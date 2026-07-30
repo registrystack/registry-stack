@@ -186,6 +186,31 @@
     ]
   },
   {
+    "id": "opencrvs-events-api",
+    "label": "Synthetic OpenCRVS Events API",
+    "summary": "A maintained synthetic case study for a bounded Events API-shaped search using generic OAuth client credentials and Rhai.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api",
+    "classification": "maintained",
+    "topology": "combined",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api",
+    "capabilities": [
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "birth-event-search",
+    "fixture": "birth-event-match",
+    "commands": [
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api test --integration birth-event-search --fixture birth-event-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api test --integration birth-event-search --fixture birth-event-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api build --environment local"
+    ]
+  },
+  {
     "id": "opencrvs-country-variant",
     "label": "OpenCRVS country variant",
     "summary": "Country-owned DCI mapping coverage for match, no-match, and ambiguity.",

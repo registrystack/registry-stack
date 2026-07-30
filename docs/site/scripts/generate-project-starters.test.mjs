@@ -38,7 +38,7 @@ async function withIsolatedProjectCatalog(run) {
 test('classifies every golden and derives topology from committed workspace content', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
 
-  assert.equal(journeys.length, 14);
+  assert.equal(journeys.length, 15);
   assert.deepEqual(
     journeys.map(({ id, classification, topology }) => ({ id, classification, topology })),
     [
@@ -49,6 +49,7 @@ test('classifies every golden and derives topology from committed workspace cont
       { id: 'fhir-r4-coverage-active', classification: 'maintained', topology: 'combined' },
       { id: 'nia-attribute-release', classification: 'conformance-only', topology: 'relay-only' },
       { id: 'opencrvs-dci', classification: 'maintained', topology: 'combined' },
+      { id: 'opencrvs-events-api', classification: 'maintained', topology: 'combined' },
       { id: 'opencrvs-country-variant', classification: 'maintained', topology: 'combined' },
       { id: 'openspp-exact', classification: 'maintained', topology: 'combined' },
       { id: 'relay-only-materialization', classification: 'maintained', topology: 'relay-only' },
@@ -113,7 +114,7 @@ test('emits the canonical 1.0 authoring and development sequence for two templat
 test('internal workspaces never emit a public template command', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
   const nonStarters = journeys.filter((journey) => !journey.starter);
-  assert.equal(nonStarters.length, 12);
+  assert.equal(nonStarters.length, 13);
   for (const journey of nonStarters) {
     assert.equal(journey.commands.some((command) => command.includes(' init ')), false);
     assert.equal(journey.project_dir, journey.source);
@@ -137,6 +138,7 @@ test('internal workspaces never emit a public template command', async () => {
       'dhis2-tracker',
       'fhir-r4-coverage-active',
       'opencrvs-dci',
+      'opencrvs-events-api',
       'opencrvs-country-variant',
       'openspp-exact',
       'snapshot',

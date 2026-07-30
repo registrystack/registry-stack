@@ -38,20 +38,20 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1811,
-    "reference_count": 503,
+    "path_count": 1826,
+    "reference_count": 505,
     "by_schema": {
       "project": 220,
-      "environment": 206,
+      "environment": 212,
       "integration": 171,
       "fixture": 63,
       "entity": 35,
-      "relay": 584,
-      "notary": 532
+      "relay": 592,
+      "notary": 533
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1441,
+      "property": 1456,
       "map_key": 26,
       "map_value": 48,
       "array_item": 178,
@@ -59,17 +59,17 @@
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1170,
-      "sensitive": 403,
-      "secret_reference": 41,
+      "internal": 1178,
+      "sensitive": 407,
+      "secret_reference": 44,
       "redacted_fixture": 51,
       "structural": 130
     },
     "by_intent_source": {
-      "schema_description": 524,
-      "reviewed_override": 262,
+      "schema_description": 527,
+      "reviewed_override": 266,
       "structural_taxonomy": 131,
-      "reviewed_profile": 894
+      "reviewed_profile": 902
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -92,7 +92,7 @@
       "notary_evidence_credential_profiles_open_map": 1,
       "notary_evidence_internal": 92,
       "notary_evidence_secret_reference": 5,
-      "notary_evidence_sensitive": 40,
+      "notary_evidence_sensitive": 41,
       "notary_evidence_signing_keys_open_map": 1,
       "notary_evidence_variables_open_map": 1,
       "notary_federation_internal": 43,
@@ -122,9 +122,9 @@
       "relay_catalog_sensitive": 1,
       "relay_config_trust_internal": 1,
       "relay_config_trust_sensitive": 4,
-      "relay_consultation_internal": 26,
-      "relay_consultation_secret_reference": 8,
-      "relay_consultation_sensitive": 20,
+      "relay_consultation_internal": 28,
+      "relay_consultation_secret_reference": 11,
+      "relay_consultation_sensitive": 23,
       "relay_datasets_internal": 391,
       "relay_datasets_secret_reference": 1,
       "relay_datasets_sensitive": 7,
@@ -36689,6 +36689,571 @@
     {
       "address": {
         "schema": "environment",
+        "pointer": "/properties/development",
+        "path_kind": "property"
+      },
+      "purpose": "Closed local-development selection. Registryctl uses the exact authored default and never prompts or guesses.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "source_mode",
+            "default_integration",
+            "default_fixture"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/development/properties/default_fixture",
+        "path_kind": "property"
+      },
+      "purpose": "Lowercase stable identifier used in project references.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/stableId",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^[a-z][a-z0-9._-]{0,95}$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/stableId"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/development/properties/default_integration",
+        "path_kind": "property"
+      },
+      "purpose": "Lowercase stable identifier used in project references.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/stableId",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^[a-z][a-z0-9._-]{0,95}$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/stableId"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/development/properties/notary_port",
+        "path_kind": "property"
+      },
+      "purpose": "Overrides the loopback port exposed by the disposable local Notary runtime without changing a deployment endpoint.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 65535
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/development/properties/relay_port",
+        "path_kind": "property"
+      },
+      "purpose": "Overrides the loopback port exposed by the disposable local Relay runtime without changing a deployment endpoint.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 65535
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/development/properties/source_mode",
+        "path_kind": "property"
+      },
+      "purpose": "Selects whether the disposable local runtime uses the maintained synthetic source or an explicitly operator-bound source integration.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "enum",
+          "value": [
+            "synthetic",
+            "operator_bound"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
         "pointer": "/properties/entities",
         "path_kind": "property"
       },
@@ -58202,7 +58767,7 @@
         "pointer": "/$defs/governedRequest/properties/target",
         "path_kind": "property"
       },
-      "purpose": "The synthetic subject target presented to the same governed request boundary as a live Notary evaluation.",
+      "purpose": "The synthetic subject target presented to the governed offline fixture boundary.",
       "purpose_source": "schema_description",
       "semantic_owner": "fixture_harness",
       "human_owner": "test_maintainers",
@@ -83736,6 +84301,570 @@
     {
       "address": {
         "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/active_key_id",
+        "key_path": "consultation.bootstrap.active_key_id",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_internal",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "bound_by_environment",
+      "sensitivity": "internal",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/active_write_deadline_unix_ms",
+        "key_path": "consultation.bootstrap.active_write_deadline_unix_ms",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_sensitive",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "format",
+          "value": "int64"
+        },
+        {
+          "keyword": "maximum",
+          "value": 9223372036854775807
+        },
+        {
+          "keyword": "minimum",
+          "value": -9223372036854775808
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/audit_event_retention_ms",
+        "key_path": "consultation.bootstrap.audit_event_retention_ms",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_sensitive",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "format",
+          "value": "int64"
+        },
+        {
+          "keyword": "maximum",
+          "value": 9223372036854775807
+        },
+        {
+          "keyword": "minimum",
+          "value": -9223372036854775808
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/keyring_maintenance_database_url_env",
+        "key_path": "consultation.bootstrap.keyring_maintenance_database_url_env",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_secret_reference",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "secret_reference",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "secret_never_reportable"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/keyring_reader_database_url_env",
+        "key_path": "consultation.bootstrap.keyring_reader_database_url_env",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_secret_reference",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "secret_reference",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "secret_never_reportable"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/migration_database_url_env",
+        "key_path": "consultation.bootstrap.migration_database_url_env",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_secret_reference",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "secret_reference",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "secret_never_reportable"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/owner_role",
+        "key_path": "consultation.bootstrap.owner_role",
+        "path_kind": "property"
+      },
+      "purpose": "Controls governed consultation execution, reviewed artifacts, credentials, and result handling.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "relay_consultation_sensitive",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
         "pointer": "/$defs/ConsultationConfig/properties/artifacts",
         "key_path": "consultation.artifacts",
         "path_kind": "property"
@@ -83990,6 +85119,98 @@
         "schema": "relay",
         "pointer": "/$defs/ConsultationWorkloadConfig"
       }
+    },
+    {
+      "address": {
+        "schema": "relay",
+        "pointer": "/$defs/ConsultationConfig/properties/bootstrap",
+        "key_path": "consultation.bootstrap",
+        "path_kind": "property"
+      },
+      "purpose": "Binds the product-owned first-install policy carried only by the verified consultation bundle; deployment renderers cannot reproduce it as command arguments.",
+      "purpose_source": "reviewed_override",
+      "intent_profile": "relay_consultation_internal",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "null",
+          "object"
+        ],
+        "composed": true
+      },
+      "requiredness": "optional",
+      "null_behavior": "conditional",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "reviewed_runtime_default",
+        "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
+      },
+      "environment_behavior": "bound_by_environment",
+      "sensitivity": "internal",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "migration_database_url_env",
+            "owner_role",
+            "keyring_maintenance_database_url_env",
+            "keyring_reader_database_url_env",
+            "active_key_id",
+            "active_write_deadline_unix_ms",
+            "audit_event_retention_ms"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": [
+            "null",
+            "object"
+          ]
+        }
+      ]
     },
     {
       "address": {
@@ -144268,6 +145489,89 @@
         {
           "keyword": "type",
           "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "notary",
+        "pointer": "/$defs/RelayConnectionConfig/properties/root_certificate_path",
+        "key_path": "evidence.relay.root_certificate_path",
+        "path_kind": "property"
+      },
+      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_evidence_sensitive",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "null",
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "conditional",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "schema_default",
+        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": [
+            "string",
+            "null"
+          ]
         }
       ]
     },
