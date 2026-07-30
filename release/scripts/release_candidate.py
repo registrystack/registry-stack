@@ -2438,7 +2438,7 @@ def main(argv: list[str] | None = None) -> int:
                     read_json(args.manifest),
                     bundle_path=args.bundle,
                     bundle_root=args.bundle_root,
-                    expected_source_sha=args.tag_target,
+                    expected_source_sha=args.workflow_revision,
                     expected_workflow_revision=args.workflow_revision,
                     expected_version=args.version,
                     expected_release_id=args.release_id,

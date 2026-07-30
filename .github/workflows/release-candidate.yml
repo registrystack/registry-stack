@@ -696,7 +696,8 @@ jobs:
           else
             python3 release/scripts/registry_release_lock.py create-payload \
               --version "${{ needs.validate.outputs.version }}" \
-              --source-sha "${{ needs.validate.outputs.source_sha }}" \
+              --manifest-source-ref "${{ needs.validate.outputs.source_sha }}" \
+              --tag-target "${{ needs.validate.outputs.source_sha }}" \
               --asset-dir candidate/bundle-root \
               --image-lock \
                 "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \

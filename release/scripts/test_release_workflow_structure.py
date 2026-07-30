@@ -228,17 +228,31 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
 
     def test_candidate_is_bound_to_p_and_final_lock_to_p_and_t(self) -> None:
         text, _ = workflow("release.yml")
-        self.assertNotIn(
-            '--source-sha "${{ needs.verify.outputs.source_sha }}"',
-            text,
-        )
+        candidate, _ = workflow("release-candidate.yml")
         self.assertIn(
             '--source-sha "${{ needs.verify.outputs.workflow_revision }}"',
             text,
         )
         self.assertIn(
+            'git merge-base --is-ancestor \\\n'
+            '            "${workflow_revision}" "${{ steps.identity.outputs.source_sha }}"',
+            text,
+        )
+        self.assertIn(
+            '--manifest-source-ref "${{ needs.verify.outputs.workflow_revision }}"',
+            text,
+        )
+        self.assertIn(
             '--tag-target "${{ needs.verify.outputs.source_sha }}"',
             text,
+        )
+        self.assertIn(
+            '--manifest-source-ref "${{ needs.validate.outputs.source_sha }}"',
+            candidate,
+        )
+        self.assertIn(
+            '--tag-target "${{ needs.validate.outputs.source_sha }}"',
+            candidate,
         )
 
     def test_major_gate_never_adds_an_unsigned_installer_bypass(self) -> None:

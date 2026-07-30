@@ -19,6 +19,7 @@ from typing import Any, Iterable
 
 
 SCHEMA = "registry-stack.first-country-release-form.v1"
+STABLE_SCHEMA = "registry-stack.first-country-release-form.v2"
 TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 RELAY_IMAGE = re.compile(
     r"^ghcr\.io/registrystack/registry-relay@sha256:([0-9a-f]{64})$"
@@ -52,6 +53,32 @@ COMMAND_ORDER = (
     "listeners",
     "stop",
 )
+STABLE_COMMAND_ORDER = (
+    "install",
+    "version",
+    "reader_journeys",
+    "pull_relay",
+    "pull_notary",
+    "pull_postgresql",
+    "doctor",
+    "dev_up",
+    "dev_status",
+    "dev_smoke",
+    "dev_logs",
+    "inspect",
+    "dev_down",
+)
+STABLE_WORKLOAD_IMAGES = {
+    "relay-public": "relay_image",
+    "relay-consultation": "relay_image",
+    "notary": "notary_image",
+    "postgresql": "postgresql_image",
+    "synthetic-source": "relay_image",
+}
+STABLE_LISTENERS = {
+    "relay-public": "127.0.0.1:4242",
+    "notary": "127.0.0.1:4243",
+}
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
 MAX_AUTHENTICATED_RESPONSE_BYTES = 1024 * 1024
@@ -775,7 +802,723 @@ def verify_loopback_listeners(
     return listeners
 
 
-def run_release_form(args: argparse.Namespace) -> Path:
+def read_closed_json(path: Path, description: str) -> Any:
+    require_regular(path, max_bytes=4 * 1024 * 1024)
+    try:
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ReleaseFormError(f"{description} is not valid closed JSON") from error
+
+
+def write_json_log(logs: Path, name: str, value: Any) -> None:
+    (logs / f"{name}.log").write_text(
+        json.dumps(value, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def stable_reader_summary(
+    manifest_path: Path, *, version: str, retained_project: Path
+) -> dict[str, Any]:
+    manifest = read_closed_json(manifest_path, "reader-journey manifest")
+    expected_projects = [
+        {
+            "id": "http",
+            "source": "embedded-http-template",
+            "reports": [
+                "http/init.json",
+                "http/test.json",
+                "http/check.json",
+                "http/build.json",
+            ],
+        },
+        {
+            "id": "opencrvs-events-api",
+            "source": "maintained-synthetic-example",
+            "covers": [
+                "oauth-client-credentials",
+                "bounded-http",
+                "rhai",
+                "opencrvs-shaped-search",
+            ],
+            "reports": [
+                "opencrvs/test.json",
+                "opencrvs/check.json",
+                "opencrvs/build.json",
+            ],
+        },
+    ]
+    expected_keys = {
+        "schema_version",
+        "status",
+        "mode",
+        "registryctl_version",
+        "projects",
+        "release_boundary",
+        "retained_project",
+    }
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != expected_keys
+        or manifest.get("schema_version")
+        != "registryctl.tutorial_reader_journeys.v1"
+        or manifest.get("status") != "passed"
+        or manifest.get("mode") != "sealed"
+        or manifest.get("registryctl_version") != version
+        or manifest.get("projects") != expected_projects
+        or manifest.get("retained_project") != str(retained_project)
+    ):
+        raise ReleaseFormError(
+            "reader-journey manifest does not prove the sealed maintained journeys"
+        )
+    return {
+        "schema_version": manifest["schema_version"],
+        "status": "passed",
+        "mode": "sealed",
+        "registryctl_version": version,
+        "projects": ["http", "opencrvs-events-api"],
+    }
+
+
+def stable_doctor_summary(report: Any) -> dict[str, Any]:
+    checks = report.get("checks") if isinstance(report, dict) else None
+    expected_ids = {
+        "authored_environment",
+        "installed_release_lock",
+        "docker_cli",
+        "docker_daemon",
+        "docker_compose",
+        "locked_images",
+    }
+    if (
+        not isinstance(report, dict)
+        or set(report)
+        != {"schema_version", "status", "environment", "profile", "checks"}
+        or report.get("schema_version") != "registryctl.doctor.v1"
+        or report.get("status") != "ready"
+        or report.get("environment") != "local"
+        or report.get("profile") != "local"
+        or not isinstance(checks, list)
+        or {check.get("id") for check in checks if isinstance(check, dict)}
+        != expected_ids
+        or any(
+            not isinstance(check, dict)
+            or set(check) != {"id", "status", "category", "remediation"}
+            or check.get("status") != "ready"
+            or check.get("category") != "ready"
+            or check.get("remediation") is not None
+            for check in checks
+        )
+    ):
+        raise ReleaseFormError("registryctl doctor did not prove the sealed runtime")
+    return {
+        "schema_version": report["schema_version"],
+        "status": "ready",
+        "environment": "local",
+        "profile": "local",
+        "checks": sorted(expected_ids),
+    }
+
+
+def stable_status_summary(report: Any) -> dict[str, Any]:
+    workloads = report.get("workloads") if isinstance(report, dict) else None
+    expected = set(STABLE_WORKLOAD_IMAGES)
+    if (
+        not isinstance(report, dict)
+        or set(report) != {"binding", "workloads", "source_mode", "request_command"}
+        or report.get("source_mode") != "synthetic"
+        or not isinstance(report.get("binding"), dict)
+        or not isinstance(report.get("request_command"), str)
+        or not report["request_command"]
+        or not isinstance(workloads, list)
+        or {item.get("workload") for item in workloads if isinstance(item, dict)}
+        != expected
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"workload", "state"}
+            or item.get("state") != "running"
+            for item in workloads
+        )
+    ):
+        raise ReleaseFormError(
+            "registryctl dev status did not prove every bound workload running"
+        )
+    return {
+        "source_mode": "synthetic",
+        "workloads": [
+            {"workload": name, "state": "running"} for name in sorted(expected)
+        ],
+    }
+
+
+def stable_smoke_summary(report: Any) -> dict[str, Any]:
+    results = report.get("results") if isinstance(report, dict) else None
+    statuses = {
+        item.get("status")
+        for item in (results if isinstance(results, list) else [])
+        if isinstance(item, dict)
+    }
+    if (
+        not isinstance(report, dict)
+        or set(report)
+        != {
+            "schema_version",
+            "project",
+            "environment",
+            "results",
+            "passed",
+        }
+        or report.get("schema_version") != "registryctl.dev_smoke.v1"
+        or report.get("environment") != "local"
+        or not isinstance(report.get("project"), str)
+        or not report["project"]
+        or report.get("passed") is not True
+        or not isinstance(results, list)
+        or len(results) != 2
+        or statuses != {"denied", "authorized"}
+        or any(
+            not isinstance(item, dict)
+            or set(item)
+            != {
+                "scenario_id",
+                "status",
+                "token_counter_delta",
+                "source_counter_delta",
+                "minimized_claim_ids",
+                "passed",
+            }
+            or not isinstance(item.get("scenario_id"), str)
+            or not item["scenario_id"]
+            or item.get("passed") is not True
+            or not isinstance(item.get("minimized_claim_ids"), list)
+            for item in results
+        )
+    ):
+        raise ReleaseFormError(
+            "registryctl dev smoke did not prove denial and authorized scenarios"
+        )
+    denial = next(item for item in results if item["status"] == "denied")
+    authorized = next(item for item in results if item["status"] == "authorized")
+    if (
+        denial["token_counter_delta"] != 0
+        or denial["source_counter_delta"] != 0
+        or denial["minimized_claim_ids"] != []
+        or type(authorized["token_counter_delta"]) is not int
+        or authorized["token_counter_delta"] < 0
+        or authorized["source_counter_delta"] != 1
+        or not all(
+            isinstance(claim, str) and claim
+            for claim in authorized["minimized_claim_ids"]
+        )
+    ):
+        raise ReleaseFormError(
+            "registryctl dev smoke counters or minimized claims are invalid"
+        )
+    return {
+        "schema_version": report["schema_version"],
+        "project": report["project"],
+        "environment": "local",
+        "passed": True,
+        "results": [
+            {
+                key: item[key]
+                for key in (
+                    "scenario_id",
+                    "status",
+                    "token_counter_delta",
+                    "source_counter_delta",
+                    "minimized_claim_ids",
+                    "passed",
+                )
+            }
+            for item in sorted(results, key=lambda item: item["status"])
+        ],
+    }
+
+
+def stable_logs_summary(report: Any) -> dict[str, Any]:
+    products = report.get("products") if isinstance(report, dict) else None
+    expected = {
+        "relay-public",
+        "relay-consultation",
+        "notary",
+        "synthetic-source",
+    }
+    if (
+        not isinstance(report, dict)
+        or set(report) != {"binding", "products"}
+        or not isinstance(report.get("binding"), dict)
+        or not isinstance(products, list)
+        or {item.get("workload") for item in products if isinstance(item, dict)}
+        != expected
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"workload", "available"}
+            or item.get("available") is not True
+            for item in products
+        )
+    ):
+        raise ReleaseFormError(
+            "registryctl dev logs did not prove bounded product log availability"
+        )
+    return {
+        "products": [
+            {"workload": name, "available": True} for name in sorted(expected)
+        ]
+    }
+
+
+def stable_runtime_summary(
+    project: Path, *, tag: str, verified: dict[str, Any]
+) -> tuple[dict[str, Any], Path]:
+    environment_root = project / ".registry-stack/dev/local"
+    require_private_directory(environment_root)
+    runtime_roots = [
+        path
+        for path in environment_root.iterdir()
+        if path.is_dir() and not path.is_symlink()
+    ]
+    if len(runtime_roots) != 1:
+        raise ReleaseFormError("development runtime binding is missing or ambiguous")
+    runtime_root = runtime_roots[0]
+    plan_path = runtime_root / "runtime-plan.json"
+    plan = read_closed_json(plan_path, "development runtime plan")
+    workloads = plan.get("workloads") if isinstance(plan, dict) else None
+    observed: dict[str, dict[str, Any]] = {}
+    if isinstance(workloads, list):
+        for workload in workloads:
+            if not isinstance(workload, dict) or not isinstance(
+                workload.get("id"), str
+            ):
+                raise ReleaseFormError("development runtime workload is invalid")
+            if workload["id"] in observed:
+                raise ReleaseFormError("development runtime workload is duplicated")
+            observed[workload["id"]] = workload
+    if set(observed) != set(STABLE_WORKLOAD_IMAGES):
+        raise ReleaseFormError("development runtime workload set is not closed")
+    for name, image_key in STABLE_WORKLOAD_IMAGES.items():
+        if observed[name].get("image") != verified[image_key]:
+            raise ReleaseFormError(
+                "development runtime does not use the exact signed image lock"
+            )
+    listeners = {
+        name: workload.get("host_endpoint")
+        for name, workload in observed.items()
+        if workload.get("host_endpoint") is not None
+    }
+    if (
+        not isinstance(plan, dict)
+        or plan.get("release_tag") != tag
+        or plan.get("source_mode") != "synthetic"
+        or listeners != STABLE_LISTENERS
+        or any(
+            not isinstance(plan.get(name), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", plan[name]) is None
+            for name in (
+                "plan_digest",
+                "build_manifest_digest",
+                "compose_digest",
+                "request_digest",
+            )
+        )
+    ):
+        raise ReleaseFormError(
+            "development runtime identity or loopback boundary is invalid"
+        )
+    summary = {
+        "release_tag": tag,
+        "source_mode": "synthetic",
+        "plan_sha256": sha256(plan_path),
+        "plan_digest": plan["plan_digest"],
+        "build_manifest_digest": plan["build_manifest_digest"],
+        "compose_digest": plan["compose_digest"],
+        "request_digest": plan["request_digest"],
+        "listeners": listeners,
+        "workloads": {
+            name: observed[name]["image"] for name in sorted(observed)
+        },
+        "permissions": {
+            "runtime_root": mode(runtime_root),
+            "credentials": mode(runtime_root / "credentials"),
+        },
+    }
+    if os.name == "posix" and summary["permissions"] != {
+        "runtime_root": "0700",
+        "credentials": "0700",
+    }:
+        raise ReleaseFormError(
+            "development runtime credential directories are not owner-only"
+        )
+    return summary, runtime_root
+
+
+def recursive_secret_values(directory: Path) -> list[bytes]:
+    values: list[bytes] = []
+    if not directory.exists():
+        return values
+    for path in sorted(directory.rglob("*")):
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            if (
+                path.name == "request.json"
+                or path.suffix == ".crt"
+                or "public" in path.name
+                or path.name == "notary-workload-jwks.json"
+            ):
+                continue
+            require_regular(path)
+            if path.suffix == ".env":
+                values.extend(credential_env_values(path))
+            else:
+                data = path.read_bytes()
+                values.extend(value for value in (data, data.strip()) if value)
+        except OSError:
+            continue
+    return sorted(set(values), key=len, reverse=True)
+
+
+def redact_text_tree(directory: Path, private_paths: Iterable[Path]) -> None:
+    replacements = sorted(
+        {
+            os.fsencode(str(candidate))
+            for path in private_paths
+            for candidate in (path.absolute(), path.resolve())
+        },
+        key=len,
+        reverse=True,
+    )
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        require_regular(path, max_bytes=MAX_LOG_BYTES)
+        data = path.read_bytes()
+        for private_path in replacements:
+            data = data.replace(private_path, b"[PRIVATE_PATH]")
+        path.write_bytes(data)
+
+
+def closed_tree_digests(directory: Path) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        require_regular(path, max_bytes=MAX_LOG_BYTES)
+        files[path.relative_to(directory).as_posix()] = sha256(path)
+    return files
+
+
+def run_stable_release_form(args: argparse.Namespace) -> Path:
+    if args.relay_image_override is not None or args.notary_image_override is not None:
+        raise ReleaseFormError(
+            "stable release proof must use the exact public signed image references"
+        )
+    beginner_runtime_asset(args.tag)
+    asset_dir = args.asset_dir.resolve()
+    evidence_dir = args.evidence_dir.resolve()
+    if evidence_dir.exists():
+        raise ReleaseFormError("evidence directory must not already exist")
+    evidence_dir.mkdir(parents=True)
+    logs = evidence_dir / "logs"
+    logs.mkdir()
+    verified = verify_asset_set(asset_dir, args.tag)
+    if shutil.which("registry-relay") or shutil.which("registry-notary"):
+        raise ReleaseFormError("ambient Registry product binaries must not be on PATH")
+
+    commands: list[dict[str, Any]] = []
+    secrets: list[bytes] = []
+    reader_summary: dict[str, Any]
+    doctor_summary: dict[str, Any]
+    status_summary: dict[str, Any]
+    smoke_summary: dict[str, Any]
+    product_logs_summary: dict[str, Any]
+    runtime_summary: dict[str, Any]
+    with tempfile.TemporaryDirectory(
+        prefix="registry-first-country-release-form-"
+    ) as temporary:
+        root = Path(temporary)
+        install_dir = root / "install"
+        project = root / "reader-http-project"
+        reader_evidence = evidence_dir / "reader-journeys"
+        install_dir.mkdir()
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "CI": "1",
+                "REGISTRYCTL_NO_UPDATE_CHECK": "1",
+                "REGISTRYCTL_ASSET_DIR": str(asset_dir),
+                "REGISTRYCTL_INSTALL_DIR": str(install_dir),
+                "REGISTRYCTL_VERSION": args.tag,
+            }
+        )
+        registryctl = install_dir / "registryctl"
+        installer = asset_dir / verified["installer_name"]
+        runtime_root: Path | None = None
+        try:
+            commands.append(
+                run_command(
+                    "install",
+                    ["bash", str(installer)],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            require_regular(registryctl)
+            require_regular(install_dir / "registry-release-lock.v1.json")
+            commands.append(
+                run_command(
+                    "version",
+                    [str(registryctl), "--version"],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            version = args.tag.removeprefix("v")
+            if (logs / "version.log").read_text(encoding="utf-8").strip() != (
+                f"registryctl {version}"
+            ):
+                raise ReleaseFormError(
+                    "installed registryctl version does not match the release tag"
+                )
+            tutorial_environment = environment.copy()
+            tutorial_environment.update(
+                {
+                    "REGISTRYCTL_BIN": str(registryctl),
+                    "REGISTRYCTL_TUTORIAL_EVIDENCE_DIR": str(reader_evidence),
+                    "REGISTRYCTL_TUTORIAL_PROJECT_DIR": str(project),
+                }
+            )
+            commands.append(
+                run_command(
+                    "reader_journeys",
+                    [
+                        "bash",
+                        str(
+                            Path(__file__).resolve().parents[2]
+                            / "docs/site/scripts/check-registryctl-tutorials.sh"
+                        ),
+                    ],
+                    cwd=root,
+                    env=tutorial_environment,
+                    logs=logs,
+                )
+            )
+            reader_summary = stable_reader_summary(
+                reader_evidence / "manifest.json",
+                version=version,
+                retained_project=project,
+            )
+            redact_text_tree(reader_evidence, (root, install_dir, project))
+            reader_summary["evidence_sha256"] = closed_tree_digests(reader_evidence)
+            for name, image in (
+                ("pull_relay", verified["relay_image"]),
+                ("pull_notary", verified["notary_image"]),
+                ("pull_postgresql", verified["postgresql_image"]),
+            ):
+                commands.append(
+                    run_command(
+                        name,
+                        ["docker", "image", "pull", image],
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+            commands.append(
+                run_command(
+                    "doctor",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "doctor",
+                        "--profile",
+                        "local",
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            doctor_summary = stable_doctor_summary(
+                read_closed_json(logs / "doctor.log", "doctor report")
+            )
+            write_json_log(logs, "doctor", doctor_summary)
+            commands.append(
+                run_command(
+                    "dev_up",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "--detach",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "dev_status",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "status",
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            status_summary = stable_status_summary(
+                read_closed_json(logs / "dev_status.log", "development status report")
+            )
+            write_json_log(logs, "dev_status", status_summary)
+            commands.append(
+                run_command(
+                    "dev_smoke",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "smoke",
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            smoke_summary = stable_smoke_summary(
+                read_closed_json(logs / "dev_smoke.log", "development smoke report")
+            )
+            write_json_log(logs, "dev_smoke", smoke_summary)
+            commands.append(
+                run_command(
+                    "dev_logs",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "logs",
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            product_logs_summary = stable_logs_summary(
+                read_closed_json(logs / "dev_logs.log", "development logs report")
+            )
+            write_json_log(logs, "dev_logs", product_logs_summary)
+            runtime_summary, runtime_root = stable_runtime_summary(
+                project, tag=args.tag, verified=verified
+            )
+            write_json_log(logs, "inspect", runtime_summary)
+            commands.append(
+                {
+                    "name": "inspect",
+                    "status": "passed",
+                    "exit_code": 0,
+                    "log_sha256": sha256(logs / "inspect.log"),
+                }
+            )
+            secrets = recursive_secret_values(runtime_root / "credentials")
+        finally:
+            if project.exists() and registryctl.exists():
+                result = subprocess.run(
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "down",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=180,
+                    check=False,
+                )
+                (logs / "dev_down.log").write_text(
+                    result.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
+                )
+                if result.returncode == 0:
+                    commands.append(
+                        {
+                            "name": "dev_down",
+                            "status": "passed",
+                            "exit_code": 0,
+                            "log_sha256": sha256(logs / "dev_down.log"),
+                        }
+                    )
+        if tuple(command["name"] for command in commands) != STABLE_COMMAND_ORDER:
+            raise ReleaseFormError(
+                "stable release-form command sequence did not complete in exact order"
+            )
+        if runtime_root is not None and runtime_root.exists():
+            raise ReleaseFormError("registryctl dev down left disposable runtime state")
+        scanned_files = assert_no_secret_leak(project, secrets)
+        redact_logs(
+            logs,
+            secrets,
+            private_paths=(root, install_dir, project, asset_dir, evidence_dir),
+        )
+        for command in commands:
+            command["log_sha256"] = sha256(logs / f"{command['name']}.log")
+        report = {
+            "schema_version": STABLE_SCHEMA,
+            "status": "passed",
+            "release_tag": args.tag,
+            "manifest_source_ref": verified["lock"]["manifest_source_ref"],
+            "tag_target": verified["lock"]["tag_target"],
+            "platform_asset": verified["binary_name"],
+            "asset_sha256": verified["assets"],
+            "release_image_lock_sha256": verified["assets"][verified["lock_name"]],
+            "release_lock_sha256": verified["assets"][verified["release_lock_name"]],
+            "relay_image": verified["relay_image"],
+            "notary_image": verified["notary_image"],
+            "postgresql_image": verified["postgresql_image"],
+            "commands": commands,
+            "reader_journeys": reader_summary,
+            "doctor": doctor_summary,
+            "runtime": runtime_summary,
+            "dev_status": status_summary,
+            "smoke": smoke_summary,
+            "product_logs": product_logs_summary,
+            "redaction": {
+                "status": "passed",
+                "generated_files_scanned": scanned_files,
+            },
+        }
+        output = evidence_dir / "first-country-release-form.json"
+        output.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return output
+
+
+def run_legacy_release_form(args: argparse.Namespace) -> Path:
     beginner_runtime_asset(args.tag)
     asset_dir = args.asset_dir.resolve()
     evidence_dir = args.evidence_dir.resolve()
@@ -1140,6 +1883,15 @@ def run_release_form(args: argparse.Namespace) -> Path:
         return output
 
 
+def run_release_form(args: argparse.Namespace) -> Path:
+    match = TAG.fullmatch(args.tag)
+    if match is None:
+        raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
+    if int(match.group(1)) >= 1:
+        return run_stable_release_form(args)
+    return run_legacy_release_form(args)
+
+
 def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for name, value in pairs:
@@ -1206,7 +1958,7 @@ def verify_evidence_logs(report_path: Path, commands: list[dict[str, Any]]) -> N
         )
 
 
-def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
+def verify_legacy_report(path: Path, asset_dir: Path, tag: str) -> None:
     require_regular(path, max_bytes=4 * 1024 * 1024)
     try:
         report = json.loads(
@@ -1318,6 +2070,264 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
         report["notary_image"], report["notary_staging_transport"]
     )
     verify_evidence_logs(path, commands)
+
+
+def verify_stable_evidence(
+    report_path: Path, report: dict[str, Any], commands: list[dict[str, Any]]
+) -> None:
+    logs = report_path.parent / "logs"
+    require_private_directory(logs)
+    entries = list(logs.iterdir())
+    expected_logs = {f"{name}.log" for name in STABLE_COMMAND_ORDER}
+    if {entry.name for entry in entries} != expected_logs:
+        raise ReleaseFormError("stable release-form evidence log set is not closed")
+    for command in commands:
+        log_path = logs / f"{command['name']}.log"
+        require_regular(log_path, max_bytes=MAX_LOG_BYTES)
+        if sha256(log_path) != command["log_sha256"]:
+            raise ReleaseFormError(
+                f"stable release-form evidence log digest does not match: {log_path.name}"
+            )
+    normalized = {
+        "doctor": report["doctor"],
+        "dev_status": report["dev_status"],
+        "dev_smoke": report["smoke"],
+        "dev_logs": report["product_logs"],
+        "inspect": report["runtime"],
+    }
+    for name, expected in normalized.items():
+        if read_closed_json(logs / f"{name}.log", f"{name} evidence log") != expected:
+            raise ReleaseFormError(
+                f"{name} evidence log does not bind the normalized report"
+            )
+
+    reader_dir = report_path.parent / "reader-journeys"
+    require_private_directory(reader_dir)
+    expected_reader_files = {
+        "manifest.json",
+        "http/init.json",
+        "http/test.json",
+        "http/check.json",
+        "http/build.json",
+        "opencrvs/test.json",
+        "opencrvs/check.json",
+        "opencrvs/build.json",
+    }
+    observed_reader = closed_tree_digests(reader_dir)
+    if (
+        set(observed_reader) != expected_reader_files
+        or observed_reader != report["reader_journeys"]["evidence_sha256"]
+    ):
+        raise ReleaseFormError("reader-journey evidence set is not closed")
+    manifest = read_closed_json(
+        reader_dir / "manifest.json", "reader-journey evidence manifest"
+    )
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version")
+        != "registryctl.tutorial_reader_journeys.v1"
+        or manifest.get("status") != "passed"
+        or manifest.get("mode") != "sealed"
+        or manifest.get("registryctl_version") != report["release_tag"].removeprefix("v")
+        or manifest.get("retained_project") != "[PRIVATE_PATH]"
+    ):
+        raise ReleaseFormError(
+            "reader-journey evidence does not bind the sealed release binary"
+        )
+
+
+def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
+    report = read_closed_json(path, "stable release-form report")
+    expected_keys = {
+        "schema_version",
+        "status",
+        "release_tag",
+        "manifest_source_ref",
+        "tag_target",
+        "platform_asset",
+        "asset_sha256",
+        "release_image_lock_sha256",
+        "release_lock_sha256",
+        "relay_image",
+        "notary_image",
+        "postgresql_image",
+        "commands",
+        "reader_journeys",
+        "doctor",
+        "runtime",
+        "dev_status",
+        "smoke",
+        "product_logs",
+        "redaction",
+    }
+    if not isinstance(report, dict) or set(report) != expected_keys:
+        raise ReleaseFormError("stable release-form report fields are not closed")
+    verified = verify_asset_set(asset_dir.resolve(), tag)
+    commands = report.get("commands")
+    command_shape_valid = isinstance(commands, list) and all(
+        isinstance(command, dict)
+        and set(command) == {"name", "status", "exit_code", "log_sha256"}
+        and command.get("status") == "passed"
+        and command.get("exit_code") == 0
+        and isinstance(command.get("log_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", command["log_sha256"]) is not None
+        for command in commands
+    )
+    reader = report.get("reader_journeys")
+    doctor = report.get("doctor")
+    runtime = report.get("runtime")
+    status = report.get("dev_status")
+    smoke = report.get("smoke")
+    product_logs = report.get("product_logs")
+    redaction = report.get("redaction")
+    expected_doctor_checks = sorted(
+        {
+            "authored_environment",
+            "installed_release_lock",
+            "docker_cli",
+            "docker_daemon",
+            "docker_compose",
+            "locked_images",
+        }
+    )
+    expected_status_workloads = [
+        {"workload": name, "state": "running"}
+        for name in sorted(STABLE_WORKLOAD_IMAGES)
+    ]
+    expected_product_logs = [
+        {"workload": name, "available": True}
+        for name in sorted(
+            {
+                "relay-public",
+                "relay-consultation",
+                "notary",
+                "synthetic-source",
+            }
+        )
+    ]
+    expected_runtime_workloads = {
+        name: verified[image_key]
+        for name, image_key in sorted(STABLE_WORKLOAD_IMAGES.items())
+    }
+    if (
+        report["schema_version"] != STABLE_SCHEMA
+        or report["status"] != "passed"
+        or report["release_tag"] != tag
+        or report["manifest_source_ref"]
+        != verified["lock"].get("manifest_source_ref")
+        or report["tag_target"] != verified["lock"].get("tag_target")
+        or re.fullmatch(r"[0-9a-f]{40}", str(report["manifest_source_ref"]))
+        is None
+        or re.fullmatch(r"[0-9a-f]{40}", str(report["tag_target"])) is None
+        or report["platform_asset"] != verified["binary_name"]
+        or report["asset_sha256"] != verified["assets"]
+        or report["release_image_lock_sha256"]
+        != verified["assets"][verified["lock_name"]]
+        or report["release_lock_sha256"]
+        != verified["assets"][verified["release_lock_name"]]
+        or report["relay_image"] != verified["relay_image"]
+        or report["notary_image"] != verified["notary_image"]
+        or report["postgresql_image"] != verified["postgresql_image"]
+        or not command_shape_valid
+        or tuple(command["name"] for command in commands) != STABLE_COMMAND_ORDER
+        or not isinstance(reader, dict)
+        or set(reader)
+        != {
+            "schema_version",
+            "status",
+            "mode",
+            "registryctl_version",
+            "projects",
+            "evidence_sha256",
+        }
+        or reader.get("schema_version")
+        != "registryctl.tutorial_reader_journeys.v1"
+        or reader.get("status") != "passed"
+        or reader.get("mode") != "sealed"
+        or reader.get("registryctl_version") != tag.removeprefix("v")
+        or reader.get("projects") != ["http", "opencrvs-events-api"]
+        or not isinstance(reader.get("evidence_sha256"), dict)
+        or not all(
+            isinstance(name, str)
+            and isinstance(digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+            for name, digest in reader.get("evidence_sha256", {}).items()
+        )
+        or doctor
+        != {
+            "schema_version": "registryctl.doctor.v1",
+            "status": "ready",
+            "environment": "local",
+            "profile": "local",
+            "checks": expected_doctor_checks,
+        }
+        or not isinstance(runtime, dict)
+        or set(runtime)
+        != {
+            "release_tag",
+            "source_mode",
+            "plan_sha256",
+            "plan_digest",
+            "build_manifest_digest",
+            "compose_digest",
+            "request_digest",
+            "listeners",
+            "workloads",
+            "permissions",
+        }
+        or runtime.get("release_tag") != tag
+        or runtime.get("source_mode") != "synthetic"
+        or runtime.get("listeners") != STABLE_LISTENERS
+        or runtime.get("workloads") != expected_runtime_workloads
+        or runtime.get("permissions")
+        != {"runtime_root": "0700", "credentials": "0700"}
+        or any(
+            not isinstance(runtime.get(name), str)
+            or re.fullmatch(
+                r"(?:sha256:)?[0-9a-f]{64}",
+                runtime[name],
+            )
+            is None
+            for name in (
+                "plan_sha256",
+                "plan_digest",
+                "build_manifest_digest",
+                "compose_digest",
+                "request_digest",
+            )
+        )
+        or status
+        != {"source_mode": "synthetic", "workloads": expected_status_workloads}
+        or stable_smoke_summary(smoke) != smoke
+        or product_logs != {"products": expected_product_logs}
+        or not isinstance(redaction, dict)
+        or set(redaction) != {"status", "generated_files_scanned"}
+        or redaction.get("status") != "passed"
+        or not isinstance(redaction.get("generated_files_scanned"), int)
+        or redaction["generated_files_scanned"] <= 0
+    ):
+        raise ReleaseFormError(
+            "stable release-form report does not prove the maintained journey"
+        )
+    verify_stable_evidence(path, report, commands)
+
+
+def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
+    match = TAG.fullmatch(tag)
+    if match is None:
+        raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
+    report = read_closed_json(path, "release-form report")
+    schema = report.get("schema_version") if isinstance(report, dict) else None
+    if int(match.group(1)) >= 1:
+        if schema != STABLE_SCHEMA:
+            raise ReleaseFormError(
+                "stable release requires the maintained release-form evidence schema"
+            )
+        verify_stable_report(path, asset_dir, tag)
+        return
+    if schema != SCHEMA:
+        raise ReleaseFormError("legacy release-form evidence schema is invalid")
+    verify_legacy_report(path, asset_dir, tag)
 
 
 def parser() -> argparse.ArgumentParser:

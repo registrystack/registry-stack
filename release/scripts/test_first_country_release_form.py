@@ -145,12 +145,204 @@ class FirstCountryReleaseFormTest(TestCase):
         path.write_text(json.dumps(report), encoding="utf-8")
         return path, report, logs
 
+    def write_valid_stable_report_evidence(self):
+        verified = self.verify_assets()
+        evidence = self.root / "stable-evidence"
+        logs = evidence / "logs"
+        reader = evidence / "reader-journeys"
+        logs.mkdir(parents=True)
+        (reader / "http").mkdir(parents=True)
+        (reader / "opencrvs").mkdir()
+        reader_manifest = {
+            "schema_version": "registryctl.tutorial_reader_journeys.v1",
+            "status": "passed",
+            "mode": "sealed",
+            "registryctl_version": "1.2.3",
+            "projects": [
+                {
+                    "id": "http",
+                    "source": "embedded-http-template",
+                    "reports": [
+                        "http/init.json",
+                        "http/test.json",
+                        "http/check.json",
+                        "http/build.json",
+                    ],
+                },
+                {
+                    "id": "opencrvs-events-api",
+                    "source": "maintained-synthetic-example",
+                    "covers": [
+                        "oauth-client-credentials",
+                        "bounded-http",
+                        "rhai",
+                        "opencrvs-shaped-search",
+                    ],
+                    "reports": [
+                        "opencrvs/test.json",
+                        "opencrvs/check.json",
+                        "opencrvs/build.json",
+                    ],
+                },
+            ],
+            "release_boundary": "sealed fixture",
+            "retained_project": "[PRIVATE_PATH]",
+        }
+        (reader / "manifest.json").write_text(
+            json.dumps(reader_manifest), encoding="utf-8"
+        )
+        for relative in (
+            "http/init.json",
+            "http/test.json",
+            "http/check.json",
+            "http/build.json",
+            "opencrvs/test.json",
+            "opencrvs/check.json",
+            "opencrvs/build.json",
+        ):
+            (reader / relative).write_text('{"status":"passed"}\n', encoding="utf-8")
+        reader_summary = {
+            "schema_version": "registryctl.tutorial_reader_journeys.v1",
+            "status": "passed",
+            "mode": "sealed",
+            "registryctl_version": "1.2.3",
+            "projects": ["http", "opencrvs-events-api"],
+            "evidence_sha256": self.module.closed_tree_digests(reader),
+        }
+        doctor = {
+            "schema_version": "registryctl.doctor.v1",
+            "status": "ready",
+            "environment": "local",
+            "profile": "local",
+            "checks": sorted(
+                {
+                    "authored_environment",
+                    "installed_release_lock",
+                    "docker_cli",
+                    "docker_daemon",
+                    "docker_compose",
+                    "locked_images",
+                }
+            ),
+        }
+        status = {
+            "source_mode": "synthetic",
+            "workloads": [
+                {"workload": name, "state": "running"}
+                for name in sorted(self.module.STABLE_WORKLOAD_IMAGES)
+            ],
+        }
+        smoke = {
+            "schema_version": "registryctl.dev_smoke.v1",
+            "project": "my-registry",
+            "environment": "local",
+            "passed": True,
+            "results": [
+                {
+                    "scenario_id": "authorized",
+                    "status": "authorized",
+                    "token_counter_delta": 0,
+                    "source_counter_delta": 1,
+                    "minimized_claim_ids": ["person_id"],
+                    "passed": True,
+                },
+                {
+                    "scenario_id": "denied",
+                    "status": "denied",
+                    "token_counter_delta": 0,
+                    "source_counter_delta": 0,
+                    "minimized_claim_ids": [],
+                    "passed": True,
+                },
+            ],
+        }
+        product_logs = {
+            "products": [
+                {"workload": name, "available": True}
+                for name in sorted(
+                    {
+                        "relay-public",
+                        "relay-consultation",
+                        "notary",
+                        "synthetic-source",
+                    }
+                )
+            ]
+        }
+        runtime = {
+            "release_tag": self.tag,
+            "source_mode": "synthetic",
+            "plan_sha256": "3" * 64,
+            "plan_digest": "sha256:" + "4" * 64,
+            "build_manifest_digest": "sha256:" + "5" * 64,
+            "compose_digest": "sha256:" + "6" * 64,
+            "request_digest": "sha256:" + "7" * 64,
+            "listeners": dict(self.module.STABLE_LISTENERS),
+            "workloads": {
+                name: verified[image_key]
+                for name, image_key in sorted(
+                    self.module.STABLE_WORKLOAD_IMAGES.items()
+                )
+            },
+            "permissions": {"runtime_root": "0700", "credentials": "0700"},
+        }
+        normalized = {
+            "doctor": doctor,
+            "dev_status": status,
+            "dev_smoke": smoke,
+            "dev_logs": product_logs,
+            "inspect": runtime,
+        }
+        commands = []
+        for name in self.module.STABLE_COMMAND_ORDER:
+            log = logs / f"{name}.log"
+            if name in normalized:
+                log.write_text(
+                    json.dumps(normalized[name], sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                log.write_text(f"{name} passed\n", encoding="utf-8")
+            commands.append(
+                {
+                    "name": name,
+                    "status": "passed",
+                    "exit_code": 0,
+                    "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+                }
+            )
+        report = {
+            "schema_version": self.module.STABLE_SCHEMA,
+            "status": "passed",
+            "release_tag": self.tag,
+            "manifest_source_ref": "1" * 40,
+            "tag_target": "2" * 40,
+            "platform_asset": self.binary,
+            "asset_sha256": verified["assets"],
+            "release_image_lock_sha256": verified["assets"][self.lock],
+            "release_lock_sha256": verified["assets"][self.release_lock],
+            "relay_image": self.relay,
+            "notary_image": self.notary,
+            "postgresql_image": self.postgresql,
+            "commands": commands,
+            "reader_journeys": reader_summary,
+            "doctor": doctor,
+            "runtime": runtime,
+            "dev_status": status,
+            "smoke": smoke,
+            "product_logs": product_logs,
+            "redaction": {"status": "passed", "generated_files_scanned": 20},
+        }
+        path = evidence / "first-country-release-form.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        return path, report, logs
+
     def verify_report(self, path: Path) -> None:
         with (
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
         ):
-            self.module.verify_report(path, self.assets, self.tag)
+            self.module.verify_legacy_report(path, self.assets, self.tag)
 
     def write_smoke_report(self, topology: str) -> Path:
         outcomes = dict(self.module.RELAY_SMOKE_OUTCOMES)
@@ -296,6 +488,98 @@ class FirstCountryReleaseFormTest(TestCase):
                 "stop",
             ),
         )
+
+    def test_stable_command_order_uses_only_maintained_cli_surfaces(self) -> None:
+        self.assertEqual(
+            self.module.STABLE_COMMAND_ORDER,
+            (
+                "install",
+                "version",
+                "reader_journeys",
+                "pull_relay",
+                "pull_notary",
+                "pull_postgresql",
+                "doctor",
+                "dev_up",
+                "dev_status",
+                "dev_smoke",
+                "dev_logs",
+                "inspect",
+                "dev_down",
+            ),
+        )
+        stable_source = SCRIPT.read_text(encoding="utf-8").split(
+            "def run_stable_release_form", 1
+        )[1].split("def run_legacy_release_form", 1)[0]
+        for retired in (
+            '"start"',
+            '"restart"',
+            '"stop"',
+            '"add"',
+            '"--from"',
+            '"--project-dir"',
+        ):
+            self.assertNotIn(retired, stable_source)
+
+    def test_stable_release_rejects_legacy_evidence_schema(self) -> None:
+        path, _, _ = self.write_valid_report_evidence()
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "maintained release-form"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_stable_report_verifies_maintained_reader_and_runtime_evidence(
+        self,
+    ) -> None:
+        path, _, _ = self.write_valid_stable_report_evidence()
+        with (
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_stable_report_rejects_runtime_image_outside_signed_lock(self) -> None:
+        path, report, _ = self.write_valid_stable_report_evidence()
+        report["runtime"]["workloads"]["relay-public"] = (
+            "ghcr.io/registrystack/registry-relay@sha256:" + "9" * 64
+        )
+        path.write_text(json.dumps(report), encoding="utf-8")
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "does not prove"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_stable_smoke_requires_zero_denied_source_access(self) -> None:
+        path, report, logs = self.write_valid_stable_report_evidence()
+        report["smoke"]["results"][1]["source_counter_delta"] = 1
+        (logs / "dev_smoke.log").write_text(
+            json.dumps(report["smoke"], sort_keys=True) + "\n", encoding="utf-8"
+        )
+        command = next(
+            command
+            for command in report["commands"]
+            if command["name"] == "dev_smoke"
+        )
+        command["log_sha256"] = hashlib.sha256(
+            (logs / "dev_smoke.log").read_bytes()
+        ).hexdigest()
+        path.write_text(json.dumps(report), encoding="utf-8")
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "counters or minimized"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
 
     def test_image_lock_without_notary_fails_closed(self) -> None:
         lock = json.loads((self.assets / self.lock).read_text(encoding="utf-8"))
@@ -912,7 +1196,7 @@ class FirstCountryReleaseFormTest(TestCase):
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
         ):
-            self.module.verify_report(path, self.assets, self.tag)
+            self.module.verify_legacy_report(path, self.assets, self.tag)
 
     def test_report_rejects_unknown_field(self) -> None:
         verified = self.verify_assets()
@@ -969,7 +1253,7 @@ class FirstCountryReleaseFormTest(TestCase):
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
         ):
-            self.module.verify_report(path, self.assets, self.tag)
+            self.module.verify_legacy_report(path, self.assets, self.tag)
 
     def test_workflows_keep_candidate_and_released_install_proofs_separate(
         self,

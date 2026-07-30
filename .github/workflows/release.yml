@@ -169,6 +169,8 @@ jobs:
             --workflow-revision "${workflow_revision}" \
             --version "${{ steps.identity.outputs.version }}" \
             --release-id "${release_id}"
+          git merge-base --is-ancestor \
+            "${workflow_revision}" "${{ steps.identity.outputs.source_sha }}"
           python3 release/scripts/release_candidate.py verify-candidate \
             --manifest "${manifest}" \
             --bundle "${bundle}" \
@@ -637,7 +639,8 @@ jobs:
           if ((major >= 1)); then
             python3 release/scripts/registry_release_lock.py create-payload \
               --version "${version}" \
-              --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
+              --manifest-source-ref "${{ needs.verify.outputs.workflow_revision }}" \
+              --tag-target "${{ needs.verify.outputs.source_sha }}" \
               --asset-dir release-assets \
               --image-lock \
                 "release-assets/registryctl-${tag}-image-lock.json" \

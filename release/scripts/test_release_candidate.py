@@ -1520,7 +1520,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                         "--trusted-run-metadata",
                         str(metadata_path),
                         "--tag-target",
-                        SOURCE_SHA,
+                        "f" * 40,
                         "--workflow-revision",
                         SOURCE_SHA,
                         "--version",
