@@ -32,11 +32,13 @@ use deployment::{
     ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
     ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
 };
+use registry_platform_crypto::canonicalize_json;
 use release_lock::{
     LockedMountSourceV1, LockedOperatorFileFormatV1, LockedOperatorFileV1, LockedRuntimeActionV1,
     LockedRuntimeMountV1, LockedSecretProjectionV1, LockedServiceHardeningV1,
 };
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
 static PROCESS_PATH_LOCK: Mutex<()> = Mutex::new(());
 
@@ -487,6 +489,27 @@ fn file_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 
+fn sha256_uri(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn recompute_package_local_manifest_for_compose(package: &Path) {
+    let manifest_file = package.join("generated/deployment-manifest.v1.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_file).unwrap()).unwrap();
+    manifest["generated_files"]["compose.yaml"] = json!(sha256_uri(
+        &fs::read(package.join("generated/compose.yaml")).unwrap()
+    ));
+    let mut closure = manifest.clone();
+    closure
+        .as_object_mut()
+        .unwrap()
+        .remove("generated_closure_sha256");
+    manifest["generated_closure_sha256"] = json!(sha256_uri(&canonicalize_json(&closure).unwrap()));
+    let mut bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+    bytes.push(b'\n');
+    fs::write(manifest_file, bytes).unwrap();
+}
+
 fn verify(
     fixture: &PackageFixture,
     models: &EffectiveComposeModelsV1,
@@ -565,6 +588,10 @@ fn managed_package_is_current_for_its_generated_models() {
         .join("generated/deployment-plan.v1.json")
         .is_file());
     assert_eq!(
+        fs::read(fixture.package.join("generated/deployment-binding.v1.yaml")).unwrap(),
+        fs::read(fixture.package.join("binding.yaml")).unwrap()
+    );
+    assert_eq!(
         fs::read_dir(fixture.package.join("generated/bundles/relay-consultation"),)
             .unwrap()
             .count(),
@@ -574,12 +601,12 @@ fn managed_package_is_current_for_its_generated_models() {
 }
 
 #[test]
-fn changed_binding_is_managed_but_stale() {
+fn changed_binding_is_managed_stale_and_safely_regenerable() {
     let fixture = package_fixture();
-    let mut binding: Value =
+    let mut binding: DeploymentBindingV1 =
         serde_norway::from_str(&fs::read_to_string(fixture.package.join("binding.yaml")).unwrap())
             .unwrap();
-    binding["ports"]["relay_public"] = json!(4343);
+    binding.ports.relay_public = 4343;
     fs::write(
         fixture.package.join("binding.yaml"),
         serde_norway::to_string(&binding).unwrap(),
@@ -597,6 +624,109 @@ fn changed_binding_is_managed_but_stale() {
         report.violations
     );
     assert_eq!(report.package_freshness, PackageFreshnessV1::Stale);
+    assert!(report.in_place_regeneration_safe);
+
+    let regenerated = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+            binding_file: None,
+        },
+        fixture.verified_inputs.clone(),
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap();
+    assert_eq!(
+        regenerated.models.ordinary["services"]["registry-relay-public"]["ports"],
+        json!(["127.0.0.1:4343:4242"])
+    );
+    let regenerated_report =
+        verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        })
+        .unwrap();
+    assert_eq!(
+        regenerated_report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        regenerated_report.violations
+    );
+    assert_eq!(
+        regenerated_report.package_freshness,
+        PackageFreshnessV1::Current
+    );
+}
+
+#[test]
+fn stale_binding_does_not_trust_recomputed_compose_with_an_extra_service() {
+    let fixture = package_fixture();
+    let binding_file = fixture.package.join("binding.yaml");
+    let mut edited_binding: DeploymentBindingV1 =
+        serde_norway::from_slice(&fs::read(&binding_file).unwrap()).unwrap();
+    edited_binding.ports.relay_public = 4343;
+    fs::write(
+        &binding_file,
+        serde_norway::to_string(&edited_binding).unwrap(),
+    )
+    .unwrap();
+
+    let compose_file = fixture.package.join("generated/compose.yaml");
+    let mut compose: Value = serde_norway::from_slice(&fs::read(&compose_file).unwrap()).unwrap();
+    compose["services"]["arbitrary-extra-service"] = json!({
+        "image": "example.invalid/arbitrary@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "command": ["/arbitrary"]
+    });
+    fs::write(&compose_file, serde_norway::to_string(&compose).unwrap()).unwrap();
+    recompute_package_local_manifest_for_compose(&fixture.package);
+
+    let report =
+        verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        })
+        .unwrap();
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Invalid,
+        "{:?}",
+        report.violations
+    );
+    assert_eq!(report.package_freshness, PackageFreshnessV1::NotApplicable);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("ordinary effective model differs")));
+}
+
+#[test]
+fn generation_binding_projection_is_closed_and_validated_before_use() {
+    let fixture = package_fixture();
+    let projection_file = fixture.package.join("generated/deployment-binding.v1.yaml");
+    let mut projection: Value =
+        serde_norway::from_slice(&fs::read(&projection_file).unwrap()).unwrap();
+    projection["unreviewed_authority"] = json!(true);
+    fs::write(
+        projection_file,
+        serde_norway::to_string(&projection).unwrap(),
+    )
+    .unwrap();
+
+    let error =
+        verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        })
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("generation binding projection is not a supported closed document"));
 }
 
 #[test]

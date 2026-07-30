@@ -62,6 +62,7 @@ pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
 ];
 
 const SERVICE_POSTGRESQL_BOOTSTRAP: &str = "registry-postgres-bootstrap";
+const GENERATED_BINDING_PROJECTION: &str = "deployment-binding.v1.yaml";
 
 const INITIALIZATION_SERVICES: [&str; 7] = [
     SERVICE_POSTGRESQL_BOOTSTRAP,
@@ -1678,6 +1679,24 @@ fn load_deployment_binding(path: &Path) -> Result<DeploymentBindingV1> {
     Ok(binding)
 }
 
+fn load_generation_binding_projection(
+    package_dir: &Path,
+) -> Result<(Vec<u8>, DeploymentBindingV1)> {
+    let bytes = read_bounded_regular_file(
+        &package_dir
+            .join("generated")
+            .join(GENERATED_BINDING_PROJECTION),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )
+    .context("failed to read the generation binding projection")?;
+    let binding: DeploymentBindingV1 = serde_norway::from_slice(&bytes)
+        .context("generation binding projection is not a supported closed document")?;
+    binding
+        .validate()
+        .context("generation binding projection is invalid")?;
+    Ok((bytes, binding))
+}
+
 fn output_is_absent_or_empty(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1770,6 +1789,10 @@ pub fn render_deployment_package(
     fs::create_dir_all(root.join("generated/anchors"))?;
 
     write_yaml(root.join("binding.yaml"), &request.binding)?;
+    write_yaml(
+        root.join("generated").join(GENERATED_BINDING_PROJECTION),
+        &request.binding,
+    )?;
     write_bytes(root.join("generated/compose.empty.env"), b"")?;
     write_bytes(
         root.join("generated/postgresql-server.env"),
@@ -1993,31 +2016,17 @@ fn verify_deployment_package_with_package_inputs(
     package_inputs: &VerifiedDeploymentInputsV1,
     verify_operator_material: bool,
 ) -> Result<DeploymentOwnershipReportV1> {
-    let binding_bytes = read_bounded_regular_file(
-        &request.package_dir.join("binding.yaml"),
-        MAX_PORTABLE_DOCUMENT_BYTES,
-    )
-    .context("failed to read deployment binding")?;
-    let binding: DeploymentBindingV1 = serde_norway::from_slice(&binding_bytes)
-        .context("deployment binding is not a supported closed document")?;
-    binding.validate()?;
-    let rendered = render_compose_package(package_inputs, &binding)?;
-    let manifest: DeploymentManifestV1 = read_json(
-        &request
-            .package_dir
-            .join("generated/deployment-manifest.v1.json"),
-    )?;
-    let expected_models = if sha256_uri(&binding_bytes) == manifest.binding_sha256 {
-        effective_rendered_models(&rendered.models)?
-    } else {
-        stored_rendered_models(request.package_dir)?
-    };
+    let (generation_binding_bytes, generation_binding) =
+        load_generation_binding_projection(request.package_dir)?;
+    let expected_rendered = render_compose_package(package_inputs, &generation_binding)?;
     let effective_models = stored_rendered_models(request.package_dir)?;
     verify_deployment_package_core(
         request,
         package_inputs,
         &effective_models,
-        &expected_models,
+        &generation_binding_bytes,
+        &generation_binding,
+        &expected_rendered,
         verify_operator_material,
     )
 }
@@ -2031,32 +2040,16 @@ pub(crate) fn verify_deployment_package_with_models(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     effective_models: &EffectiveComposeModelsV1,
 ) -> Result<DeploymentOwnershipReportV1> {
-    let rendered = render_compose_package(
-        request.verified_inputs,
-        &serde_norway::from_slice::<DeploymentBindingV1>(&read_bounded_regular_file(
-            &request.package_dir.join("binding.yaml"),
-            MAX_PORTABLE_DOCUMENT_BYTES,
-        )?)?,
-    )?;
-    let binding_bytes = read_bounded_regular_file(
-        &request.package_dir.join("binding.yaml"),
-        MAX_PORTABLE_DOCUMENT_BYTES,
-    )?;
-    let manifest: DeploymentManifestV1 = read_json(
-        &request
-            .package_dir
-            .join("generated/deployment-manifest.v1.json"),
-    )?;
-    let expected_models = if sha256_uri(&binding_bytes) == manifest.binding_sha256 {
-        effective_rendered_models(&rendered.models)?
-    } else {
-        stored_rendered_models(request.package_dir)?
-    };
+    let (generation_binding_bytes, generation_binding) =
+        load_generation_binding_projection(request.package_dir)?;
+    let expected_rendered = render_compose_package(request.verified_inputs, &generation_binding)?;
     verify_deployment_package_core(
         request,
         request.verified_inputs,
         effective_models,
-        &expected_models,
+        &generation_binding_bytes,
+        &generation_binding,
+        &expected_rendered,
         request.check_operator_files,
     )
 }
@@ -2065,7 +2058,9 @@ fn verify_deployment_package_core(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     package_inputs: &VerifiedDeploymentInputsV1,
     effective_models: &EffectiveComposeModelsV1,
-    expected_models: &EffectiveComposeModelsV1,
+    generation_binding_bytes: &[u8],
+    generation_binding: &DeploymentBindingV1,
+    expected_rendered: &RenderedComposePackageV1,
     verify_operator_material: bool,
 ) -> Result<DeploymentOwnershipReportV1> {
     let inputs = package_inputs;
@@ -2099,8 +2094,8 @@ fn verify_deployment_package_core(
     let Ok(package_binding) = package_binding else {
         unreachable!("invalid package bindings return before rendering");
     };
-    let canonical = render_compose_package(inputs, &package_binding)?;
-    let operator_inventory = operator_file_inventory(&inputs.runtime, &package_binding)?;
+    let expected_models = effective_rendered_models(&expected_rendered.models)?;
+    let operator_inventory = operator_file_inventory(&inputs.runtime, generation_binding)?;
     let manifest: DeploymentManifestV1 = read_json(
         &request
             .package_dir
@@ -2120,18 +2115,15 @@ fn verify_deployment_package_core(
     let binding_digest = sha256_uri(&binding_bytes);
     let binding_is_stale = binding_digest != manifest.binding_sha256;
     let expected_fixed_files = expected_fixed_generated_files(
-        &canonical,
+        expected_rendered,
         inputs,
-        &package_binding,
+        generation_binding,
         request
             .package_dir
             .file_name()
             .and_then(|name| name.to_str()),
     )?;
     for (path, digest) in &expected_fixed_files {
-        if binding_is_stale && matches!(path.as_str(), "compose.yaml" | "compose.initialize.yaml") {
-            continue;
-        }
         if actual_generated.get(path) != Some(digest) {
             generated_intact = false;
             violations.push(format!(
@@ -2175,6 +2167,14 @@ fn verify_deployment_package_core(
     {
         generated_intact = false;
         violations.push("deployment manifest package identity changed".to_string());
+    }
+    if generation_binding.environment != manifest.environment
+        || generation_binding.package_id != manifest.package_id
+        || sha256_uri(generation_binding_bytes) != manifest.binding_sha256
+    {
+        generated_intact = false;
+        violations
+            .push("generation binding projection differs from the deployment manifest".to_string());
     }
     let plan_bytes = read_bounded(
         &request
@@ -3454,7 +3454,9 @@ fn expected_fixed_generated_files(
     let inventory = operator_file_inventory(&inputs.runtime, binding)?;
     let mut inventory_bytes = serde_json::to_vec_pretty(&inventory)?;
     inventory_bytes.push(b'\n');
+    let binding_projection = serde_norway::to_string(binding)?.into_bytes();
     let files = [
+        (GENERATED_BINDING_PROJECTION, binding_projection),
         ("compose.empty.env", Vec::new()),
         (
             "postgresql-server.env",
