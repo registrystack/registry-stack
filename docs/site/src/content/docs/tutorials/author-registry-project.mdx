@@ -29,6 +29,28 @@ Do not add production endpoints, source credentials, or personal data.
 
 ## Before you start
 
+Choose an exact published 1.x tag from the
+[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
+download its installer:
+
+```sh
+tag="v<major>.<minor>.<patch>"
+installer="registryctl-${tag}-install.sh"
+curl --proto '=https' --tlsv1.2 --fail --location \
+  --output "$installer" \
+  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
+```
+
+This quick installation path trusts GitHub and TLS.
+The installer then verifies the downloaded Registryctl binary and matching signed release lock
+against the release checksums.
+When your acceptance process requires publisher authentication, follow `release/VERIFY.md` from
+the same tag before running the installer.
+
+```sh
+bash "$installer"
+```
+
 Confirm that Registryctl and Docker Compose are available:
 
 ```sh

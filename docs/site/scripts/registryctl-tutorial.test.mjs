@@ -223,6 +223,10 @@ test('current HTTP reader pages keep one starter and current command roots', () 
   ];
   const currentText = pages.join('\n');
 
+  assert.match(currentText, /tag="v<major>\.<minor>\.<patch>"/);
+  assert.match(currentText, /registryctl-\$\{tag\}-install\.sh/);
+  assert.match(currentText, /release\/VERIFY\.md/);
+  assert.match(currentText, /quick installation path trusts GitHub and TLS/);
   assert.match(currentText, /--template http/);
   assert.match(currentText, /registryctl dev smoke/);
   assert.match(currentText, /registryctl check/);
