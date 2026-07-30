@@ -159,28 +159,32 @@ test('bundle verification separates stateless closure from product rollback elig
 
   assert.match(
     source,
-    /SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-bundle[\s\S]*?PRODUCT_TRUST_ANCHOR=operator-inputs\/relay-trust-anchor\.json[\s\S]*?registryctl trust bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor "\$PRODUCT_TRUST_ANCHOR"/,
+    /ROTATED_TRUST=operator-inputs\/rotated-relay-consultation-trust[\s\S]*?SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-consultation-next[\s\S]*?registryctl trust bundle sign[\s\S]*?--anchor "\$ROTATED_TRUST\/anchor\.json"[\s\S]*?--against "\$CURRENT_APPROVED_SET"[\s\S]*?PRODUCT_TRUST_ANCHOR="\$ROTATED_TRUST\/anchor\.json"[\s\S]*?registryctl trust bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor "\$PRODUCT_TRUST_ANCHOR"/,
+  );
+  assert.match(
+    source,
+    /registryctl trust approved-set assemble[\s\S]*?--from "\$CURRENT_APPROVED_SET"[\s\S]*?--relay-consultation "\$SIGNED_PRODUCT_BUNDLE"/,
   );
   assert.match(
     source,
     /does not read product anti-rollback state or establish local rollback eligibility/,
   );
-  for (const [product, bundleVariable, anchorVariable, stateVariable] of [
-    ['registry-relay', 'SIGNED_RELAY_BUNDLE', 'RELAY_TRUST_ANCHOR', 'RELAY_ROLLBACK_STATE'],
-    ['registry-notary', 'SIGNED_NOTARY_BUNDLE', 'NOTARY_TRUST_ANCHOR', 'NOTARY_ROLLBACK_STATE'],
+  for (const [product, stateVariable] of [
+    ['registry-relay', 'RELAY_ROLLBACK_STATE'],
+    ['registry-notary', 'NOTARY_ROLLBACK_STATE'],
   ]) {
     assert.match(
       source,
       new RegExp(
         `${product} config verify-bundle[\\s\\S]*?` +
-          `--bundle-dir "\\$${bundleVariable}"[\\s\\S]*?` +
-          `--anchor-path "\\$${anchorVariable}"[\\s\\S]*?` +
+          '--bundle-dir "\\$SIGNED_PRODUCT_BUNDLE"[\\s\\S]*?' +
+          '--anchor-path "\\$PRODUCT_TRUST_ANCHOR"[\\s\\S]*?' +
           `--state-path "\\$${stateVariable}"`,
       ),
     );
   }
   assert.match(source, /require accepted state to exist/);
-  assert.match(source, /Neither command persists bundle acceptance/);
+  assert.match(source, /without persisting an acceptance/);
   assert.doesNotMatch(
     source,
     /(?:registryctl )?[Bb]undle verification proves[\s\S]{0,100}anti-rollback eligibility/,
