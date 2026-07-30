@@ -992,17 +992,18 @@ function buildSteps(journey, matrixById) {
       kind: "operator_interface",
       label: "Review against governed product baselines",
       inputs: [
-        "Separately verified Relay baseline bundle and Relay trust anchor",
+        "Separately verified public Relay baseline bundle and Relay trust anchor",
+        "Separately verified consultation Relay baseline bundle and Relay trust anchor",
         "Separately verified Notary baseline bundle and Notary trust anchor",
       ],
       outputs: ["Value-safe promotion report and required-action review"],
       procedure:
-        "Only after operators supply both product-owned baseline paths and trust anchors, use the registryctl promote lifecycle interface for the fixed project directory and local environment. This governed review is separate from the first-time starter comparison and does not authorize activation.",
+        "Only after operators supply all three product-owned baseline paths and trust anchors, use the registryctl promote lifecycle interface for the fixed project directory and local environment. This governed review is separate from the first-time starter comparison and does not authorize activation.",
     },
     {
       id: "lifecycle-relay-bundle",
       kind: "operator_interface",
-      label: "Sign and verify the Relay product input",
+      label: "Sign and verify the public Relay product input",
       inputs: [
         "registry-project/.registry-stack/build/local/private/relay",
         "Operator-selected Relay signing key",
@@ -1011,6 +1012,19 @@ function buildSteps(journey, matrixById) {
       outputs: ["journey-output/registry-relay-bundle"],
       procedure:
         "Use registryctl bundle sign with --out journey-output/registry-relay-bundle, then verify that directory with the product-owned Relay trust anchor. Signing material is never rendered into a shell block.",
+    },
+    {
+      id: "lifecycle-relay-consultation-bundle",
+      kind: "operator_interface",
+      label: "Sign and verify the consultation Relay product input",
+      inputs: [
+        "registry-project/.registry-stack/build/local/private/relay-consultation",
+        "Operator-selected consultation Relay signing key",
+        "Operator-selected consultation Relay trust anchor and anti-rollback sequence",
+      ],
+      outputs: ["journey-output/registry-relay-consultation-bundle"],
+      procedure:
+        "Review private/relay-consultation as a separate product input. Use registryctl bundle sign with --out journey-output/registry-relay-consultation-bundle, verify that directory with the product-owned Relay trust anchor, and hand it to the consultation Relay activation procedure independently from the public Relay and Notary bundles.",
     },
     {
       id: "lifecycle-notary-bundle",

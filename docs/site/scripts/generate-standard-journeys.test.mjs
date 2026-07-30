@@ -171,6 +171,7 @@ test("preserves exact scaffold ownership and emitted build paths", async () => {
     for (const path of [
       `${projectDirectory}/.registry-stack/build/local/reviewable`,
       `${projectDirectory}/.registry-stack/build/local/private/relay`,
+      `${projectDirectory}/.registry-stack/build/local/private/relay-consultation`,
       `${projectDirectory}/.registry-stack/build/local/private/notary`,
     ]) {
       assert(paths.has(path), `${id} is missing exact emitted path ${path}`);
@@ -188,6 +189,7 @@ test("preserves exact scaffold ownership and emitted build paths", async () => {
       .map((artifact) => artifact.path),
     [
       "journey-output/registry-relay-bundle",
+      "journey-output/registry-relay-consultation-bundle",
       "journey-output/registry-notary-bundle",
     ],
   );
@@ -429,8 +431,23 @@ test("keeps runtime and product activation claims bounded to traceable evidence"
     false,
   );
   assert.equal(
-    lifecycle.steps.filter((step) => step.kind === "operator_interface").length >= 3,
+    lifecycle.steps.filter((step) => step.kind === "operator_interface").length >= 4,
     true,
+  );
+  const consultationRelay = lifecycle.steps.find(
+    (step) => step.id === "lifecycle-relay-consultation-bundle",
+  );
+  assert.deepEqual(consultationRelay.inputs, [
+    "registry-project/.registry-stack/build/local/private/relay-consultation",
+    "Operator-selected consultation Relay signing key",
+    "Operator-selected consultation Relay trust anchor and anti-rollback sequence",
+  ]);
+  assert.deepEqual(consultationRelay.outputs, [
+    "journey-output/registry-relay-consultation-bundle",
+  ]);
+  assert.match(
+    consultationRelay.procedure,
+    /activation procedure independently from the public Relay and Notary bundles/u,
   );
   const governedPromotion = lifecycle.steps.find(
     (step) =>

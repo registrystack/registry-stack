@@ -162,8 +162,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -479,8 +479,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -750,7 +750,15 @@
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay product input."
+        "note": "Exact emitted unsigned public Relay product input."
+      },
+      {
+        "path": "registry-project/.registry-stack/build/local/private/relay-consultation",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact emitted unsigned consultation Relay product input for the authored consultation profile."
       },
       {
         "path": "registry-project/.registry-stack/build/local/private/notary",
@@ -810,8 +818,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -1169,7 +1177,15 @@
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay input containing the complete Rhai adapter."
+        "note": "Exact emitted unsigned public Relay input."
+      },
+      {
+        "path": "fhir-project/.registry-stack/build/local/private/relay-consultation",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact emitted unsigned consultation Relay input containing the complete Rhai adapter."
       },
       {
         "path": "fhir-project/.registry-stack/build/local/private/notary",
@@ -1228,8 +1244,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -1606,7 +1622,15 @@
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay input containing snapshot materialization requirements."
+        "note": "Exact emitted unsigned public Relay input containing snapshot materialization requirements."
+      },
+      {
+        "path": "snapshot-project/.registry-stack/build/local/private/relay-consultation",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact emitted unsigned consultation Relay input for registry-backed evidence requests."
       },
       {
         "path": "snapshot-project/.registry-stack/build/local/private/notary",
@@ -1667,8 +1691,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -2020,7 +2044,15 @@
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay input for snapshot materialization."
+        "note": "Exact emitted unsigned public Relay input for snapshot materialization."
+      },
+      {
+        "path": "snapshot-project/.registry-stack/build/local/private/relay-consultation",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact emitted unsigned consultation Relay input for the registry-backed Notary claim."
       },
       {
         "path": "snapshot-project/.registry-stack/build/local/private/notary",
@@ -2058,7 +2090,7 @@
     "review": [
       "Review the exact selector, claim identifiers, and both focused fixture expectations.",
       "Keep match and no-match results bounded to the synthetic snapshot fixture.",
-      "Review Relay and Notary generated inputs independently."
+      "Review the public Relay, consultation Relay, and Notary generated inputs independently."
     ],
     "gates": [
       {
@@ -2081,8 +2113,8 @@
       "environment": "Bind the reviewed candidate to the intended production environment and product instance.",
       "secrets": "Provision credentials and trust material through operator-managed references.",
       "approval": "Record country-author, product-owner, and operator approval for the reviewed candidate.",
-      "signing": "Sign each immutable product input with the authorized product-specific identity.",
-      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product."
+      "signing": "Sign each immutable product input with the authorized product-specific identity. When a build emits `private/relay-consultation`, review and sign that consultation Relay input independently from the public Relay and Notary inputs.",
+      "activation": "Verify, activate, observe, and retain rollback evidence independently for each product input, including `private/relay-consultation` when consultation profiles exist."
     },
     "troubleshooting": [
       {
@@ -2320,12 +2352,12 @@
     "slug": "journeys/product-input-lifecycle",
     "title": "Review and promote generated product inputs",
     "description": "Keep authoring, generation, signing, verification, and activation as separate trust-boundary steps.",
-    "outcome": "Reviewed authored configuration becomes independently activatable Relay and Notary product inputs.",
+    "outcome": "Reviewed authored configuration becomes independently activatable public Relay, consultation Relay, and Notary product inputs.",
     "level": "Advanced",
     "prerequisites": [
       "A fixture-complete project that passes registryctl check",
       "Operator-managed signing identities and product trust anchors",
-      "Separate Relay and Notary activation authority"
+      "Separate public Relay, consultation Relay, and Notary activation authority"
     ],
     "expected_time": "40 minutes",
     "evidence_class": "generated_contract",
@@ -2406,7 +2438,15 @@
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay product input."
+        "note": "Exact emitted unsigned public Relay product input."
+      },
+      {
+        "path": "registry-project/.registry-stack/build/local/private/relay-consultation",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact emitted unsigned consultation Relay product input for the authored consultation profile."
       },
       {
         "path": "registry-project/.registry-stack/build/local/private/notary",
@@ -2422,7 +2462,15 @@
         "owner": "operator",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact user-selected --out path for the independently signed and verified Relay bundle."
+        "note": "Exact user-selected --out path for the independently signed and verified public Relay bundle."
+      },
+      {
+        "path": "journey-output/registry-relay-consultation-bundle",
+        "classification": "generated_signed",
+        "owner": "operator",
+        "human_edit": false,
+        "version_control": false,
+        "note": "Exact user-selected --out path for the independently signed and verified consultation Relay bundle."
       },
       {
         "path": "journey-output/registry-notary-bundle",
@@ -2439,14 +2487,14 @@
       "expected_trace": [
         "Fixtures establish authored behavior before build.",
         "Check and preflight emit separate value-free reports.",
-        "Product inputs remain independent through signing, verification, and the product-owned activation handoff."
+        "The public Relay, consultation Relay, and Notary inputs remain independent through signing, verification, and their product-owned activation handoffs."
       ]
     },
     "contract": {
       "proves": [
         "Deterministic unsigned product inputs can be generated from reviewed source.",
-        "Independently signed Relay and Notary bundles can be verified and made eligible for separate product-owned activation.",
-        "Relay and Notary inputs, signatures, trust anchors, and anti-rollback sequences remain product-owned and separate."
+        "Independently signed public Relay, consultation Relay, and Notary bundles can be verified and made eligible for separate product-owned activation.",
+        "Public Relay, consultation Relay, and Notary inputs, signatures, trust anchors, and anti-rollback sequences remain product-owned and separate."
       ],
       "does_not_prove": [
         "An unsigned build is trusted, active, healthy, or release-proven.",
@@ -2460,7 +2508,7 @@
     "review": [
       "Review authored semantics and the candidate source commit.",
       "Use the build report to locate each product closure.",
-      "Sign and verify Relay and Notary inputs independently before handing either bundle to its product-owned activation procedure."
+      "Sign and verify public Relay, consultation Relay, and Notary inputs independently before handing each bundle to its product-owned activation procedure."
     ],
     "gates": [
       {
@@ -2476,20 +2524,20 @@
       {
         "name": "bundle verification",
         "proves": "One immutable product closure has accepted signature and target binding.",
-        "does_not_prove": "The other product is valid or activation succeeds."
+        "does_not_prove": "Either other product input is valid or activation succeeds."
       },
       {
         "name": "activation handoff",
         "proves": "Each verified bundle and trust decision is separately identifiable for its product-owned activation procedure.",
-        "does_not_prove": "Either product activated the bundle, reached readiness, or exercised rollback."
+        "does_not_prove": "Any of the three product inputs activated, reached readiness, or exercised rollback."
       }
     ],
     "production_delta": {
       "environment": "Bind each reviewed product candidate to the intended environment and instance.",
       "secrets": "Keep signing keys and trust anchors in operator-managed systems.",
       "approval": "Preserve separate author, product-owner, signer, and activator approvals.",
-      "signing": "Apply product-specific identity, stream, sequence, and bundle bindings.",
-      "activation": "Exercise readiness, activation, rollback, and last-known-good behavior per product. Relay and Notary activate independently; Registry Stack does not claim atomic project-root activation."
+      "signing": "Apply separate identity, stream, sequence, and bundle bindings to `private/relay`, `private/relay-consultation`, and `private/notary`.",
+      "activation": "Exercise readiness, activation, rollback, and last-known-good behavior per product input. Public Relay, consultation Relay, and Notary activate independently; Registry Stack does not claim atomic project-root activation."
     },
     "troubleshooting": [
       {
@@ -2790,18 +2838,19 @@
         "kind": "operator_interface",
         "label": "Review against governed product baselines",
         "inputs": [
-          "Separately verified Relay baseline bundle and Relay trust anchor",
+          "Separately verified public Relay baseline bundle and Relay trust anchor",
+          "Separately verified consultation Relay baseline bundle and Relay trust anchor",
           "Separately verified Notary baseline bundle and Notary trust anchor"
         ],
         "outputs": [
           "Value-safe promotion report and required-action review"
         ],
-        "procedure": "Only after operators supply both product-owned baseline paths and trust anchors, use the registryctl promote lifecycle interface for the fixed project directory and local environment. This governed review is separate from the first-time starter comparison and does not authorize activation."
+        "procedure": "Only after operators supply all three product-owned baseline paths and trust anchors, use the registryctl promote lifecycle interface for the fixed project directory and local environment. This governed review is separate from the first-time starter comparison and does not authorize activation."
       },
       {
         "id": "lifecycle-relay-bundle",
         "kind": "operator_interface",
-        "label": "Sign and verify the Relay product input",
+        "label": "Sign and verify the public Relay product input",
         "inputs": [
           "registry-project/.registry-stack/build/local/private/relay",
           "Operator-selected Relay signing key",
@@ -2811,6 +2860,20 @@
           "journey-output/registry-relay-bundle"
         ],
         "procedure": "Use registryctl bundle sign with --out journey-output/registry-relay-bundle, then verify that directory with the product-owned Relay trust anchor. Signing material is never rendered into a shell block."
+      },
+      {
+        "id": "lifecycle-relay-consultation-bundle",
+        "kind": "operator_interface",
+        "label": "Sign and verify the consultation Relay product input",
+        "inputs": [
+          "registry-project/.registry-stack/build/local/private/relay-consultation",
+          "Operator-selected consultation Relay signing key",
+          "Operator-selected consultation Relay trust anchor and anti-rollback sequence"
+        ],
+        "outputs": [
+          "journey-output/registry-relay-consultation-bundle"
+        ],
+        "procedure": "Review private/relay-consultation as a separate product input. Use registryctl bundle sign with --out journey-output/registry-relay-consultation-bundle, verify that directory with the product-owned Relay trust anchor, and hand it to the consultation Relay activation procedure independently from the public Relay and Notary bundles."
       },
       {
         "id": "lifecycle-notary-bundle",
