@@ -474,6 +474,15 @@ class ContractError(RuntimeError):
     """Raised when a normalized fixture violates the package contract."""
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ContractError(f"deployment plan probe repeats object field {name}")
+        result[name] = value
+    return result
+
+
 def fixture_runtime_contract() -> dict[str, Any]:
     return {
         "ordinary_commands": ORDINARY_COMMANDS,
@@ -697,6 +706,7 @@ def _assert_product_hardening(
         or service.get("security_opt") != ["no-new-privileges:true"]
         or service.get("tmpfs") != ["/tmp"]
         or "cap_add" in service
+        or service.get("privileged", False) is not False
     ):
         raise ContractError(f"{name} lost product hardening")
     expected_healthcheck = (
@@ -727,6 +737,7 @@ def _assert_postgresql_hardening(
         or service.get("tmpfs")
         != ["/tmp", "/var/run/postgresql:uid=999,gid=999,mode=0750"]
         or "cap_add" in service
+        or service.get("privileged", False) is not False
     ):
         raise ContractError(f"{name} lost PostgreSQL hardening")
     expected_healthcheck = (
@@ -760,6 +771,7 @@ def _assert_product_mounts(
     lane: str,
     *,
     action: str,
+    package_root: Path,
 ) -> None:
     mounts = _mounts(service)
     expected_targets = {
@@ -780,15 +792,16 @@ def _assert_product_mounts(
     ):
         mount = mounts[target]
         source = mount.get("source")
-        path_parts = Path(source).parts if isinstance(source, str) else ()
+        expected_source = package_root / "generated" / kind / lane
         if kind == "bundles":
-            lane_owned = path_parts[-2:] == ("bundles", lane) or (
-                len(path_parts) >= 3
-                and path_parts[-3:-1] == ("bundles", lane)
-                and re.fullmatch(r"[0-9a-f]{64}", path_parts[-1]) is not None
+            source_path = Path(source) if isinstance(source, str) else None
+            lane_owned = source_path == expected_source or (
+                source_path is not None
+                and source_path.parent == expected_source
+                and re.fullmatch(r"[0-9a-f]{64}", source_path.name) is not None
             )
         else:
-            lane_owned = path_parts[-2:] == ("anchors", lane)
+            lane_owned = source == str(expected_source)
         if (
             mount.get("type") != "bind"
             or mount.get("read_only") is not True
@@ -937,8 +950,11 @@ def assert_value_free(model: dict[str, Any]) -> None:
 
 def validate_plan(path: Path) -> dict[str, str]:
     try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        plan = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ContractError("deployment plan probe is not valid JSON") from error
     expected_root_fields = {
         "schema_id",
@@ -1037,8 +1053,6 @@ def assert_ordinary_model(
             raise ContractError(f"{name} has the wrong ordinary network")
         if _dependencies(service) != ORDINARY_DEPENDENCIES[name]:
             raise ContractError(f"{name} has the wrong ordinary dependencies")
-        if service.get("privileged", False) is not False:
-            raise ContractError(f"{name} gained privileged execution")
         for forbidden in ("network_mode", "secrets"):
             if forbidden in service:
                 raise ContractError(f"{name} gained forbidden {forbidden}")
@@ -1058,10 +1072,12 @@ def assert_ordinary_model(
         health_probe=runtime_contract["health_probes"]["registry-postgres"],
     )
     for name, environment in LANE_ENVIRONMENTS.items():
-        if [path.name for path in _env_file_paths(services[name])] != [environment]:
+        if _env_file_paths(services[name]) != [
+            package_root / "operator/secrets" / environment
+        ]:
             raise ContractError(f"{name} does not use its lane environment")
-    if [path.name for path in _env_file_paths(services["registry-postgres"])] != [
-        "postgresql-server.env"
+    if _env_file_paths(services["registry-postgres"]) != [
+        package_root / "generated/postgresql-server.env"
     ]:
         raise ContractError("PostgreSQL does not use its package server environment")
     postgres_entrypoint = services["registry-postgres"].get("entrypoint")
@@ -1092,6 +1108,7 @@ def assert_ordinary_model(
             services[name],
             lane,
             action="serve",
+            package_root=package_root,
         )
     expected_ports = {
         "registry-relay-public": [
@@ -1129,8 +1146,11 @@ def assert_initialization_model(
     ordinary: dict[str, Any],
     expected_images: dict[str, str],
     runtime_contract: dict[str, Any] | None = None,
+    *,
+    package_root: Path | None = None,
 ) -> None:
     runtime_contract = runtime_contract or fixture_runtime_contract()
+    package_root = package_root or FIXTURE_ROOT / "package"
     assert_value_free(model)
     services = _services(model)
     if set(services) != ORDINARY_SERVICES | INITIALIZATION_SERVICES:
@@ -1155,9 +1175,6 @@ def assert_initialization_model(
         raise ContractError("PostgreSQL initialization is not an explicit delta")
     bootstrap = services["registry-postgres-bootstrap"]
     bootstrap_env_files = _env_file_paths(bootstrap)
-    ordinary_operator_directory = _env_file_paths(ordinary_services["registry-notary"])[
-        0
-    ].parent
     if (
         bootstrap.get("image") != expected_images["registry-postgres"]
         or bootstrap.get("command")
@@ -1165,9 +1182,11 @@ def assert_initialization_model(
             "registry-postgres-bootstrap"
         ]
         or bootstrap.get("restart") != "no"
-        or [path.name for path in bootstrap_env_files]
-        != ["postgresql-server.env", "postgresql-bootstrap-environment"]
-        or bootstrap_env_files[1].parent != ordinary_operator_directory
+        or bootstrap_env_files
+        != [
+            package_root / "generated/postgresql-server.env",
+            package_root / "operator/secrets/postgresql-bootstrap-environment",
+        ]
         or set(bootstrap.get("networks", {})) != {NETWORK_RUNTIME}
         or _dependencies(bootstrap)
         != {
@@ -1202,14 +1221,21 @@ def assert_initialization_model(
             or service.get("restart") != "no"
             or set(service.get("networks", {})) != {NETWORK_RUNTIME}
             or _dependencies(service) != INITIALIZATION_DEPENDENCIES[name]
-            or [path.name for path in _env_file_paths(service)] != [environment]
+            or _env_file_paths(service)
+            != [package_root / "operator/secrets" / environment]
             or "network_mode" in service
             or "secrets" in service
             or "ports" in service
         ):
             raise ContractError(f"{name} has the wrong initialization contract")
         _assert_product_hardening(name, service, health_probe=None)
-        _assert_product_mounts(name, service, lane, action=action)
+        _assert_product_mounts(
+            name,
+            service,
+            lane,
+            action=action,
+            package_root=package_root,
+        )
     if model.get("networks") != ordinary.get("networks"):
         raise ContractError("initialization delta changed package networks")
     if model.get("volumes") != ordinary.get("volumes"):
@@ -1250,7 +1276,12 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         "package/generated/compose.yaml",
         "package/generated/compose.initialize.yaml",
     )
-    assert_initialization_model(initialized, ordinary, expected_images)
+    assert_initialization_model(
+        initialized,
+        ordinary,
+        expected_images,
+        package_root=fixture_root / "package",
+    )
     parent = _compose_config(
         compose_command,
         fixture_root,
@@ -1293,6 +1324,7 @@ def run_rendered_package_contract(
         ordinary,
         expected_images,
         runtime_contract,
+        package_root=package_root,
     )
 
 

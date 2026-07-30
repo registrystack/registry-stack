@@ -17,6 +17,7 @@ assert SPEC is not None and SPEC.loader is not None
 CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
 SYNTHETIC_ROOT = Path("/fixture")
+SYNTHETIC_PACKAGE_ROOT = SYNTHETIC_ROOT / "package"
 
 
 def expected_images() -> dict[str, str]:
@@ -275,6 +276,15 @@ def assert_ordinary(model: dict) -> None:
     )
 
 
+def assert_initialization(model: dict, ordinary: dict) -> None:
+    CHECKER.assert_initialization_model(
+        model,
+        ordinary,
+        expected_images(),
+        package_root=SYNTHETIC_PACKAGE_ROOT,
+    )
+
+
 class AdopterComposeContractTests(unittest.TestCase):
     def test_ordinary_model_accepts_closed_package(self) -> None:
         assert_ordinary(ordinary_model())
@@ -359,6 +369,149 @@ class AdopterComposeContractTests(unittest.TestCase):
                 with self.assertRaises(CHECKER.ContractError):
                     assert_ordinary(model)
 
+    def test_ordinary_rejects_removal_of_each_workload_protection(self) -> None:
+        hardening_fields = (
+            "user",
+            "read_only",
+            "cap_drop",
+            "security_opt",
+            "tmpfs",
+            "healthcheck",
+        )
+        for service_name in CHECKER.WORKLOAD_SERVICES:
+            fields = hardening_fields + (
+                ("entrypoint",) if service_name == "registry-postgres" else ()
+            )
+            for field in fields:
+                with self.subTest(service=service_name, protection=field):
+                    model = ordinary_model()
+                    model["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+
+    def test_ordinary_requires_every_command_restart_and_dependency(self) -> None:
+        for service_name in CHECKER.WORKLOAD_SERVICES:
+            for field in ("command", "restart"):
+                with self.subTest(service=service_name, field=field):
+                    model = ordinary_model()
+                    model["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+            for dependency in CHECKER.ORDINARY_DEPENDENCIES[service_name]:
+                with self.subTest(service=service_name, dependency=dependency):
+                    model = ordinary_model()
+                    model["services"][service_name]["depends_on"].pop(dependency)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+
+    def test_ordinary_requires_every_protected_workload_mount(self) -> None:
+        baseline = ordinary_model()
+        for service_name in CHECKER.WORKLOAD_SERVICES:
+            targets = [
+                mount["target"]
+                for mount in baseline["services"][service_name]["volumes"]
+            ]
+            for target in targets:
+                with self.subTest(service=service_name, target=target):
+                    model = ordinary_model()
+                    service = model["services"][service_name]
+                    service["volumes"] = [
+                        mount
+                        for mount in service["volumes"]
+                        if mount["target"] != target
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+                with self.subTest(service=service_name, target=target, mode="changed"):
+                    model = ordinary_model()
+                    mount = next(
+                        mount
+                        for mount in model["services"][service_name]["volumes"]
+                        if mount["target"] == target
+                    )
+                    if mount.get("read_only") is True:
+                        mount.pop("read_only")
+                    else:
+                        mount["read_only"] = True
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+
+    def test_ordinary_publications_are_exact_and_private_services_stay_private(
+        self,
+    ) -> None:
+        for service_name in ("registry-relay-public", "registry-notary"):
+            with self.subTest(service=service_name, mutation="missing"):
+                model = ordinary_model()
+                model["services"][service_name].pop("ports")
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_ordinary(model)
+            with self.subTest(service=service_name, mutation="non-loopback"):
+                model = ordinary_model()
+                model["services"][service_name]["ports"][0]["host_ip"] = "0.0.0.0"
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_ordinary(model)
+        for service_name in CHECKER.ORDINARY_SERVICES - {
+            "registry-relay-public",
+            "registry-notary",
+        }:
+            with self.subTest(service=service_name, mutation="published"):
+                model = ordinary_model()
+                model["services"][service_name]["ports"] = [
+                    {
+                        "host_ip": "127.0.0.1",
+                        "mode": "ingress",
+                        "protocol": "tcp",
+                        "published": "9999",
+                        "target": 9999,
+                    }
+                ]
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_ordinary(model)
+
+    def test_product_inputs_must_be_owned_by_the_exact_lane_and_package(
+        self,
+    ) -> None:
+        lanes = {
+            "registry-relay-public": "relay-public",
+            "registry-relay-consultation": "relay-consultation",
+            "registry-notary": "notary",
+        }
+        for service_name, lane in lanes.items():
+            other_lane = next(
+                candidate for candidate in lanes.values() if candidate != lane
+            )
+            mutations = {
+                "environment": lambda service: service["env_file"].__setitem__(
+                    0,
+                    f"/fixture/package/operator/secrets/{other_lane}-environment",
+                ),
+                "bundle-lane": lambda service: service["volumes"][0].update(
+                    {"source": (f"/fixture/package/generated/bundles/{other_lane}")}
+                ),
+                "bundle-package": lambda service: service["volumes"][0].update(
+                    {"source": f"/outside/generated/bundles/{lane}"}
+                ),
+                "anchor-lane": lambda service: service["volumes"][1].update(
+                    {"source": (f"/fixture/package/generated/anchors/{other_lane}")}
+                ),
+                "state": lambda service: service["volumes"][2].update(
+                    {"source": f"registry-{other_lane}-state"}
+                ),
+                "audit": lambda service: service["volumes"][3].update(
+                    {"source": f"registry-{other_lane}-audit"}
+                ),
+            }
+            if f"registry-operator-files-{lane}-serve" in CHECKER.STAGED_SECRET_VOLUMES:
+                mutations["operator-secret"] = lambda service: service["volumes"][
+                    -1
+                ].update({"source": f"registry-operator-files-{other_lane}-serve"})
+            for mutation_name, mutate in mutations.items():
+                with self.subTest(service=service_name, mutation=mutation_name):
+                    model = ordinary_model()
+                    mutate(model["services"][service_name])
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+
     def test_stagers_reject_cross_lane_authority_and_missing_fields(
         self,
     ) -> None:
@@ -404,6 +557,57 @@ class AdopterComposeContractTests(unittest.TestCase):
                 with self.assertRaises(CHECKER.ContractError):
                     assert_ordinary(model)
 
+    def test_each_stager_requires_its_closed_isolated_contract(self) -> None:
+        fields = (
+            "image",
+            "entrypoint",
+            "command",
+            "user",
+            "read_only",
+            "cap_drop",
+            "cap_add",
+            "security_opt",
+            "tmpfs",
+            "network_mode",
+            "restart",
+        )
+        baseline = ordinary_model()
+        for service_name in CHECKER.STAGER_SERVICES:
+            for field in fields:
+                with self.subTest(service=service_name, field=field):
+                    model = ordinary_model()
+                    model["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+            with self.subTest(service=service_name, field="privileged"):
+                model = ordinary_model()
+                model["services"][service_name]["privileged"] = True
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_ordinary(model)
+            for projection in baseline["services"][service_name]["secrets"]:
+                with self.subTest(
+                    service=service_name,
+                    secret=projection["source"],
+                ):
+                    model = ordinary_model()
+                    model["services"][service_name]["secrets"] = [
+                        item
+                        for item in model["services"][service_name]["secrets"]
+                        if item["source"] != projection["source"]
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+            for mount in baseline["services"][service_name]["volumes"]:
+                with self.subTest(service=service_name, output=mount["target"]):
+                    model = ordinary_model()
+                    model["services"][service_name]["volumes"] = [
+                        item
+                        for item in model["services"][service_name]["volumes"]
+                        if item["target"] != mount["target"]
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_ordinary(model)
+
     def test_operator_files_must_stay_under_operator_directory(self) -> None:
         model = ordinary_model()
         model["secrets"]["registry-notary-signing-key"]["file"] = (
@@ -426,11 +630,7 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_initialization_model_accepts_explicit_actions(self) -> None:
         ordinary = ordinary_model()
         initialized = initialization_model(ordinary)
-        CHECKER.assert_initialization_model(
-            initialized,
-            ordinary,
-            expected_images(),
-        )
+        assert_initialization(initialized, ordinary)
 
     def test_initialization_requires_exact_postgresql_delta(self) -> None:
         ordinary = ordinary_model()
@@ -443,11 +643,7 @@ class AdopterComposeContractTests(unittest.TestCase):
             CHECKER.ContractError,
             "not an explicit delta",
         ):
-            CHECKER.assert_initialization_model(
-                initialized,
-                ordinary,
-                expected_images(),
-            )
+            assert_initialization(initialized, ordinary)
 
     def test_initialization_requires_each_closed_action_field(self) -> None:
         mutations = {
@@ -497,11 +693,108 @@ class AdopterComposeContractTests(unittest.TestCase):
                 initialized = initialization_model(ordinary)
                 mutate(initialized)
                 with self.assertRaises(CHECKER.ContractError):
-                    CHECKER.assert_initialization_model(
-                        initialized,
-                        ordinary,
-                        expected_images(),
+                    assert_initialization(initialized, ordinary)
+
+    def test_initialization_rejects_removal_of_each_hardening_field(self) -> None:
+        ordinary = ordinary_model()
+        hardening_fields = (
+            "user",
+            "read_only",
+            "cap_drop",
+            "security_opt",
+            "tmpfs",
+        )
+        for service_name in CHECKER.INITIALIZATION_SERVICES:
+            for field in hardening_fields:
+                with self.subTest(service=service_name, protection=field):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+            with self.subTest(service=service_name, protection="privileged"):
+                initialized = initialization_model(ordinary)
+                initialized["services"][service_name]["privileged"] = True
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_initialization(initialized, ordinary)
+
+    def test_initialization_requires_each_command_restart_network_and_dependency(
+        self,
+    ) -> None:
+        ordinary = ordinary_model()
+        baseline = initialization_model(ordinary)
+        for service_name in CHECKER.INITIALIZATION_SERVICES:
+            for field in ("command", "restart", "networks"):
+                with self.subTest(service=service_name, field=field):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+            dependencies = baseline["services"][service_name].get("depends_on", {})
+            if dependencies:
+                for dependency in dependencies:
+                    with self.subTest(service=service_name, dependency=dependency):
+                        initialized = initialization_model(ordinary)
+                        initialized["services"][service_name]["depends_on"].pop(
+                            dependency
+                        )
+                        with self.assertRaises(CHECKER.ContractError):
+                            assert_initialization(initialized, ordinary)
+            else:
+                with self.subTest(service=service_name, dependency="unexpected"):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name]["depends_on"] = (
+                        dependency_model({"registry-postgres": "service_healthy"})
                     )
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+
+    def test_initialization_services_are_unpublished_and_keep_every_mount(
+        self,
+    ) -> None:
+        ordinary = ordinary_model()
+        baseline = initialization_model(ordinary)
+        for service_name in CHECKER.INITIALIZATION_SERVICES:
+            with self.subTest(service=service_name, protection="publication"):
+                initialized = initialization_model(ordinary)
+                initialized["services"][service_name]["ports"] = [
+                    {
+                        "host_ip": "127.0.0.1",
+                        "mode": "ingress",
+                        "protocol": "tcp",
+                        "published": "9999",
+                        "target": 9999,
+                    }
+                ]
+                with self.assertRaises(CHECKER.ContractError):
+                    assert_initialization(initialized, ordinary)
+            targets = [
+                mount["target"]
+                for mount in baseline["services"][service_name]["volumes"]
+            ]
+            for target in targets:
+                with self.subTest(service=service_name, target=target):
+                    initialized = initialization_model(ordinary)
+                    service = initialized["services"][service_name]
+                    service["volumes"] = [
+                        mount
+                        for mount in service["volumes"]
+                        if mount["target"] != target
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+                with self.subTest(service=service_name, target=target, mode="changed"):
+                    initialized = initialization_model(ordinary)
+                    mount = next(
+                        mount
+                        for mount in initialized["services"][service_name]["volumes"]
+                        if mount["target"] == target
+                    )
+                    if mount.get("read_only") is True:
+                        mount.pop("read_only")
+                    else:
+                        mount["read_only"] = True
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
 
     def test_initialization_delta_cannot_change_ordinary_service(self) -> None:
         ordinary = ordinary_model()
@@ -511,11 +804,7 @@ class AdopterComposeContractTests(unittest.TestCase):
             CHECKER.ContractError,
             "changed ordinary service registry-notary",
         ):
-            CHECKER.assert_initialization_model(
-                initialized,
-                ordinary,
-                expected_images(),
-            )
+            assert_initialization(initialized, ordinary)
 
     def test_plan_probe_is_closed_and_complete(self) -> None:
         images = CHECKER.validate_plan(
@@ -564,6 +853,82 @@ class AdopterComposeContractTests(unittest.TestCase):
                 }
             ),
             "action": lambda plan: plan["initialization_actions"][0].pop("id"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                plan = copy.deepcopy(baseline)
+                mutate(plan)
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "plan.json"
+                    path.write_text(json.dumps(plan), encoding="utf-8")
+                    with self.assertRaises(CHECKER.ContractError):
+                        CHECKER.validate_plan(path)
+
+    def test_plan_probe_rejects_duplicate_json_object_fields(self) -> None:
+        baseline = (CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json").read_text(
+            encoding="utf-8"
+        )
+        duplicate_root = baseline.replace(
+            '  "single_instance": true,\n',
+            '  "single_instance": true,\n  "single_instance": true,\n',
+            1,
+        )
+        duplicate_workload = baseline.replace(
+            '      "id": "relay-public",\n',
+            ('      "id": "relay-public",\n      "id": "relay-public",\n'),
+            1,
+        )
+        for name, text in (
+            ("root", duplicate_root),
+            ("workload", duplicate_workload),
+        ):
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "plan.json"
+                    path.write_text(text, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        CHECKER.ContractError,
+                        "repeats object field",
+                    ):
+                        CHECKER.validate_plan(path)
+
+    def test_plan_probe_rejects_unknown_and_duplicate_semantic_entries(
+        self,
+    ) -> None:
+        baseline = json.loads(
+            (CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            baseline["workloads"][0]["mount_roles"].count("certificate"),
+            1,
+        )
+        mutations = {
+            "duplicate-workload": lambda plan: plan["workloads"].append(
+                copy.deepcopy(plan["workloads"][0])
+            ),
+            "unknown-workload": lambda plan: plan["workloads"][0].update(
+                {"id": "unknown"}
+            ),
+            "duplicate-certificate-role": lambda plan: plan["workloads"][0][
+                "mount_roles"
+            ].append("certificate"),
+            "unknown-mount-role": lambda plan: plan["workloads"][0][
+                "mount_roles"
+            ].append("unknown"),
+            "duplicate-initialization": lambda plan: plan[
+                "initialization_actions"
+            ].append(copy.deepcopy(plan["initialization_actions"][0])),
+            "duplicate-recovery-group": lambda plan: plan[
+                "recovery_consistency_groups"
+            ].append(copy.deepcopy(plan["recovery_consistency_groups"][0])),
+            "duplicate-exposure": lambda plan: plan["exposure_requirements"].append(
+                copy.deepcopy(plan["exposure_requirements"][0])
+            ),
+            "unknown-exposure": lambda plan: plan["exposure_requirements"][0].update(
+                {"endpoint_class": "unknown"}
+            ),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
