@@ -19,7 +19,7 @@ impl zed::Extension for RegistryStackExtension {
         } else if let Some(command) = worktree.which("registryctl") {
             (
                 command,
-                vec!["authoring".to_owned(), "language-server".to_owned()],
+                vec!["tooling".to_owned(), "language-server".to_owned()],
             )
         } else {
             return Err(

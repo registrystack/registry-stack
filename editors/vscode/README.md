@@ -2,8 +2,8 @@
 
 This beta integration is installed from a Registry Stack source release.
 It is not yet published to the VS Code Marketplace and no release VSIX is provided.
-For the stable beta path, run `registryctl init --from <starter>` or
-`registryctl authoring editor --project-dir <project>` and use the generated YAML schema settings.
+For the stable beta path, run `registryctl init <directory> --template http` or
+`registryctl -C <project> tooling editor` and use the generated YAML schema settings.
 Install this integration for optional semantic navigation.
 
 This extension starts `registry-language-server` for a workspace whose root contains
@@ -54,7 +54,7 @@ The source VSIX contains the extension runtime and the verified path to `registr
 platform server binary. Its server discovery order is: the explicit
 `registryStack.languageServer.path` setting, the installer-selected `registryctl`,
 `registry-language-server` on `PATH`, then a matching `registryctl` on `PATH`. Registryctl runs
-`registryctl authoring language-server` in both cases. A manually packaged VSIX omits the local
+`registryctl tooling language-server` in both cases. A manually packaged VSIX omits the local
 path metadata and retains the PATH-based discovery behavior.
 
 ## Manual packaging
