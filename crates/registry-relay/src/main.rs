@@ -112,6 +112,7 @@ const OPENAPI_COMMAND: &str = "openapi";
 /// Internal fixed-purpose development source. Registryctl is its only
 /// supported caller and supplies one compiler-owned closed plan.
 const SYNTHETIC_SOURCE_COMMAND: &str = "synthetic-source";
+const SYNTHETIC_SOURCE_PROBE_ACTION: &str = "probe";
 
 /// Offline operator diagnostics for config, env, and metadata readiness.
 const DOCTOR_COMMAND: &str = "doctor";
@@ -191,9 +192,7 @@ enum CliCommand {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
     },
-    SyntheticSource {
-        plan_path: PathBuf,
-    },
+    SyntheticSource(SyntheticSourceCommand),
     Doctor {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -216,6 +215,12 @@ enum CliCommand {
         reason: String,
         operator: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SyntheticSourceCommand {
+    Serve { plan_path: PathBuf },
+    Probe { plan_path: PathBuf },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -430,8 +435,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             config_path,
             env_file,
         } => run_openapi(config_path, env_file).await,
-        CliCommand::SyntheticSource { plan_path } => {
+        CliCommand::SyntheticSource(SyntheticSourceCommand::Serve { plan_path }) => {
             registry_relay::synthetic_source::run(&plan_path).await?;
+            Ok(())
+        }
+        CliCommand::SyntheticSource(SyntheticSourceCommand::Probe { plan_path }) => {
+            println!(
+                "{}",
+                registry_relay::synthetic_source::probe(&plan_path).await?
+            );
             Ok(())
         }
         CliCommand::Doctor {
@@ -2177,14 +2189,22 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
 }
 
 fn parse_synthetic_source_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let (action, args) = match args.first().map(String::as_str) {
+        Some(SYNTHETIC_SOURCE_PROBE_ACTION) => ("probe", &args[1..]),
+        _ => ("serve", args),
+    };
     if args.len() != 2 || args[0] != PLAN_FLAG {
+        let action = if action == "probe" { " probe" } else { "" };
         return Err(CliError(format!(
-            "{SYNTHETIC_SOURCE_COMMAND} requires exactly {PLAN_FLAG} <path>"
+            "{SYNTHETIC_SOURCE_COMMAND}{action} requires exactly {PLAN_FLAG} <path>"
         )));
     }
-    Ok(CliCommand::SyntheticSource {
-        plan_path: required_path_value(PLAN_FLAG, &args[1])?,
-    })
+    let plan_path = required_path_value(PLAN_FLAG, &args[1])?;
+    Ok(CliCommand::SyntheticSource(match action {
+        "probe" => SyntheticSourceCommand::Probe { plan_path },
+        "serve" => SyntheticSourceCommand::Serve { plan_path },
+        _ => unreachable!("synthetic-source action parser is closed"),
+    }))
 }
 
 fn parse_product_action_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -3038,9 +3058,9 @@ mod tests {
         ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
         OperatorSafeConsultationActivationFailure, OutputFormat, ProcessStartupCode,
         ProcessStartupFailure, ProductAction, ProductActionCommand, ReportedConfigLoadFailure,
-        ServeConfigSource, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
-        INITIALIZE_STATE_ACTION, PREPARE_STATE_STORE_ACTION, PRODUCT_ACTION_COMMAND, SERVE_ACTION,
-        VERIFY_STATE_ACTION,
+        ServeConfigSource, SyntheticSourceCommand, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
+        DEFAULT_HEALTHCHECK_URL, INITIALIZE_STATE_ACTION, PREPARE_STATE_STORE_ACTION,
+        PRODUCT_ACTION_COMMAND, SERVE_ACTION, VERIFY_STATE_ACTION,
     };
     use axum::routing::get;
     use axum::Router;
@@ -4313,9 +4333,24 @@ audit:
 
         assert_eq!(
             command,
-            CliCommand::SyntheticSource {
+            CliCommand::SyntheticSource(SyntheticSourceCommand::Serve {
                 plan_path: PathBuf::from("/run/registry/synthetic-source-plan.json"),
-            }
+            })
+        );
+
+        let probe = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "synthetic-source",
+            "probe",
+            "--plan",
+            "/run/registry/synthetic-source-plan.json",
+        ]))
+        .expect("synthetic-source probe parses");
+        assert_eq!(
+            probe,
+            CliCommand::SyntheticSource(SyntheticSourceCommand::Probe {
+                plan_path: PathBuf::from("/run/registry/synthetic-source-plan.json"),
+            })
         );
 
         for args in [
@@ -4345,6 +4380,41 @@ audit:
             assert_eq!(
                 error.to_string(),
                 "synthetic-source requires exactly --plan <path>"
+            );
+        }
+
+        for args in [
+            vec!["registry-relay", "synthetic-source", "probe"],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "probe",
+                "--plan=/tmp/plan.json",
+            ],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "probe",
+                "--plan",
+                "/tmp/plan.json",
+                "--url",
+                "https://attacker.invalid",
+            ],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "probe",
+                "--plan",
+                "/tmp/plan.json",
+                "--header",
+                "Authorization: attacker",
+            ],
+        ] {
+            let error = parse_cli_command_from(command_args(&args))
+                .expect_err("synthetic-source probe extension argument is rejected");
+            assert_eq!(
+                error.to_string(),
+                "synthetic-source probe requires exactly --plan <path>"
             );
         }
     }

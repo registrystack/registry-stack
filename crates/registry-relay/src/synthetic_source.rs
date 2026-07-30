@@ -6,6 +6,7 @@
 //! profile. Methods, routes, response headers, listener, TLS, secret root,
 //! request limits, timeouts, and counters remain owned by this module.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs::{self, File};
 use std::future::Future;
@@ -17,8 +18,8 @@ use std::time::Duration;
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::State;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION};
-use axum::http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
+use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LOCATION};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use axum::routing::{get, post};
 use axum::Router;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -46,13 +47,13 @@ pub const SYNTHETIC_SOURCE_BIND: &str = "0.0.0.0:8099";
 
 /// Fixed source origin used by the compiler-owned development projection.
 pub const SYNTHETIC_SOURCE_ORIGIN: &str = "https://registry-synthetic-source:8099";
+const COUNTERS_URL: &str = "https://registry-synthetic-source:8099/__registry/counters";
 
 /// Fixed directory mounted by the development renderer for source-only
 /// credentials and TLS material.
 pub const SYNTHETIC_SOURCE_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
 
 pub const SYNTHETIC_SOURCE_PLAN_VERSION: &str = "registry.relay.synthetic-source-plan.v1";
-pub const SOURCE_ROUTE: &str = "/v1/source";
 pub const TOKEN_ROUTE: &str = "/oauth/token";
 pub const COUNTERS_ROUTE: &str = "/__registry/counters";
 pub const HEALTH_ROUTE: &str = "/healthz";
@@ -61,12 +62,20 @@ const MAX_PLAN_BYTES: usize = 1024 * 1024;
 const MAX_AUTHORED_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 const MAX_EXPECTED_OAUTH_FIELDS_BYTES: usize = 8 * 1024;
+const MAX_SOURCE_PATH_BYTES: usize = 2 * 1024;
+const MAX_SOURCE_QUERY_FIELDS: usize = 16;
+const MAX_SOURCE_HEADERS: usize = 16;
+const MAX_SOURCE_FIELD_NAME_BYTES: usize = 96;
+const MAX_SOURCE_FIELD_VALUE_BYTES: usize = 2 * 1024;
+const MAX_SOURCE_EXPECTATION_BYTES: usize = 16 * 1024;
 const MAX_SECRET_BYTES: usize = 4 * 1024;
 const MAX_TLS_FILE_BYTES: usize = 256 * 1024;
 const MAX_CONNECTIONS: usize = 8;
 const CONNECTION_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_COUNTER_RESPONSE_BYTES: u64 = 128;
 const AUTHORED_DEVELOPMENT_SOURCE_DEADLINE_SECONDS: u64 = 10;
 const SOURCE_TIMEOUT: Duration = Duration::from_secs(15);
 const _: () = assert!(SOURCE_TIMEOUT.as_secs() > AUTHORED_DEVELOPMENT_SOURCE_DEADLINE_SECONDS);
@@ -92,6 +101,8 @@ pub enum SyntheticSourceError {
     ServeFailed,
     #[error("synthetic-source randomness is unavailable")]
     RandomUnavailable,
+    #[error("synthetic-source counter probe failed")]
+    ProbeFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -120,6 +131,156 @@ impl SourceScenario {
             Self::AuthoredResponse | Self::NoMatch | Self::Ambiguity | Self::SubjectMismatch
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SourceRequestMethod {
+    Get,
+    Post,
+}
+
+impl SourceRequestMethod {
+    const fn as_http(self) -> Method {
+        match self {
+            Self::Get => Method::GET,
+            Self::Post => Method::POST,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceRequestExpectation {
+    method: SourceRequestMethod,
+    path: String,
+    query: BTreeMap<String, String>,
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<Value>,
+}
+
+impl std::fmt::Debug for SourceRequestExpectation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourceRequestExpectation")
+            .field("method", &self.method)
+            .field("path", &"<redacted>")
+            .field("query_field_count", &self.query.len())
+            .field("header_count", &self.headers.len())
+            .field("body", &self.body.as_ref().map(|_| "<configured>"))
+            .finish()
+    }
+}
+
+impl SourceRequestExpectation {
+    fn validate(&self) -> Result<(), SyntheticSourceError> {
+        if self.path.is_empty()
+            || self.path.len() > MAX_SOURCE_PATH_BYTES
+            || !self.path.starts_with('/')
+            || self
+                .path
+                .bytes()
+                .any(|byte| !byte.is_ascii_graphic() || matches!(byte, b'?' | b'#' | b'\\'))
+            || self
+                .path
+                .split('/')
+                .any(|segment| matches!(segment, "." | ".."))
+            || matches!(
+                self.path.as_str(),
+                HEALTH_ROUTE | TOKEN_ROUTE | COUNTERS_ROUTE
+            )
+            || self.query.len() > MAX_SOURCE_QUERY_FIELDS
+            || self.headers.len() > MAX_SOURCE_HEADERS
+        {
+            return Err(SyntheticSourceError::InvalidPlan);
+        }
+        let mut total = self.path.len();
+        for (name, value) in &self.query {
+            validate_expected_field(name, value)?;
+            total = total
+                .checked_add(name.len())
+                .and_then(|bytes| bytes.checked_add(value.len()))
+                .ok_or(SyntheticSourceError::InvalidPlan)?;
+        }
+        for (name, value) in &self.headers {
+            validate_expected_field(name, value)?;
+            if name.bytes().any(|byte| byte.is_ascii_uppercase())
+                || HeaderName::from_bytes(name.as_bytes()).is_err()
+                || HeaderValue::from_str(value).is_err()
+                || is_reserved_source_header(name)
+            {
+                return Err(SyntheticSourceError::InvalidPlan);
+            }
+            total = total
+                .checked_add(name.len())
+                .and_then(|bytes| bytes.checked_add(value.len()))
+                .ok_or(SyntheticSourceError::InvalidPlan)?;
+        }
+        if let Some(body) = &self.body {
+            total = total
+                .checked_add(
+                    serde_json::to_vec(body)
+                        .map_err(|_| SyntheticSourceError::InvalidPlan)?
+                        .len(),
+                )
+                .ok_or(SyntheticSourceError::InvalidPlan)?;
+        }
+        if total > MAX_SOURCE_EXPECTATION_BYTES {
+            return Err(SyntheticSourceError::InvalidPlan);
+        }
+        Ok(())
+    }
+}
+
+fn validate_expected_field(name: &str, value: &str) -> Result<(), SyntheticSourceError> {
+    if name.is_empty()
+        || name.len() > MAX_SOURCE_FIELD_NAME_BYTES
+        || value.len() > MAX_SOURCE_FIELD_VALUE_BYTES
+        || name
+            .bytes()
+            .any(|byte| !byte.is_ascii_graphic() || matches!(byte, b'&' | b'=' | b'%' | b'+'))
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(SyntheticSourceError::InvalidPlan);
+    }
+    Ok(())
+}
+
+fn is_reserved_source_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "set-cookie"
+            | "host"
+            | "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "accept-encoding"
+            | "content-type"
+            | "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+            | "x-real-ip"
+            | "x-api-key"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StaticBearerSourceAuthType {
+    StaticBearer,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StaticBearerSourceAuthPlan {
+    #[serde(rename = "type")]
+    auth_type: StaticBearerSourceAuthType,
+    secret: SecretFileReference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -248,6 +409,9 @@ struct RuntimeSecretReferences {
 struct SyntheticSourcePlan {
     version: PlanVersion,
     scenario: SourceScenario,
+    source_request: SourceRequestExpectation,
+    #[serde(default)]
+    source_auth: Option<StaticBearerSourceAuthPlan>,
     request_encoding: OAuthRequestEncoding,
     #[serde(default)]
     oauth: Option<OAuthPlan>,
@@ -262,6 +426,11 @@ impl std::fmt::Debug for SyntheticSourcePlan {
             .debug_struct("SyntheticSourcePlan")
             .field("version", &self.version)
             .field("scenario", &self.scenario)
+            .field("source_request", &self.source_request)
+            .field(
+                "source_auth",
+                &self.source_auth.as_ref().map(|_| "static_bearer"),
+            )
             .field("request_encoding", &self.request_encoding)
             .field(
                 "oauth_profile",
@@ -283,10 +452,24 @@ impl std::fmt::Debug for SyntheticSourcePlan {
 impl SyntheticSourcePlan {
     fn validate(&self) -> Result<(), SyntheticSourceError> {
         let _ = self.version;
+        self.source_request.validate()?;
+        if self.source_auth.is_some() && self.oauth.is_some() {
+            return Err(SyntheticSourceError::InvalidPlan);
+        }
+        let mut secret_files = BTreeSet::new();
+        validate_distinct_secret_reference(&self.secrets.control_token, &mut secret_files)?;
+        validate_distinct_secret_reference(&self.secrets.tls_certificate, &mut secret_files)?;
+        validate_distinct_secret_reference(&self.secrets.tls_private_key, &mut secret_files)?;
         self.secrets.control_token.validate()?;
         self.secrets.tls_certificate.validate()?;
         self.secrets.tls_private_key.validate()?;
+        if let Some(source_auth) = &self.source_auth {
+            let _ = source_auth.auth_type;
+            validate_distinct_secret_reference(&source_auth.secret, &mut secret_files)?;
+        }
         if let Some(oauth) = &self.oauth {
+            validate_distinct_secret_reference(&oauth.secrets.client_id, &mut secret_files)?;
+            validate_distinct_secret_reference(&oauth.secrets.client_secret, &mut secret_files)?;
             oauth.secrets.client_id.validate()?;
             oauth.secrets.client_secret.validate()?;
             oauth.request.validate()?;
@@ -311,6 +494,17 @@ impl SyntheticSourcePlan {
         }
         Ok(())
     }
+}
+
+fn validate_distinct_secret_reference<'a>(
+    reference: &'a SecretFileReference,
+    files: &mut BTreeSet<&'a str>,
+) -> Result<(), SyntheticSourceError> {
+    reference.validate()?;
+    if !files.insert(&reference.file) {
+        return Err(SyntheticSourceError::InvalidPlan);
+    }
+    Ok(())
 }
 
 struct OAuthRuntime {
@@ -359,9 +553,18 @@ struct Counters {
     source_requests: AtomicU64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct CounterSnapshot {
+    token_requests: u64,
+    source_requests: u64,
+}
+
 struct SyntheticSourceState {
     scenario: SourceScenario,
+    source_request: SourceRequestExpectation,
     response_body: Option<Bytes>,
+    static_bearer: Option<Zeroizing<Vec<u8>>>,
     oauth: Option<OAuthRuntime>,
     control_token: Zeroizing<Vec<u8>>,
     counters: Counters,
@@ -373,6 +576,11 @@ impl std::fmt::Debug for SyntheticSourceState {
         formatter
             .debug_struct("SyntheticSourceState")
             .field("scenario", &self.scenario)
+            .field("source_request", &self.source_request)
+            .field(
+                "static_bearer",
+                &self.static_bearer.as_ref().map(|_| "<configured>"),
+            )
             .field("oauth", &self.oauth)
             .field(
                 "response_body",
@@ -393,20 +601,126 @@ pub async fn run(plan_path: &Path) -> Result<(), SyntheticSourceError> {
     serve_tls(listener, router(state), tls, shutdown_signal()).await
 }
 
+/// Read the private synthetic-source effect counters through the fixed,
+/// certificate-pinned development endpoint.
+pub async fn probe(plan_path: &Path) -> Result<String, SyntheticSourceError> {
+    probe_with_options(
+        plan_path,
+        Path::new(SYNTHETIC_SOURCE_SECRET_ROOT),
+        ProbeTarget::Fixed,
+    )
+    .await
+}
+
+enum ProbeTarget {
+    Fixed,
+    #[cfg(test)]
+    Test {
+        url: String,
+        resolved_address: std::net::SocketAddr,
+    },
+}
+
+async fn probe_with_options(
+    plan_path: &Path,
+    secret_root: &Path,
+    target: ProbeTarget,
+) -> Result<String, SyntheticSourceError> {
+    let plan = load_plan(plan_path)?;
+    let control_token =
+        read_secret_reference(&plan.secrets.control_token, secret_root, MAX_SECRET_BYTES)?;
+    let certificate_pem = Zeroizing::new(read_bounded_file(
+        &plan.secrets.tls_certificate.resolve(secret_root),
+        MAX_TLS_FILE_BYTES,
+        true,
+    )?);
+    let roots = reqwest::Certificate::from_pem_bundle(&certificate_pem)
+        .map_err(|_| SyntheticSourceError::InvalidTlsMaterial)?;
+    if roots.is_empty() || roots.len() > 8 {
+        return Err(SyntheticSourceError::InvalidTlsMaterial);
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .use_rustls_tls()
+        .tls_built_in_root_certs(false)
+        .https_only(true)
+        .timeout(PROBE_TIMEOUT)
+        .connect_timeout(PROBE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .pool_max_idle_per_host(0)
+        .http1_only()
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate();
+    for root in roots {
+        builder = builder.add_root_certificate(root);
+    }
+    #[cfg(test)]
+    if let ProbeTarget::Test {
+        resolved_address, ..
+    } = &target
+    {
+        builder = builder.resolve("registry-synthetic-source", *resolved_address);
+    }
+    let client = builder
+        .build()
+        .map_err(|_| SyntheticSourceError::ProbeFailed)?;
+
+    let mut authorization_bytes = Zeroizing::new(Vec::with_capacity(
+        b"Bearer ".len().saturating_add(control_token.len()),
+    ));
+    authorization_bytes.extend_from_slice(b"Bearer ");
+    authorization_bytes.extend_from_slice(control_token.as_slice());
+    let mut authorization = HeaderValue::from_bytes(&authorization_bytes)
+        .map_err(|_| SyntheticSourceError::SecretLoadFailed)?;
+    authorization.set_sensitive(true);
+    let url = match &target {
+        ProbeTarget::Fixed => COUNTERS_URL,
+        #[cfg(test)]
+        ProbeTarget::Test { url, .. } => url,
+    };
+    let response = client
+        .get(url)
+        .header(AUTHORIZATION, authorization)
+        .header(ACCEPT, HeaderValue::from_static("application/json"))
+        .send()
+        .await
+        .map_err(|_| SyntheticSourceError::ProbeFailed)?;
+    if response.status() != StatusCode::OK
+        || response.headers().get(CONTENT_TYPE)
+            != Some(&HeaderValue::from_static("application/json"))
+    {
+        return Err(SyntheticSourceError::ProbeFailed);
+    }
+    let body = registry_platform_httputil::read_bounded(response, MAX_COUNTER_RESPONSE_BYTES)
+        .await
+        .map_err(|_| SyntheticSourceError::ProbeFailed)?;
+    let counters = parse_counter_snapshot(&body)?;
+    serde_json::to_string(&counters).map_err(|_| SyntheticSourceError::ProbeFailed)
+}
+
+fn parse_counter_snapshot(body: &[u8]) -> Result<CounterSnapshot, SyntheticSourceError> {
+    let value = parse_json_strict(body).map_err(|_| SyntheticSourceError::ProbeFailed)?;
+    serde_json::from_value(value).map_err(|_| SyntheticSourceError::ProbeFailed)
+}
+
 fn load_runtime(
     plan_path: &Path,
     secret_root: &Path,
 ) -> Result<(Arc<SyntheticSourceState>, TlsAcceptor), SyntheticSourceError> {
-    let plan_bytes = read_bounded_file(plan_path, MAX_PLAN_BYTES, false)
-        .map_err(|_| SyntheticSourceError::PlanLoadFailed)?;
-    let plan_value =
-        parse_json_strict(&plan_bytes).map_err(|_| SyntheticSourceError::InvalidPlan)?;
-    let plan: SyntheticSourcePlan =
-        serde_json::from_value(plan_value).map_err(|_| SyntheticSourceError::InvalidPlan)?;
-    plan.validate()?;
-
+    let plan = load_plan(plan_path)?;
     let control_token =
         read_secret_reference(&plan.secrets.control_token, secret_root, MAX_SECRET_BYTES)?;
+    let static_bearer = plan
+        .source_auth
+        .as_ref()
+        .map(|source_auth| {
+            read_secret_reference(&source_auth.secret, secret_root, MAX_SECRET_BYTES)
+        })
+        .transpose()?;
     let oauth = plan
         .oauth
         .as_ref()
@@ -454,7 +768,9 @@ fn load_runtime(
         .map(Bytes::from);
     let state = Arc::new(SyntheticSourceState {
         scenario: plan.scenario,
+        source_request: plan.source_request,
         response_body,
+        static_bearer,
         oauth,
         control_token,
         counters: Counters::default(),
@@ -464,12 +780,23 @@ fn load_runtime(
     Ok((state, tls))
 }
 
+fn load_plan(plan_path: &Path) -> Result<SyntheticSourcePlan, SyntheticSourceError> {
+    let plan_bytes = read_bounded_file(plan_path, MAX_PLAN_BYTES, false)
+        .map_err(|_| SyntheticSourceError::PlanLoadFailed)?;
+    let plan_value =
+        parse_json_strict(&plan_bytes).map_err(|_| SyntheticSourceError::InvalidPlan)?;
+    let plan: SyntheticSourcePlan =
+        serde_json::from_value(plan_value).map_err(|_| SyntheticSourceError::InvalidPlan)?;
+    plan.validate()?;
+    Ok(plan)
+}
+
 fn router(state: Arc<SyntheticSourceState>) -> Router {
     Router::new()
         .route(HEALTH_ROUTE, get(health))
         .route(COUNTERS_ROUTE, get(counters))
         .route(TOKEN_ROUTE, post(token))
-        .route(SOURCE_ROUTE, get(source).post(source))
+        .fallback(source)
         .with_state(state)
 }
 
@@ -541,14 +868,20 @@ async fn source_with_timeout(
 ) -> Response<Body> {
     increment_counter(&state.counters.source_requests);
     let (parts, body) = request.into_parts();
-    match read_request_body(body, body_timeout).await {
-        Ok(_) => {}
+    let body = match read_request_body(body, body_timeout).await {
+        Ok(body) => body,
         Err(RequestBodyFailure::TooLarge) => {
             return empty_response(StatusCode::PAYLOAD_TOO_LARGE);
         }
         Err(RequestBodyFailure::Timeout) => {
             return empty_response(StatusCode::REQUEST_TIMEOUT);
         }
+    };
+    if !source_request_matches(&state.source_request, &parts, &body) {
+        return static_json_response(
+            StatusCode::BAD_REQUEST,
+            br#"{"error":"source_request_mismatch"}"#,
+        );
     }
     if let Some(oauth) = &state.oauth {
         if !bearer_matches(&parts.headers, oauth.access_token.as_slice()) {
@@ -557,13 +890,36 @@ async fn source_with_timeout(
                 br#"{"error":"source_credential_required"}"#,
             );
         }
+    } else if let Some(static_bearer) = &state.static_bearer {
+        if !bearer_matches(&parts.headers, static_bearer.as_slice()) {
+            return static_json_response(
+                StatusCode::UNAUTHORIZED,
+                br#"{"error":"source_credential_required"}"#,
+            );
+        }
+    } else if parts.headers.contains_key(AUTHORIZATION) {
+        return static_json_response(
+            StatusCode::UNAUTHORIZED,
+            br#"{"error":"source_credential_not_allowed"}"#,
+        );
     }
     match state.scenario {
-        SourceScenario::AuthoredResponse
-        | SourceScenario::NoMatch
-        | SourceScenario::Ambiguity
-        | SourceScenario::SubjectMismatch => json_response(
+        SourceScenario::AuthoredResponse | SourceScenario::SubjectMismatch => json_response(
             StatusCode::OK,
+            state
+                .response_body
+                .clone()
+                .expect("validated authored response is installed"),
+        ),
+        SourceScenario::NoMatch => json_response(
+            StatusCode::NOT_FOUND,
+            state
+                .response_body
+                .clone()
+                .expect("validated authored response is installed"),
+        ),
+        SourceScenario::Ambiguity => json_response(
+            StatusCode::CONFLICT,
             state
                 .response_body
                 .clone()
@@ -587,6 +943,95 @@ async fn source_with_timeout(
             json_response(StatusCode::OK, state.oversize_body.clone())
         }
     }
+}
+
+fn source_request_matches(
+    expected: &SourceRequestExpectation,
+    parts: &axum::http::request::Parts,
+    body: &[u8],
+) -> bool {
+    if parts.method != expected.method.as_http()
+        || parts.uri.path() != expected.path
+        || !source_query_matches(parts.uri.query(), &expected.query)
+        || !source_headers_match(&parts.headers, &expected.headers)
+    {
+        return false;
+    }
+    match &expected.body {
+        Some(expected_body) => {
+            if parts.headers.get(CONTENT_TYPE)
+                != Some(&HeaderValue::from_static("application/json"))
+            {
+                return false;
+            }
+            parse_json_strict(body)
+                .map(|actual| actual == *expected_body)
+                .unwrap_or(false)
+        }
+        None => body.is_empty() && !parts.headers.contains_key(CONTENT_TYPE),
+    }
+}
+
+fn source_query_matches(query: Option<&str>, expected: &BTreeMap<String, String>) -> bool {
+    let mut actual = BTreeMap::new();
+    for pair in query
+        .unwrap_or_default()
+        .as_bytes()
+        .split(|byte| *byte == b'&')
+    {
+        if pair.is_empty() {
+            if query.is_some_and(|query| !query.is_empty()) {
+                return false;
+            }
+            continue;
+        }
+        let Some(separator) = pair.iter().position(|byte| *byte == b'=') else {
+            return false;
+        };
+        let (name, value) = pair.split_at(separator);
+        let Some(name) = decode_form_component(name) else {
+            return false;
+        };
+        let Some(value) = decode_form_component(&value[1..]) else {
+            return false;
+        };
+        if actual.insert(name, value).is_some() {
+            return false;
+        }
+    }
+    actual.len() == expected.len()
+        && expected.iter().all(|(name, value)| {
+            actual
+                .get(name.as_bytes())
+                .is_some_and(|actual| constant_time_eq(actual, value.as_bytes()))
+        })
+}
+
+fn source_headers_match(headers: &HeaderMap, expected: &BTreeMap<String, String>) -> bool {
+    let mut seen = BTreeSet::new();
+    for (name, value) in headers {
+        if matches!(
+            name.as_str(),
+            "host"
+                | "authorization"
+                | "content-type"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "accept-encoding"
+        ) {
+            continue;
+        }
+        let Some(expected_value) = expected.get(name.as_str()) else {
+            return false;
+        };
+        if !seen.insert(name.as_str())
+            || !constant_time_eq(value.as_bytes(), expected_value.as_bytes())
+        {
+            return false;
+        }
+    }
+    seen.len() == expected.len()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1251,6 +1696,8 @@ mod tests {
     const CONTROL_CANARY: &[u8] = b"control-canary";
     const ACCESS_TOKEN_CANARY: &[u8] = b"access-token-canary";
     const SOURCE_VALUE_CANARY: &str = "source-value-canary";
+    const EXPECTED_SOURCE_PATH: &str = "/people/AB-123456";
+    const EXPECTED_SOURCE_URI: &str = "/people/AB-123456?fields=active";
 
     fn secret_reference(file: &str) -> SecretFileReference {
         SecretFileReference {
@@ -1266,6 +1713,8 @@ mod tests {
         SyntheticSourcePlan {
             version: PlanVersion::V1,
             scenario,
+            source_request: expected_source_request(),
+            source_auth: None,
             request_encoding: OAuthRequestEncoding::Json,
             oauth: oauth_profile.map(|response_profile| OAuthPlan {
                 response_profile,
@@ -1288,6 +1737,16 @@ mod tests {
                 tls_certificate: secret_reference("tls.crt"),
                 tls_private_key: secret_reference("tls.key"),
             },
+        }
+    }
+
+    fn expected_source_request() -> SourceRequestExpectation {
+        SourceRequestExpectation {
+            method: SourceRequestMethod::Get,
+            path: EXPECTED_SOURCE_PATH.to_string(),
+            query: BTreeMap::from([("fields".to_string(), "active".to_string())]),
+            headers: BTreeMap::new(),
+            body: None,
         }
     }
 
@@ -1323,6 +1782,7 @@ mod tests {
     ) -> Arc<SyntheticSourceState> {
         Arc::new(SyntheticSourceState {
             scenario,
+            source_request: expected_source_request(),
             response_body: scenario.needs_authored_response().then(|| {
                 Bytes::from(
                     serde_json::to_vec(
@@ -1331,6 +1791,7 @@ mod tests {
                     .unwrap(),
                 )
             }),
+            static_bearer: None,
             oauth: oauth_profile.map(|response_profile| OAuthRuntime {
                 request_encoding,
                 expected_request,
@@ -1375,6 +1836,12 @@ mod tests {
         let raw = json!({
             "version": SYNTHETIC_SOURCE_PLAN_VERSION,
             "scenario": "authored_response",
+            "source_request": {
+                "method": "get",
+                "path": EXPECTED_SOURCE_PATH,
+                "query": {"fields": "active"},
+                "headers": {}
+            },
             "request_encoding": "json",
             "oauth": {
                 "response_profile": "oauth2_bearer",
@@ -1396,6 +1863,7 @@ mod tests {
         let diagnostic = format!("{admitted:?}");
         assert!(!diagnostic.contains("eligible"));
         assert!(!diagnostic.contains("scope-value-canary"));
+        assert!(!diagnostic.contains(EXPECTED_SOURCE_PATH));
 
         for forbidden in ["destination", "route", "headers", "proxy"] {
             let mut candidate = raw.clone();
@@ -1411,6 +1879,29 @@ mod tests {
         let mut unknown_encoding = raw.clone();
         unknown_encoding["request_encoding"] = json!("auto");
         assert!(serde_json::from_value::<SyntheticSourcePlan>(unknown_encoding).is_err());
+        let mut missing_source_request = raw.clone();
+        missing_source_request
+            .as_object_mut()
+            .unwrap()
+            .remove("source_request");
+        assert!(serde_json::from_value::<SyntheticSourcePlan>(missing_source_request).is_err());
+        for reserved in [HEALTH_ROUTE, TOKEN_ROUTE, COUNTERS_ROUTE] {
+            let mut reserved_path = raw.clone();
+            reserved_path["source_request"]["path"] = json!(reserved);
+            let reserved_path: SyntheticSourcePlan = serde_json::from_value(reserved_path).unwrap();
+            assert_eq!(
+                reserved_path.validate(),
+                Err(SyntheticSourceError::InvalidPlan)
+            );
+        }
+        let mut sensitive_header = raw.clone();
+        sensitive_header["source_request"]["headers"]["authorization"] = json!("secret");
+        let sensitive_header: SyntheticSourcePlan =
+            serde_json::from_value(sensitive_header).unwrap();
+        assert_eq!(
+            sensitive_header.validate(),
+            Err(SyntheticSourceError::InvalidPlan)
+        );
         let mut missing_oauth_request = raw.clone();
         missing_oauth_request["oauth"]
             .as_object_mut()
@@ -1435,6 +1926,56 @@ mod tests {
         traversal["secrets"]["control_token"]["file"] = json!("../secret");
         let traversal: SyntheticSourcePlan = serde_json::from_value(traversal).unwrap();
         assert_eq!(traversal.validate(), Err(SyntheticSourceError::InvalidPlan));
+
+        for (left, right) in [
+            (
+                &["secrets", "tls_private_key", "file"][..],
+                &["secrets", "tls_certificate", "file"][..],
+            ),
+            (
+                &["oauth", "secrets", "client_secret", "file"][..],
+                &["oauth", "secrets", "client_id", "file"][..],
+            ),
+            (
+                &["oauth", "secrets", "client_id", "file"][..],
+                &["secrets", "control_token", "file"][..],
+            ),
+        ] {
+            let mut aliased = raw.clone();
+            let alias = right
+                .iter()
+                .fold(&aliased, |value, segment| &value[*segment])
+                .clone();
+            let target = left
+                .iter()
+                .fold(&mut aliased, |value, segment| &mut value[*segment]);
+            *target = alias;
+            let aliased: SyntheticSourcePlan = serde_json::from_value(aliased).unwrap();
+            assert_eq!(aliased.validate(), Err(SyntheticSourceError::InvalidPlan));
+        }
+
+        let mut static_and_oauth = raw.clone();
+        static_and_oauth["source_auth"] = json!({
+            "type": "static_bearer",
+            "secret": {"file": "source-bearer", "generation": 1}
+        });
+        let static_and_oauth: SyntheticSourcePlan =
+            serde_json::from_value(static_and_oauth).unwrap();
+        assert_eq!(
+            static_and_oauth.validate(),
+            Err(SyntheticSourceError::InvalidPlan)
+        );
+        let mut static_alias = raw.clone();
+        static_alias.as_object_mut().unwrap().remove("oauth");
+        static_alias["source_auth"] = json!({
+            "type": "static_bearer",
+            "secret": {"file": "control-token", "generation": 1}
+        });
+        let static_alias: SyntheticSourcePlan = serde_json::from_value(static_alias).unwrap();
+        assert_eq!(
+            static_alias.validate(),
+            Err(SyntheticSourceError::InvalidPlan)
+        );
 
         let mut oversized = raw;
         oversized["response_body"] = json!("x".repeat(MAX_AUTHORED_RESPONSE_BYTES + 1));
@@ -1505,7 +2046,7 @@ mod tests {
 
         let source = app
             .oneshot(
-                Request::get(SOURCE_ROUTE)
+                Request::get(EXPECTED_SOURCE_URI)
                     .header(
                         AUTHORIZATION,
                         format!(
@@ -1525,6 +2066,117 @@ mod tests {
         );
         assert_eq!(state.counters.token_requests.load(Ordering::Relaxed), 1);
         assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn source_scenarios_use_their_exact_authored_statuses() {
+        for (scenario, expected_status) in [
+            (SourceScenario::AuthoredResponse, StatusCode::OK),
+            (SourceScenario::NoMatch, StatusCode::NOT_FOUND),
+            (SourceScenario::Ambiguity, StatusCode::CONFLICT),
+            (SourceScenario::SubjectMismatch, StatusCode::OK),
+        ] {
+            let response = router(state(scenario, None))
+                .oneshot(
+                    Request::get(EXPECTED_SOURCE_URI)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&response_body(response, 1024).await).unwrap(),
+                json!({"eligible": true, "source_value": SOURCE_VALUE_CANARY})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_source_request_and_static_bearer_are_both_required() {
+        let mut state = state(SourceScenario::AuthoredResponse, None);
+        let state_mut = Arc::get_mut(&mut state).unwrap();
+        state_mut.source_request = SourceRequestExpectation {
+            method: SourceRequestMethod::Post,
+            path: "/records/AB-123456".to_string(),
+            query: BTreeMap::from([("view".to_string(), "minimal".to_string())]),
+            headers: BTreeMap::from([("accept".to_string(), "application/json".to_string())]),
+            body: Some(json!({"person_id": "AB-123456"})),
+        };
+        state_mut.static_bearer = Some(Zeroizing::new(b"static-bearer-canary".to_vec()));
+        let app = router(Arc::clone(&state));
+        let request = |uri: &str, bearer: &str, body: &'static str, extra_header: bool| {
+            let mut request = Request::post(uri)
+                .header(ACCEPT, "application/json")
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {bearer}"));
+            if extra_header {
+                request = request.header("x-unexpected", "value-canary");
+            }
+            request.body(Body::from(body)).unwrap()
+        };
+
+        let accepted = app
+            .clone()
+            .oneshot(request(
+                "/records/AB-123456?view=minimal",
+                "static-bearer-canary",
+                r#"{"person_id":"AB-123456"}"#,
+                false,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+
+        for (uri, bearer, body, extra_header, expected_status) in [
+            (
+                "/records/AB-123456?view=minimal",
+                "wrong-bearer-canary",
+                r#"{"person_id":"AB-123456"}"#,
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/records/other?view=minimal",
+                "static-bearer-canary",
+                r#"{"person_id":"AB-123456"}"#,
+                false,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/records/AB-123456?view=expanded",
+                "static-bearer-canary",
+                r#"{"person_id":"AB-123456"}"#,
+                false,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/records/AB-123456?view=minimal",
+                "static-bearer-canary",
+                r#"{"person_id":"other"}"#,
+                false,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/records/AB-123456?view=minimal",
+                "static-bearer-canary",
+                r#"{"person_id":"AB-123456"}"#,
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(uri, bearer, body, extra_header))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            let rendered = String::from_utf8(response_body(response, 1024).await).unwrap();
+            assert!(!rendered.contains("value-canary"));
+            assert!(!rendered.contains("wrong-bearer-canary"));
+            assert!(!rendered.contains("other"));
+        }
+        assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 6);
     }
 
     #[tokio::test]
@@ -1686,9 +2338,9 @@ mod tests {
             .oneshot(Request::post("/proxy").body(Body::from("ignored")).unwrap())
             .await
             .unwrap();
-        assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+        assert_eq!(absent.status(), StatusCode::BAD_REQUEST);
         assert_eq!(state.counters.token_requests.load(Ordering::Relaxed), 0);
-        assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 1);
 
         let oversized = app
             .oneshot(
@@ -1701,7 +2353,7 @@ mod tests {
             .unwrap();
         assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(state.counters.token_requests.load(Ordering::Relaxed), 1);
-        assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(state.counters.source_requests.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -1721,7 +2373,9 @@ mod tests {
         assert_eq!(token.status(), StatusCode::REQUEST_TIMEOUT);
         let source = source_with_timeout(
             Arc::clone(&state),
-            Request::post(SOURCE_ROUTE).body(pending_body()).unwrap(),
+            Request::post(EXPECTED_SOURCE_URI)
+                .body(pending_body())
+                .unwrap(),
             Duration::from_millis(10),
         )
         .await;
@@ -1871,6 +2525,127 @@ mod tests {
             std::str::from_utf8(CONTROL_CANARY).unwrap(),
         ] {
             assert!(!diagnostic.contains(canary));
+        }
+    }
+
+    #[tokio::test]
+    async fn counter_probe_uses_only_fixed_tls_control_material_and_emits_exact_json() {
+        let directory = TempDir::new().unwrap();
+        let CertifiedKey { cert, key_pair } =
+            generate_simple_self_signed(vec!["registry-synthetic-source".to_string()]).unwrap();
+        write_owner_only(
+            &directory.path().join("tls.crt"),
+            pem("CERTIFICATE", cert.der().as_ref()).as_bytes(),
+        );
+        write_owner_only(
+            &directory.path().join("server.key"),
+            pem("PRIVATE KEY", &key_pair.serialize_der()).as_bytes(),
+        );
+        write_owner_only(&directory.path().join("control-token"), CONTROL_CANARY);
+
+        let plan_path = directory.path().join("plan.json");
+        fs::write(
+            &plan_path,
+            serde_json::to_vec(&json!({
+                "version": SYNTHETIC_SOURCE_PLAN_VERSION,
+                "scenario": "authored_response",
+                "source_request": {
+                    "method": "get",
+                    "path": EXPECTED_SOURCE_PATH,
+                    "query": {"fields": "active"},
+                    "headers": {}
+                },
+                "request_encoding": "form",
+                "oauth": {
+                    "response_profile": "oauth2_bearer",
+                    "request": {"scope": "records.read"},
+                    "secrets": {
+                        "client_id": {"file": "not-mounted-client-id", "generation": 1},
+                        "client_secret": {"file": "not-mounted-client-secret", "generation": 1}
+                    }
+                },
+                "response_body": {"eligible": true},
+                "secrets": {
+                    "control_token": {"file": "control-token", "generation": 1},
+                    "tls_certificate": {"file": "tls.crt", "generation": 1},
+                    "tls_private_key": {"file": "not-mounted-private-key", "generation": 1}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!directory.path().join("not-mounted-client-id").exists());
+        assert!(!directory.path().join("not-mounted-client-secret").exists());
+        assert!(!directory.path().join("not-mounted-private-key").exists());
+
+        let server_tls = load_tls_acceptor(
+            &RuntimeSecretReferences {
+                control_token: secret_reference("control-token"),
+                tls_certificate: secret_reference("tls.crt"),
+                tls_private_key: secret_reference("server.key"),
+            },
+            directory.path(),
+        )
+        .unwrap();
+        let state = state(SourceScenario::AuthoredResponse, None);
+        increment_counter(&state.counters.token_requests);
+        increment_counter(&state.counters.token_requests);
+        increment_counter(&state.counters.source_requests);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_tls(listener, router(state), server_tls, async move {
+            let _ = shutdown_rx.await;
+        }));
+        let target = || ProbeTarget::Test {
+            url: format!(
+                "https://registry-synthetic-source:{}{COUNTERS_ROUTE}",
+                address.port()
+            ),
+            resolved_address: address,
+        };
+
+        let output = probe_with_options(&plan_path, directory.path(), target())
+            .await
+            .unwrap();
+        assert_eq!(output, r#"{"token_requests":2,"source_requests":1}"#);
+
+        write_owner_only(
+            &directory.path().join("control-token"),
+            b"wrong-control-token-canary",
+        );
+        let error = probe_with_options(&plan_path, directory.path(), target())
+            .await
+            .unwrap_err();
+        assert_eq!(error, SyntheticSourceError::ProbeFailed);
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains("wrong-control-token-canary"));
+        assert!(!diagnostic.contains(std::str::from_utf8(CONTROL_CANARY).unwrap()));
+
+        shutdown_tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn counter_probe_rejects_non_exact_or_value_bearing_responses() {
+        assert_eq!(
+            parse_counter_snapshot(br#"{"token_requests":2,"source_requests":1}"#).unwrap(),
+            CounterSnapshot {
+                token_requests: 2,
+                source_requests: 1
+            }
+        );
+        for body in [
+            br#"{"token_requests":2}"#.as_slice(),
+            br#"{"token_requests":2,"source_requests":1,"value":"canary"}"#.as_slice(),
+            br#"{"token_requests":2,"token_requests":3,"source_requests":1}"#.as_slice(),
+            br#"{"token_requests":"2","source_requests":1}"#.as_slice(),
+        ] {
+            let error = parse_counter_snapshot(body).unwrap_err();
+            let diagnostic = format!("{error:?} {error}");
+            assert_eq!(error, SyntheticSourceError::ProbeFailed);
+            assert!(!diagnostic.contains("canary"));
+            assert!(!diagnostic.contains(std::str::from_utf8(body).unwrap()));
         }
     }
 
