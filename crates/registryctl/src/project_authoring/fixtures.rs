@@ -108,6 +108,52 @@ fn execute_all_fixtures_with_coverage_observations(
     if loaded.integrations.is_empty() {
         return Ok((Vec::new(), Vec::new(), Vec::new(), call_budget_actual));
     }
+    if let Some(selected) = integration_filter {
+        if !loaded.integrations.contains_key(selected) {
+            bail!(
+                "selected integration {selected} does not exist; available integration ids: {}",
+                loaded
+                    .integrations
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    if let Some(selected) = fixture_filter {
+        let available = loaded
+            .integrations
+            .iter()
+            .filter(|(alias, _)| integration_filter.is_none_or(|filter| filter == alias.as_str()))
+            .flat_map(|(alias, integration)| {
+                integration
+                    .fixtures
+                    .iter()
+                    .map(|(_, fixture)| fixture)
+                    .map(move |fixture| format!("{alias}.{}", fixture.name))
+            })
+            .collect::<Vec<_>>();
+        let selected_exists = loaded
+            .integrations
+            .iter()
+            .filter(|(alias, _)| integration_filter.is_none_or(|filter| filter == alias.as_str()))
+            .any(|(_, integration)| {
+                integration
+                    .fixtures
+                    .iter()
+                    .map(|(_, fixture)| fixture)
+                    .any(|fixture| fixture.name == selected)
+            });
+        if !selected_exists {
+            let selected_id = integration_filter
+                .map_or_else(|| selected.to_string(), |integration| format!("{integration}.{selected}"));
+            bail!(
+                "selected fixture {selected_id} does not exist; available fixture ids: {}",
+                available.join(", ")
+            );
+        }
+    }
     let relay_config = compiled
         .relay_consultation_private
         .get(Path::new("config/relay.yaml"))
@@ -395,9 +441,6 @@ fn execute_all_fixtures_with_coverage_observations(
                 execution_context.worker_program(),
             )?);
         }
-    }
-    if reports.is_empty() && (integration_filter.is_some() || fixture_filter.is_some()) {
-        bail!("the selected integration or fixture does not exist");
     }
     Ok((
         reports,

@@ -3606,6 +3606,56 @@ fn http_trace_marks_the_redacted_dynamic_path_segment() {
 }
 
 #[test]
+fn focused_test_selector_errors_name_the_selection_and_available_ids() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+    let options = ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+    };
+
+    let integration_error = test_registry_project_selected(
+        &options,
+        &ProjectTestSelection {
+            integration: Some("missing-source".to_string()),
+            fixture: None,
+            trace: false,
+        },
+    )
+    .expect_err("an absent integration fails");
+    let integration_message = format!("{integration_error:#}");
+    assert!(integration_message.contains("selected integration missing-source does not exist"));
+    assert!(integration_message.contains("available integration ids: person-record"));
+
+    let fixture_error = test_registry_project_selected(
+        &options,
+        &ProjectTestSelection {
+            integration: Some("person-record".to_string()),
+            fixture: Some("missing-case".to_string()),
+            trace: false,
+        },
+    )
+    .expect_err("an absent fixture fails");
+    let fixture_message = format!("{fixture_error:#}");
+    assert!(fixture_message.contains("selected fixture person-record.missing-case does not exist"));
+    for available in [
+        "person-record.active-person",
+        "person-record.ambiguous-person",
+        "person-record.no-person",
+    ] {
+        assert!(
+            fixture_message.contains(available),
+            "{available} is missing from {fixture_message}"
+        );
+    }
+}
+
+#[test]
 fn http_starter_adapts_to_a_structurally_different_source_api() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("adapted-registry-api");
