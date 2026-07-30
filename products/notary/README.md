@@ -11,13 +11,12 @@ adapters.
 A Registry Stack project may deploy:
 
 - Relay only, for governed source access, materialization, or records APIs;
-- Notary only, for source-free self-attested evaluation and rendering; or
+- Notary without configured claims, for an empty control-plane deployment; or
 - Relay and Notary, for claims derived from Relay consultation outcomes and outputs.
 
-Credential issuance is available only in a combined Relay and Notary project.
-Every credential claim must come from a freshly executed, compiler-pinned Relay
-consultation. Source-free claims remain evaluation-only and cannot belong to a
-credential profile or OID4VCI configuration.
+Every evaluable claim must derive from at least one compiler-pinned Relay
+consultation. Credential issuance is available only from a freshly executed
+Relay-backed evaluation with the exact required provenance.
 
 Notary keeps independent authority over caller authentication, purpose,
 service policy, claim evaluation, disclosure, credential issuance, and its own

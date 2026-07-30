@@ -526,10 +526,7 @@ impl RegistryNotaryApiState {
     }
 
     pub(crate) fn relay_required(&self) -> bool {
-        self.evidence
-            .claims
-            .iter()
-            .any(|claim| claim.evidence_mode.is_registry_backed())
+        !self.evidence.claims.is_empty()
     }
 
     pub(crate) fn relay_activated(&self) -> bool {

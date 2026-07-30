@@ -46,7 +46,7 @@ pub(super) fn valid_subject_access_config_passes_validation() {
 }
 
 #[test]
-pub(super) fn delegated_attestation_accepts_compiler_pinned_relay_proofs() {
+pub(super) fn delegated_subject_access_accepts_compiler_pinned_relay_proofs() {
     let config = valid_delegated_subject_access_config();
     config
         .validate()
@@ -407,38 +407,6 @@ pub(super) fn valid_oid4vci_projection_config_passes_validation() {
 }
 
 #[test]
-pub(super) fn source_free_claim_remains_valid_for_evaluation_only() {
-    let mut config = minimal_config();
-    config.evidence.claims = vec![minimal_claim("evaluation-only")];
-
-    config
-        .validate()
-        .expect("source-free evaluation without credential capability remains valid");
-}
-
-#[test]
-pub(super) fn credential_profile_rejects_source_free_claim_binding() {
-    let mut config = valid_subject_access_config();
-    config.subject_access = SubjectAccessConfig::default();
-    config.oid4vci = Oid4vciConfig::default();
-    config.evidence.relay = None;
-    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims[0].rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
-
-    let error = config
-        .validate()
-        .expect_err("source-free credential binding must fail startup");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::InvalidCredentialClaimBinding { ref reason }
-            if reason.contains("source-free") && reason.contains("registry_backed")
-    ));
-}
-
-#[test]
 pub(super) fn credential_claim_and_profile_bindings_must_be_mutual() {
     let mut config = valid_subject_access_config();
     config.subject_access = SubjectAccessConfig::default();
@@ -471,90 +439,6 @@ pub(super) fn credential_root_accepts_registry_backed_dependency_closure() {
     config
         .validate()
         .expect("credential root may retain an exact registry-backed dependency closure");
-}
-
-#[test]
-pub(super) fn credential_root_rejects_source_free_dependency_closure() {
-    let mut config = valid_subject_access_config();
-    let mut dependency = minimal_claim("caller-asserted-dependency");
-    dependency.purpose = config.evidence.claims[0].purpose.clone();
-    config.evidence.claims[0]
-        .depends_on
-        .push(dependency.id.clone());
-    config.evidence.claims.push(dependency);
-
-    let error = config
-        .validate()
-        .expect_err("source-free credential dependency must fail startup");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::InvalidCredentialClaimBinding { ref reason }
-            if reason.contains("dependency closure contains source-free claim 'caller-asserted-dependency'")
-                && reason.contains("all dependencies must be registry_backed")
-    ));
-}
-
-#[test]
-pub(super) fn delegated_source_free_claim_cannot_gain_credential_capability() {
-    let mut config = valid_delegated_subject_access_config();
-    config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "dependent-date-of-birth")
-        .expect("delegated dependent claim exists")
-        .credential_profiles
-        .push("civil_status_sd_jwt".to_string());
-
-    let error = config
-        .validate()
-        .expect_err("source-free delegated claims cannot gain credential capability");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::InvalidCredentialClaimBinding { ref reason }
-            if reason.contains("source-free claim 'dependent-date-of-birth'")
-    ));
-}
-
-#[test]
-pub(super) fn oid4vci_wrapper_rejects_source_free_claim_binding() {
-    let mut config = valid_oid4vci_config();
-    config.evidence.relay = None;
-    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims[0].rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
-
-    let reason = expect_oid4vci_error(&config);
-    assert!(
-        reason.contains("source-free") && reason.contains("registry_backed"),
-        "unexpected: {reason}"
-    );
-}
-
-#[test]
-pub(super) fn oid4vci_projection_rejects_mixed_evidence_modes() {
-    let mut config = valid_oid4vci_projection_config();
-    let claim = config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "birth-place")
-        .expect("projection claim exists");
-    claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    claim.rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
-
-    let reason = expect_oid4vci_error(&config);
-    assert!(
-        reason.contains("birth-place")
-            && reason.contains("source-free")
-            && reason.contains("registry_backed"),
-        "unexpected: {reason}"
-    );
 }
 
 #[test]
@@ -1291,19 +1175,16 @@ pub(super) fn subject_access_rejects_unallowed_claim_purpose() {
 #[test]
 pub(super) fn subject_access_rejects_claim_without_purpose() {
     let mut config = valid_subject_access_config();
-    config.evidence.relay = None;
     config.evidence.claims[0].purpose = None;
-    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims[0].rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
 
-    let reason = expect_subject_access_error(&config);
-    assert!(
-        reason.contains("must declare purpose"),
-        "unexpected: {reason}"
-    );
+    let error = config
+        .validate()
+        .expect_err("every registry-backed claim requires a purpose");
+    assert!(matches!(
+        error,
+        EvidenceConfigError::InvalidClaimEvidenceMode { ref reason, .. }
+            if reason.contains("explicit bounded purpose")
+    ));
 }
 
 #[test]

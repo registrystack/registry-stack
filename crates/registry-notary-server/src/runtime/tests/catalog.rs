@@ -5,7 +5,7 @@
         let mut node_claims = Vec::new();
         for index in 0..=MAX_CLAIM_DEPENDENCY_NODES_V1 {
             let dependency = (index > 0).then(|| format!("claim-{}", index - 1));
-            let mut claim = test_claim(&format!("claim-{index}"), Vec::new(), false);
+            let mut claim = test_claim(&format!("claim-{index}"), Vec::new());
             claim.depends_on = dependency.into_iter().collect();
             node_claims.push(claim);
         }
@@ -22,7 +22,7 @@
 
         let mut edge_claims = Vec::new();
         for index in 0..24 {
-            let mut claim = test_claim(&format!("edge-{index}"), Vec::new(), false);
+            let mut claim = test_claim(&format!("edge-{index}"), Vec::new());
             claim.depends_on = (0..index)
                 .map(|dependency| format!("edge-{dependency}"))
                 .collect();
@@ -39,7 +39,7 @@
 
     #[test]
     fn claim_summary_advertises_cccev_evidence_type_metadata() {
-        let mut claim = test_claim("civil-child-status", Vec::new(), false);
+        let mut claim = test_claim("civil-child-status", Vec::new());
         claim.cccev = Some(registry_notary_core::CccevConfig {
             requirement_type: Some("InformationRequirement".to_string()),
             evidence_type: Some("civil_child_status_evidence".to_string()),
@@ -104,15 +104,6 @@
                 }
             ])
         );
-    }
-
-    #[test]
-    fn claim_summary_omits_target_inputs_without_relay_consultation() {
-        let claim = test_claim("date-of-birth", Vec::new(), false);
-
-        let summary = claim_summary(&claim);
-
-        assert!(summary.get("target_inputs").is_none());
     }
 
     #[test]
@@ -264,7 +255,7 @@
 
     #[test]
     fn claim_summary_exposes_claim_and_consultation_output_semantics() {
-        let mut claim = test_claim("date-of-birth", Vec::new(), true);
+        let mut claim = test_claim("date-of-birth", Vec::new());
         claim.semantics = Some(registry_notary_core::ClaimSemanticConfig {
             concept: Some("https://publicschema.org/Person".to_string()),
             property: Some("https://publicschema.org/date_of_birth".to_string()),

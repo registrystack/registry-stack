@@ -4,12 +4,18 @@
 > the source of truth. Parts of it diverge from the shipped code (see the
 > divergence note below); do not implement from this document. For current
 > behavior see the code and docs/.
+>
+> **Current boundary:** Registry Notary does not support self-attested or
+> source-free claim evidence. Identity-derived subject context is authorization
+> only. Every configured claim requires a compiler-pinned Relay consultation.
 
 ## Divergence from shipped code (2026-05-31)
 
 - The breaking request-model work this spec frames as future has shipped: see EvaluateRequest/BatchEvaluateRequest at model.rs:580 and 912, BatchItemResponse at model.rs:947, and api.rs:2229.
 - The "empty-context audit hash" path this spec describes as current was replaced by `audit_reference_hash(class, scope, canonical_input)` (registry-platform-audit/src/lib.rs:680).
 - OpenAPI request-envelope schema names drift: this spec's `EvidenceEvaluateRequest`, `EvidenceBatchEvaluateRequest`, and `EvidenceBatchItemRequest` are emitted by the code as `EvaluateRequest`, `BatchEvaluateRequest`, and `BatchEvaluateItemRequest` (openapi.rs:588). The other Evidence-prefixed schema names (EvidenceEntity, EvidenceIdentifier, etc.) do match the code.
+- All self-attestation design material below is retired. It is preserved only
+  as historical context and must not be treated as product direction.
 
 ## Status
 

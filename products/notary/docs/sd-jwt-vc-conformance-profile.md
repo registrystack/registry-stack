@@ -142,7 +142,7 @@ selectively disclosable value. A client verifier of a status-bearing credential
 retrieves the signed status token only from its configured exact HTTPS trusted
 origin and fails closed when the status is missing, malformed, untrusted,
 unavailable, suspended, revoked, expired, or otherwise invalid.
-- **CORS.** Browser-based wallets from configured self-attestation wallet origins
+- **CORS.** Browser-based wallets from configured subject access wallet origins
   receive CORS headers on the `/.well-known/vct/...` metadata surface.
 
 ## Verification

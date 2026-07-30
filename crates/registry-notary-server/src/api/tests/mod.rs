@@ -4,10 +4,10 @@
 include!("support.rs");
 
 mod admin;
-mod attestation;
 mod audit;
 mod credentials;
 mod evaluations;
 mod oid4vci;
 mod state;
 mod status;
+mod subject_access;

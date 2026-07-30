@@ -25,22 +25,24 @@ returns typed outputs, Notary owns evidence meaning and disclosure, and the
 evidence consumer determines how the evidence is used. The decision owner
 remains accountable for requirements, decisions, workflow, and actions.
 
-## Self-attested Notary-only evaluation
+## Subject-bound evaluation
 
 ```mermaid
 sequenceDiagram
   participant Holder as Authenticated holder
   participant Notary as Registry Notary
+  participant Relay as Registry Relay
 
-  Holder->>Notary: Source-free evidence request
+  Holder->>Notary: Evidence request
   Notary->>Notary: Validate token and subject binding
-  Notary->>Notary: Evaluate allowed self-attested evidence claim
+  Notary->>Relay: Execute pinned evidence consultation
+  Relay-->>Notary: Minimized evidence
   Notary-->>Holder: Allowed result or credential
 ```
 
-This topology performs no Relay or registry-source call. The identity token
-authorizes subject-bound access; it does not establish consumer eligibility
-or another consumer-owned outcome.
+The identity token authorizes subject-bound access. It does not provide claim
+evidence or establish consumer eligibility. Claim evidence comes from the
+declared Relay consultation.
 
 ## Delegated evaluation
 
@@ -52,7 +54,7 @@ sequenceDiagram
 
   Caller->>Notary: Request for represented target
   Notary->>Notary: Validate exact authorization details
-  Notary->>Relay: Optional pinned relationship-proof consultation
+  Notary->>Relay: Pinned relationship-proof consultation
   Relay-->>Notary: Boolean proof outcome
   Notary->>Relay: Pinned evidence consultation
   Relay-->>Notary: Minimized evidence

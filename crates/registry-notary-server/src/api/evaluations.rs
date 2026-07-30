@@ -2,8 +2,6 @@
 //! Evaluation, batch evaluation, and rendering handlers.
 
 use super::*;
-use crate::runtime::registry_backed_batch_requested;
-
 pub(super) async fn evaluate(
     headers: HeaderMap,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
@@ -65,8 +63,8 @@ pub(super) async fn evaluate(
     if principal.is_subject_access() {
         // Classification only proves the caller is a citizen attester. The
         // transaction token authorization details select self vs delegated.
-        let attestation_access_mode = requested_attestation_access_mode(&principal);
-        principal.access_mode = attestation_access_mode;
+        let subject_access_mode = requested_subject_access_mode(&principal);
+        principal.access_mode = subject_access_mode;
         let principal_hash = match state
             .subject_access_rate_keys
             .principal(&principal.principal_id)
@@ -86,11 +84,11 @@ pub(super) async fn evaluate(
                 &request_claim_ids,
                 error.bucket(),
             );
-            override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             return response;
         }
-        let context_result = if attestation_access_mode == AccessMode::DelegatedAttestation {
-            derive_delegated_attestation_request_context(
+        let context_result = if subject_access_mode == AccessMode::DelegatedSubjectAccess {
+            derive_delegated_subject_access_request_context(
                 &state.subject_access,
                 evidence,
                 &state.subject_access_rate_keys,
@@ -112,7 +110,10 @@ pub(super) async fn evaluate(
                         &request_claim_ids,
                         rate_error.bucket(),
                     );
-                    override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                    override_subject_access_audit_access_mode(
+                        &mut response,
+                        principal.access_mode(),
+                    );
                     return response;
                 }
             }
@@ -125,7 +126,7 @@ pub(super) async fn evaluate(
                 denial_code,
                 Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
-            override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             return response;
         }
         match prepare_subject_access_evaluate(&state, evidence, &principal, &request) {
@@ -145,7 +146,7 @@ pub(super) async fn evaluate(
                             &request_claim_ids,
                             rate_error.bucket(),
                         );
-                        override_attestation_audit_access_mode(
+                        override_subject_access_audit_access_mode(
                             &mut response,
                             principal.access_mode(),
                         );
@@ -161,7 +162,7 @@ pub(super) async fn evaluate(
                     denial_code,
                     Some(state.subject_access.subject_binding.token_claim.as_str()),
                 );
-                override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                override_subject_access_audit_access_mode(&mut response, principal.access_mode());
                 return response;
             }
         }
@@ -247,7 +248,7 @@ pub(super) async fn evaluate(
                     None,
                     subject_access_policy_hash,
                 );
-                override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             } else {
                 attach_evidence_audit(
                     &mut response,
@@ -284,7 +285,7 @@ pub(super) async fn evaluate(
             );
             attach_runtime_evaluation_audit(&mut response, runtime_audit);
             if principal.is_subject_access() {
-                override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             }
             if zero_source_no_forward {
                 attach_zero_relay_no_forward_audit(&mut response);
@@ -369,13 +370,7 @@ pub(super) async fn batch_evaluate(
     if let Err(error) = validate_batch_subject_limit(evidence, &request) {
         return evidence_error_response(error);
     }
-    let registry_backed_batch = match registry_backed_batch_requested(evidence, &request) {
-        Ok(value) => value,
-        Err(error) => return evidence_error_response(error),
-    };
-    if registry_backed_batch
-        && idempotency_key(&headers).is_none_or(|key| key.is_empty() || key.len() > 256)
-    {
+    if idempotency_key(&headers).is_none_or(|key| key.is_empty() || key.len() > 256) {
         return evidence_error_response(EvidenceError::ConsultationInvalidRequest);
     }
     let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
@@ -530,7 +525,7 @@ pub(super) async fn render(
                 &evaluation.claim_ids,
                 error.bucket(),
             );
-            override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             return response;
         }
     }
@@ -558,7 +553,7 @@ pub(super) async fn render(
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
-                override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             } else {
                 attach_evidence_audit_with_purposes(
                     &mut response,
@@ -586,7 +581,7 @@ pub(super) async fn render(
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
-                override_attestation_audit_access_mode(&mut response, principal.access_mode());
+                override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             } else {
                 attach_evidence_audit(
                     &mut response,

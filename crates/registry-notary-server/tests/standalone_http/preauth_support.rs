@@ -15,7 +15,7 @@ pub(super) const ESIGNET_RP_CLIENT_ID: &str = "registry-lab-live-client";
 
 pub(super) fn set_preauth_env() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
     std::env::set_var("TEST_ACCESS_TOKEN_JWK", TEST_ACCESS_TOKEN_JWK);
     std::env::set_var("TEST_ESIGNET_RP_JWK", TEST_ESIGNET_RP_JWK);
 }

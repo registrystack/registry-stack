@@ -3,11 +3,10 @@
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator, integrator
 
 Registry Notary exposes an issuer-initiated pre-authorized code flow for
-issuing registry-backed `dc+sd-jwt` credentials to holder wallets. Source-free
-`self_attested` claims remain evaluation-only and cannot appear in an OID4VCI
-credential configuration. A credential configuration can also select the
-digitally authenticated representative ceremony for one registry-proven
-relationship.
+issuing registry-backed `dc+sd-jwt` credentials to holder wallets. A
+credential configuration can also select the digitally authenticated
+representative ceremony for one registry-proven relationship. Identity-provider
+and wallet inputs authorize and bind the flow; they do not become evidence.
 
 ## Supported 1.0 profile
 
@@ -25,8 +24,9 @@ The wallet facade supports:
 - one credential per immediate response.
 
 It does not support wallet-facing authorization-code grants, a public nonce
-route, response next nonces, ES256 holder proof, source-free issuance, EUDI or
-HAIP profiles, PAR, DPoP, or wallet attestation.
+route, response next nonces, ES256 holder proof, credential issuance from
+caller-provided evidence, EUDI or HAIP profiles, PAR, DPoP, or wallet
+attestation.
 
 The eSignet authorization code used during the browser callback is internal to
 Notary's identity-provider login. The wallet never receives or redeems it.
@@ -105,7 +105,7 @@ Content-Type: application/json
 The request cannot contain a target, purpose, claim value, Relay result, or
 provenance. Registry Notary reloads those values from the fresh caller-owned
 evaluation and active reviewed configuration. It rejects denied, stale,
-source-free, mismatched, foreign, or already consumed evaluations before
+incompletely provenanced, mismatched, foreign, or already consumed evaluations before
 creating an issuance transaction.
 
 A successful response is:
@@ -320,7 +320,7 @@ frozen candidate artifact and immutable evidence are published.
 | Symptom | Likely cause | Check |
 | --- | --- | --- |
 | OID4VCI routes are unavailable | The facade or pre-authorized flow is disabled | Expanded config and startup diagnostics |
-| Configuration is rejected | A source-free, mixed, one-sided, or delegated binding without the representative ceremony remains | Claim evidence mode, representative policy, profile bindings, and OID4VCI projections |
+| Configuration is rejected | A claim lacks a Relay consultation, a profile binding is one-sided, or delegated issuance lacks the representative ceremony | Claim evidence mode, representative policy, profile bindings, and OID4VCI projections |
 | Offer is not rendered | Identity binding, Relay execution, or stored transaction creation failed | Sanitized audit records and Relay availability |
 | Wallet asks for a different grant | Wallet does not support issuer-initiated pre-authorized code | Wallet version and imported offer |
 | PIN is rejected | Wrong, expired, replayed, or locked offer | Offer age and rate-limit diagnostics |

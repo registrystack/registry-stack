@@ -771,51 +771,6 @@
       "open_map_semantics": "Each reviewed key names a consultation output and each value defines its bounded evidence-result interpretation."
     },
     {
-      "id": "notary_evidence_claims_rule_bindings_claims_open_map",
-      "purpose": "Each reviewed key names a CEL claim binding and each value selects the approved evidence claim exposed to that binding.",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "structural",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "introduced_in": "0.13.0",
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "example_guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "arbitrary_map_keys_not_fixed_properties"
-      ],
-      "open_map_semantics": "Each reviewed key names a CEL claim binding and each value selects the approved evidence claim exposed to that binding."
-    },
-    {
       "id": "notary_evidence_credential_profiles_open_map",
       "purpose": "Each reviewed key names a credential profile and each value defines its exact claims, format, and issuance contract.",
       "semantic_owner": "notary_runtime",
@@ -4043,66 +3998,6 @@
       "profile": "notary_evidence_internal",
       "purpose_source": "profile",
       "default_source": "no_schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/RuleConfig/oneOf/2/properties/bindings",
-      "key_path": "evidence.claims[].rule.bindings",
-      "path_kind": "property",
-      "profile": "notary_evidence_internal",
-      "purpose_source": "profile",
-      "default_source": "schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/CelBindingsConfig/properties/claims",
-      "key_path": "evidence.claims[].rule.bindings.claims",
-      "path_kind": "property",
-      "profile": "notary_evidence_internal",
-      "purpose_source": "profile",
-      "default_source": "schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/CelBindingsConfig/properties/claims/additionalProperties",
-      "key_path": "evidence.claims[].rule.bindings.claims.*",
-      "path_kind": "map_value",
-      "profile": "notary_evidence_claims_rule_bindings_claims_open_map",
-      "purpose_source": "profile",
-      "default_source": "not_applicable",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/ClaimBindingConfig/properties/binding_type",
-      "key_path": "evidence.claims[].rule.bindings.claims.*.binding_type",
-      "path_kind": "property",
-      "profile": "notary_evidence_internal",
-      "purpose_source": "profile",
-      "default_source": "schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/ClaimBindingConfig/properties/claim",
-      "key_path": "evidence.claims[].rule.bindings.claims.*.claim",
-      "path_kind": "property",
-      "profile": "notary_evidence_internal",
-      "purpose_source": "profile",
-      "default_source": "no_schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/CelBindingsConfig/properties/vars",
-      "key_path": "evidence.claims[].rule.bindings.vars",
-      "path_kind": "property",
-      "profile": "notary_evidence_internal",
-      "purpose_source": "profile",
-      "default_source": "schema_default",
       "schema_facts_reviewed": true
     },
     {

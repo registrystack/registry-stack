@@ -124,9 +124,20 @@
                 "title": "Person is alive",
                 "version": "1",
                 "subject_type": "person",
-                "evidence_mode": { "type": "self_attested" },
+                "evidence_mode": {
+                    "type": "registry_backed",
+                    "consultations": {
+                        "civil_status": {
+                            "profile": {
+                                "id": "example.civil-status.exact",
+                                "contract_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            },
+                            "inputs": { "subject_id": "target.id" }
+                        }
+                    }
+                },
                 "purpose": "citizen_subject_access",
-                "rule": { "type": "cel", "expression": "true" },
+                "rule": { "type": "consultation_matched", "consultation": "civil_status" },
                 "operations": {
                     "evaluate": { "enabled": true },
                     "batch_evaluate": { "enabled": true, "max_subjects": 5 }
@@ -208,10 +219,26 @@
                     "title": "Dependent person is alive",
                     "version": "1",
                     "subject_type": "person",
-                    "evidence_mode": { "type": "self_attested" },
+                    "evidence_mode": {
+                        "type": "registry_backed",
+                        "consultations": {
+                            "dependent_status": {
+                                "profile": {
+                                    "id": "example.dependent-status.exact",
+                                    "contract_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                                },
+                                "inputs": {
+                                    "subject_id": "request.target.identifiers.civil_registration_id"
+                                }
+                            }
+                        }
+                    },
                     "purpose": "dependent_attestation",
                     "depends_on": ["guardian-link-established"],
-                    "rule": { "type": "cel", "expression": "claims.guardian.satisfied", "bindings": { "claims": { "guardian": { "claim": "guardian-link-established" } } } },
+                    "rule": {
+                        "type": "consultation_matched",
+                        "consultation": "dependent_status"
+                    },
                     "operations": {
                         "evaluate": { "enabled": true },
                         "batch_evaluate": { "enabled": false, "max_subjects": 1 }
@@ -278,7 +305,7 @@
                 relationship_type: "guardian".to_string(),
                 proof_claim: "guardian-link-established".to_string(),
             }),
-            access_mode: Some(AccessMode::DelegatedAttestation),
+            access_mode: Some(AccessMode::DelegatedSubjectAccess),
             assisted_access_context: None,
         }
     }
@@ -293,7 +320,7 @@
         )
         .expect("citizen principal classifies");
         principal.authorization_details = Some(delegated_authorization_details(evidence));
-        principal.access_mode = AccessMode::DelegatedAttestation;
+        principal.access_mode = AccessMode::DelegatedSubjectAccess;
         principal
     }
 
@@ -554,12 +581,14 @@
         Arc::new(PreAuthRuntime::for_api_tests(access_token_typ))
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     struct AttemptLimitedAccessTokenSigner {
         inner: LocalJwkSigner,
         sign_attempt_count: Arc<AtomicUsize>,
         allowed_signatures: usize,
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     impl AttemptLimitedAccessTokenSigner {
         fn new(sign_attempt_count: Arc<AtomicUsize>, allowed_signatures: usize) -> Self {
             let inner = LocalJwkSigner::new(
@@ -585,6 +614,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     #[async_trait::async_trait]
     impl SigningProvider for AttemptLimitedAccessTokenSigner {
         fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
@@ -613,6 +643,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     fn oid4vci_test_preauth_runtime_with_limited_signer(
         access_token_typ: &str,
         sign_attempt_count: Arc<AtomicUsize>,
@@ -628,11 +659,13 @@
         )
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     struct FirstSigningAttemptGate {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     impl FirstSigningAttemptGate {
         fn new() -> Self {
             Self {
@@ -650,12 +683,14 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     struct FirstAttemptBlockingAccessTokenSigner {
         inner: LocalJwkSigner,
         sign_attempt_count: Arc<AtomicUsize>,
         gate: Arc<FirstSigningAttemptGate>,
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     impl FirstAttemptBlockingAccessTokenSigner {
         fn new(
             sign_attempt_count: Arc<AtomicUsize>,
@@ -684,6 +719,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     #[async_trait::async_trait]
     impl SigningProvider for FirstAttemptBlockingAccessTokenSigner {
         fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
@@ -711,6 +747,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     fn oid4vci_test_preauth_runtime_with_first_signing_attempt_gate(
         access_token_typ: &str,
         sign_attempt_count: Arc<AtomicUsize>,
@@ -726,11 +763,13 @@
         )
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     struct FirstAttemptFailingAccessTokenSigner {
         inner: LocalJwkSigner,
         sign_attempt_count: Arc<AtomicUsize>,
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     impl FirstAttemptFailingAccessTokenSigner {
         fn new(sign_attempt_count: Arc<AtomicUsize>) -> Self {
             let inner = LocalJwkSigner::new(
@@ -755,6 +794,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     #[async_trait::async_trait]
     impl SigningProvider for FirstAttemptFailingAccessTokenSigner {
         fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
@@ -782,6 +822,7 @@
         }
     }
 
+    #[cfg(feature = "registry-notary-cel")]
     fn oid4vci_test_preauth_runtime_with_first_signing_attempt_failure(
         access_token_typ: &str,
         sign_attempt_count: Arc<AtomicUsize>,

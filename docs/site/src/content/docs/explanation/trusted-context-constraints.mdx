@@ -55,8 +55,8 @@ by its evidence mode. The pinned profile fixes the contract hash, purpose, close
 outcome union, and typed outputs. Notary does not configure a source origin, credential, lookup
 recipe, freshness field, or adapter runtime.
 
-A Notary-only self-attested service performs no Relay or source I/O. Its constraints apply only to
-the authenticated subject context and source-free claim policy.
+Subject access constrains the authenticated requester and subject. It does not
+replace the Relay observation contract or provide claim evidence.
 
 ## Reports and audit evidence
 
@@ -79,7 +79,7 @@ distinct from an assurance value asserted in authorization context.
 - Does the compiled Notary contract exactly match the Relay consultation semantics and hash?
 - Is source freshness derived from a proven Relay observation contract rather than a domain date?
 - Are reports bounded and redacted at both product boundaries?
-- Does a self-attested service remain source-free?
+- Does every claim retain a compiler-pinned Relay observation contract?
 
 ## Related pages
 

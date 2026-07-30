@@ -59,20 +59,6 @@ fn relay_readiness_state() -> RegistryNotaryApiState {
     )
 }
 
-#[tokio::test]
-async fn source_free_state_does_not_require_relay_readiness() {
-    let state = RegistryNotaryApiState::new(
-        Arc::new(evidence_config()),
-        AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(EvidenceStore::default()),
-        Arc::new(NoopIssuerResolver),
-    );
-
-    assert!(!state.relay_required());
-    assert!(!state.relay_activated());
-    assert!(state.relay_ready().await);
-}
-
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
 async fn readiness_reports_unactivated_cel_without_starting_the_worker() {

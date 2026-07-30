@@ -14,7 +14,7 @@ pub(super) async fn request_body_limit_returns_413_above_threshold() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -64,7 +64,7 @@ pub(super) async fn request_uri_limit_returns_414_problem_details() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -110,7 +110,7 @@ pub(super) async fn error_responses_match_rfc_9457_problem_details_shape() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -152,7 +152,7 @@ pub(super) async fn evaluation_json_rejections_and_unsupported_idempotency_are_p
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -261,7 +261,7 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -338,7 +338,7 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
 #[tokio::test]
 pub(super) async fn subject_access_cors_uses_wallet_origins_on_browser_paths() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -407,7 +407,7 @@ pub(super) async fn subject_access_cors_uses_wallet_origins_on_browser_paths() {
 #[tokio::test]
 pub(super) async fn subject_access_preflight_uses_wallet_origin_allow_list() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -494,7 +494,7 @@ pub(super) async fn standalone_router_hides_admin_and_metrics_when_admin_listene
 
         let tmp = TempDir::new().expect("tempdir");
         let audit_path = tmp.path().join("audit.jsonl");
-        let mut config = notary_only_config(
+        let mut config = registry_backed_config(
             "http://127.0.0.1:1",
             audit_path.to_str().expect("audit path is UTF-8"),
         );
@@ -531,7 +531,7 @@ pub(super) async fn standalone_router_default_config_hides_admin_and_metrics() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -566,7 +566,7 @@ pub(super) async fn standalone_server_can_serve_openapi_without_auth_when_config
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -621,7 +621,7 @@ pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let config = notary_only_config(
+    let config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -661,7 +661,7 @@ pub(super) async fn request_uri_limit_414_carries_server_owned_request_id() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -690,7 +690,7 @@ pub(super) async fn request_body_limit_413_carries_server_owned_request_id() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))

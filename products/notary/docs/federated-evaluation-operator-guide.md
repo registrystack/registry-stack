@@ -18,18 +18,20 @@ Agency B <- signed response JWT <- Agency A
 ```
 
 The serving Notary verifies the request, enforces local peer policy, evaluates
-an admitted source-free claim only after policy passes, emits audit, and
+an admitted registry-backed claim only after policy passes, emits audit, and
 returns a signed result.
 
 ```mermaid
 sequenceDiagram
   participant B as Agency B (requesting Notary)
   participant A as Agency A (serving Notary)
+  participant Relay as Registry Relay
   participant Audit as Audit sink
 
   B->>A: POST /federation/v1/evaluations (signed request JWT)
   A->>A: Verify signature, audience, time window, profile, purpose, replay, denylist, body limit
-  A->>A: Evaluate admitted source-free claim
+  A->>Relay: Evaluate admitted registry-backed claim using request jti
+  Relay-->>A: Minimized evidence
   A->>Audit: Chained audit record
   A-->>B: Signed response JWT, or signed error, or Problem Details denial
 ```
@@ -114,13 +116,10 @@ principal when authorizing the selected local claim. They do not grant registry
 or Relay source access. `max_claim_result_age_seconds` bounds the age of the
 local claim result's `issued_at` timestamp.
 
-The current federation endpoint cannot select a claim with
-`evidence_mode.type: registry_backed`. Startup rejects that composition because
-federation audit does not yet carry the Notary evaluation id and Relay
-consultation ids needed for end-to-end reconciliation. The existing federation
-MVP is therefore limited to admitted source-free/self-attested claims.
-Relay-backed federation is deferred until the audit boundary is implemented as
-one complete feature. Notary has no direct registry-source fallback.
+The federation endpoint can select only a claim with
+`evidence_mode.type: registry_backed`. The verified federation request `jti`
+is passed to Relay as the bounded audit correlation id. Notary has no direct
+registry-source or caller-input evidence fallback.
 
 `allow_insecure_private_network` is a development and lab escape hatch for
 private Compose networks. It allows HTTP peer JWKS fetches through the shared

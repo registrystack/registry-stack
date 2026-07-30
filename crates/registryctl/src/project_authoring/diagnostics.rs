@@ -620,7 +620,7 @@ fn project_declaration_semantic_diagnostics(
                         PROJECT_FILE,
                         Some("services.claims.cel"),
                         "A claim evaluation does not resolve to a declared consultation.",
-                        "Reference one declared consultation or add the explicit source-free value contract.",
+                        "Reference one declared Relay consultation.",
                         Some(PROJECT_SCHEMA_HINT),
                         vec![
                             diagnostic_address(

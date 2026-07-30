@@ -18,8 +18,8 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_notary_core::{
-    AccessMode, ClaimRef, EvaluateRequest, EvaluationCapability, EvidenceAuthProfileId,
-    EvidenceAuthorizationDetails, EvidenceEntity, EvidencePrincipal,
+    AccessMode, BoundedCorrelationId, ClaimRef, EvaluateRequest, EvaluationCapability,
+    EvidenceAuthProfileId, EvidenceAuthorizationDetails, EvidenceEntity, EvidencePrincipal,
     FederationEvaluationProfileConfig, FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_crypto::pairwise_subject_ref_hash;
@@ -298,6 +298,11 @@ async fn handle_federated_evaluate(
     })?;
     audit_context.subject_ref_hash = Some(subject_hash.clone());
     let runtime_eval = state.runtime();
+    let correlation_id = BoundedCorrelationId::new(request_jti.to_string()).map_err(|_| {
+        audit_context.denied(FederationProblem::server_error(
+            "verified request jti exceeds the correlation identifier bound",
+        ))
+    })?;
     let results = runtime_eval
         .evaluate_with_capability(
             Arc::clone(&state.evidence),
@@ -307,7 +312,7 @@ async fn handle_federated_evaluate(
             request,
             None,
             None,
-            None,
+            Some(correlation_id),
         )
         .await
         .map_err(|error| audit_context.denied(FederationProblem::from_evidence_error(error)))?;

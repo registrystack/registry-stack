@@ -57,10 +57,10 @@ pub(in crate::api) async fn oid4vci_credential(
             Err(error) => return oid4vci_error_response(error),
         };
     let configuration_claim_ids = configuration.credential_claim_ids();
-    let requested_access_mode = requested_attestation_access_mode(&principal);
+    let requested_access_mode = requested_subject_access_mode(&principal);
     let representative_configuration = configuration.representative_issuance.is_some();
     if (principal.is_subject_access()
-        && (requested_access_mode == AccessMode::DelegatedAttestation)
+        && (requested_access_mode == AccessMode::DelegatedSubjectAccess)
             != representative_configuration)
         || (!principal.is_subject_access() && representative_configuration)
     {
@@ -306,7 +306,7 @@ pub(in crate::api) fn oid4vci_credential_response_with_audit(
     {
         return Err(Oid4vciWireError::ServerError);
     }
-    override_attestation_audit_access_mode(&mut response, evaluation.access_mode());
+    override_subject_access_audit_access_mode(&mut response, evaluation.access_mode());
     Ok(response)
 }
 
@@ -518,7 +518,7 @@ async fn materialize_oid4vci_transaction(
         let stored_principal_hash = evaluation
             .subject_access
             .as_ref()
-            .filter(|metadata| metadata.access_mode == AccessMode::DelegatedAttestation)
+            .filter(|metadata| metadata.access_mode == AccessMode::DelegatedSubjectAccess)
             .map(|metadata| &metadata.principal_hash);
         check_oid4vci_subject_access_rate_limit(
             state,
@@ -537,7 +537,7 @@ async fn materialize_oid4vci_transaction(
         return Err(Oid4vciWireError::InvalidProof);
     }
     let holder_id = validated_proof.holder_id.as_str();
-    let subject_ref = if principal.access_mode() == AccessMode::DelegatedAttestation {
+    let subject_ref = if principal.access_mode() == AccessMode::DelegatedSubjectAccess {
         let Some(first) = evaluation.results.first() else {
             return Err(Oid4vciWireError::AccessDenied);
         };
@@ -817,7 +817,7 @@ pub(in crate::api) fn oid4vci_representative_issuance_authorization_details(
         &proof_claim.id,
         &proof_claim.version,
     ));
-    details.access_mode = Some(AccessMode::DelegatedAttestation);
+    details.access_mode = Some(AccessMode::DelegatedSubjectAccess);
     details.target = Some(registry_notary_core::EvidenceAuthorizationTarget {
         id_type: delegated_target_id_type(config, relationship).to_string(),
         id: target_id.to_string(),
@@ -988,15 +988,13 @@ pub(in crate::api) fn derive_subject_access_request_context(
     Ok(())
 }
 
-pub(in crate::api) fn requested_attestation_access_mode(
-    principal: &EvidencePrincipal,
-) -> AccessMode {
+pub(in crate::api) fn requested_subject_access_mode(principal: &EvidencePrincipal) -> AccessMode {
     match principal
         .authorization_details
         .as_ref()
         .and_then(|details| details.access_mode)
     {
-        Some(AccessMode::DelegatedAttestation) => AccessMode::DelegatedAttestation,
+        Some(AccessMode::DelegatedSubjectAccess) => AccessMode::DelegatedSubjectAccess,
         _ => AccessMode::SubjectBound,
     }
 }
@@ -1005,7 +1003,7 @@ pub(in crate::api) fn apply_stored_subject_access_access_mode(
     principal: &mut EvidencePrincipal,
     metadata: &StoredSubjectAccessMetadata,
 ) -> Result<(), EvidenceError> {
-    let requested_access_mode = requested_attestation_access_mode(principal);
+    let requested_access_mode = requested_subject_access_mode(principal);
     if requested_access_mode != metadata.access_mode {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
@@ -1013,7 +1011,7 @@ pub(in crate::api) fn apply_stored_subject_access_access_mode(
     Ok(())
 }
 
-pub(in crate::api) fn derive_delegated_attestation_request_context(
+pub(in crate::api) fn derive_delegated_subject_access_request_context(
     config: &SubjectAccessConfig,
     evidence: &EvidenceConfig,
     keys: &SubjectAccessRateLimitKeys,

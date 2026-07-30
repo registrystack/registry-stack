@@ -100,8 +100,8 @@
             "slug": "products/registry-notary/postgresql-state-operations"
           },
           {
-            "label": "Self-attestation operator guide",
-            "slug": "products/registry-notary/self-attestation-operator-guide"
+            "label": "Subject access operator guide",
+            "slug": "products/registry-notary/subject-access-operator-guide"
           },
           {
             "label": "Credential lifecycle and status",

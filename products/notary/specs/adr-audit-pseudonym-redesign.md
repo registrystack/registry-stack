@@ -14,7 +14,7 @@ Accepted for the audit pseudonym follow-up design freeze.
 Registry Notary audit events need stable enough references for security review,
 incident response, and lawful investigation without storing raw identity
 attributes or creating cross-context correlation handles. The evidence request
-subject model also introduces non-person targets, self-attestation, provider
+subject model also introduces non-person targets, subject access, provider
 matching, and federation pairwise subject hashes, so audit pseudonyms need an
 explicit domain model before implementation changes land.
 

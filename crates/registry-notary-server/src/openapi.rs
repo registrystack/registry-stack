@@ -252,7 +252,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Source-free and legacy evaluations are not issuable. Delegated issuance is accepted only for a credential configuration using the digitally authenticated representative ceremony. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Delegated issuance is accepted only for a credential configuration using the digitally authenticated representative ceremony. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -459,7 +459,7 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Complete eSignet login for a pre-authorized-code offer",
                     "operationId": "completeOid4vciOffer",
-                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, and validates the id_token. For an ordinary credential configuration, it completes the exact registry-backed Relay evaluation and only then mints one single-use pre-authorized_code bound to that immutable transaction. For a representative configuration, it reserves a fresh single-use target-selection state and returns a no-store form; POST /oid4vci/offer/representative completes the proof-bounded evaluation. Denied, unavailable, malformed, source-free, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, and validates the id_token. For an ordinary credential configuration, it completes the exact registry-backed Relay evaluation and only then mints one single-use pre-authorized_code bound to that immutable transaction. For a representative configuration, it reserves a fresh single-use target-selection state and returns a no-store form; POST /oid4vci/offer/representative completes the proof-bounded evaluation. Denied, unavailable, malformed, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
                     "security": [],
                     "parameters": [
                         {
@@ -692,7 +692,7 @@ fn build_openapi_document() -> Value {
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
                         "413": { "description": "Request body is too large" },
-                        "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
+                        "429": { "description": "Subject-access request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
@@ -744,8 +744,8 @@ fn build_openapi_document() -> Value {
                         {
                             "name": "Idempotency-Key",
                             "in": "header",
-                            "required": false,
-                            "description": "Required for every registry-backed batch. The value is caller-bound and may contain 1 to 256 bytes.",
+                            "required": true,
+                            "description": "Required for every batch. The value is caller-bound and may contain 1 to 256 bytes.",
                             "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
                         }
                     ],
@@ -759,13 +759,13 @@ fn build_openapi_document() -> Value {
                     },
                     "responses": {
                         "200": { "description": "Per-item claim evaluation results" },
-                        "400": { "description": "Invalid request, including a registry-backed batch without a valid Idempotency-Key or an item that fails whole-batch preflight" },
+                        "400": { "description": "Invalid request, including a batch without a valid Idempotency-Key or an item that fails whole-batch preflight" },
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
                         "409": { "description": "Idempotency key conflicts with another request body" },
                         "413": { "description": "The request exceeds the hard 100-member ceiling or a lower configured batch limit. Rejection occurs before quota, idempotency, Relay, source, or retained-state side effects." },
-                        "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
+                        "429": { "description": "Subject-access request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
@@ -797,7 +797,7 @@ fn build_openapi_document() -> Value {
                         "404": { "description": "Evaluation not found" },
                         "406": { "description": "Requested format is not acceptable" },
                         "413": { "description": "Request body is too large" },
-                        "429": { "description": "Self-attestation request is rate limited" },
+                        "429": { "description": "Subject-access request is rate limited" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
@@ -805,7 +805,7 @@ fn build_openapi_document() -> Value {
             "/v1/credentials": {
                 "post": {
                     "summary": "Issue a credential from a stored evaluation",
-                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable through this direct route. Representative issuance uses the separately configured OpenID4VCI ceremony.",
+                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Representative issuance uses the separately configured OpenID4VCI ceremony.",
                     "operationId": "issueCredential",
                     "requestBody": {
                         "required": true,
@@ -823,7 +823,7 @@ fn build_openapi_document() -> Value {
                         "406": { "description": "Requested format is not acceptable" },
                         "409": { "description": "Holder proof replay or Relay ambiguity conflict" },
                         "413": { "description": "Request body is too large" },
-                        "429": { "description": "Self-attestation request is rate limited" },
+                        "429": { "description": "Subject-access request is rate limited" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
@@ -2787,7 +2787,7 @@ fn add_runtime_problem_responses(
             "429" => (
                 429,
                 "subject_access.rate_limited",
-                "Self-attestation rate limited",
+                "Subject access rate limited",
                 "subject-access request is rate limited",
             ),
             "503" => (

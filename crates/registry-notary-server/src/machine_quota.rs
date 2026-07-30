@@ -9,7 +9,7 @@
 //! rejected whole so the response stays deterministic and no partial
 //! evaluation work is ever performed for a rejected request.
 //!
-//! Self-attestation principals never reach this limiter; enforcement in
+//! Subject-access principals never reach this limiter; enforcement in
 //! `api.rs` only calls it for principals that failed
 //! [`registry_notary_core::model::EvidencePrincipal::is_subject_access`].
 

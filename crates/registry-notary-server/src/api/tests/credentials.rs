@@ -670,9 +670,9 @@ async fn delegated_evaluation_cannot_issue_directly_even_with_registry_provenanc
         &evaluate_request("NAT-123"),
     )
     .expect("subject-access metadata prepares");
-    context.metadata.access_mode = AccessMode::DelegatedAttestation;
+    context.metadata.access_mode = AccessMode::DelegatedSubjectAccess;
     principal.authorization_details = Some(registry_notary_core::EvidenceAuthorizationDetails {
-        access_mode: Some(AccessMode::DelegatedAttestation),
+        access_mode: Some(AccessMode::DelegatedSubjectAccess),
         ..Default::default()
     });
     let evaluation_id = "eval-delegated-direct-retired";

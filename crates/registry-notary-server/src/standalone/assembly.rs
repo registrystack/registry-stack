@@ -1,6 +1,6 @@
 use super::*;
 
-/// Build a source-free, explicitly in-memory Notary router.
+/// Build an explicitly in-memory Notary router.
 ///
 /// PostgreSQL configurations require asynchronous state-plane activation and
 /// return [`StandaloneServerError::PostgresqlStateActivationRequired`].
@@ -43,8 +43,8 @@ pub struct NotaryRuntimeSnapshot {
 impl NotaryRuntimeSnapshot {
     /// Activate PostgreSQL state and any configured Relay consultations.
     ///
-    /// Source-free in-memory runtimes complete without reading credentials or
-    /// performing network I/O.
+    /// In-memory runtimes activate their configured Relay consultations before
+    /// serving requests.
     pub async fn activate(mut self) -> Result<Self, StandaloneServerError> {
         self.verify_retained_audit_chain().await;
         self.state_plane.activate().await?;

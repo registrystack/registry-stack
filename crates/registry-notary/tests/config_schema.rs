@@ -672,14 +672,10 @@ fn adapter_rosters_are_generated_from_runtime_labels() {
         );
     }
 
-    let runtime_evidence_modes = [
-        serde_json::to_value(ClaimEvidenceMode::RegistryBacked {
-            consultations: Default::default(),
-        })
-        .expect("registry-backed mode serializes"),
-        serde_json::to_value(ClaimEvidenceMode::SelfAttested)
-            .expect("self-attested mode serializes"),
-    ]
+    let runtime_evidence_modes = [serde_json::to_value(ClaimEvidenceMode::RegistryBacked {
+        consultations: Default::default(),
+    })
+    .expect("registry-backed mode serializes")]
     .into_iter()
     .map(|value| value["type"].as_str().expect("mode type label").to_string())
     .collect();
@@ -745,28 +741,18 @@ fn adapter_variant_rosters_and_scalar_shapes_match_runtime_deserialization() {
         "credential-fingerprint reference shape deferred to runtime validation",
     );
 
-    let mut self_attested = example_config();
-    self_attested["evidence"]["claims"][0]["evidence_mode"] = json!({"type": "self_attested"});
-    self_attested["evidence"]
-        .as_object_mut()
-        .expect("evidence is an object")
-        .remove("credential_profiles");
-    self_attested
-        .as_object_mut()
-        .expect("config is an object")
-        .remove("oid4vci");
-    if let Some(subject_access) = self_attested
-        .get_mut("subject_access")
-        .and_then(Value::as_object_mut)
-    {
-        subject_access.remove("credential_profiles");
-    }
-    assert_valid(
+    let mut removed_evidence_mode = example_config();
+    removed_evidence_mode["evidence"]["claims"][0]["evidence_mode"] =
+        json!({"type": "self_attested"});
+    assert_invalid(
         &schema,
-        &self_attested,
-        "evaluation-only self-attested claim",
+        &removed_evidence_mode,
+        "removed self_attested evidence mode",
     );
-    assert_runtime_deserializes(&self_attested, "evaluation-only self-attested claim");
+    assert_runtime_rejects(
+        &removed_evidence_mode,
+        "removed self_attested evidence mode",
+    );
 }
 
 #[test]
@@ -816,7 +802,7 @@ fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
     let assignments = intent["assignments"]
         .as_array()
         .expect("Notary intent assignments are an array");
-    assert_eq!(assignments.len(), 538);
+    assert_eq!(assignments.len(), 532);
     let assigned_paths = assignments
         .iter()
         .map(|assignment| {
@@ -835,6 +821,6 @@ fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
             .iter()
             .filter(|assignment| assignment["path_kind"] == "map_value")
             .count(),
-        10
+        9
     );
 }

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- Removed project authoring for claims without declared Registry Relay
+  consultations. Registryctl no longer generates source-free Notary
+  evaluation projects.
+
 ### Added
 
 - Added a compact `oid4vci.representative_issuance` authoring block.

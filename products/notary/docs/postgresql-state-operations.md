@@ -224,7 +224,7 @@ Use these minimum drain periods:
 | Machine quota | 1 minute |
 | OID4VCI nonce and preauthorization state | 10 minutes |
 | Evaluation and batch idempotency | 15 minutes |
-| Self-attestation quota | 1 hour |
+| Subject access quota | 1 hour |
 | Replay identifiers | Longest configured token or request lifetime |
 | Credential status | No timed drain; required records must be absent or migrated |
 
@@ -278,12 +278,12 @@ future retention setting does not shorten existing rows.
 | Replay identifier | Protocol token or request expiry |
 | Reserved nonce | Configured nonce expiry |
 | Consumed nonce | 60 seconds after consumption |
-| Stored evaluation | Its absolute expiry, normally 15 minutes or a stricter self-attestation expiry |
+| Stored evaluation | Its absolute expiry, normally 15 minutes or a stricter subject access expiry |
 | Completed or failed batch idempotency | 15 minutes |
 | In-flight batch idempotency | Bounded owner lease, then takeover eligibility |
 | Credential status | Credential expiry plus `credential_status.retention_seconds` |
 | Machine quota | One-minute fixed window |
-| Self-attestation quota | One-minute or one-hour fixed window by bucket |
+| Subject access quota | One-minute or one-hour fixed window by bucket |
 | Preauthorization login state | Configured lifetime, at most 600 seconds |
 | Preauthorization transaction code | Code lifetime, at most 600 seconds, or successful redemption |
 
@@ -425,7 +425,7 @@ Before release from quarantine:
    acknowledged a write.
 2. Wait until every token, request, nonce, evaluation, idempotency key, and
    preauthorization value that could be missing from the restore has expired.
-3. Wait through the maximum one-hour self-attestation quota window. Treat
+3. Wait through the maximum one-hour subject access quota window. Treat
    uncertain quota state conservatively.
 4. Reconcile credential status against retained issuance and status evidence.
    If a suspension or revocation could be missing, keep status and issuance

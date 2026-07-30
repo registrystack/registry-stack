@@ -153,19 +153,16 @@ impl FederationConfig {
                 "federation.evaluation_profiles[].claim_id",
                 &profile.claim_id,
             )?;
-            let claim = evidence
+            if !evidence
                 .claims
                 .iter()
-                .find(|claim| claim.id == profile.claim_id)
-                .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                .any(|claim| claim.id == profile.claim_id)
+            {
+                return Err(EvidenceConfigError::InvalidFederationConfig {
                     reason:
                         "federation.evaluation_profiles[].claim_id must reference an evidence claim"
                             .to_string(),
-                })?;
-            if claim.evidence_mode.is_registry_backed() {
-                return invalid_federation(
-                    "federation.evaluation_profiles[].claim_id cannot reference a registry_backed claim until federation preserves Relay consultation audit correlation",
-                );
+                });
             }
             validate_federation_non_empty(
                 "federation.evaluation_profiles[].subject_id_type",

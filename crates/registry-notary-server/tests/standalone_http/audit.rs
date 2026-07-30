@@ -27,7 +27,7 @@ async fn wait_for_audit_writer_shutdown(audit_path: &std::path::Path) {
 
 #[tokio::test]
 #[cfg(not(feature = "registry-notary-cel"))]
-pub(super) async fn standalone_server_authenticates_and_audits_unsupported_access_mode() {
+pub(super) async fn standalone_server_authenticates_and_audits_registry_evaluation() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -36,7 +36,7 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -84,7 +84,7 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
             "disclosure": "predicate"
         }))
         .await;
-    response.assert_status(StatusCode::NOT_IMPLEMENTED);
+    response.assert_status_ok();
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
     let envelopes = audit_envelopes(&audit_path);
@@ -94,7 +94,7 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
     assert!(envelopes
         .iter()
         .all(|envelope| envelope.record.get("principal_id").is_none()));
-    assert!(audit.contains("\"decision\":\"evaluate_denied\""));
+    assert!(audit.contains("\"decision\":\"evaluate\""));
     assert!(audit.contains("\"claim_hash\":\"sha256:"));
     assert!(!audit.contains("api-token"));
     assert!(!audit.contains("person-1"));
@@ -106,17 +106,17 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
     let metrics_body = metrics.text();
     assert!(metrics_body.contains("registry_notary_http_requests_total"));
     assert!(metrics_body.contains(
-        "registry_notary_http_requests_total{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"501\",status_class=\"5xx\",error_code=\"claim.operation_unsupported\"}"
+        "registry_notary_http_requests_total{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(metrics_body.contains("# TYPE registry_notary_http_request_duration_seconds histogram"));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"501\",status_class=\"5xx\",error_code=\"claim.operation_unsupported\",le=\"+Inf\"}"
+        "registry_notary_http_request_duration_seconds_bucket{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\",le=\"+Inf\"}"
     ));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"501\",status_class=\"5xx\",error_code=\"claim.operation_unsupported\"}"
+        "registry_notary_http_request_duration_seconds_sum{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(metrics_body.contains(
-        "registry_notary_http_request_duration_seconds_count{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"501\",status_class=\"5xx\",error_code=\"claim.operation_unsupported\"}"
+        "registry_notary_http_request_duration_seconds_count{method=\"POST\",endpoint_kind=\"evaluation\",status_code=\"200\",status_class=\"2xx\",error_code=\"none\"}"
     ));
     assert!(!metrics_body.contains("registry_notary_http_request_duration_ms_total"));
     assert!(!metrics_body.contains("route="));
@@ -137,7 +137,7 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let config = notary_only_config(
+    let config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -191,7 +191,7 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let config = notary_only_config(
+    let config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -244,7 +244,7 @@ pub(super) async fn standalone_router_verifies_audit_before_returning_readiness(
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let config = notary_only_config(
+    let config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );

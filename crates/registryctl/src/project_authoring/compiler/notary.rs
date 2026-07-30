@@ -141,25 +141,8 @@ fn generated_notary_config(
                             json!({ "type": "registry_backed", "consultations": consultations }),
                             value_type,
                             nullable,
-                            None,
+                            None::<u32>,
                             rule,
-                        )
-                    }
-                    ClaimEvidence::SelfAttested => {
-                        let value = claim
-                            .value
-                            .as_ref()
-                            .ok_or_else(|| anyhow!("source-free claim value contract is absent"))?;
-                        let expression = claim
-                            .cel
-                            .as_ref()
-                            .ok_or_else(|| anyhow!("source-free claim CEL rule is absent"))?;
-                        (
-                            json!({ "type": "self_attested" }),
-                            claim_value_type(value)?.to_string(),
-                            value.nullable,
-                            value.max_bytes,
-                            json!({ "type": "cel", "expression": expression, "bindings": {} }),
                         )
                     }
                 };
@@ -366,11 +349,11 @@ fn validate_compiler_credential_profile_evidence(
                 "credential profile {service_id}.{credential_id} references absent claim {claim_id}"
             )
         })?;
-        if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-            bail!(
-                "credential profile {service_id}.{credential_id} selects source-free claim {claim_id}; refusing to compile credential capability without registry-backed claim evidence"
-            );
-        }
+        inferred_claim_evidence(service, claim).with_context(|| {
+            format!(
+                "credential profile {service_id}.{credential_id} requires claim {claim_id} to reference a declared Relay consultation"
+            )
+        })?;
     }
     Ok(())
 }
@@ -580,19 +563,6 @@ fn add_oid4vci_config(
         });
     }
     Ok(())
-}
-
-fn claim_value_type(value: &ClaimValueDeclaration) -> Result<&'static str> {
-    match value.value_type {
-        OutputType::Boolean => Ok("boolean"),
-        OutputType::Integer => Ok("integer"),
-        OutputType::String => Ok("string"),
-        OutputType::Date => Ok("date"),
-        OutputType::Object | OutputType::Array => {
-            bail!("claim value contracts cannot declare structured values")
-        }
-        OutputType::Presence => bail!("claim value contracts cannot use presence"),
-    }
 }
 
 fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Result<Value> {
@@ -812,7 +782,7 @@ fn generated_notary_claim_rule(
     Ok((
         value_type,
         nullable,
-        json!({ "type": "cel", "expression": expression, "bindings": {} }),
+        json!({ "type": "cel", "expression": expression }),
     ))
 }
 
@@ -1306,7 +1276,7 @@ mod notary_compiler_tests {
     use super::*;
 
     #[test]
-    fn compiler_rejects_source_free_credential_profiles_without_project_validation() {
+    fn compiler_rejects_claims_without_relay_consultations() {
         let project: RegistryProject = serde_norway::from_str(
             r#"version: 1
 registry: { id: compiler-boundary-test }
@@ -1341,10 +1311,8 @@ services:
             service,
             credential,
         )
-        .expect_err("compiler boundary must reject source-free credentials");
-        assert!(format!("{error:#}").contains(
-            "refusing to compile credential capability without registry-backed claim evidence"
-        ));
+        .expect_err("compiler boundary must reject claims without Relay consultations");
+        assert!(format!("{error:#}").contains("must derive from one declared Relay consultation"));
     }
 
     #[test]

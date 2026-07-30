@@ -8,8 +8,11 @@ Notary, and consumer decisions in the consuming system.
 | Need | Project topology | Notary evidence mode |
 | --- | --- | --- |
 | Governed records or materialization only | Relay only | Not applicable |
-| Source-free evidence from an authenticated subject | Notary only | `self_attested` |
 | Evidence derived from registry data | Relay and Notary | `registry_backed` |
+
+Authentication can bind an evidence request to the authenticated subject, but
+it is authorization context rather than evidence. Notary does not support
+claims derived only from caller-provided or identity-token data.
 
 A Registry Stack project has one registry trust domain and one logical source
 available to Relay. Separate independent registries require separate projects.

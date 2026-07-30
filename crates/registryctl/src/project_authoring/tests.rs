@@ -1826,7 +1826,7 @@ outputs:
             json!(0);
         assert!(
             validate_live_response(&missing_provenance, &request, &expected)
-                .expect_err("source-free result must fail")
+                .expect_err("a result without Relay provenance must fail")
                 .to_string()
                 .contains("source-backed provenance")
         );
@@ -3043,7 +3043,7 @@ outputs:
     }
 
     #[test]
-    fn registry_cel_claims_reject_structured_consultation_members_before_generation() {
+    fn registry_cel_claims_reject_structured_members_and_constant_only_rules() {
         let mut loaded =
             load_registry_project(&project_golden("opencrvs"), None).expect("OpenCRVS project loads");
         let set_claim_expression = |loaded: &mut LoadedRegistryProject, expression: &str| {
@@ -3074,9 +3074,12 @@ outputs:
             .to_string()
             .contains("registry-backed CEL cannot use index access"));
 
-        set_claim_expression(&mut loaded, "['source-free'][0] == 'source-free'");
-        validate_service_integration_links(&loaded.project, &loaded.integrations)
-            .expect("source-free CEL index behavior remains outside this registry boundary");
+        set_claim_expression(&mut loaded, "['literal-value'][0] == 'literal-value'");
+        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
+            .expect_err("constant-only CEL cannot replace Registry evidence");
+        assert!(error
+            .to_string()
+            .contains("every claim must derive from one declared Relay consultation"));
     }
 
     #[test]

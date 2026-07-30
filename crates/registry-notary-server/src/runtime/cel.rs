@@ -9,7 +9,7 @@ pub(super) async fn evaluate_cel_expression(
     let config = ctx.config;
     #[cfg(not(feature = "registry-notary-cel"))]
     let config = &RegistryNotaryCelConfig::default();
-    validate_cel_policy(ctx.expression, ctx.bindings, ctx.claim, config)?;
+    validate_cel_policy(ctx.expression, config)?;
     #[cfg(feature = "registry-notary-cel")]
     {
         evaluate_with_cel(ctx).await
@@ -29,24 +29,16 @@ pub(crate) fn validate_cel_claims_for_startup(
     let mut runtime = MappingRuntime::new(RuntimeOptions::default());
     runtime.limits = cel_security_limits(config);
     for claim in &evidence.claims {
-        let RuleConfig::Cel {
-            expression,
-            bindings,
-        } = &claim.rule
-        else {
+        let RuleConfig::Cel { expression } = &claim.rule else {
             continue;
         };
-        validate_cel_policy(expression, bindings, claim, config)?;
-        if claim.evidence_mode.is_registry_backed() {
-            validate_registry_cel_expression(expression, claim)?;
-        } else {
-            validate_cel_expression_roots(expression)?;
-        }
+        validate_cel_policy(expression, config)?;
+        validate_registry_cel_expression(expression, claim)?;
         if !config.allow_regex && cel_expression_uses_regex(expression) {
             return Err(EvidenceError::InvalidRequest);
         }
         let input = StandaloneExpressionInput::new(
-            cel_preflight_root_bindings(evidence, claim, bindings)
+            cel_preflight_root_bindings(evidence, claim)
                 .into_iter()
                 .collect(),
         );
@@ -67,8 +59,6 @@ pub(crate) fn validate_cel_claims_for_startup(
 
 pub(super) fn validate_cel_policy(
     expression: &str,
-    bindings: &CelBindingsConfig,
-    claim: &ClaimDefinition,
     _config: &RegistryNotaryCelConfig,
 ) -> Result<(), EvidenceError> {
     if expression.trim().is_empty() {
@@ -79,25 +69,10 @@ pub(super) fn validate_cel_policy(
         cel_security_limits(_config)
             .check_expr(expression)
             .map_err(|_| EvidenceError::InvalidRequest)?;
-        if bindings.claims.len() > MAX_CEL_CLAIM_BINDINGS
-            || bindings.vars.len() > MAX_CEL_VAR_BINDINGS
-        {
-            return Err(EvidenceError::InvalidRequest);
-        }
-        for (alias, binding) in &bindings.claims {
-            if !is_cel_identifier(alias) || !claim.depends_on.contains(&binding.claim) {
-                return Err(EvidenceError::InvalidRequest);
-            }
-        }
-        for alias in bindings.vars.keys() {
-            if !is_cel_identifier(alias) {
-                return Err(EvidenceError::InvalidRequest);
-            }
-        }
     }
     #[cfg(not(feature = "registry-notary-cel"))]
     {
-        let _ = (expression, bindings, claim);
+        let _ = expression;
     }
     Ok(())
 }
@@ -207,71 +182,29 @@ pub(super) fn evaluate_cel_in_process_for_unit_tests(
 pub(super) fn cel_preflight_root_bindings(
     evidence: &EvidenceConfig,
     claim: &ClaimDefinition,
-    bindings: &CelBindingsConfig,
 ) -> BTreeMap<String, Value> {
-    if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
-        let mut roots = BTreeMap::new();
-        if let Some((name, consultation)) = consultations.first_key_value() {
-            let mut output_view = consultation
-                .outputs
-                .iter()
-                .filter(|(_, output)| output.is_scalar())
-                .map(|(name, output)| (name.clone(), registry_output_dummy_value(output)))
-                .collect::<Map<_, _>>();
-            output_view.insert("matched".to_string(), Value::Bool(true));
-            output_view.insert("outcome".to_string(), Value::String("match".to_string()));
-            roots.insert(name.clone(), Value::Object(output_view));
-        }
-        for (name, variable) in &evidence.variables {
-            let value = match variable.value_type {
-                registry_notary_core::RequestVariableType::Date => json!("2026-01-01"),
-            };
-            roots.insert(name.clone(), value);
-        }
-        return roots;
-    }
-    let sources = Map::new();
-
-    let mut claims = Map::new();
-    for (alias, binding) in &bindings.claims {
-        let value = evidence
-            .claims
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        return BTreeMap::new();
+    };
+    let mut roots = BTreeMap::new();
+    if let Some((name, consultation)) = consultations.first_key_value() {
+        let mut output_view = consultation
+            .outputs
             .iter()
-            .find(|candidate| candidate.id == binding.claim)
-            .map(|candidate| cel_dummy_value_for_config(&candidate.value))
-            .unwrap_or(Value::Bool(true));
-        claims.insert(
-            alias.clone(),
-            json!({
-                "value": value,
-                "satisfied": value.as_bool().unwrap_or(true),
-                "claim_id": binding.claim,
-                "version": "preflight",
-            }),
-        );
+            .filter(|(_, output)| output.is_scalar())
+            .map(|(name, output)| (name.clone(), registry_output_dummy_value(output)))
+            .collect::<Map<_, _>>();
+        output_view.insert("matched".to_string(), Value::Bool(true));
+        output_view.insert("outcome".to_string(), Value::String("match".to_string()));
+        roots.insert(name.clone(), Value::Object(output_view));
     }
-
-    BTreeMap::from([
-        ("source".to_string(), Value::Object(sources)),
-        ("claims".to_string(), Value::Object(claims)),
-        (
-            "ctx".to_string(),
-            json!({
-                "purpose": "preflight",
-                "subject": { "id": "preflight-subject" },
-                "target": {
-                    "type": "Person",
-                    "id": "preflight-subject"
-                },
-                "today": "2026-06-16",
-            }),
-        ),
-        (
-            "vars".to_string(),
-            Value::Object(bindings.vars.clone().into_iter().collect()),
-        ),
-        ("meta".to_string(), cel_meta(evidence, claim)),
-    ])
+    for (name, variable) in &evidence.variables {
+        let value = match variable.value_type {
+            registry_notary_core::RequestVariableType::Date => json!("2026-01-01"),
+        };
+        roots.insert(name.clone(), value);
+    }
+    roots
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -300,42 +233,12 @@ fn registry_output_dummy_value(output: &registry_notary_core::RelayOutputContrac
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn cel_dummy_value_for_config(config: &registry_notary_core::ClaimValueConfig) -> Value {
-    match config.value_type.as_str() {
-        "boolean" | "bool" => Value::Bool(true),
-        "number" | "float" | "double" => json!(1.0),
-        "integer" | "int" => json!(1),
-        "date" => json!("2000-01-01"),
-        "datetime" | "date-time" | "string" | "uri" | "" | "unknown" => {
-            bounded_string_preview(config.max_bytes)
-        }
-        "array" | "list" => json!([]),
-        "object" => json!({}),
-        "null" => Value::Null,
-        _ => bounded_string_preview(config.max_bytes),
-    }
-}
-
-#[cfg(feature = "registry-notary-cel")]
 fn bounded_string_preview(max_bytes: Option<u32>) -> Value {
     Value::String(if max_bytes == Some(0) {
         String::new()
     } else {
         "x".to_string()
     })
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn validate_cel_expression_roots(expression: &str) -> Result<(), EvidenceError> {
-    for root in cel_root_references(expression) {
-        if !matches!(
-            root.as_str(),
-            "source" | "claims" | "ctx" | "vars" | "meta" | "date" | "person"
-        ) {
-            return Err(EvidenceError::InvalidRequest);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -637,71 +540,19 @@ pub(super) fn is_cel_identifier_continue_byte(byte: u8) -> bool {
 pub(super) fn cel_root_bindings(
     ctx: &CelEvaluationContext<'_>,
 ) -> Result<BTreeMap<String, Value>, EvidenceError> {
-    if ctx.claim.evidence_mode.is_registry_backed() {
-        let mut root_bindings =
-            registry_cel_scalar_consultation_outputs(ctx.claim, ctx.consultation_outputs)?;
-        for (name, declaration) in &ctx.evidence.variables {
-            let Some(value) = ctx.variables.get(name) else {
-                continue;
-            };
-            match declaration.value_type {
-                registry_notary_core::RequestVariableType::Date => {
-                    root_bindings.insert(name.clone(), Value::String(value.to_string()));
-                }
+    let mut root_bindings =
+        registry_cel_scalar_consultation_outputs(ctx.claim, ctx.consultation_outputs)?;
+    for (name, declaration) in &ctx.evidence.variables {
+        let Some(value) = ctx.variables.get(name) else {
+            continue;
+        };
+        match declaration.value_type {
+            registry_notary_core::RequestVariableType::Date => {
+                root_bindings.insert(name.clone(), Value::String(value.to_string()));
             }
         }
-        let root_bindings = root_bindings.into_iter().collect::<BTreeMap<_, _>>();
-        validate_cel_binding_limits(
-            &Value::Object(root_bindings.clone().into_iter().collect()),
-            ctx.config,
-        )?;
-        return Ok(root_bindings);
     }
-    let mut claim_values = Map::new();
-    for (alias, binding) in &ctx.bindings.claims {
-        let result = ctx
-            .claims
-            .get(&binding.claim)
-            .ok_or(EvidenceError::RuleEvaluationFailed)?;
-        let value = cel_project_claim_value(ctx, &binding.claim, result)?;
-        let satisfied = value.as_ref().and_then(Value::as_bool);
-        claim_values.insert(
-            alias.clone(),
-            json!({
-                "value": value,
-                "satisfied": satisfied,
-                "claim_id": result.claim_id,
-                "version": result.claim_version,
-            }),
-        );
-    }
-    let subject = ctx
-        .subject
-        .map(|subject| json!({ "id": subject.id }))
-        .unwrap_or(Value::Null);
-    let target =
-        serde_json::to_value(ctx.target).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
-    let root_bindings = BTreeMap::from([
-        (
-            "source".to_string(),
-            Value::Object(ctx.consultation_outputs.clone().into_iter().collect()),
-        ),
-        ("claims".to_string(), Value::Object(claim_values)),
-        (
-            "ctx".to_string(),
-            json!({
-                "purpose": ctx.purpose,
-                "subject": subject,
-                "target": target,
-                "today": ctx.today,
-            }),
-        ),
-        (
-            "vars".to_string(),
-            Value::Object(ctx.bindings.vars.clone().into_iter().collect()),
-        ),
-        ("meta".to_string(), cel_meta(ctx.evidence, ctx.claim)),
-    ]);
+    let root_bindings = root_bindings.into_iter().collect::<BTreeMap<_, _>>();
     validate_cel_binding_limits(
         &Value::Object(root_bindings.clone().into_iter().collect()),
         ctx.config,
@@ -742,22 +593,6 @@ pub(super) fn registry_cel_scalar_consultation_outputs(
             Ok((consultation_name.clone(), Value::Object(projected)))
         })
         .collect()
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn cel_project_claim_value(
-    ctx: &CelEvaluationContext<'_>,
-    claim_id: &str,
-    result: &ClaimResultInternal,
-) -> Result<Option<Value>, EvidenceError> {
-    if result.redaction_fields.is_empty() {
-        return Ok(Some(result.value.clone()));
-    }
-    let claim = find_claim_version(ctx.evidence, claim_id, &result.claim_version)?;
-    if supports_object_field_redaction(claim.value.value_type.as_str(), &result.redaction_fields) {
-        return redact_object_fields(&result.value, &result.redaction_fields);
-    }
-    Ok(None)
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -856,36 +691,4 @@ pub(super) fn cel_security_limits(config: &RegistryNotaryCelConfig) -> SecurityL
         max_string_bytes: config.max_string_bytes,
         ..SecurityLimits::default()
     }
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn is_cel_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return false;
-    }
-    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
-    let mut sources = Map::new();
-    if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
-        for (alias, consultation) in consultations {
-            sources.insert(alias.clone(), json!({ "profile": consultation.profile.id }));
-        }
-    }
-    json!({
-        "service_id": evidence.service_id,
-        "api_version": evidence.api_version,
-        "claim": {
-            "id": claim.id,
-            "version": claim.version,
-            "subject_type": claim.subject_type,
-        },
-        "sources": sources,
-    })
 }

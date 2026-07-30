@@ -381,7 +381,7 @@ impl ActivatedRelayConsultations for TypedOutputRelay {
 
 fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefinition {
     let nullable = matches!(&rule, RuleConfig::ConsultationOutput { .. });
-    let mut claim = test_claim(id, Vec::new(), false);
+    let mut claim = test_claim(id, Vec::new());
     claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
         consultations: BTreeMap::from([(
             "enrollment".to_string(),
@@ -454,9 +454,12 @@ fn delegated_relay_proof_claim() -> ClaimDefinition {
 }
 
 fn delegated_selected_claim(dependencies: Vec<&str>) -> ClaimDefinition {
-    let mut claim = test_claim("selected", dependencies, false);
-    claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    claim.purpose = Some("test".to_string());
+    let mut claim = delegated_relay_proof_claim();
+    claim.id = "selected".to_string();
+    claim.depends_on = dependencies.into_iter().map(str::to_string).collect();
+    claim.rule = RuleConfig::ConsultationMatched {
+        consultation: "relationship".to_string(),
+    };
     claim
 }
 
@@ -634,7 +637,7 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
             evidence,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
-            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
             None,
@@ -673,7 +676,7 @@ async fn delegated_capability_denies_a_registry_dependency_omitted_from_the_comm
             evidence,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
-            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
             None,
@@ -716,7 +719,7 @@ async fn delegated_capability_allows_the_exact_committed_registry_dependency_clo
             evidence,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
-            delegated_attestation_capability_with_allowed_claims(
+            delegated_subject_access_capability_with_allowed_claims(
                 &keys,
                 "NAT-123",
                 "CHILD-123",
@@ -759,7 +762,7 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
             evidence,
             &EvidenceStore::default(),
             &delegated_principal(),
-            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
             None,
@@ -801,7 +804,7 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
                 evidence,
                 &EvidenceStore::default(),
                 &delegated_relay_principal(),
-                delegated_attestation_capability(&keys, requester, target),
+                delegated_subject_access_capability(&keys, requester, target),
                 delegated_runtime_request(),
                 None,
                 None,
@@ -841,7 +844,7 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
                 evidence,
                 &EvidenceStore::default(),
                 &delegated_relay_principal(),
-                delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+                delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
                 delegated_runtime_request(),
                 None,
                 None,
@@ -882,7 +885,7 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
             evidence,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
-            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
             None,
@@ -922,7 +925,7 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
             evidence,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
-            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
             None,
@@ -1032,7 +1035,6 @@ async fn typed_output_map_is_reused_for_direct_output_and_date_age_claims() {
             "age-band",
             RuleConfig::Cel {
                 expression: "enrollment.matched && enrollment.date_of_birth != null ? (date.age_on(enrollment.date_of_birth, as_of_date) < 18 ? \"child\" : \"adult\") : null".to_string(),
-                bindings: Default::default(),
             },
             "string",
         );
@@ -1086,7 +1088,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay() {
             "age-band",
             RuleConfig::Cel {
                 expression: "enrollment.matched && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
-                bindings: Default::default(),
             },
             "integer",
         );
@@ -1136,7 +1137,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay() {
                 "age-band",
                 RuleConfig::Cel {
                     expression: "enrollment.matched".to_string(),
-                    bindings: Default::default(),
                 },
                 "boolean",
             )]),
@@ -1160,7 +1160,6 @@ fn no_match_builds_only_presence_and_nullable_absence_outputs() {
         "age-band",
         RuleConfig::Cel {
             expression: "enrollment.matched ? \"known\" : null".to_string(),
-            bindings: Default::default(),
         },
         "string",
     );
@@ -2157,7 +2156,8 @@ async fn single_and_batch_equivalence_matrix_pins_security_and_disclosure_surfac
         outcome: RuntimeRelayOutcome::Match,
     });
     let authorization_runtime = runtime_with_test_relay(Arc::clone(&authorization_relay));
-    let unauthorized_principal = machine_principal();
+    let mut unauthorized_principal = machine_principal();
+    unauthorized_principal.scopes.clear();
     let single_authorization = authorization_runtime
         .evaluate(
             Arc::clone(&evidence),
@@ -2916,7 +2916,7 @@ async fn relay_group_key_ignores_unrelated_principal_scopes() {
 
 #[tokio::test]
 async fn relay_plan_uses_the_explicitly_selected_claim_version() {
-    let mut transitional = test_claim("enrollment-status", Vec::new(), false);
+    let mut transitional = test_claim("enrollment-status", Vec::new());
     transitional.version = "1".to_string();
     let mut registry = registry_claim(
         "enrollment-status",
@@ -2977,11 +2977,13 @@ async fn registry_backed_preflight_denial_makes_zero_relay_calls() {
     let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
 
     let evidence = Arc::new(evidence);
+    let mut missing_scope_principal = machine_principal();
+    missing_scope_principal.scopes.clear();
     let (result, audit) = runtime
         .evaluate_for_api(
             Arc::clone(&evidence),
             &EvidenceStore::default(),
-            &machine_principal(),
+            &missing_scope_principal,
             test_request("enrollment-status"),
             None,
         )
@@ -3016,7 +3018,7 @@ async fn registry_backed_preflight_denial_makes_zero_relay_calls() {
 
 #[tokio::test]
 async fn evaluate_refuses_consultation_matched_result_with_wrong_value_type() {
-    let mut claim = test_claim("selected", Vec::new(), true);
+    let mut claim = test_claim("selected", Vec::new());
     claim.rule = RuleConfig::ConsultationMatched {
         consultation: "src".to_string(),
     };
@@ -3027,7 +3029,7 @@ async fn evaluate_refuses_consultation_matched_result_with_wrong_value_type() {
     let store = EvidenceStore::default();
     let request = test_request("selected");
 
-    let err = RegistryNotaryRuntime::new()
+    let err = matched_relay_runtime()
         .evaluate(
             evidence,
             &store,
@@ -3045,21 +3047,20 @@ async fn evaluate_refuses_consultation_matched_result_with_wrong_value_type() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn source_free_string_evaluation_enforces_max_bytes_after_cel() {
+async fn registry_backed_string_evaluation_enforces_max_bytes_after_cel() {
     let string_claim = |id: &str, expression: &str, max_bytes: u32, nullable: bool| {
-        let mut claim = test_claim(id, Vec::new(), false);
+        let mut claim = test_claim(id, Vec::new());
         claim.value.value_type = "string".to_string();
         claim.value.nullable = nullable;
         claim.value.max_bytes = Some(max_bytes);
         claim.rule = RuleConfig::Cel {
             expression: expression.to_string(),
-            bindings: CelBindingsConfig::default(),
         };
         claim
     };
 
     let exact = string_claim("exact", r#""éé""#, 4, false);
-    let exact_results = RegistryNotaryRuntime::new()
+    let exact_results = matched_relay_runtime()
         .evaluate(
             test_evidence(vec![exact]),
             &EvidenceStore::default(),
@@ -3072,7 +3073,7 @@ async fn source_free_string_evaluation_enforces_max_bytes_after_cel() {
     assert_eq!(exact_results[0].value, Some(json!("éé")));
 
     let nullable = string_claim("nullable", "null", 1, true);
-    let null_results = RegistryNotaryRuntime::new()
+    let null_results = matched_relay_runtime()
         .evaluate(
             test_evidence(vec![nullable]),
             &EvidenceStore::default(),
@@ -3086,7 +3087,7 @@ async fn source_free_string_evaluation_enforces_max_bytes_after_cel() {
 
     let sensitive = "DO-NOT-EXPOSE";
     let over_bound = string_claim("over-bound", &format!(r#""{sensitive}""#), 4, false);
-    let error = RegistryNotaryRuntime::new()
+    let error = matched_relay_runtime()
         .evaluate(
             test_evidence(vec![over_bound]),
             &EvidenceStore::default(),
@@ -3102,8 +3103,21 @@ async fn source_free_string_evaluation_enforces_max_bytes_after_cel() {
 
 #[tokio::test]
 async fn evaluate_target_ref_serializes_as_opaque_handle() {
-    let mut evidence_config =
-        (*test_evidence(vec![test_claim("selected", Vec::new(), true)])).clone();
+    let mut claim = test_claim("selected", Vec::new());
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("test claim is registry backed")
+    };
+    consultations
+        .get_mut("src")
+        .expect("test consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        );
+    let mut evidence_config = (*test_evidence(vec![claim])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
     let evidence = Arc::new(evidence_config);
     let store = EvidenceStore::default();
@@ -3114,7 +3128,7 @@ async fn evaluate_target_ref_serializes_as_opaque_handle() {
         "person-1",
     ));
 
-    let results = RegistryNotaryRuntime::new()
+    let results = matched_relay_runtime()
         .evaluate(
             evidence,
             &store,
@@ -3137,7 +3151,20 @@ async fn evaluate_target_ref_serializes_as_opaque_handle() {
 
 #[tokio::test]
 async fn batch_item_target_ref_serializes_as_opaque_handle() {
-    let mut claim = test_claim("selected", Vec::new(), true);
+    let mut claim = test_claim("selected", Vec::new());
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("test claim is registry backed")
+    };
+    consultations
+        .get_mut("src")
+        .expect("test consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        );
     claim.operations.batch_evaluate.enabled = true;
     claim.operations.batch_evaluate.max_subjects = 1;
     let mut evidence_config = (*test_evidence(vec![claim])).clone();
@@ -3159,7 +3186,7 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
         purpose: Some("test".to_string()),
     };
 
-    let response = RegistryNotaryRuntime::new()
+    let response = matched_relay_runtime()
         .batch_evaluate(
             evidence,
             &store,
@@ -3190,7 +3217,7 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
         .get(evaluation_id, &principal.principal_id)
         .await
         .expect("completed batch evaluation read succeeds")
-        .expect("completed source-free batch evaluation is retained");
+        .expect("completed registry-backed batch evaluation is retained");
     assert!(stored.issuance_provenance.is_none());
     let stored_at = OffsetDateTime::parse(&stored.created_at, &Rfc3339)
         .expect("stored_at is canonical RFC3339");
@@ -3201,8 +3228,8 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
 
 #[tokio::test]
 async fn evaluate_uses_requested_claim_version() {
-    let older_claim = test_claim("selected", Vec::new(), false);
-    let mut newer_claim = test_claim("selected", Vec::new(), true);
+    let older_claim = test_claim("selected", Vec::new());
+    let mut newer_claim = test_claim("selected", Vec::new());
     newer_claim.version = "2.0".to_string();
     let mut evidence_config = (*test_evidence(vec![older_claim, newer_claim])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
@@ -3211,7 +3238,7 @@ async fn evaluate_uses_requested_claim_version() {
     let mut request = test_request("selected");
     request.claims = vec![ClaimRef::with_version("selected", "2.0")];
 
-    let results = RegistryNotaryRuntime::new()
+    let results = matched_relay_runtime()
         .evaluate(
             evidence,
             &store,
@@ -3229,7 +3256,7 @@ async fn evaluate_uses_requested_claim_version() {
 /// lacks a claim's required scope.
 #[tokio::test]
 async fn evaluate_denies_missing_scope() {
-    let mut claim = test_claim("selected", Vec::new(), true);
+    let mut claim = test_claim("selected", Vec::new());
     claim.required_scopes = vec!["selected:1.0".to_string()];
     let mut evidence_config = (*test_evidence(vec![claim])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
@@ -3264,9 +3291,9 @@ async fn evaluate_denies_missing_scope() {
 
 #[tokio::test]
 async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
-    let mut older_claim = test_claim("selected", Vec::new(), true);
+    let mut older_claim = test_claim("selected", Vec::new());
     older_claim.required_scopes = vec!["selected:1.0".to_string()];
-    let mut newer_claim = test_claim("selected", Vec::new(), true);
+    let mut newer_claim = test_claim("selected", Vec::new());
     newer_claim.version = "2.0".to_string();
     newer_claim.required_scopes = vec!["selected:2.0".to_string()];
     let mut evidence_config = (*test_evidence(vec![older_claim, newer_claim])).clone();
@@ -3304,7 +3331,7 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
         scopes: vec!["selected:2.0".to_string()],
         ..principal
     };
-    let results = RegistryNotaryRuntime::new()
+    let results = matched_relay_runtime()
         .evaluate(
             evidence,
             &store,
@@ -3320,7 +3347,7 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
 
 #[tokio::test]
 async fn evaluate_rejects_missing_claim_version() {
-    let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+    let evidence = test_evidence(vec![test_claim("selected", Vec::new())]);
     let store = EvidenceStore::default();
     let mut request = test_request("selected");
     request.claims = vec![ClaimRef::with_version("selected", "2.0")];

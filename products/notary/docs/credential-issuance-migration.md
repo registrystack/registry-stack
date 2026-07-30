@@ -7,6 +7,26 @@ selected claims were produced by fresh, exact compiler-pinned Registry Relay
 consultations. This applies to `POST /v1/credentials` and
 `POST /oid4vci/credential`.
 
+## Removal of caller-provided evidence
+
+The `self_attested` evidence mode has been removed. It is not an
+evaluation-only compatibility mode. Configuration containing
+`evidence_mode.type: self_attested` is rejected.
+
+To migrate:
+
+1. Remove claims that have no authoritative evidence source.
+2. For retained claims, declare at least one compiler-pinned Relay
+   consultation and derive the result only from its typed outputs.
+3. Rename the authorization wire value `delegated_attestation` to
+   `delegated_subject_access`.
+4. Rename the access scope `evidence:self_attest` to
+   `evidence:subject_access`.
+5. Regenerate configuration and restart Notary.
+
+OIDC identity, authorization details, subject binding, and representative
+policy remain access controls. They must not be treated as claim provenance.
+
 The OID4VCI surface also changes to issuer-initiated pre-authorized code only.
 Remove integrations that call the former credential-offer or public nonce
 routes, or that treat an identity-provider authorization code as a wallet
@@ -29,10 +49,7 @@ OID4VCI projection:
 - A profile and its claims must name each other consistently.
 - OID4VCI claims and projections must resolve through those same
   registry-backed profile bindings.
-- Remove source-free `self_attested` claims from credential profiles,
-  credential-capable subject-access allow-lists, and OID4VCI configurations.
-- Keep a source-free service evaluation-only by disabling credential issuance
-  and omitting credential profiles and OID4VCI credential configurations.
+- Remove claims without compiler-pinned Relay evidence.
 - Remove legacy `credential_profiles` entries from delegated relationships.
   Representative OID4VCI issuance is configured on the credential
   configuration instead and requires the digitally authenticated
@@ -72,8 +89,8 @@ execution records are denied before signer access, signing, credential
 identifiers, or status writes.
 Direct issuance performs this check before holder-proof replay mutation. The
 OID4VCI callback creates the registry-backed transaction and completes the
-Relay evaluation before it renders an offer. The credential endpoint rejects a
-source-free configuration, consumes the transaction-bound proof nonce, reloads
+Relay evaluation before it renders an offer. The credential endpoint rejects
+incomplete Relay provenance, consumes the transaction-bound proof nonce, reloads
 the stored transaction and evaluation, and verifies exact provenance before
 signer access.
 
@@ -92,9 +109,8 @@ change.
 
 1. Regenerate the project configuration and correct any credential-binding
    validation errors.
-2. Remove or replace source-free credential journeys and delegated credential
-   journeys that do not use the representative OID4VCI ceremony. They may
-   continue as evaluation and rendering journeys.
+2. Remove claims without Relay evidence. Retain delegated credential journeys
+   only when they use the representative OID4VCI ceremony.
 3. Deploy compatible Relay and Notary configuration from one project
    generation.
 4. Re-evaluate claims used by in-progress credential journeys.

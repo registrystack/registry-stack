@@ -8,11 +8,9 @@ Adoption mode: profiled OpenID4VCI subset.
 
 Registry Notary exposes a narrow wallet facade for issuing holder-bound
 `dc+sd-jwt` credentials from registry-backed evidence. The facade adapts the
-Notary transaction and issuance model to wallets without creating a second
-source-free credential trust surface.
-
-Source-free `self_attested` claims remain available for evaluation. They cannot
-authorize or produce credentials through either the Notary API or OID4VCI.
+Notary transaction and issuance model to wallets. Identity-provider and wallet
+inputs authorize and bind the transaction; they do not become claim evidence.
+Every issued claim derives from a compiler-pinned Relay consultation.
 
 ## Trust and topology
 
@@ -52,7 +50,7 @@ Registry Stack 1.0 supports:
 Registry Stack 1.0 does not claim:
 
 - wallet-facing OAuth authorization-code issuance;
-- source-free or self-attested credential issuance;
+- credential issuance from caller-provided or identity-token data;
 - a public nonce endpoint or credential-response next nonce;
 - ES256 holder proof;
 - PAR, DPoP, wallet attestation, EUDI Wallet, or HAIP conformance;
@@ -167,8 +165,9 @@ keys.
 
 Source tests cover the complete browser callback, offer, token, credential, and
 client-verification path for EdDSA and ES256 issuer keys with an EdDSA
-`did:jwk` holder. Tests also cover replay, tampering, source-free denial,
-unsupported holder profiles, route removal, and status failure behavior.
+`did:jwk` holder. Tests also cover replay, tampering, denial of configurations
+without Relay-backed evidence, unsupported holder profiles, route removal, and
+status failure behavior.
 
 External wallet, verifier, OIDF suite, or ecosystem conformance is claimed only
 from a frozen candidate artifact with recorded product versions and immutable

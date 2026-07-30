@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Self-attestation and delegated-attestation authorization policy.
+//! Subject-bound and delegated subject-access authorization policy.
 
 use super::*;
 
@@ -361,7 +361,7 @@ pub(super) fn delegated_relationship_config<'a>(
     Ok(relationship_config)
 }
 
-pub(super) fn require_delegated_attestation_evaluate(
+pub(super) fn require_delegated_subject_access_evaluate(
     evidence: &EvidenceConfig,
     config: &SubjectAccessConfig,
     principal: &EvidencePrincipal,
@@ -470,7 +470,7 @@ pub(super) fn require_delegated_attestation_evaluate(
             SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
-    require_delegated_attestation_authorization_details(
+    require_delegated_subject_access_authorization_details(
         evidence,
         config,
         principal,
@@ -485,7 +485,7 @@ pub(super) fn require_delegated_attestation_evaluate(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn require_delegated_attestation_authorization_details(
+pub(super) fn require_delegated_subject_access_authorization_details(
     evidence: &EvidenceConfig,
     config: &SubjectAccessConfig,
     principal: &EvidencePrincipal,
@@ -526,7 +526,7 @@ pub(super) fn require_delegated_attestation_authorization_details(
             disclosure,
             format,
             purpose,
-            access_mode: AccessMode::DelegatedAttestation,
+            access_mode: AccessMode::DelegatedSubjectAccess,
             subject: Some(crate::authz_details::ScopedAuthorizationSubject {
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
@@ -539,7 +539,7 @@ pub(super) fn require_delegated_attestation_authorization_details(
             allowed_claims: Some(&authorized_claims),
         },
     )
-    .map_err(delegated_attestation_authorization_details_denial)?;
+    .map_err(delegated_subject_access_authorization_details_denial)?;
     let relationship = details.relationship.as_ref().ok_or_else(|| {
         subject_access_denied(SubjectAccessDenialCode::DelegatedRelationshipNotAllowed)
     })?;
@@ -613,7 +613,7 @@ pub(super) fn subject_access_authorization_details_denial(
     subject_access_denied(reason)
 }
 
-pub(super) fn delegated_attestation_authorization_details_denial(
+pub(super) fn delegated_subject_access_authorization_details_denial(
     error: crate::authz_details::ScopedAuthorizationError,
 ) -> EvidenceError {
     let reason = match error {
@@ -716,8 +716,8 @@ fn prepare_subject_access_evaluation_for_operation(
     request: &EvaluateRequest,
     operation: SubjectAccessEvaluationOperation,
 ) -> Result<SubjectAccessEvaluateContext, EvidenceError> {
-    if principal.access_mode() == AccessMode::DelegatedAttestation {
-        return prepare_delegated_attestation_evaluate(state, evidence, principal, request);
+    if principal.access_mode() == AccessMode::DelegatedSubjectAccess {
+        return prepare_delegated_subject_access_evaluate(state, evidence, principal, request);
     }
     let runtime_config = state.runtime_config();
     require_subject_access_evaluation_for_operation(
@@ -824,13 +824,13 @@ fn prepare_subject_access_evaluation_for_operation(
     })
 }
 
-pub(super) fn prepare_delegated_attestation_evaluate(
+pub(super) fn prepare_delegated_subject_access_evaluate(
     state: &RegistryNotaryApiState,
     evidence: &EvidenceConfig,
     principal: &EvidencePrincipal,
     request: &EvaluateRequest,
 ) -> Result<SubjectAccessEvaluateContext, EvidenceError> {
-    require_delegated_attestation_evaluate(evidence, &state.subject_access, principal, request)?;
+    require_delegated_subject_access_evaluate(evidence, &state.subject_access, principal, request)?;
     require_subject_access_token_policy(&state.subject_access, principal)?;
 
     let relationship_config = delegated_relationship_config(&state.subject_access, principal)?;
@@ -920,7 +920,7 @@ pub(super) fn prepare_delegated_attestation_evaluate(
     let relationship_type = ConfigMetadata::new(relationship_config.relationship_type.clone())
         .map_err(|_| EvidenceError::InvalidRequest)?;
     let metadata = StoredSubjectAccessMetadata {
-        access_mode: AccessMode::DelegatedAttestation,
+        access_mode: AccessMode::DelegatedSubjectAccess,
         issuer: claims.issuer.clone(),
         audiences: claims.audiences.clone(),
         client_id: claims.client_id.clone(),
@@ -949,7 +949,7 @@ pub(super) fn prepare_delegated_attestation_evaluate(
         policy_hash: Some(policy_hash.clone()),
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
-    let evaluation_capability = EvaluationCapability::DelegatedAttestation {
+    let evaluation_capability = EvaluationCapability::DelegatedSubjectAccess {
         proof_claim_id,
         allowed_claim_ids,
         requester_subject_binding_hash,
@@ -1237,7 +1237,7 @@ fn require_subject_access_stored_access_inner(
     if metadata.subject_binding_claim.as_str() != state.subject_access.subject_binding.token_claim {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
-    let delegated_relationship = if metadata.access_mode == AccessMode::DelegatedAttestation {
+    let delegated_relationship = if metadata.access_mode == AccessMode::DelegatedSubjectAccess {
         if !state.subject_access.delegation.enabled || metadata.dependent_target_hash.is_none() {
             return Err(EvidenceError::EvaluationBindingMismatch);
         }
@@ -1299,13 +1299,13 @@ fn require_subject_access_stored_access_inner(
             reason: SubjectAccessDenialCode::SubjectClaimMissing,
         })?;
     // Delegated evaluations bind the requester subject over the (id_type, id)
-    // pair (see prepare_delegated_attestation_evaluate); non-delegated
+    // pair (see prepare_delegated_subject_access_evaluate); non-delegated
     // subject-access keeps the value-only binding byte-for-byte unchanged.
     let subject_binding_matches = allow_token_envelope_transition
         && subject_binding_value == metadata.subject_binding_hash.as_str();
     let subject_binding_hash = if subject_binding_matches {
         metadata.subject_binding_hash.clone()
-    } else if metadata.access_mode == AccessMode::DelegatedAttestation {
+    } else if metadata.access_mode == AccessMode::DelegatedSubjectAccess {
         state
             .subject_access_rate_keys
             .delegated_subject_binding(
@@ -1394,7 +1394,7 @@ pub(super) fn require_delegated_stored_authorization_details(
             disclosure: &evaluation.disclosure,
             format: &evaluation.format,
             purpose: &evaluation.purpose,
-            access_mode: AccessMode::DelegatedAttestation,
+            access_mode: AccessMode::DelegatedSubjectAccess,
             subject: Some(crate::authz_details::ScopedAuthorizationSubject {
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
@@ -1404,7 +1404,7 @@ pub(super) fn require_delegated_stored_authorization_details(
             allowed_claims: Some(&authorized_claims),
         },
     )
-    .map_err(delegated_attestation_authorization_details_denial)
+    .map_err(delegated_subject_access_authorization_details_denial)
 }
 
 pub(super) fn require_delegated_authorization_target_binding(

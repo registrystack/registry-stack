@@ -21,7 +21,7 @@ pub(super) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -104,7 +104,7 @@ pub(super) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_rel
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -175,7 +175,7 @@ pub(super) async fn admin_capabilities_requires_ops_read_and_reports_notary_surf
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -291,16 +291,14 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
     add_ops_read_api_key(&mut config);
 
-    let runtime = compile_notary_runtime(config)
-        .expect("runtime compiles for dedicated topology")
-        .activate()
+    let runtime = activate_test_runtime(config)
         .await
         .expect("runtime activates for dedicated topology");
     let routers = notary_routers_from_runtime(runtime).expect("Notary-only runtime is serve-ready");
@@ -355,7 +353,7 @@ pub(super) async fn governed_config_rejects_shared_admin_listener_topology() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -387,7 +385,7 @@ pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() 
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -423,7 +421,7 @@ pub(super) async fn admin_posture_reports_configured_instance_override() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -463,7 +461,7 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -542,7 +540,7 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
 
 #[tokio::test]
 pub(super) async fn admin_posture_reports_subject_access_summary_and_redacts_signing_key_ids() {
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let issuer = MockIdp::start().await;
     let issuer_url = issuer.issuer();
@@ -692,7 +690,7 @@ pub(super) async fn admin_posture_redacts_runtime_config_signing_secrets() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1/private-source?token=source-url-secret",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -755,7 +753,7 @@ pub(super) async fn admin_posture_classifies_in_memory_state_storage() {
     );
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -786,7 +784,7 @@ pub(super) async fn admin_posture_warns_for_production_like_in_memory_state() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -865,7 +863,7 @@ pub(super) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );

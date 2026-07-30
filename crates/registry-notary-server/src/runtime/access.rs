@@ -74,7 +74,7 @@ pub(super) fn evaluation_capability_for_principal(
                 subject_binding_hash,
             })
         }
-        AccessMode::DelegatedAttestation => Err(delegated_attestation_denied()),
+        AccessMode::DelegatedSubjectAccess => Err(delegated_subject_access_denied()),
         AccessMode::Unknown => Err(EvidenceError::SubjectAccessInvalidToken),
     }
 }
@@ -86,14 +86,14 @@ pub(super) fn ensure_evaluation_capability_matches_principal(
     match (principal.access_mode(), capability.access_mode()) {
         (AccessMode::MachineClient, AccessMode::MachineClient)
         | (AccessMode::SubjectBound, AccessMode::SubjectBound)
-        | (AccessMode::DelegatedAttestation, AccessMode::DelegatedAttestation) => Ok(()),
+        | (AccessMode::DelegatedSubjectAccess, AccessMode::DelegatedSubjectAccess) => Ok(()),
         (AccessMode::SubjectBound, AccessMode::MachineClient) => {
             Err(EvidenceError::SubjectAccessDenied {
                 reason: SubjectAccessDenialCode::OperationDenied,
             })
         }
-        (AccessMode::DelegatedAttestation, AccessMode::MachineClient) => {
-            Err(delegated_attestation_denied())
+        (AccessMode::DelegatedSubjectAccess, AccessMode::MachineClient) => {
+            Err(delegated_subject_access_denied())
         }
         _ => Err(EvidenceError::SubjectAccessInvalidToken),
     }
@@ -110,7 +110,7 @@ pub(super) fn require_evaluation_capability(
         {
             Ok(())
         }
-        EvaluationCapability::DelegatedAttestation { .. }
+        EvaluationCapability::DelegatedSubjectAccess { .. }
             if capability.allows_delegated_claim(claim_id) =>
         {
             Ok(())
@@ -118,7 +118,9 @@ pub(super) fn require_evaluation_capability(
         EvaluationCapability::SubjectBound { .. } => Err(EvidenceError::SubjectAccessDenied {
             reason: SubjectAccessDenialCode::ClaimDenied,
         }),
-        EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
+        EvaluationCapability::DelegatedSubjectAccess { .. } => {
+            Err(delegated_subject_access_denied())
+        }
     }
 }
 
@@ -128,7 +130,7 @@ pub(super) fn require_relay_consultation_capability(
 ) -> Result<(), EvidenceError> {
     match capability {
         EvaluationCapability::Machine { .. } => Ok(()),
-        EvaluationCapability::DelegatedAttestation { .. }
+        EvaluationCapability::DelegatedSubjectAccess { .. }
             if capability.allows_delegated_claim(claim_id) =>
         {
             Ok(())
@@ -138,14 +140,16 @@ pub(super) fn require_relay_consultation_capability(
         {
             Ok(())
         }
-        EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
+        EvaluationCapability::DelegatedSubjectAccess { .. } => {
+            Err(delegated_subject_access_denied())
+        }
         EvaluationCapability::SubjectBound { .. } => Err(EvidenceError::SubjectAccessDenied {
             reason: SubjectAccessDenialCode::OperationDenied,
         }),
     }
 }
 
-pub(super) fn delegated_attestation_denied() -> EvidenceError {
+pub(super) fn delegated_subject_access_denied() -> EvidenceError {
     EvidenceError::SubjectAccessDenied {
         reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
     }
@@ -166,7 +170,7 @@ pub(super) fn delegated_proof_denied() -> EvidenceError {
 pub(super) fn ensure_delegated_capability_context_binding(
     ctx: &ClaimEvaluationContext,
 ) -> Result<(), EvidenceError> {
-    let EvaluationCapability::DelegatedAttestation {
+    let EvaluationCapability::DelegatedSubjectAccess {
         requester_subject_binding_hash,
         dependent_target_hash,
         ..
@@ -179,11 +183,11 @@ pub(super) fn ensure_delegated_capability_context_binding(
         .requester
         .as_ref()
         .and_then(EvidenceEntity::to_subject_request)
-        .ok_or_else(delegated_attestation_denied)?;
+        .ok_or_else(delegated_subject_access_denied)?;
     let target_subject = ctx
         .context
         .target_subject()
-        .ok_or_else(delegated_attestation_denied)?;
+        .ok_or_else(delegated_subject_access_denied)?;
     // Re-derive the bindings over the (id_type, id) pair so they bind the
     // subject scheme as well as the value. The id_types are pinned upstream
     // (requester via subject_binding.id_type, target via the relationship's
@@ -191,11 +195,11 @@ pub(super) fn ensure_delegated_capability_context_binding(
     let requester_id_type = requester_subject
         .id_type
         .as_deref()
-        .ok_or_else(delegated_attestation_denied)?;
+        .ok_or_else(delegated_subject_access_denied)?;
     let target_id_type = target_subject
         .id_type
         .as_deref()
-        .ok_or_else(delegated_attestation_denied)?;
+        .ok_or_else(delegated_subject_access_denied)?;
     let requester_hash = ctx
         .subject_access_rate_keys
         .delegated_subject_binding(requester_id_type, requester_subject.id.as_str())
@@ -205,7 +209,7 @@ pub(super) fn ensure_delegated_capability_context_binding(
         .delegated_subject_binding(target_id_type, target_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     if &requester_hash != requester_subject_binding_hash || &target_hash != dependent_target_hash {
-        return Err(delegated_attestation_denied());
+        return Err(delegated_subject_access_denied());
     }
     Ok(())
 }

@@ -3,8 +3,8 @@
 > **Status: Archived and removed before 1.0 (2026-07-13).** This file preserves
 > the historical source-adapter sidecar design only. Registry Notary no longer
 > ships or accepts this execution path. Registry-backed evidence uses
-> authenticated, compiler-pinned Registry Relay consultations; source-free
-> Notary evidence remains self-attested. Do not read the sidecar, OpenFn,
+> authenticated, compiler-pinned Registry Relay consultations. Source-free and
+> self-attested claim evidence are not supported. Do not read the sidecar, OpenFn,
 > `http_json`, `http_flow`, FHIR, or Rhai engine language below as current
 > behavior.
 

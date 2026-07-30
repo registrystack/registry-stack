@@ -604,7 +604,7 @@
                 extra,
             },
             matched_client: Some("azp:citizen-client".to_string()),
-            scopes: vec!["openid".to_string(), "evidence:self_attest".to_string()],
+            scopes: vec!["openid".to_string(), "evidence:subject_access".to_string()],
         }
     }
 
@@ -830,7 +830,7 @@
     fn oidc_principal_carries_bounded_verified_claims() {
         let subject_binding_claim = "https://id.example.gov/claims/national_id";
         let mut extra = Map::new();
-        extra.insert("scope".to_string(), json!("openid evidence:self_attest"));
+        extra.insert("scope".to_string(), json!("openid evidence:subject_access"));
         extra.insert(subject_binding_claim.to_string(), json!("NAT-123"));
         extra.insert("acr".to_string(), json!("loa3"));
         extra.insert("auth_time".to_string(), json!(1_700_000_000_i64));
@@ -851,7 +851,7 @@
                 extra,
             },
             matched_client: Some("azp:citizen-client".to_string()),
-            scopes: vec!["openid".to_string(), "evidence:self_attest".to_string()],
+            scopes: vec!["openid".to_string(), "evidence:subject_access".to_string()],
         };
 
         let authenticated = principal_from_oidc(
@@ -909,7 +909,7 @@
                 .iter()
                 .map(VerifiedClaimValue::as_str)
                 .collect::<Vec<_>>(),
-            vec!["openid", "evidence:self_attest"]
+            vec!["openid", "evidence:subject_access"]
         );
         assert_eq!(
             verified_claims
@@ -1197,7 +1197,7 @@
                 extra: Map::new(),
             },
             matched_client: Some("azp:citizen-client".to_string()),
-            scopes: vec!["evidence:self_attest".to_string()],
+            scopes: vec!["evidence:subject_access".to_string()],
         };
 
         assert!(bounded_verified_claims_from_oidc(

@@ -252,62 +252,6 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
 }
 
 #[tokio::test]
-async fn oid4vci_source_free_bypass_denies_before_offer_or_signer_access() {
-    let store = Arc::new(EvidenceStore::default());
-    let evidence = Arc::new(oid4vci_evidence_config());
-    assert!(evidence.claims[0].evidence_mode.is_self_attested());
-    let subject_access = Arc::new(subject_access_config());
-    let mut oid4vci = oid4vci_config();
-    oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
-    let oid4vci = Arc::new(oid4vci);
-    let sign_count = Arc::new(AtomicUsize::new(0));
-    let preauth =
-        oid4vci_test_preauth_runtime(registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP);
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
-            Arc::clone(&evidence),
-            Arc::clone(&subject_access),
-            Arc::clone(&oid4vci),
-            oid4vci_test_audit_hasher(),
-            Arc::clone(&store),
-            Arc::new(CountingIssuerResolver {
-                sign_count: Arc::clone(&sign_count),
-            }),
-        )
-        .with_preauth_runtime(Some(Arc::clone(&preauth))),
-    );
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let transaction_id = ulid::Ulid::new().to_string();
-    let err = prepare_registry_backed_issuance_transaction(
-        &state,
-        &preauth,
-        &BoundSubject {
-            subject: "citizen-subject".to_string(),
-            subject_binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
-            subject_binding_value: "NAT-123".to_string(),
-            client_id: "citizen-portal".to_string(),
-            scopes: vec!["subject_access".to_string()],
-            acr: Some("urn:example:loa:substantial".to_string()),
-            auth_time: Some(now),
-        },
-        "person_is_alive_sd_jwt",
-        &transaction_id,
-        None,
-    )
-    .await
-    .expect_err("source-free configuration is credential-ineligible");
-
-    assert!(matches!(err, EvidenceError::EvaluationBindingMismatch));
-    assert_eq!(sign_count.load(Ordering::SeqCst), 0);
-    assert!(preauth
-        .preauthorization_state()
-        .transaction(&transaction_id)
-        .await
-        .expect("transaction state is available")
-        .is_none());
-}
-
-#[tokio::test]
 async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_nonce_consume() {
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
@@ -2247,7 +2191,7 @@ fn oid4vci_token_audit_mode_follows_issuance_authority_without_exposing_values()
     );
     assert_eq!(
         issuance_authority_access_mode(&IssuanceAuthority::SubjectAccess, true),
-        AccessMode::DelegatedAttestation
+        AccessMode::DelegatedSubjectAccess
     );
     let authority = IssuanceAuthority::RegistryClient {
         initiating_client_id: "registrar-audit-secret".to_string(),

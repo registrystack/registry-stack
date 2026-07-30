@@ -1,12 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
-fn test_claim(id: &str, depends_on: Vec<&str>, _has_source: bool) -> ClaimDefinition {
+fn test_claim(id: &str, depends_on: Vec<&str>) -> ClaimDefinition {
     ClaimDefinition {
         id: id.to_string(),
         title: id.to_string(),
         version: "1.0".to_string(),
         subject_type: "person".to_string(),
-        evidence_mode: ClaimEvidenceMode::SelfAttested,
+        evidence_mode: ClaimEvidenceMode::RegistryBacked {
+            consultations: BTreeMap::from([(
+                "src".to_string(),
+                RelayConsultationConfig {
+                    profile: RelayConsultationProfileRef {
+                        id: "example.test-source.exact".to_string(),
+                        contract_hash:
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_string(),
+                    },
+                    inputs: BTreeMap::from([(
+                        "subject_id".to_string(),
+                        RelayConsultationInput::TargetId,
+                    )]),
+                    outputs: BTreeMap::from([(
+                        "registration_status".to_string(),
+                        RelayOutputContract::String {
+                            nullable: true,
+                            max_bytes: 64,
+                        },
+                    )]),
+                },
+            )]),
+        },
         value: registry_notary_core::ClaimValueConfig {
             value_type: "boolean".to_string(),
             nullable: false,
@@ -16,8 +39,8 @@ fn test_claim(id: &str, depends_on: Vec<&str>, _has_source: bool) -> ClaimDefini
         semantics: None,
         inputs: Vec::new(),
         depends_on: depends_on.into_iter().map(str::to_string).collect(),
-        purpose: None,
-        required_scopes: Vec::new(),
+        purpose: Some("test".to_string()),
+        required_scopes: vec!["registry:evidence".to_string()],
         rule: RuleConfig::ConsultationMatched {
             consultation: "src".to_string(),
         },
@@ -32,6 +55,13 @@ fn test_claim(id: &str, depends_on: Vec<&str>, _has_source: bool) -> ClaimDefini
         cccev: None,
         oots: None,
     }
+}
+
+fn matched_relay_runtime() -> RegistryNotaryRuntime {
+    RegistryNotaryRuntime::new().with_activated_relay(Some(Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    })))
 }
 
 fn test_evidence(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
@@ -97,7 +127,7 @@ fn machine_principal() -> EvidencePrincipal {
     EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "machine".to_string(),
-        scopes: Vec::new(),
+        scopes: vec!["registry:evidence".to_string()],
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
         authorization_details: None,
@@ -115,12 +145,12 @@ fn subject_access_principal() -> EvidencePrincipal {
     }
 }
 
-fn delegated_attestation_capability(
+fn delegated_subject_access_capability(
     keys: &SubjectAccessRateLimitKeys,
     requester_subject: &str,
     dependent_subject: &str,
 ) -> EvaluationCapability {
-    delegated_attestation_capability_with_allowed_claims(
+    delegated_subject_access_capability_with_allowed_claims(
         keys,
         requester_subject,
         dependent_subject,
@@ -128,13 +158,13 @@ fn delegated_attestation_capability(
     )
 }
 
-fn delegated_attestation_capability_with_allowed_claims(
+fn delegated_subject_access_capability_with_allowed_claims(
     keys: &SubjectAccessRateLimitKeys,
     requester_subject: &str,
     dependent_subject: &str,
     allowed_claim_ids: &[&str],
 ) -> EvaluationCapability {
-    EvaluationCapability::DelegatedAttestation {
+    EvaluationCapability::DelegatedSubjectAccess {
         proof_claim_id: BoundedClaimId::new("guardian-link").expect("proof claim id is bounded"),
         allowed_claim_ids: allowed_claim_ids
             .iter()
@@ -156,7 +186,7 @@ fn delegated_principal() -> EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: "guardian".to_string(),
         scopes: Vec::new(),
-        access_mode: AccessMode::DelegatedAttestation,
+        access_mode: AccessMode::DelegatedSubjectAccess,
         verified_claims: None,
         authorization_details: None,
     }

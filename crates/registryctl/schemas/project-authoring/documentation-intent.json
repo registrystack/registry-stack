@@ -829,7 +829,7 @@
     {
       "schema": "project",
       "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/properties/cel",
-      "purpose": "Provides the CEL expression used for a source-free evaluation-only evidence claim."
+      "purpose": "Provides the CEL expression used to derive a claim from declared Relay consultation outputs."
     },
     {
       "schema": "project",
@@ -869,17 +869,17 @@
     {
       "schema": "project",
       "pointer": "/$defs/claimValue/properties/type",
-      "purpose": "Declares the boolean, integer, string, or date type of a source-free claim value."
+      "purpose": "Declares the boolean, integer, string, or date type of a claim value."
     },
     {
       "schema": "project",
       "pointer": "/$defs/claimValue/properties/nullable",
-      "purpose": "States whether the source-free claim value may be null."
+      "purpose": "States whether the claim value may be null."
     },
     {
       "schema": "project",
       "pointer": "/$defs/claimValue/properties/max_bytes",
-      "purpose": "Bounds the encoded size of a source-free claim value."
+      "purpose": "Bounds the encoded size of a claim value."
     },
     {
       "schema": "project",

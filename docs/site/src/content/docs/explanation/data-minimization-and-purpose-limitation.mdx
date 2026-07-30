@@ -42,7 +42,7 @@ The design treats the narrow question, not the record, as the thing to be answer
 
 That principle is enforced at two separate boundaries. A Relay integration declares closed
 request inputs and minimized typed outputs. A Notary claim can consume only the outputs of its
-compiler-pinned consultation, or the configured authenticated context for self-attestation.
+compiler-pinned consultation, or the configured authenticated context for subject access.
 Callers cannot choose a source destination, credential, selector field, adapter capability, or
 undeclared output at request time.
 
@@ -94,8 +94,8 @@ validated credential profile; registry-backed evaluation-only claims retain no
 private issuance provenance. A deterministic unkeyed SHA-256 binding detects
 partial mutation between a claim pin, execution record, and claim provenance,
 but is not an authenticity anchor against an operator able to rewrite all
-committed fields and the digest. A source-free,
-delegated, or legacy evaluation cannot cross the
+committed fields and the digest. A delegated evaluation without the
+representative ceremony or a legacy evaluation cannot cross the
 credential trust boundary.
 Issued credentials are SD-JWT VC: a verifiable-credential format in which the signed body carries
 only a SHA-256 digest of each selectively disclosable field, so a field the holder does not

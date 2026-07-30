@@ -41,13 +41,13 @@
 
     #[test]
     fn render_cccev_uses_result_claim_version_for_requirement() {
-        let mut older_claim = test_claim("selected", Vec::new(), true);
+        let mut older_claim = test_claim("selected", Vec::new());
         older_claim.oots = Some(registry_notary_core::OotsConfig {
             enabled: true,
             requirement: Some("https://requirements.example/v1".to_string()),
             ..registry_notary_core::OotsConfig::default()
         });
-        let mut newer_claim = test_claim("selected", Vec::new(), true);
+        let mut newer_claim = test_claim("selected", Vec::new());
         newer_claim.version = "2.0".to_string();
         newer_claim.oots = Some(registry_notary_core::OotsConfig {
             enabled: true,
@@ -96,7 +96,7 @@
 
     #[test]
     fn render_cccev_maps_provider_agent_from_generated_by_service_id() {
-        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new())]);
         let result = ClaimResultView {
             evaluation_id: "eval-test".to_string(),
             claim_id: "selected".to_string(),
@@ -139,7 +139,7 @@
 
     #[test]
     fn render_cccev_omits_conformance_for_redacted_result() {
-        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new())]);
         let result = ClaimResultView {
             evaluation_id: "eval-test".to_string(),
             claim_id: "selected".to_string(),
@@ -194,10 +194,17 @@ claims:
     version: "1.0"
     subject_type: person
     evidence_mode:
-      type: self_attested
+      type: registry_backed
+      consultations:
+        civil_status:
+          profile:
+            id: example.civil-status.exact
+            contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          inputs:
+            subject_id: target.id
     rule:
-      type: cel
-      expression: "true"
+      type: consultation_matched
+      consultation: civil_status
     credential_profiles:
       - profile_a
 signing_keys:
@@ -258,9 +265,9 @@ credential_profiles:
 
     #[test]
     fn credential_profile_for_uses_stored_claim_version() {
-        let mut older_claim = test_claim("claim-a", Vec::new(), true);
+        let mut older_claim = test_claim("claim-a", Vec::new());
         older_claim.credential_profiles = vec!["profile_a".to_string()];
-        let mut newer_claim = test_claim("claim-a", Vec::new(), true);
+        let mut newer_claim = test_claim("claim-a", Vec::new());
         newer_claim.version = "2.0".to_string();
         newer_claim.credential_profiles = vec!["profile_b".to_string()];
         let mut evidence = (*test_evidence(vec![older_claim, newer_claim])).clone();
@@ -309,7 +316,7 @@ profile_b:
     }
 
     fn issuable_registry_evaluation() -> (Arc<EvidenceConfig>, registry_notary_core::StoredEvaluation) {
-        let mut claim = test_claim("registry-fact", Vec::new(), false);
+        let mut claim = test_claim("registry-fact", Vec::new());
         claim.version = "1".to_string();
         claim.purpose = Some("credential-purpose".to_string());
         claim.value = registry_notary_core::ClaimValueConfig {
@@ -591,27 +598,6 @@ profile_b:
             .claims
             .push(duplicate);
         assert_not_issuable(&evidence, &tampered);
-    }
-
-    #[test]
-    fn relationship_proof_count_cannot_make_a_source_free_root_issuable() {
-        let (evidence, evaluation) = issuable_registry_evaluation();
-        let mut source_free = (*evidence).clone();
-        source_free.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
-        source_free.claims[0].rule = RuleConfig::Cel {
-            expression: "true".to_string(),
-            bindings: Default::default(),
-        };
-
-        assert_eq!(
-            evaluation.results[0]
-                .provenance
-                .used
-                .relay_consultation_count,
-            1,
-            "the public count models a delegated relationship proof"
-        );
-        assert_not_issuable(&source_free, &evaluation);
     }
 
     #[test]

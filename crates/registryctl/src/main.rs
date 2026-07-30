@@ -1397,7 +1397,6 @@ fn rendered_claim_class(
     }
     match authoritative_evidence {
         Some("registry_backed") => Some("registry_backed_evaluation"),
-        Some("self_attested") => Some("source_free_evaluation"),
         _ => None,
     }
 }
@@ -1587,7 +1586,7 @@ fn render_check_report(
             writeln!(output, "  Relay source authority: not applicable")?;
         }
 
-        if matches!(deployment, "notary_only" | "combined") {
+        if deployment == "combined" {
             let mut service_ids = std::collections::BTreeSet::new();
             for (path, field) in &project_fields {
                 if classifier_public_value(field).is_none() {
@@ -1600,7 +1599,6 @@ fn render_check_report(
                     service_ids.insert(parts[1].clone());
                 }
             }
-            let mut source_free_evaluation = 0u64;
             let mut relay_backed = 0u64;
             for service_id in service_ids {
                 let kind_path = format!("/services/{service_id}/kind");
@@ -1616,19 +1614,13 @@ fn render_check_report(
                     .get(consultation_count_path.as_str())
                     .and_then(|field| classifier_public_count(field))
                 {
-                    Some(0) => source_free_evaluation += 1,
                     Some(_) => relay_backed += 1,
                     None => {}
                 }
             }
             writeln!(
                 output,
-                "  Notary authority: {}, {}",
-                render_count(
-                    source_free_evaluation,
-                    "source-free evaluation service",
-                    "source-free evaluation services"
-                ),
+                "  Notary authority: {}",
                 render_count(
                     relay_backed,
                     "compiler-pinned Relay-backed service",
@@ -2774,51 +2766,8 @@ mod tests {
             rendered_claim_class(false, Some("registry_backed")),
             Some("registry_backed_evaluation")
         );
-        assert_eq!(
-            rendered_claim_class(false, Some("self_attested")),
-            Some("source_free_evaluation")
-        );
+        assert_eq!(rendered_claim_class(false, Some("unknown")), None);
         assert_eq!(rendered_claim_class(false, None), None);
-    }
-
-    #[test]
-    fn human_check_report_identifies_single_product_topologies_and_authority() {
-        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/project-authoring");
-        let relay_report = registryctl::check_registry_project(&ProjectCheckOptions {
-            project_directory: fixtures.join("relay-only-records"),
-            environment: "local".to_string(),
-            explain: true,
-            against: None,
-            anchor: None,
-        })
-        .expect("Relay-only project checks");
-        let relay_rendered =
-            render_check_report(&relay_report, false, None).expect("report renders");
-        assert!(relay_rendered.contains("topology: Relay-only"));
-        assert!(relay_rendered.contains(
-            "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition"
-        ));
-
-        let notary_report = registryctl::check_registry_project(&ProjectCheckOptions {
-            project_directory: fixtures.join("notary-only-evaluation"),
-            environment: "local".to_string(),
-            explain: true,
-            against: None,
-            anchor: None,
-        })
-        .expect("Notary-only evaluation project checks");
-        let notary_rendered =
-            render_check_report(&notary_report, true, None).expect("report renders");
-        assert!(notary_rendered.contains("topology: Notary-only"));
-        assert!(notary_rendered.contains(
-            "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
-        ));
-        assert!(notary_rendered.contains(
-            "claim application-complete: class=source_free_evaluation, disclosure=predicate"
-        ));
-        assert!(!notary_rendered.contains("class=registry_backed_evaluation"));
-        assert!(notary_rendered.contains("Relay source authority: not applicable"));
     }
 
     #[test]

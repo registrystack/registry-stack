@@ -45,22 +45,23 @@ admits. Those inputs can include target or requester identifiers, declared varia
 relationship attributes.
 The REST call is authenticated the way the rest of the service is: an API key or bearer token in
 static-credential mode, or an OIDC token, whichever your deployment is configured for.
-For a registry-backed claim, Registry Notary requests the compiler-pinned consultation from
-Registry Relay. For a source-free or self-attested claim, Notary uses only the configured request
-inputs.
+For every claim, Registry Notary requests at least one compiler-pinned
+consultation from Registry Relay. Request inputs may parameterize the
+consultation but do not become evidence.
 The caller does not supply the evaluated value, and cannot inject one.
 
 The evaluation runs as a pipeline: Relay returns a closed typed consultation result when the claim
 is registry-backed, a rule evaluates the configured evidence statement, a disclosure mode shapes
 what leaves the service, and a response format carries the result.
-Because Notary computes the answer from the closed Relay result or permitted self-attestation, it
-can return that computed answer rather than handing back a source record.
+Because Notary computes the answer from the closed Relay result and any
+declared non-evidentiary evaluation parameters, it can return that computed
+answer rather than handing back a source record.
 
 The rule that does the computing is one of three kinds.
 An **exists** rule checks whether the pinned consultation produced one admissible match.
 An **extract** rule reads a declared typed output.
-A **`cel`** rule derives an evidence value from typed outputs, request variables, or earlier claim
-results through a hardened expression.
+A **`cel`** rule derives an evidence value from typed Relay outputs and
+declared non-evidentiary request variables through a hardened expression.
 Each kind produces an answer about the subject without that answer being a copy of the source row.
 
 ## Evidence is not a consumer decision
@@ -101,7 +102,7 @@ how much was revealed.
 
 This is the central privacy property.
 Because Notary computes the answer from compiler-pinned Relay outputs or permitted
-self-attestation, a `predicate` result can satisfy a question while disclosing only a boolean.
+subject access, a `predicate` result can satisfy a question while disclosing only a boolean.
 A question of whether someone has a registered record is modelled as an `exists` rule disclosed as
 `predicate`: the caller learns `true` when a matching record is found, while a subject with no
 matching record returns `evidence.not_available` (collapsed to a single public reason by default)
@@ -201,7 +202,7 @@ A few boundaries matter when you evaluate this design:
   output is revealed as a unit.
 
 These modes also sit inside boundaries that are not specific to disclosure design: how the Relay
-consultation is authorized and pinned, how self-attestation inputs are scoped, and what "aligned
+consultation is authorized and pinned, how subject access inputs are scoped, and what "aligned
 with a standard" does and does not mean.
 Weigh those alongside the disclosure modes; see the [known limitations hub](../known-limitations/) for
 the full inventory.

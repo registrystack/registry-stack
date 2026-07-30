@@ -333,7 +333,7 @@ impl PreAuthRuntime {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "registry-notary-cel"))]
     pub(crate) fn with_access_token_signer_for_tests(
         mut self,
         signer: Arc<dyn SigningProvider>,

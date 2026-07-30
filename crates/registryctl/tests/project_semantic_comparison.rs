@@ -14,9 +14,8 @@ use registryctl::{
     SemanticComparisonChangeSource, SemanticComparisonConsumer, SemanticComparisonDimension,
     SemanticComparisonDirection, SemanticComparisonEquivalence,
     SemanticComparisonGeneratedArtifact, SemanticComparisonRequiredAction,
-    SemanticComparisonRestartRequirement, SemanticComparisonReviewClass,
-    SemanticComparisonReviewPlanState, SemanticComparisonSchemaFamily,
-    SemanticComparisonSigningRequirement,
+    SemanticComparisonRestartRequirement, SemanticComparisonReviewPlanState,
+    SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
 };
 use serde_json::Value;
 
@@ -97,16 +96,6 @@ fn registry_id_change(
                 && change.address.field.as_str() == "/properties/registry/properties/id"
         })
         .expect("registry.id change is classified")
-}
-
-fn first_product_change(
-    report: &registryctl::ProjectSemanticComparisonReportV1,
-) -> &registryctl::ProjectSemanticComparisonChange {
-    report
-        .changes
-        .iter()
-        .find(|change| change.requirements.signing != SemanticComparisonSigningRequirement::None)
-        .expect("product-impacting change is classified")
 }
 
 #[test]
@@ -349,128 +338,6 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
         assert!(!report.human_safe_summary().contains(value));
         assert!(!format!("{report:?}").contains(value));
     }
-}
-
-#[test]
-fn single_product_comparison_filters_actions_to_enabled_product_topology() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-
-    let relay_baseline = temporary.path().join("relay-baseline");
-    copy_project_tree(
-        &fixture_project("relay-only-materialization"),
-        &relay_baseline,
-    );
-    let relay_current = temporary.path().join("relay-current");
-    copy_project_tree(
-        &fixture_project("relay-only-materialization"),
-        &relay_current,
-    );
-    rewrite_yaml(&relay_current.join("entities/people.yaml"), |document| {
-        document["schema"]["properties"]["status"]["maxLength"] = Value::from(31);
-    });
-    let relay_report = compare_projects(&relay_current, &relay_baseline);
-    let relay_change = first_product_change(&relay_report);
-    assert_eq!(
-        relay_change.address.schema_family,
-        SemanticComparisonSchemaFamily::Entity
-    );
-    assert!(relay_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryRelay));
-    assert!(!relay_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryNotary));
-    assert!(relay_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::RelayConfig));
-    assert!(!relay_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
-    assert!(relay_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Relay));
-    assert!(!relay_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Notary));
-    assert_eq!(
-        relay_change.requirements.signing,
-        SemanticComparisonSigningRequirement::RelayBundle
-    );
-    assert_eq!(
-        relay_change.requirements.activation,
-        SemanticComparisonActivationRequirement::ApplyRelayConfig
-    );
-    assert_eq!(
-        relay_change.requirements.restart,
-        SemanticComparisonRestartRequirement::RegistryRelay
-    );
-    assert_eq!(
-        relay_report.required_actions,
-        vec![
-            SemanticComparisonRequiredAction::ReviewSemanticChanges,
-            SemanticComparisonRequiredAction::RunAffectedFixtures,
-            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
-            SemanticComparisonRequiredAction::ResignRelayBundle,
-            SemanticComparisonRequiredAction::ReactivateRelayConfiguration,
-            SemanticComparisonRequiredAction::RestartRegistryRelay,
-        ]
-    );
-
-    let notary_baseline = temporary.path().join("notary-baseline");
-    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_baseline);
-    let notary_current = temporary.path().join("notary-current");
-    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_current);
-    rewrite_yaml(&notary_current.join("registry-stack.yaml"), |document| {
-        document["services"]["applicant-evaluation"]["purpose"] =
-            Value::String("changed-purpose".to_owned());
-    });
-    let notary_report = compare_projects(&notary_current, &notary_baseline);
-    let notary_change = first_product_change(&notary_report);
-    assert_eq!(
-        notary_change.address.schema_family,
-        SemanticComparisonSchemaFamily::Project
-    );
-    assert!(notary_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryNotary));
-    assert!(!notary_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryRelay));
-    assert!(notary_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
-    assert!(!notary_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::RelayConfig));
-    assert!(notary_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Notary));
-    assert!(!notary_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Relay));
-    assert_eq!(
-        notary_change.requirements.signing,
-        SemanticComparisonSigningRequirement::NotaryBundle
-    );
-    assert_eq!(
-        notary_change.requirements.activation,
-        SemanticComparisonActivationRequirement::ApplyNotaryConfig
-    );
-    assert_eq!(
-        notary_change.requirements.restart,
-        SemanticComparisonRestartRequirement::RegistryNotary
-    );
-    assert_eq!(
-        notary_report.required_actions,
-        vec![
-            SemanticComparisonRequiredAction::ReviewSemanticChanges,
-            SemanticComparisonRequiredAction::RunAffectedFixtures,
-            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
-            SemanticComparisonRequiredAction::ResignNotaryBundle,
-            SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
-            SemanticComparisonRequiredAction::RestartRegistryNotary,
-        ]
-    );
 }
 
 #[test]

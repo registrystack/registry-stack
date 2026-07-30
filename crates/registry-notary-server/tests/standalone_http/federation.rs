@@ -45,7 +45,25 @@ pub(super) fn federation_config_for(
     peer_issuer: &str,
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
-    let mut config = notary_only_config(base_url, audit_path);
+    let mut config = registry_backed_config(base_url, audit_path);
+    let claim = config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("federation test claim exists");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("federation test claim is registry backed")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("federation test consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        );
     config.evidence.signing_keys.insert(
         "federation-key".to_string(),
         SigningKeyConfig {
@@ -295,7 +313,7 @@ evidence:
   signing_keys:
     issuer-key:
       provider: local_jwk_env
-      private_jwk_env: TEST_SELF_ATTESTATION_ISSUER_JWK
+      private_jwk_env: TEST_CREDENTIAL_ISSUER_JWK
       alg: EdDSA
       kid: did:web:issuer.example#key-1
       status: active
@@ -744,7 +762,7 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
     set_federation_env();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(notary_only_config(
+    let app = standalone_router(registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))

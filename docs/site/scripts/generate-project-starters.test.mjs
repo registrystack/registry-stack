@@ -33,7 +33,7 @@ async function withIsolatedProjectCatalog(run) {
 test('classifies every golden and derives topology from committed workspace content', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
 
-  assert.equal(journeys.length, 14);
+  assert.equal(journeys.length, 13);
   assert.deepEqual(
     journeys.map(({ id, classification, topology }) => ({ id, classification, topology })),
     [
@@ -50,7 +50,6 @@ test('classifies every golden and derives topology from committed workspace cont
       { id: 'relay-only-records', classification: 'maintained', topology: 'relay-only' },
       { id: 'snapshot', classification: 'maintained', topology: 'combined' },
       { id: 'snapshot-with-records', classification: 'maintained', topology: 'combined' },
-      { id: 'notary-only-evaluation', classification: 'maintained', topology: 'notary-only' },
     ],
   );
 });
@@ -108,7 +107,7 @@ test('emits one canonical eight-command sequence for exactly five starters', asy
 test('non-starters never emit init and supported steps follow fixture maintenance status', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
   const nonStarters = journeys.filter((journey) => !journey.starter);
-  assert.equal(nonStarters.length, 9);
+  assert.equal(nonStarters.length, 8);
   for (const journey of nonStarters) {
     assert.equal(journey.commands.some((command) => command.includes(' init --from ')), false);
     assert.equal(journey.project_dir, journey.source);
@@ -122,7 +121,6 @@ test('non-starters never emit init and supported steps follow fixture maintenanc
     'nia-attribute-release',
     'relay-only-materialization',
     'relay-only-records',
-    'notary-only-evaluation',
   ]) {
     const journey = journeys.find((candidate) => candidate.id === id);
     assert.deepEqual(journey.capabilities, ['check', 'build']);

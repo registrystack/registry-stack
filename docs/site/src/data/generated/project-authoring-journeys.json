@@ -330,22 +330,5 @@
       "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local --explain",
       "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local"
     ]
-  },
-  {
-    "id": "notary-only-evaluation",
-    "label": "Notary-only evaluation",
-    "summary": "Local policy evaluation only, with no credential profile, issuance, or direct source capability.",
-    "source": "crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation",
-    "classification": "maintained",
-    "topology": "notary-only",
-    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation",
-    "capabilities": [
-      "check",
-      "build"
-    ],
-    "commands": [
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation --environment local"
-    ]
   }
 ]

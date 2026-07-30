@@ -61,7 +61,7 @@ fn valid_registry_backed_config() -> StandaloneRegistryNotaryConfig {
     config.evidence.relay = Some(relay_connection());
     let mut claim = minimal_claim("person-status-known");
     make_registry_backed(&mut claim, "person_status");
-    config.evidence.claims.push(claim);
+    config.evidence.claims = vec![claim];
     config
 }
 
@@ -102,21 +102,6 @@ fn expect_mode_error(config: &StandaloneRegistryNotaryConfig, expected: &str) {
     );
 }
 
-fn expect_subject_access_closure_error(config: &StandaloneRegistryNotaryConfig) {
-    let error = config
-        .validate()
-        .expect_err("a subject-access closure with mixed evidence modes must fail validation");
-    assert!(
-        matches!(
-            error,
-            EvidenceConfigError::InvalidClaimEvidenceMode { ref reason, .. }
-                if reason.contains("self_attested dependency closure")
-                    || reason.contains("cannot declare depends_on")
-        ),
-        "unexpected error: {error:?}"
-    );
-}
-
 #[test]
 fn consultation_rules_reject_removed_source_named_variants() {
     let output: RuleConfig = serde_norway::from_str(
@@ -151,8 +136,8 @@ consultation: person_status
 fn claim_evidence_mode_is_required_and_closed() {
     let missing = serde_norway::from_str::<ClaimDefinition>(
         r#"
-id: source-free
-title: Source free
+id: missing-mode
+title: Missing mode
 version: "1"
 subject_type: person
 rule:
@@ -180,19 +165,18 @@ rule:
 
     serde_norway::from_str::<ClaimDefinition>(
         r#"
-id: mixed-mode
-title: Mixed mode
+id: removed-mode
+title: Removed mode
 version: "1"
 subject_type: person
 evidence_mode:
   type: self_attested
-  consultations: {}
 rule:
   type: cel
   expression: "true"
 "#,
     )
-    .expect_err("mode-specific fields cannot be mixed");
+    .expect_err("the removed self_attested evidence mode must remain rejected");
 }
 
 #[test]
@@ -273,9 +257,7 @@ rule:
     )
     .expect("named target identifier mapping parses");
 
-    let ClaimEvidenceMode::RegistryBacked { consultations } = claim.evidence_mode else {
-        panic!("registry-backed mode")
-    };
+    let ClaimEvidenceMode::RegistryBacked { consultations } = claim.evidence_mode;
     let mapping = consultations["birth_record"].inputs["uin"].clone();
     assert_eq!(mapping.request_path(), "request.target.identifiers.UIN");
     assert_eq!(mapping.request_context_path(), "target.identifiers.UIN");
@@ -608,7 +590,6 @@ fn registry_backed_claim_enforces_gates_cardinality_and_rule_binding() {
     let mut config = valid_registry_backed_config();
     config.evidence.claims[0].rule = RuleConfig::Cel {
         expression: "true".to_string(),
-        bindings: CelBindingsConfig::default(),
     };
     config
         .validate()
@@ -808,6 +789,7 @@ fn relay_connection_concurrency_is_operator_bounded() {
 #[test]
 fn relay_connection_is_rejected_when_no_registry_backed_claim_uses_it() {
     let mut config = minimal_config();
+    config.evidence.claims.clear();
     config.evidence.relay = Some(relay_connection());
     let error = config
         .validate()
@@ -906,25 +888,6 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
 }
 
 #[test]
-fn self_attested_claims_are_source_free_across_dependencies() {
-    let mut config = minimal_config();
-    let mut claim = minimal_claim("source-free");
-    claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims.push(claim);
-    config.validate().expect("source-free CEL claim validates");
-
-    let mut source_rule = config.clone();
-    source_rule.evidence.claims[0].rule = RuleConfig::ConsultationMatched {
-        consultation: "implicit-source".to_string(),
-    };
-    expect_mode_error(&source_rule, "cannot name a Relay consultation");
-
-    let mut config = config.clone();
-    config.evidence.claims[0].required_scopes = vec!["self:read".to_string(); 2];
-    expect_mode_error(&config, "duplicate");
-}
-
-#[test]
 fn removed_plugin_rule_is_rejected_during_deserialization() {
     let error = serde_norway::from_str::<RuleConfig>("type: plugin\nplugin: unavailable\n")
         .expect_err("the unreleased plugin rule must not remain accepted");
@@ -974,24 +937,6 @@ fn subject_access_allows_exact_subject_bound_registry_claims() {
 }
 
 #[test]
-fn subject_access_still_rejects_registry_backed_dependencies_of_self_attested_claims() {
-    let mut config = valid_subject_access_config();
-    config.evidence.relay = Some(relay_connection());
-    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims[0].rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
-    let mut dependency = minimal_claim("registry-dependency");
-    make_registry_backed(&mut dependency, "civil_status");
-    config.evidence.claims[0]
-        .depends_on
-        .push(dependency.id.clone());
-    config.evidence.claims.push(dependency);
-    expect_subject_access_closure_error(&config);
-}
-
-#[test]
 fn registry_backed_claim_accepts_registry_backed_dependency() {
     let mut config = valid_registry_backed_config();
     let mut dependency = minimal_claim("registry-dependency");
@@ -1038,21 +983,6 @@ fn delegated_subject_access_allows_registry_backed_dependency_closures() {
     config
         .validate()
         .expect("configured delegated Relay proof edge validates");
-
-    let mut ordinary = config.clone();
-    let ordinary_claim = ordinary
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "date-of-birth")
-        .expect("ordinary claim exists");
-    ordinary_claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    ordinary_claim.rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
-    ordinary_claim.depends_on = vec!["guardian-link".to_string()];
-    expect_subject_access_closure_error(&ordinary);
 
     let mut registry_dependent = config;
     let delegated = registry_dependent
@@ -1183,7 +1113,6 @@ fn registry_backed_cel_accepts_one_complete_typed_output_map_and_full_date_varia
     ]);
     claim.rule = RuleConfig::Cel {
         expression: "person_status.matched && person_status.date_of_birth != null ? date.age_on(person_status.date_of_birth, as_of_date) >= 18 : false".to_string(),
-        bindings: CelBindingsConfig::default(),
     };
     claim.value.value_type = "boolean".to_string();
     claim.value.nullable = false;
@@ -1521,7 +1450,6 @@ fn direct_consultation_output_accepts_object_and_array_claim_types_but_cel_stays
     let mut cel = config;
     cel.evidence.claims[0].rule = RuleConfig::Cel {
         expression: "true".to_string(),
-        bindings: CelBindingsConfig::default(),
     };
     cel.evidence.claims[0].value.value_type = "boolean".to_string();
     cel.evidence.claims[0].value.nullable = false;

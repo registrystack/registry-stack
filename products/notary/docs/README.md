@@ -1,11 +1,9 @@
 # Registry Notary documentation
 
-Registry Notary evaluates claims and issues evidence. For registry-backed
-evidence, it consumes only authenticated, typed Registry Relay consultation
-results. For Notary-only projects it can evaluate source-free self-attested
-evidence, but it cannot issue credentials from those claims. Credential
-issuance requires a newly executed, compiler-pinned Relay consultation for
-every selected claim. It never connects directly to a registry source.
+Registry Notary evaluates claims and issues evidence from authenticated, typed
+Registry Relay consultation results. Every claim must reference a
+compiler-pinned Relay consultation. It never connects directly to a registry
+source.
 
 ## Understand
 
@@ -26,7 +24,7 @@ every selected claim. It never connects directly to a registry source.
 ## Operate
 
 - [Operator configuration reference](operator-config-reference.md)
-- [Self-attestation](self-attestation-operator-guide.md)
+- [Subject access](subject-access-operator-guide.md)
 - [Federated evaluation](federated-evaluation-operator-guide.md)
 - [Credential lifecycle and status](credential-lifecycle-status.md)
 - [Credential issuance trust-boundary migration](credential-issuance-migration.md)

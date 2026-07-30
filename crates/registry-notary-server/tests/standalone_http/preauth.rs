@@ -595,7 +595,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
 pub(super) async fn compile_rejects_access_token_key_reusing_credential_key_material() {
     set_preauth_env();
     // A dedicated env var bound to the credential issuer's material. The
-    // credential `issuer-key` resolves from `TEST_SELF_ATTESTATION_ISSUER_JWK`,
+    // credential `issuer-key` resolves from `TEST_CREDENTIAL_ISSUER_JWK`,
     // which `set_preauth_env` also sets to `TEST_ISSUER_JWK`, so the new
     // access-token key reuses the credential key material under a distinct
     // id/kid.
@@ -1869,12 +1869,12 @@ pub(super) async fn representative_preauth_end_to_end_separates_representative_s
             .iter()
             .find(|record| record["decision"] == json!(decision))
             .unwrap_or_else(|| panic!("{decision} audit event exists"));
-        assert_eq!(event["access_mode"], json!("delegated_attestation"));
+        assert_eq!(event["access_mode"], json!("delegated_subject_access"));
     }
     let credential_audit = credential_issued_audit(&audit_path);
     assert_eq!(
         credential_audit["access_mode"],
-        json!("delegated_attestation")
+        json!("delegated_subject_access")
     );
     assert_eq!(
         credential_audit["credential_configuration_id"],
@@ -2023,7 +2023,7 @@ pub(super) async fn preauth_end_to_end_issuer_algorithms_match_metadata_and_clie
     for (algorithm, key_env, key_id, key_material) in [
         (
             "EdDSA",
-            "TEST_SELF_ATTESTATION_ISSUER_JWK",
+            "TEST_CREDENTIAL_ISSUER_JWK",
             "issuer-key",
             TEST_ISSUER_JWK,
         ),

@@ -9,20 +9,25 @@ use crosswalk_core::{
     ErrorSeverity, MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneExpressionInput,
 };
 #[cfg(test)]
-use registry_notary_core::RelayConsultationInput;
+use registry_notary_core::SubjectRequest;
 use registry_notary_core::{
     is_rfc3339_full_date, AccessMode, BatchClaimResultView, BatchEvaluateRequest,
     BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
-    BatchSummary, BoundedClaimId, BoundedCorrelationId, CelBindingsConfig, ClaimDefinition,
-    ClaimEvidenceMode, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
-    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceConfig,
-    EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal,
-    EvidenceRequestContext, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
+    BatchSummary, BoundedClaimId, BoundedCorrelationId, ClaimDefinition, ClaimEvidenceMode,
+    ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig, DisclosureDowngrade,
+    DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
+    ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
     StoredIssuanceClaimProvenance, StoredIssuanceConsultationProvenance, StoredIssuanceProvenance,
-    StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDenialCode, SubjectRequest,
-    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
-    MAX_CLAIM_DEPENDENCY_EDGES_V1, MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD,
-    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDenialCode, TargetRefView,
+    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, MAX_CLAIM_DEPENDENCY_EDGES_V1,
+    MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE,
+    SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+};
+#[cfg(test)]
+use registry_notary_core::{
+    RelayConsultationConfig, RelayConsultationInput, RelayConsultationProfileRef,
+    RelayOutputContract,
 };
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -45,11 +50,6 @@ use crate::json_path::get_json_path;
 use crate::problem::evidence_title;
 use crate::request_context::with_request_correlation_id;
 use crate::subject_access_rate_limit::SubjectAccessRateLimitKeys;
-
-#[cfg(feature = "registry-notary-cel")]
-const MAX_CEL_CLAIM_BINDINGS: usize = 64;
-#[cfg(feature = "registry-notary-cel")]
-const MAX_CEL_VAR_BINDINGS: usize = 64;
 
 mod access;
 mod catalog;

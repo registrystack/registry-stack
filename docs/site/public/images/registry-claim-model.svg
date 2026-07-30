@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Claim model: five configured stages</title>
-  <desc>A Registry Notary claim evaluation moves through five configured stages in order. (1) Typed request inputs from the caller. (2) A compiler-pinned Registry Relay consultation, or permitted self-attestation. (3) Rule evaluation from closed inputs. (4) Disclosure mode: value, predicate, or redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD. Only registry-backed stored evaluations with exact Relay execution provenance can later be materialized as SD-JWT VC credentials.</desc>
+  <desc>A Registry Notary claim evaluation moves through five configured stages in order. (1) Authorized typed request inputs from the caller. Subject access can authorize and bind this request, but does not provide evidence. (2) A compiler-pinned Registry Relay consultation. (3) Rule evaluation from typed Relay outputs. (4) Disclosure mode: value, predicate, or redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD. Only stored evaluations with exact Relay execution provenance can later be materialized as SD-JWT VC credentials.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">CLAIM MODEL · FIVE STAGES IN ORDER</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -27,8 +27,8 @@
 
   <g fill="#6a6a6a" font-size="11.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="248" y="112">Relay consultation  |  self-attestation</text>
-    <text x="248" y="156">configured CEL over closed inputs</text>
+    <text x="248" y="112">compiler-pinned Relay consultation</text>
+    <text x="248" y="156">configured rule over typed Relay outputs</text>
     <text x="248" y="200">value  |  predicate  |  redacted</text>
     <text x="248" y="244">claim-result JSON  |  CCCEV JSON-LD</text>
   </g>

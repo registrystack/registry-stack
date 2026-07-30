@@ -15,12 +15,6 @@ that still tracks open work.
   hard limits, two-phase processing, per-member audit, cancellation, replay,
   and issuance boundaries for the synchronous batch evaluation surface.
   **[implemented]**
-- [`citizen-self-attestation-spec.md`](citizen-self-attestation-spec.md):
-  citizen self-attestation behavior, guard order, privacy controls, rate
-  limits, and historical source-free credential issuance design. Current
-  source-free claims are evaluation-only; current credential issuance requires
-  exact registry-backed Relay execution provenance.
-  **[archived: reconciled design record]**
 - [`federated-evaluation-mvp-spec.md`](federated-evaluation-mvp-spec.md):
   static-peer delegated evaluation MVP. **[implemented]**
 - [`gitb-conformance-suite.md`](gitb-conformance-suite.md):

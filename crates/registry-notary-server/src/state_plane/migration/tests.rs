@@ -698,7 +698,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_CHECK_SQL,
+            SUBJECT_ACCESS_QUOTA_CHECK_SQL,
             &invalid_token_buckets,
             &invalid_token_hashes,
             &invalid_token_limits,
@@ -710,7 +710,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_CHECK_SQL,
+            SUBJECT_ACCESS_QUOTA_CHECK_SQL,
             &invalid_token_buckets,
             &invalid_token_hashes,
             &invalid_token_limits,
@@ -729,7 +729,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     let (first_instance, second_instance) = tokio::join!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &concurrent_buckets,
             &concurrent_hashes,
             &concurrent_limits,
@@ -737,7 +737,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
         ),
         subject_access_quota_decision(
             &runtime_peer,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &concurrent_buckets,
             &concurrent_hashes,
             &concurrent_limits,
@@ -761,7 +761,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime_peer,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &invalid_token_buckets,
             &invalid_token_hashes,
             &invalid_token_limits,
@@ -778,7 +778,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime_restarted,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &invalid_token_buckets,
             &invalid_token_hashes,
             &invalid_token_limits,
@@ -793,7 +793,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_CHECK_SQL,
+            SUBJECT_ACCESS_QUOTA_CHECK_SQL,
             &invalid_token_buckets,
             &invalid_token_hashes,
             &invalid_token_limits,
@@ -814,7 +814,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &grouped_buckets,
             &grouped_hashes,
             &grouped_limits,
@@ -826,7 +826,7 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
     assert_eq!(
         subject_access_quota_decision(
             &runtime,
-            SELF_ATTESTATION_QUOTA_DEBIT_SQL,
+            SUBJECT_ACCESS_QUOTA_DEBIT_SQL,
             &["per_principal".to_string()],
             &[vec![0x22; 32]],
             &[1],
@@ -982,9 +982,9 @@ async fn assert_runtime_pool_contract(
     Ok(())
 }
 
-const SELF_ATTESTATION_QUOTA_CHECK_SQL: &str = "SELECT allowed, denied_bucket FROM \
+const SUBJECT_ACCESS_QUOTA_CHECK_SQL: &str = "SELECT allowed, denied_bucket FROM \
      registry_notary_api.subject_access_quota_check_v1($1, $2, $3, $4)";
-const SELF_ATTESTATION_QUOTA_DEBIT_SQL: &str = "SELECT allowed, denied_bucket FROM \
+const SUBJECT_ACCESS_QUOTA_DEBIT_SQL: &str = "SELECT allowed, denied_bucket FROM \
      registry_notary_api.subject_access_quota_debit_v1($1, $2, $3, $4)";
 
 async fn assert_replay_and_nonce_contracts(

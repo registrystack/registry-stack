@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: The `self_attested` evidence mode is removed. Every configured
+  claim must derive from at least one compiler-pinned Relay consultation.
+  OIDC subject binding and delegated subject access remain authorization
+  controls and never supply claim evidence. Configuration using the removed
+  evidence mode is rejected. Rename `delegated_attestation` to
+  `delegated_subject_access` and `evidence:self_attest` to
+  `evidence:subject_access`.
 - Registry-backed direct Relay claims can preserve bounded closed objects and
   arrays through stored evaluation and SD-JWT issuance. Type Metadata publishes
   the namespaced recursive value contract. Each top-level structured claim is
@@ -279,7 +286,7 @@
 
 ## 0.6.0
 
-- Added delegated self-attestation support with explicit requester-side target
+- Added delegated subject access support with explicit requester-side target
   binding, canonicalized delegated targets, and claim-lookup validation.
 - Bound delegated authorization details to the requested identifier type so a
   delegated attestation cannot drift across supported identity forms.
@@ -292,7 +299,7 @@
 
 ## 0.3.0
 
-- Added citizen self-attestation flows, including bearer-token subject binding,
+- Added citizen subject access flows, including bearer-token subject binding,
   rate limiting, denial audit metadata, and SD-JWT VC issuance.
 - Added OpenID4VCI issuer primitives and HTTP routes for credential issuer
   metadata, SD-JWT VC Type Metadata at configured `vct` URLs, credential offers,
@@ -338,7 +345,7 @@
   `auth.oidc.jwks_url`, `auth.oidc.leeway`, and
   `auth.oidc.allowed_token_types`. Legacy aliases fail config load with an error
   naming the replacement. `auth.oidc.leeway` now uses humantime strings such as
-  `30s`; self-attestation
+  `30s`; subject access
   `token_policy.max_clock_leeway_seconds` still bounds the resolved duration.
 - Removed `server.cors.allow_credentials`; Registry Notary now always disables
   credentialed CORS on the operator-configured server CORS layer. Remove the
@@ -354,7 +361,7 @@
   validation, and OpenAPI documentation.
 - Replaced fake Problem Details type URLs with
   `https://id.registrystack.org/problems/registry-notary/...`.
-- Changed self-attestation subject-binding hashes to keyed HMAC values and
+- Changed subject access subject-binding hashes to keyed HMAC values and
   stopped recording raw query strings in request spans or audit paths.
 - Known limitations: this release is `dc+sd-jwt` only, does not serve
   `/.well-known/jwt-vc-issuer`, does not implement PKCS#12 issuer keys, does

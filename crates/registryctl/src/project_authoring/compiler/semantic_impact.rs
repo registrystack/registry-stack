@@ -490,15 +490,6 @@ mod semantic_impact_tests {
         .expect("Relay-only semantic-impact fixture loads")
     }
 
-    fn loaded_notary_only_project() -> LoadedRegistryProject {
-        load_registry_project(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/project-authoring/notary-only-evaluation"),
-            Some("local"),
-        )
-        .expect("Notary-only semantic-impact fixture loads")
-    }
-
     fn disclosure_digest() -> String {
         format!("sha256:{}", "d".repeat(64))
     }
@@ -689,49 +680,6 @@ mod semantic_impact_tests {
     }
 
     #[test]
-    fn notary_only_impact_never_requires_relay_review_signing_or_activation() {
-        let loaded = loaded_notary_only_project();
-        let report = project_semantic_impact_report(&loaded, None, &disclosure_digest());
-
-        assert_eq!(
-            dimensions(&report),
-            vec![
-                SemanticDimension::Claim,
-                SemanticDimension::ServicePolicy,
-                SemanticDimension::OperatorSecurity,
-                SemanticDimension::Disclosure,
-            ]
-        );
-        for change in report.changes {
-            assert!(change.consumers.contains(&ImpactConsumer::RegistryNotary));
-            assert!(!change.consumers.contains(&ImpactConsumer::RegistryRelay));
-            assert!(change.review_classes.contains(&ImpactReviewClass::Notary));
-            assert!(!change.review_classes.contains(&ImpactReviewClass::Relay));
-            assert!(change
-                .product_impacts
-                .iter()
-                .any(|impact| impact.product == ProjectProduct::Notary));
-            assert!(!change
-                .product_impacts
-                .iter()
-                .any(|impact| impact.product == ProjectProduct::Relay));
-            assert_eq!(change.requirements.signing, SigningRequirement::NotaryBundle);
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryNotary
-            );
-            assert!(!change.affected_subjects.iter().any(|subject| {
-                subject.id.starts_with("registry-relay.")
-                    || subject.kind == AffectedSubjectKind::Consultation
-            }));
-        }
-    }
-
-    #[test]
     fn verified_baseline_product_removal_keeps_removed_product_obligations() {
         let current = loaded_relay_only_project();
         let previous = loaded_project();
@@ -782,54 +730,6 @@ mod semantic_impact_tests {
                 .iter()
                 .find(|change| change.dimension == dimension)
                 .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
-            assert_eq!(
-                change.requirements.signing,
-                SigningRequirement::RelayAndNotaryBundles
-            );
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyRelayAndNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryRelayAndNotary
-            );
-        }
-    }
-
-    #[test]
-    fn verified_baseline_relay_removal_keeps_removed_product_obligations() {
-        let current = loaded_notary_only_project();
-        let previous = loaded_project();
-        let mut baseline =
-            matching_baseline(&previous, &format!("sha256:{}", "b".repeat(64)));
-        for digest in [
-            "claim",
-            "integration",
-            "service_policy",
-            "operator_security",
-        ] {
-            baseline["semantic_digests"][digest] =
-                Value::String(format!("sha256:{}", "0".repeat(64)));
-        }
-        baseline["promotion_projection"] = json!({
-            "products": ["relay", "notary"],
-        });
-        let report =
-            project_semantic_impact_report(&current, Some(&baseline), &disclosure_digest());
-
-        for dimension in [
-            SemanticDimension::Integration,
-            SemanticDimension::ServicePolicy,
-            SemanticDimension::OperatorSecurity,
-        ] {
-            let change = report
-                .changes
-                .iter()
-                .find(|change| change.dimension == dimension)
-                .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
-            assert!(change.consumers.contains(&ImpactConsumer::RegistryRelay));
-            assert!(change.consumers.contains(&ImpactConsumer::RegistryNotary));
             assert_eq!(
                 change.requirements.signing,
                 SigningRequirement::RelayAndNotaryBundles

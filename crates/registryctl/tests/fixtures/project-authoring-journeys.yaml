@@ -158,14 +158,3 @@ workspaces:
     steps: [trace, watch, test, check, build]
     environment: local
     check_explain: true
-
-  - id: notary-only-evaluation
-    label: Notary-only evaluation
-    summary: Local policy evaluation only, with no credential profile, issuance, or direct source capability.
-    source: crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation
-    classification: maintained
-    topology: notary-only
-    project_dir: crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation
-    steps: [check, build]
-    environment: local
-    check_explain: true

@@ -510,7 +510,7 @@
     `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or
     ES256 issuer algorithm. Transaction code is required by default; an
     explicit no-PIN profile has a maximum 300-second bearer-offer window.
-    Source-free claims cannot authorize issuance. The profile makes no claim
+    Caller-provided or identity-token data cannot become claim evidence. The profile makes no claim
     for a public nonce endpoint, response next nonce, wallet-facing
     authorization code, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet
     attestation. Source tests cover the full issuance and client-verification

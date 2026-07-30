@@ -434,14 +434,14 @@ impl SubjectAccessDelegatedRelationshipConfig {
                     self.proof_claim
                 ));
             }
-            validate_delegated_attestation_claim(
+            validate_delegated_subject_access_claim(
                 claim,
                 &allowed_purposes,
                 &allowed_formats,
                 &allowed_disclosures,
             )?;
         }
-        validate_delegated_attestation_allow_lists_are_supported(self, evidence)?;
+        validate_delegated_subject_access_allow_lists_are_supported(self, evidence)?;
         Ok(())
     }
 }
@@ -971,7 +971,7 @@ pub(super) fn validate_delegated_proof_claim_binding(
     Ok(())
 }
 
-pub(super) fn validate_delegated_attestation_claim(
+pub(super) fn validate_delegated_subject_access_claim(
     claim: &ClaimDefinition,
     allowed_purposes: &HashSet<&str>,
     allowed_formats: &HashSet<&str>,
@@ -980,12 +980,6 @@ pub(super) fn validate_delegated_attestation_claim(
     if !claim.operations.evaluate.enabled {
         return invalid_subject_access(format!(
             "delegated claim '{}' must enable evaluate",
-            claim.id
-        ));
-    }
-    if !claim.evidence_mode.is_self_attested() && !claim.evidence_mode.is_registry_backed() {
-        return invalid_subject_access(format!(
-            "delegated claim '{}' must be self_attested or registry_backed",
             claim.id
         ));
     }
@@ -1024,7 +1018,7 @@ pub(super) fn validate_delegated_attestation_claim(
     Ok(())
 }
 
-pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
+pub(super) fn validate_delegated_subject_access_allow_lists_are_supported(
     relationship: &SubjectAccessDelegatedRelationshipConfig,
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {

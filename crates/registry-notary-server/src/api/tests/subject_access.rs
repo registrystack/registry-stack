@@ -564,7 +564,7 @@ fn subject_access_notary_standard_at_jwt_still_requires_transaction_details() {
 }
 
 #[test]
-fn delegated_attestation_derives_requester_and_pins_metadata() {
+fn delegated_subject_access_derives_requester_and_pins_metadata() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
@@ -577,7 +577,7 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
     );
     let mut request = delegated_request();
 
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -615,7 +615,7 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
     assert_eq!(context.purpose, "dependent_attestation");
     assert_eq!(
         context.metadata.access_mode,
-        AccessMode::DelegatedAttestation
+        AccessMode::DelegatedSubjectAccess
     );
     assert_eq!(
         context
@@ -641,12 +641,12 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
         .unwrap_or(false));
     assert!(matches!(
         context.evaluation_capability,
-        EvaluationCapability::DelegatedAttestation { .. }
+        EvaluationCapability::DelegatedSubjectAccess { .. }
     ));
 }
 
 #[test]
-fn delegated_attestation_rejects_spoofed_requester_context() {
+fn delegated_subject_access_rejects_spoofed_requester_context() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
@@ -666,7 +666,7 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
         },
     ));
 
-    let err = derive_delegated_attestation_request_context(
+    let err = derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -684,7 +684,7 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
 }
 
 #[test]
-fn delegated_attestation_canonicalizes_target_to_validated_subject() {
+fn delegated_subject_access_canonicalizes_target_to_validated_subject() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
@@ -718,7 +718,7 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
         .insert("given_name".to_string(), json!("smuggled"));
     target.profile = Some("smuggled-profile".to_string());
 
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -769,7 +769,7 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
 }
 
 #[test]
-fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
+fn delegated_subject_access_requires_transaction_details_to_cover_proof_claim() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let mut principal = delegated_transaction_principal(&config, &evidence);
@@ -786,7 +786,7 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
         Arc::new(NoopIssuerResolver),
     );
     let mut request = delegated_request();
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -807,7 +807,7 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
 }
 
 #[test]
-fn delegated_attestation_requires_transaction_details_target() {
+fn delegated_subject_access_requires_transaction_details_target() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let mut principal = delegated_transaction_principal(&config, &evidence);
@@ -824,7 +824,7 @@ fn delegated_attestation_requires_transaction_details_target() {
         Arc::new(NoopIssuerResolver),
     );
     let mut request = delegated_request();
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -845,7 +845,7 @@ fn delegated_attestation_requires_transaction_details_target() {
 }
 
 #[test]
-fn stored_delegated_attestation_rechecks_current_authorization_details() {
+fn stored_delegated_subject_access_rechecks_current_authorization_details() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
@@ -857,7 +857,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
         Arc::new(NoopIssuerResolver),
     );
     let mut request = delegated_request();
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -903,7 +903,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
 }
 
 #[test]
-fn stored_delegated_attestation_rechecks_current_target_binding() {
+fn stored_delegated_subject_access_rechecks_current_target_binding() {
     let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
@@ -915,7 +915,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
         Arc::new(NoopIssuerResolver),
     );
     let mut request = delegated_request();
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,
@@ -957,7 +957,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
 }
 
 #[test]
-fn stored_delegated_attestation_accepts_the_committed_target_handle_in_wallet_tokens() {
+fn stored_delegated_subject_access_accepts_the_committed_target_handle_in_wallet_tokens() {
     let evidence = delegated_evidence_config();
     let config = delegated_subject_access_config();
     let mut principal = delegated_transaction_principal(&config, &evidence);
@@ -969,7 +969,7 @@ fn stored_delegated_attestation_accepts_the_committed_target_handle_in_wallet_to
         Arc::new(NoopIssuerResolver),
     );
     let mut request = delegated_request();
-    derive_delegated_attestation_request_context(
+    derive_delegated_subject_access_request_context(
         &state.subject_access,
         &evidence,
         &state.subject_access_rate_keys,

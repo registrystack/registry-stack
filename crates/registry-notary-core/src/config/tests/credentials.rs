@@ -856,21 +856,8 @@ pub(super) fn omitted_claim_formats_default_to_claim_result_json() {
 #[test]
 pub(super) fn explicit_empty_claim_formats_are_rejected() {
     let mut config = minimal_config();
-    let claim: ClaimDefinition = serde_norway::from_str(
-        r#"
-id: empty-format
-title: Empty format claim
-version: "1.0"
-subject_type: person
-evidence_mode:
-  type: self_attested
-rule:
-  type: cel
-  expression: "true"
-formats: []
-"#,
-    )
-    .expect("claim YAML is valid");
+    let mut claim = minimal_claim("empty-format");
+    claim.formats.clear();
     config.evidence.claims = vec![claim];
 
     let err = config

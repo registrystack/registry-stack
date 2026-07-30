@@ -132,7 +132,7 @@ public evidence or disposition.
   and `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
   Disposition: purpose mismatch is denied before credential signing, and the
   direct `/v1/credentials` product route now returns a stable problem response,
-  emits a redacted `credential_denied` audit record with self-attestation access
+  emits a redacted `credential_denied` audit record with subject-access
   mode and hashed identifiers, and produces no `credential_issued` event.
 - `NP-20`: Covered.
   Public anchors:
@@ -227,7 +227,7 @@ public evidence or disposition.
   lookup denials emit a minimal `credential_denied` event without recording an
   untrusted evaluation id. Evaluation-bound binding, stored-access, policy,
   proof, and replay denials share redacted stored-evaluation context and
-  preserve structured self-attestation denial codes, including issue-time
+  preserve structured subject-access denial codes, including issue-time
   assurance failures. Credential issuance rate limiting retains its dedicated
   `credential_issue_rate_limited` decision with the same safe stored context.
   Authentication failures retain the auth middleware taxonomy; missing handler

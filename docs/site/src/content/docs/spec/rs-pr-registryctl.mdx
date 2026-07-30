@@ -189,16 +189,15 @@ separate public product contract to discover an output it consumes.
 
 ## 7. Credential-issuance boundary
 
-Project authoring can compile evaluation-only Notary services without a credential profile. When
-a project declares credential issuance, every selected claim must derive from an exact
-compiler-pinned Registry Relay consultation. The compiler and end-to-end tests enforce this in
+Project authoring can compile a Notary service without configured claims. Every configured claim
+must derive from an exact compiler-pinned Registry Relay consultation. The compiler and end-to-end
+tests enforce this in
 [`compiler/notary.rs`](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/compiler/notary.rs)
 and [`project_authoring.rs`](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/tests/project_authoring.rs).
 
-REQ-PR-REGISTRYCTL-018: Registryctl MUST NOT compile a credential profile or OpenID for Verifiable
-Credential Issuance (OID4VCI) configuration that selects a source-free claim. Source-free claims
-MAY be used only for evaluation when no credential profile selects them. Credential issuance MUST
-remain registry-backed.
+REQ-PR-REGISTRYCTL-018: Registryctl MUST reject a Notary claim that does not
+derive from at least one declared Registry Relay consultation. Caller-provided,
+OIDC, and authorization-details data MUST NOT be compiled as claim evidence.
 
 ## Conformance
 
@@ -215,7 +214,7 @@ A registryctl release conforms to this specification when it:
   (REQ-PR-REGISTRYCTL-016).
 - Keeps unstable generated internals outside the compatibility promise
   (REQ-PR-REGISTRYCTL-017).
-- Refuses credential issuance from source-free claims (REQ-PR-REGISTRYCTL-018).
+- Refuses claims without Registry Relay evidence (REQ-PR-REGISTRYCTL-018).
 
 ## Evidence
 

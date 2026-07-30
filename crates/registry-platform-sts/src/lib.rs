@@ -73,7 +73,7 @@ impl TokenExchangeConfig {
             jwt_typ: NOTARY_TRANSACTION_JWT_TYP.to_string(),
             default_lifetime: Duration::from_secs(300),
             max_lifetime: Duration::from_secs(600),
-            required_scopes: vec!["registry_notary:self_attestation".to_string()],
+            required_scopes: vec!["registry_notary:subject_access".to_string()],
             sender_constraint: SenderConstraintPolicy::Disabled,
             require_session_binding: true,
             session_binding_secret: None,
@@ -902,7 +902,7 @@ fn validate_authorization_details(
         || detail.locations.len() != 1
         || detail.locations.first() != Some(&config.notary_audience)
         || detail.claims.is_empty()
-        || detail.access_mode.as_deref() != Some("self_attestation")
+        || detail.access_mode.as_deref() != Some("subject_bound")
     {
         return Err(StsError::AuthorizationDetailsInvalid);
     }
@@ -959,7 +959,7 @@ fn validate_authorization_details(
             binding_claim,
             id_type,
         }),
-        access_mode: Some("self_attestation".to_string()),
+        access_mode: Some("subject_bound".to_string()),
     }])
 }
 
@@ -1418,7 +1418,7 @@ mod tests {
         VerifiedSubjectToken {
             subject: "hmac-sha256:subject".to_string(),
             issuer: "https://idp.example.test".to_string(),
-            scopes: vec!["registry_notary:self_attestation".to_string()],
+            scopes: vec!["registry_notary:subject_access".to_string()],
             confirmation: Some(json!({"jkt": "thumbprint"})),
             actor: Some(TokenActor {
                 actor_id_hash: "hmac-sha256:actor".to_string(),
@@ -1436,7 +1436,7 @@ mod tests {
             requested_token_type: Some(ACCESS_TOKEN_TYPE.to_string()),
             audience: Some("https://notary.example.test".to_string()),
             resource: None,
-            scope: Some("registry_notary:self_attestation".to_string()),
+            scope: Some("registry_notary:subject_access".to_string()),
             authorization_details: Some(vec![authorization_details()]),
             actor_token: None,
             actor_token_type: None,
@@ -1455,12 +1455,12 @@ mod tests {
             }],
             disclosure: Some("predicate".to_string()),
             format: Some("application/vnd.registry-notary.claim-result+json".to_string()),
-            purpose: Some("citizen_self_attestation".to_string()),
+            purpose: Some("citizen_subject_access".to_string()),
             subject: Some(NotaryAuthorizationSubject {
                 binding_claim: "national_id".to_string(),
                 id_type: "national_id".to_string(),
             }),
-            access_mode: Some("self_attestation".to_string()),
+            access_mode: Some("subject_bound".to_string()),
         }
     }
 
@@ -1610,7 +1610,7 @@ mod tests {
                 version: Some("1".to_string()),
             },
         ];
-        details[0].purpose = Some(" citizen_self_attestation ".to_string());
+        details[0].purpose = Some(" citizen_subject_access ".to_string());
         details[0].disclosure = Some(" predicate ".to_string());
         details[0].format = Some(" application/vnd.registry-notary.claim-result+json ".to_string());
 
@@ -1623,7 +1623,7 @@ mod tests {
         assert_eq!(canonical[0].claims[1].id, "z-claim");
         assert_eq!(
             canonical[0].purpose.as_deref(),
-            Some("citizen_self_attestation")
+            Some("citizen_subject_access")
         );
         assert_eq!(canonical[0].disclosure.as_deref(), Some("predicate"));
         assert_eq!(
@@ -1646,12 +1646,12 @@ mod tests {
             }],
             "disclosure": "predicate",
             "format": "application/vnd.registry-notary.claim-result+json",
-            "purpose": "citizen_self_attestation",
+            "purpose": "citizen_subject_access",
             "subject": {
                 "binding_claim": "national_id",
                 "id_type": "national_id"
             },
-            "access_mode": "self_attestation"
+            "access_mode": "subject_bound"
         });
         assert!(serde_json::from_value::<NotaryAuthorizationDetails>(with_extra_field).is_err());
 
@@ -1686,7 +1686,7 @@ mod tests {
         assert!(payload["jti"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
-        assert_eq!(payload["scope"], "registry_notary:self_attestation");
+        assert_eq!(payload["scope"], "registry_notary:subject_access");
         assert!(payload.get("cnf").is_none());
         assert_eq!(payload["act"]["actor_id_hash"], "hmac-sha256:actor");
         assert_eq!(payload["act"]["delegation_ref"], "delegation-123");
@@ -1708,7 +1708,7 @@ mod tests {
         );
         assert_eq!(
             payload["authorization_details"][0]["access_mode"],
-            "self_attestation"
+            "subject_bound"
         );
         assert_eq!(
             payload["authorization_details"][0]["subject"]["binding_claim"],

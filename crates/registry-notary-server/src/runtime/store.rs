@@ -14,7 +14,7 @@ const BATCH_WAIT_INITIAL_MILLIS: u64 = 50;
 const BATCH_WAIT_MAX_MILLIS: u64 = 1_000;
 // Version 2 adopts the pre-1.0 subject-access vocabulary in persisted
 // evaluation and idempotency response envelopes. Version 1 used the removed
-// self-attestation field and access-mode vocabulary and is intentionally not
+// subject-access field and access-mode vocabulary and is intentionally not
 // accepted by the clean 1.0 storage contract.
 const STORED_RECORD_VERSION: i16 = 2;
 
@@ -378,10 +378,6 @@ impl EvidenceStore {
             return self.reserve_in_memory_batch(key, request_hash).await;
         };
         reserve_postgres_batch(state_plane, key, request_hash, principal_id, quota).await
-    }
-
-    pub(super) fn uses_postgresql(&self) -> bool {
-        self.postgres_state_plane().is_some()
     }
 
     fn postgres_state_plane(&self) -> Option<&Arc<NotaryStatePlaneHandle>> {
