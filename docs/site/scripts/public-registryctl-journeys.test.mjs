@@ -7,11 +7,14 @@ import {
   verify,
 } from 'node:crypto';
 import {
+  closeSync,
+  constants,
   cpSync,
+  fstatSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -50,11 +53,46 @@ function temporaryStarter(t) {
   return project;
 }
 
-function runShell(script, cwd) {
-  return spawnSync('/bin/sh', ['-eu', '-c', script], {
+function runScriptFile(scriptPath, cwd) {
+  return spawnSync('/bin/sh', ['-eu', scriptPath], {
     cwd,
     encoding: 'utf8',
   });
+}
+
+function runShellSnippet(script, cwd) {
+  return spawnSync('/bin/sh', ['-eu'], {
+    cwd,
+    encoding: 'utf8',
+    input: script,
+  });
+}
+
+function pathMode(path, flags = constants.O_RDONLY) {
+  const descriptor = openSync(path, flags);
+  try {
+    return fstatSync(descriptor).mode & 0o777;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readRegularUtf8WithMode(path) {
+  const descriptor = openSync(path, constants.O_RDONLY);
+  try {
+    const stats = fstatSync(descriptor);
+    assert.ok(stats.isFile(), `${path} must be a regular file`);
+    return {
+      mode: stats.mode & 0o777,
+      content: readFileSync(descriptor, 'utf8'),
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function assertPathMissing(path) {
+  assert.throws(() => readFileSync(path), /ENOENT/);
 }
 
 function assertOverlayChecksum(relativePath) {
@@ -104,9 +142,10 @@ test('public OAuth and Rhai journey applies a generated docs asset to a fresh HT
   for (const page of [oauth, opencrvs]) {
     assert.match(page, /registryctl init .* --template http/);
     assert.match(page, /opencrvs-events-api-overlay-v1\.sh/);
-    assert.match(
-      page,
-      /https:\/\/docs\.registrystack\.org\/v\/\$REGISTRYCTL_VERSION\/examples\/registryctl\/\$OVERLAY/,
+    assert.ok(
+      page.includes(
+        'https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY',
+      ),
     );
     assert.match(page, /curl -fsS "\$OVERLAY_URL\.sha256" -o "\$OVERLAY\.sha256"/);
     assert.match(page, /hmac\.compare_digest\(actual, expected\)/);
@@ -126,19 +165,16 @@ test('public OAuth and Rhai journey applies a generated docs asset to a fresh HT
   assertOverlayChecksum('public/examples/registryctl/opencrvs-events-api-overlay-v1.sh');
 
   const project = temporaryStarter(t);
-  const result = runShell(
-    `sh ${JSON.stringify(
-      resolve(siteRoot, 'public/examples/registryctl/opencrvs-events-api-overlay-v1.sh'),
-    )}`,
+  const result = runScriptFile(
+    resolve(siteRoot, 'public/examples/registryctl/opencrvs-events-api-overlay-v1.sh'),
     project,
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay/);
-  assert.throws(
-    () => statSync(resolve(project, 'integrations/person-record')),
-    /ENOENT/,
+  assertPathMissing(resolve(project, 'integrations/person-record'));
+  assert.doesNotThrow(() =>
+    readFileSync(resolve(project, 'integrations/birth-event-search/integration.yaml'), 'utf8'),
   );
-  assert.ok(statSync(resolve(project, 'integrations/birth-event-search/integration.yaml')).isFile());
 });
 
 test('optional public-source continuation has exact offline and opt-in live gates', (t) => {
@@ -148,9 +184,10 @@ test('optional public-source continuation has exact offline and opt-in live gate
 
   assert.match(page, /registryctl init public-json-live-demo --template http/);
   assert.match(page, /jsonplaceholder-todo-live-overlay-v1\.sh/);
-  assert.match(
-    page,
-    /https:\/\/docs\.registrystack\.org\/v\/\$REGISTRYCTL_VERSION\/examples\/registryctl\/\$OVERLAY/,
+  assert.ok(
+    page.includes(
+      'https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY',
+    ),
   );
   assert.match(page, /curl -fsS "\$OVERLAY_URL\.sha256" -o "\$OVERLAY\.sha256"/);
   assert.match(page, /hmac\.compare_digest\(actual, expected\)/);
@@ -170,15 +207,15 @@ test('optional public-source continuation has exact offline and opt-in live gate
     gate,
     /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/,
   );
-  assert.match(gate, /https:\/\/jsonplaceholder\.typicode\.com\/todos\/4/);
-  assert.match(gate, /https:\/\/jsonplaceholder\.typicode\.com\/todos\/999999/);
+  assert.ok(gate.includes('https://jsonplaceholder.typicode.com/todos/4'));
+  assert.ok(gate.includes('https://jsonplaceholder.typicode.com/todos/999999'));
   assert.match(gate, /expected 200/);
   assert.match(gate, /expected 404/);
   assert.match(gate, /--environment "\$environment" smoke/);
   assert.doesNotMatch(gate, /rm -r "\$PROJECT\/integrations\/person-record"/);
 
   assert.match(overlay, /source_mode: operator_bound/);
-  assert.match(overlay, /origin: https:\/\/jsonplaceholder\.typicode\.com/);
+  assert.ok(overlay.includes('origin: https://jsonplaceholder.typicode.com'));
   assert.match(overlay, /auth: \{ type: none \}/);
   assert.match(overlay, /default_fixture: completed-todo/);
   assert.match(overlay, /default_fixture: no-todo/);
@@ -187,33 +224,30 @@ test('optional public-source continuation has exact offline and opt-in live gate
   assertOverlayChecksum('public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh');
 
   const project = temporaryStarter(t);
-  const result = runShell(
-    `sh ${JSON.stringify(
-      resolve(siteRoot, 'public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh'),
-    )}`,
+  const result = runScriptFile(
+    resolve(siteRoot, 'public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh'),
     project,
   );
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(statSync(resolve(project, 'integrations/public-todo/integration.yaml')).isFile());
+  assert.doesNotThrow(() =>
+    readFileSync(resolve(project, 'integrations/public-todo/integration.yaml'), 'utf8'),
+  );
 });
 
 test('public overlays reject a changed starter before mutation', (t) => {
   const project = temporaryStarter(t);
   const readme = resolve(project, 'README.md');
   writeFileSync(readme, `${readFileSync(readme, 'utf8')}\nchanged by operator\n`);
-  const result = runShell(
-    `sh ${JSON.stringify(
-      resolve(siteRoot, 'public/examples/registryctl/opencrvs-events-api-overlay-v1.sh'),
-    )}`,
+  const result = runScriptFile(
+    resolve(siteRoot, 'public/examples/registryctl/opencrvs-events-api-overlay-v1.sh'),
     project,
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /HTTP starter closure does not match this release: changed=README\.md/);
-  assert.ok(statSync(resolve(project, 'integrations/person-record/integration.yaml')).isFile());
-  assert.throws(
-    () => statSync(resolve(project, 'integrations/birth-event-search')),
-    /ENOENT/,
+  assert.doesNotThrow(() =>
+    readFileSync(resolve(project, 'integrations/person-record/integration.yaml'), 'utf8'),
   );
+  assertPathMissing(resolve(project, 'integrations/birth-event-search'));
 });
 
 test('Compose command blocks exactly reproduce the generated runbook sequence', () => {
@@ -294,19 +328,24 @@ test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK p
   const root = mkdtempSync(join(tmpdir(), 'registryctl-evaluation-keys-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
-  const result = runShell(script, root);
+  const result = runShellSnippet(script, root);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(statSync(resolve(root, 'evaluation-keys')).mode & 0o777, 0o700);
+  assert.equal(
+    pathMode(resolve(root, 'evaluation-keys'), constants.O_RDONLY | constants.O_DIRECTORY),
+    0o700,
+  );
 
   const publicMembers = new Set();
   for (const lane of ['relay-public', 'relay-consultation', 'notary']) {
     const privatePath = resolve(root, `evaluation-keys/${lane}.private.jwk`);
     const publicPath = resolve(root, `evaluation-keys/${lane}.public.jwk`);
-    assert.equal(statSync(privatePath).mode & 0o777, 0o600);
-    assert.equal(statSync(publicPath).mode & 0o777, 0o600);
+    const privateFile = readRegularUtf8WithMode(privatePath);
+    const publicFile = readRegularUtf8WithMode(publicPath);
+    assert.equal(privateFile.mode, 0o600);
+    assert.equal(publicFile.mode, 0o600);
 
-    const privateJwk = JSON.parse(readFileSync(privatePath, 'utf8'));
-    const publicJwk = JSON.parse(readFileSync(publicPath, 'utf8'));
+    const privateJwk = JSON.parse(privateFile.content);
+    const publicJwk = JSON.parse(publicFile.content);
     assert.deepEqual(publicJwk, {
       crv: 'Ed25519',
       kty: 'OKP',
@@ -323,14 +362,8 @@ test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK p
       verify(null, payload, createPublicKey({ key: publicJwk, format: 'jwk' }), signature),
       true,
     );
-    assert.throws(
-      () => statSync(resolve(root, `evaluation-keys/${lane}.private.der`)),
-      /ENOENT/,
-    );
-    assert.throws(
-      () => statSync(resolve(root, `evaluation-keys/${lane}.public.der`)),
-      /ENOENT/,
-    );
+    assertPathMissing(resolve(root, `evaluation-keys/${lane}.private.der`));
+    assertPathMissing(resolve(root, `evaluation-keys/${lane}.public.der`));
   }
   assert.equal(publicMembers.size, 3);
 });

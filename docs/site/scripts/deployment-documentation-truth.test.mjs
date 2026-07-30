@@ -41,11 +41,10 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');
   assert.equal(current.source, 'registry-stack-main');
-  assert.match(
-    readme,
-    /https:\/\/docs\.registrystack\.org\/dev\/tutorials\/author-registry-project\//,
+  assert.ok(
+    readme.includes('https://docs.registrystack.org/dev/tutorials/author-registry-project/'),
   );
-  assert.match(readme, /https:\/\/docs\.registrystack\.org\/dev\/start\/pre-1\.0-cutover\//);
+  assert.ok(readme.includes('https://docs.registrystack.org/dev/start/pre-1.0-cutover/'));
   assert.equal(
     current.description,
     'Unreleased Registry Stack documentation built from the main branch.',
