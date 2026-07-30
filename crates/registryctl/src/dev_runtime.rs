@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, Read as _, Write as _};
+use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -21,6 +21,7 @@ use registry_platform_config::{
     verify_config_bundle, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
     ProductAcceptanceProductV1, ProductTrustDomainV1, MAX_MANIFEST_BYTES,
 };
+use rustls_pki_types::{pem::PemObject as _, CertificateDer};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -3356,11 +3357,11 @@ impl DockerComposeBackend {
     ) -> DevRuntimeResult<(DevSmokeStatus, Vec<String>)> {
         let endpoint = plan.caller_endpoint()?;
         let url = format!("https://{endpoint}/v1/evaluations");
-        let certificate = File::open(plan.paths.credentials.join("notary-tls.crt"))
-            .map_err(|_| DevRuntimeError::smoke())?;
-        let mut certificate = BufReader::new(certificate);
+        let certificates =
+            CertificateDer::pem_file_iter(plan.paths.credentials.join("notary-tls.crt"))
+                .map_err(|_| DevRuntimeError::smoke())?;
         let mut roots = rustls::RootCertStore::empty();
-        for certificate in rustls_pemfile::certs(&mut certificate) {
+        for certificate in certificates {
             roots
                 .add(certificate.map_err(|_| DevRuntimeError::smoke())?)
                 .map_err(|_| DevRuntimeError::smoke())?;
