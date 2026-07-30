@@ -3,3 +3,4 @@
 # This pre-1.0 contract break is documented in the release notes. The line below
 # stops matching once the baseline includes it.
 POST /v1/batch-evaluations the 'header' request parameter 'Idempotency-Key' became required
+POST /v1/batch-evaluations the `header` request parameter `idempotency-key` became required
