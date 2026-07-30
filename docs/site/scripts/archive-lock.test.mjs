@@ -47,6 +47,18 @@ test('validates exact archived docset coverage and digest shapes', () => {
     ).join('\n'),
     /contains non-archived docset latest/,
   );
+  assert.deepEqual(
+    validateArchiveLock(lock({
+      archives: {
+        'v1.0.0': {
+          bundle_sha256: digest,
+          root_tree_sha256: 'b'.repeat(64),
+          version_tree_sha256: 'c'.repeat(64),
+        },
+      },
+    }), docsets),
+    [],
+  );
 });
 
 test('immutable lock entries can be added but not changed or removed', () => {
@@ -89,4 +101,18 @@ test('adds a new lock entry but refuses to overwrite immutable bytes', () => {
     }),
     /already exists/,
   );
+});
+
+test('adds both authenticated tree digests for a dual-tree release bundle', () => {
+  const current = lock();
+  addArchiveLockEntry(current, 'v2.0.0', {
+    bundle_sha256: 'c'.repeat(64),
+    root_tree_sha256: 'd'.repeat(64),
+    version_tree_sha256: 'e'.repeat(64),
+  });
+  assert.deepEqual(current.archives['v2.0.0'], {
+    bundle_sha256: 'c'.repeat(64),
+    root_tree_sha256: 'd'.repeat(64),
+    version_tree_sha256: 'e'.repeat(64),
+  });
 });

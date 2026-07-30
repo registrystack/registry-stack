@@ -86,7 +86,9 @@ async function restoreDownloadedBundle({
         bundlePath,
         docset,
         expectedBundleSha256: lockEntry.bundle_sha256,
+        expectedRootTreeSha256: lockEntry.root_tree_sha256,
         expectedTreeSha256: lockEntry.tree_sha256,
+        expectedVersionTreeSha256: lockEntry.version_tree_sha256,
         // Release assets are canonical and do not need to be duplicated in
         // Pages. The fallback URL is republished so pre-contract releases stay
         // self-hosting.
@@ -116,7 +118,9 @@ async function restoreLocalBundle({ docsRoot, docset, lockEntry }) {
     bundlePath,
     docset,
     expectedBundleSha256: lockEntry.bundle_sha256,
+    expectedRootTreeSha256: lockEntry.root_tree_sha256,
     expectedTreeSha256: lockEntry.tree_sha256,
+    expectedVersionTreeSha256: lockEntry.version_tree_sha256,
   });
   return true;
 }
@@ -129,11 +133,20 @@ async function bootstrapArchive({
 }) {
   await buildArchive(docset, { docsRoot });
   const bundlePath = localArchiveBundlePath(docsRoot, docset);
-  const result = await createArchiveBundle({ docsRoot, docset, bundlePath });
-  if (
-    result.bundle_sha256 !== lockEntry.bundle_sha256 ||
-    result.tree_sha256 !== lockEntry.tree_sha256
-  ) {
+  const result = await createArchiveBundle({
+    docsRoot,
+    docset,
+    bundlePath,
+    // A historical lock entry authenticates the original single-tree bundle.
+    // Do not let a canonical-root staging tree change its bundle shape.
+    singleTree: Boolean(lockEntry.tree_sha256),
+  });
+  const matches = result.bundle_sha256 === lockEntry.bundle_sha256 &&
+    (result.root_tree_sha256
+      ? result.root_tree_sha256 === lockEntry.root_tree_sha256 &&
+        result.version_tree_sha256 === lockEntry.version_tree_sha256
+      : result.tree_sha256 === lockEntry.tree_sha256);
+  if (!matches) {
     throw new Error(
       `bootstrapped archive ${docset.id} does not match its immutable lock entry`,
     );
@@ -143,7 +156,9 @@ async function bootstrapArchive({
     bundlePath,
     docset,
     expectedBundleSha256: lockEntry.bundle_sha256,
+    expectedRootTreeSha256: lockEntry.root_tree_sha256,
     expectedTreeSha256: lockEntry.tree_sha256,
+    expectedVersionTreeSha256: lockEntry.version_tree_sha256,
   });
 }
 

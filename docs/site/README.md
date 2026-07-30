@@ -35,8 +35,9 @@ To verify the complete deployable tree, including every locked release archive:
 npm run check:archives
 ```
 
-`src/data/archive-lock.yaml` is append-only. Each entry binds one archived
-docset to the SHA-256 of its deterministic bundle and extracted site tree.
+`src/data/archive-lock.yaml` is append-only. New entries bind one archived
+docset to the SHA-256 of its deterministic bundle, canonical-root tree, and
+version-prefixed tree. Historical single-tree entries remain valid.
 Existing entries must never be edited or removed. `npm run
 check:archive-lock -- --base-ref origin/main` enforces that invariant.
 Historical archives retain their sealed search output. New release archives
@@ -55,9 +56,10 @@ npm run check:archive-lock -- --base-ref origin/main
 The release workflow repeats those steps from the exact annotated tag and
 publishes `registry-docs-vX.Y.Z.tar.gz` with the other signed, SBOM-covered,
 SLSA-provenanced release files.
-The archive metadata binds the release tag and tree digest, not a future merge
-commit. The Pages workflow authenticates that public asset and promotes its
-unchanged files to `/` and `/v/X.Y.Z/`; protected `main` is built at `/dev/`.
+The archive metadata binds the release tag, version path, and both tree digests,
+not a future merge commit. The Pages workflow authenticates that one public
+asset and copies its canonical-root and version-prefixed trees unchanged to `/`
+and `/v/X.Y.Z/`; protected `main` is built at `/dev/`.
 
 ## Published layout
 
@@ -69,10 +71,11 @@ The production site uses one indexable namespace:
 - `/preview/` keeps old links working by redirecting matching pages to `/`.
 
 The Pages workflow verifies the selected release archive against
-`src/data/archive-lock.yaml`, copies that locked tree into `/`, and changes URLs and SEO metadata only
-in the promoted copy. The immutable `/v/<version>/` tree and its release asset are not changed.
-Search data and machine-readable corpora are generated from the promoted release pages, so the
-canonical site does not depend on unreleased `/dev/` content.
+`src/data/archive-lock.yaml` and copies the separately built trees to their
+bound destinations without rewriting either one. The immutable
+`/v/<version>/` tree and its release asset are not changed. Search data and
+machine-readable corpora are sealed into the canonical-root release tree, so
+the canonical site does not depend on unreleased `/dev/` content.
 
 ## Content Sources
 
