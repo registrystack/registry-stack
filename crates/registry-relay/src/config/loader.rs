@@ -387,7 +387,9 @@ pub fn load_with_metadata_options(
 ///
 /// This entry point deliberately has no unsigned-config or break-glass
 /// fallback. The explicit bundle, trust anchor, and anti-rollback state inputs
-/// are the complete startup trust boundary for this mode.
+/// are the complete startup trust boundary for this mode. Direct startup also
+/// requires a manifest instance binding so separate runtime anchors cannot
+/// resolve to the fleet-wide anti-rollback lane.
 pub fn load_verified_bundle_with_metadata_options(
     bundle_path: &Path,
     trust_anchor_path: &Path,
@@ -398,7 +400,7 @@ pub fn load_verified_bundle_with_metadata_options(
         log_bundle_verification_error(&error);
         Error::from(ConfigError::ValidationError)
     })?;
-    enforce_relay_bundle_product_binding(&verified)?;
+    enforce_relay_direct_bundle_binding(&verified)?;
     let config_trust = super::ConfigTrustConfig {
         trust_anchor_path: trust_anchor_path.to_path_buf(),
         bundle_path: bundle_path.to_path_buf(),
@@ -460,8 +462,32 @@ pub fn verify_relay_bundle_product_binding(
     }
 }
 
+/// Verify the Relay-owned bindings required by direct bundle startup.
+///
+/// The shared bundle format permits a missing `instance_id` for fleet-wide
+/// bootstrap use. Direct startup has no unsigned bootstrap document to provide
+/// an additional instance boundary, so it must reject that wider scope before
+/// resolving anti-rollback state.
+pub fn verify_relay_direct_bundle_binding(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), BundleVerificationCode> {
+    verify_relay_bundle_product_binding(verified)?;
+    if verified.manifest.instance_id.is_some() {
+        Ok(())
+    } else {
+        Err(BundleVerificationCode::REJECTED_BINDING)
+    }
+}
+
 fn enforce_relay_bundle_product_binding(verified: &VerifiedConfigBundle) -> Result<(), Error> {
     verify_relay_bundle_product_binding(verified).map_err(|code| {
+        emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
+        Error::from(ConfigError::ValidationError)
+    })
+}
+
+fn enforce_relay_direct_bundle_binding(verified: &VerifiedConfigBundle) -> Result<(), Error> {
+    verify_relay_direct_bundle_binding(verified).map_err(|code| {
         emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
         Error::from(ConfigError::ValidationError)
     })

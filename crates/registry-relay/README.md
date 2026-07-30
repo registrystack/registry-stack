@@ -99,7 +99,9 @@ registry-relay \
 
 Omit `--initialize-state` after first acceptance. Direct bundle startup does
 not fall back to local configuration or a break-glass override when
-verification or anti-rollback checks fail.
+verification or anti-rollback checks fail. The bundle manifest must contain an
+`instance_id` that matches the trust anchor. Relay rejects a missing or
+mismatched instance binding before reading or advancing anti-rollback state.
 
 ## Build
 

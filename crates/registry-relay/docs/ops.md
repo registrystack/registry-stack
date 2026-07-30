@@ -672,7 +672,9 @@ registry-relay config verify-bundle <flags>
 `verify-bundle` verifies the local bundle directory, checks anti-rollback state
 read-only, validates the embedded Relay config, and prints a
 `registry.platform.config_apply_report.v1` JSON report to stdout. It never
-persists state and never contacts a running gateway.
+persists state and never contacts a running gateway. Direct verification
+requires the signed manifest to contain an `instance_id` matching the trust
+anchor and rejects that binding before anti-rollback state access.
 
 Flags:
 

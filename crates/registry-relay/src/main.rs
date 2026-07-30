@@ -1358,7 +1358,7 @@ async fn run_config_verify_bundle(
             );
         }
     };
-    if let Err(code) = config::loader::verify_relay_bundle_product_binding(&verified) {
+    if let Err(code) = config::loader::verify_relay_direct_bundle_binding(&verified) {
         print_json_report(config_verify_bundle_report(
             ApplyReportResult::from(code),
             None,
@@ -2941,9 +2941,10 @@ mod tests {
     };
     use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
     use registry_platform_ops::{
-        bundle_verify_rejection_code, AntiRollbackKey, AntiRollbackStoreError, BundleStateAction,
-        BundleVerificationCode, ConfigOverrideMode, ConfigOverridePin, ConfigSource,
-        DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
+        antirollback_key_from_verified_bundle, bundle_verify_rejection_code, AntiRollbackKey,
+        AntiRollbackStoreError, BundleStateAction, BundleVerificationCode, ConfigOverrideMode,
+        ConfigOverridePin, ConfigSource, DeploymentProfile, FileAntiRollbackStore,
+        PendingBundleAcceptance,
     };
     use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
     use registry_relay::config::Config;
@@ -3154,7 +3155,7 @@ mod tests {
             product: "registry-relay".to_string(),
             environment: "lab".to_string(),
             stream_id: "relay-bind-test".to_string(),
-            instance_id: None,
+            instance_id: Some("relay-bind-test".to_string()),
             bundle_id: "relay-bind-bundle".to_string(),
             sequence: 1,
             previous_config_hash: None,
@@ -3230,6 +3231,33 @@ mod tests {
         let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
         let kid = private.public().jkt().expect("thumbprint");
         write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+    }
+
+    fn rewrite_signed_bundle_instance_id(
+        fixture: &SignedRelayBundleFixture,
+        instance_id: Option<&str>,
+    ) {
+        let manifest_path = fixture.bundle_dir.join("manifest.json");
+        let mut manifest: ConfigBundleManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        manifest.instance_id = instance_id.map(str::to_string);
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let kid = private.public().jkt().expect("thumbprint");
+        write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+    }
+
+    fn rewrite_anchor_instance_id(fixture: &SignedRelayBundleFixture, instance_id: &str) {
+        let mut anchor: ConfigTrustAnchor = serde_json::from_slice(
+            &std::fs::read(&fixture.anchor_path).expect("trust anchor reads"),
+        )
+        .expect("trust anchor parses");
+        anchor.instance_id = instance_id.to_string();
+        std::fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
+        )
+        .expect("trust anchor writes");
     }
 
     fn rewrite_signed_bundle_product(fixture: &SignedRelayBundleFixture, product: &str) {
@@ -3530,7 +3558,7 @@ config_trust:
         );
         let key = AntiRollbackKey {
             product: "registry-relay".to_string(),
-            instance_id: String::new(),
+            instance_id: "relay-bind-test".to_string(),
             environment: "lab".to_string(),
             stream_id: "relay-bind-test".to_string(),
         };
@@ -3581,6 +3609,74 @@ config_trust:
         std::env::remove_var(env_name);
     }
 
+    #[tokio::test]
+    async fn direct_bundle_without_instance_id_cannot_initialize_or_start() {
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, "UNUSED_MISSING_INSTANCE_AUDIT_HASH_SECRET");
+        rewrite_signed_bundle_instance_id(&fixture, None);
+        let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("shared bundle verification permits a fleet-wide bundle");
+        assert_eq!(
+            registry_relay::config::loader::verify_relay_direct_bundle_binding(&verified),
+            Err(BundleVerificationCode::REJECTED_BINDING)
+        );
+        assert_eq!(
+            ProcessStartupCode::from_bundle_verification(BundleVerificationCode::REJECTED_BINDING),
+            ProcessStartupCode::BUNDLE_BINDING_REJECTED
+        );
+
+        let initialize_error =
+            registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+                &fixture.bundle_dir,
+                &fixture.anchor_path,
+                &fixture.state_path,
+                registry_relay::config::LoadOptions {
+                    initialize_state: true,
+                },
+            )
+            .expect_err("missing instance binding cannot initialize direct startup");
+        assert_eq!(initialize_error.to_string(), "config validation error");
+        assert!(!fixture.state_path.exists());
+
+        let start_error = super::run_server(signed_bundle_source(&fixture), None, None, true)
+            .await
+            .expect_err("missing instance binding cannot start Relay");
+        assert_eq!(
+            start_error.to_string(),
+            "configuration load failure was already reported"
+        );
+        assert!(!fixture.state_path.exists());
+    }
+
+    #[test]
+    fn direct_bundle_without_instance_id_cannot_share_lane_across_instance_anchors() {
+        let dir = tempdir().expect("tempdir");
+        let fixture =
+            write_signed_relay_bundle(&dir, "UNUSED_SHARED_INSTANCE_LANE_AUDIT_HASH_SECRET");
+        rewrite_signed_bundle_instance_id(&fixture, None);
+
+        for instance_id in ["relay-instance-one", "relay-instance-two"] {
+            rewrite_anchor_instance_id(&fixture, instance_id);
+            let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+                .expect("fleet-wide bundle verifies against either instance anchor");
+            assert_eq!(
+                antirollback_key_from_verified_bundle(&verified).instance_id,
+                ""
+            );
+            let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+                &fixture.bundle_dir,
+                &fixture.anchor_path,
+                &fixture.state_path,
+                registry_relay::config::LoadOptions {
+                    initialize_state: true,
+                },
+            )
+            .expect_err("direct startup rejects the fleet-wide anti-rollback lane");
+            assert_eq!(error.to_string(), "config validation error");
+            assert!(!fixture.state_path.exists());
+        }
+    }
+
     #[test]
     fn direct_verified_bundle_rejects_signature_and_binding_failures_value_free() {
         let signature_dir = tempdir().expect("signature tempdir");
@@ -3625,7 +3721,7 @@ config_trust:
             &std::fs::read(&binding_fixture.anchor_path).expect("trust anchor reads"),
         )
         .expect("trust anchor parses");
-        anchor.environment = "sentinel-private-environment".to_string();
+        anchor.instance_id = "sentinel-private-instance".to_string();
         std::fs::write(
             &binding_fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
