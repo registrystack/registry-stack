@@ -468,7 +468,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "dev_smoke": smoke,
             "dev_logs": product_logs,
             "inspect": runtime,
-            "inspect_secret_stagers": (self.module.expected_secret_staging_summary()),
+            "inspect_secret_stagers": {"outcome": "passed"},
         }
         commands = []
         for name in self.module.STABLE_COMMAND_ORDER:
