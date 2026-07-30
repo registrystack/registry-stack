@@ -528,16 +528,21 @@ async fn run_server(
         persist_bundle_acceptance(acceptance)?;
     }
     if let Some(acceptance) = product_acceptance {
-        write_acceptance_intent_audit(
-            &runtime.audit_sink,
-            acceptance.plan.audit_intent(),
-            &acceptance.signer_kids,
-            acceptance.previous_config_hash.as_deref(),
-        )
-        .await?;
+        let audit_sink = Arc::clone(&runtime.audit_sink);
+        let signer_kids = acceptance.signer_kids;
+        let previous_config_hash = acceptance.previous_config_hash;
         acceptance
             .store
-            .commit_acceptance(acceptance.plan)
+            .commit_acceptance(acceptance.plan, move |intent| async move {
+                write_acceptance_intent_audit(
+                    &audit_sink,
+                    &intent,
+                    &signer_kids,
+                    previous_config_hash.as_deref(),
+                )
+                .await
+            })
+            .await
             .map_err(|_| product_acceptance_failure())?;
     }
 
@@ -1372,18 +1377,26 @@ async fn run_product_action(
                 .plan_initialize(&candidate)
                 .map_err(|_| product_acceptance_failure())?;
             let audit_sink = build_product_action_audit_sink(&input.runtime)?;
-            write_acceptance_intent_audit(
-                &audit_sink,
-                plan.audit_intent(),
-                &input.verified.signer_kids,
-                input.verified.manifest.previous_config_hash.as_deref(),
-            )
-            .await?;
-            if command.lane == config::loader::RelayProductLane::Consultation {
-                initialize_state_from_signed_policy(&input.runtime).await?;
-            }
+            let signer_kids = input.verified.signer_kids.clone();
+            let previous_config_hash = input.verified.manifest.previous_config_hash.clone();
+            let initialize_consultation = (command.lane
+                == config::loader::RelayProductLane::Consultation)
+                .then_some(&input.runtime);
             store
-                .commit_acceptance(plan)
+                .commit_acceptance(plan, move |intent| async move {
+                    write_acceptance_intent_audit(
+                        &audit_sink,
+                        &intent,
+                        &signer_kids,
+                        previous_config_hash.as_deref(),
+                    )
+                    .await?;
+                    if let Some(runtime) = initialize_consultation {
+                        initialize_state_from_signed_policy(runtime).await?;
+                    }
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })
+                .await
                 .map_err(|_| product_acceptance_failure())?;
             print_json_report(json!({
                 "schema": "registry.relay.product-action-result.v1",
@@ -3302,6 +3315,7 @@ mod tests {
                 .expect("manifest parses");
         manifest.sequence = sequence;
         manifest.bundle_id = format!("relay-bind-bundle-{sequence}");
+        manifest.previous_config_hash = (sequence > 1).then(|| manifest.config_hash.clone());
         let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
         let kid = private.public().jkt().expect("thumbprint");
         write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
@@ -3677,7 +3691,8 @@ config_trust:
             .plan_initialize(&candidate)
             .expect("initial state plan");
         store
-            .commit_acceptance(plan)
+            .commit_acceptance(plan, |_| async { Ok::<(), std::convert::Infallible>(()) })
+            .await
             .expect("test state initializes");
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -4016,27 +4031,46 @@ config_trust:
         assert!(!fixture.state_path.exists());
     }
 
-    #[test]
-    fn direct_verified_bundle_rejects_stale_state_without_break_glass_fallback() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn direct_verified_bundle_rejects_stale_state_without_break_glass_fallback() {
         let _guard = env_lock();
         let env_name = "REGISTRY_RELAY_STALE_BUNDLE_AUDIT_HASH_SECRET";
         std::env::set_var(env_name, "registry-relay-stale-bundle-secret-32-bytes");
         let dir = tempdir().expect("tempdir");
         let fixture = write_signed_relay_bundle(&dir, env_name);
-        rewrite_signed_bundle_sequence(&fixture, 2);
-        let loaded = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
-            &fixture.bundle_dir,
-            &fixture.anchor_path,
-            &fixture.state_path,
-            registry_relay::config::LoadOptions {
-                initialize_state: true,
-            },
+        let initial_verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("initial bundle verifies");
+        let initial = registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(
+            &initial_verified,
         )
-        .expect("initial bundle loads");
-        let acceptance = loaded
-            .pending_bundle_acceptance
-            .expect("initial load produces pending acceptance");
-        super::persist_bundle_acceptance(&acceptance).expect("test state initializes");
+        .expect("initial acceptance candidate");
+        let store = FileAntiRollbackStore::new(&fixture.state_path);
+        let initial_plan = store.plan_initialize(&initial).expect("initial plan");
+        store
+            .commit_acceptance(initial_plan, |_| async {
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .await
+            .expect("initial state commits");
+
+        rewrite_signed_bundle_sequence(&fixture, 2);
+        let updated_verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("updated bundle verifies");
+        let updated = registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(
+            &updated_verified,
+        )
+        .expect("update acceptance candidate");
+        let update_plan = store
+            .plan_acceptance(&updated, None, None)
+            .expect("update plan");
+        store
+            .commit_acceptance(update_plan, |_| async {
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .await
+            .expect("updated state commits");
+
         rewrite_signed_bundle_sequence(&fixture, 1);
 
         let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
@@ -4048,11 +4082,11 @@ config_trust:
         .expect_err("lower sequence is rejected");
 
         assert_eq!(error.to_string(), "config validation error");
-        let record = FileAntiRollbackStore::new(&fixture.state_path)
-            .load(&acceptance.key)
+        let record = store
+            .load(&updated.key)
             .expect("accepted state remains readable");
         assert_eq!(record.last_sequence, 2);
-        assert_eq!(record.last_config_hash, acceptance.config_hash);
+        assert_eq!(record.last_config_hash, updated.config_hash);
 
         std::env::remove_var(env_name);
     }

@@ -644,8 +644,9 @@ fn write_bundle_fixture_with_extra_files(
         &canonicalize_json(&serde_json::to_value(&manifest).expect("manifest value"))
             .expect("manifest canonicalizes"),
     );
-    FileAntiRollbackStore::new(&state_path)
-        .initialize(AntiRollbackRecord {
+    std::fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&AntiRollbackRecord {
             key: AntiRollbackKey {
                 acceptance_identity: anchor.acceptance_identity.clone(),
             },
@@ -675,7 +676,9 @@ fn write_bundle_fixture_with_extra_files(
             break_glass: Default::default(),
             local_approvals: Default::default(),
         })
-        .expect("state initializes");
+        .expect("state serializes"),
+    )
+    .expect("state writes");
 
     BundleFixture {
         bundle_dir,

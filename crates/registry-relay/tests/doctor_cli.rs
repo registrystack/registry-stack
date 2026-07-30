@@ -13,8 +13,7 @@ use registry_platform_config::{
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
-    AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore,
-    AUDIT_ACK_CURSOR_FIXTURE_V1,
+    AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackRecord, AUDIT_ACK_CURSOR_FIXTURE_V1,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -160,8 +159,9 @@ fn write_signed_profile_config(
         &canonicalize_json(&serde_json::to_value(&manifest).expect("manifest value"))
             .expect("manifest canonicalizes"),
     );
-    FileAntiRollbackStore::new(&state_path)
-        .initialize(AntiRollbackRecord {
+    std::fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&AntiRollbackRecord {
             key: AntiRollbackKey {
                 acceptance_identity: manifest.acceptance_identity.clone(),
             },
@@ -174,7 +174,9 @@ fn write_signed_profile_config(
             break_glass: Default::default(),
             local_approvals: Default::default(),
         })
-        .expect("state initializes");
+        .expect("state serializes"),
+    )
+    .expect("state writes");
 
     let path = tmp.path().join(format!("relay-{fixture_name}.yaml"));
     std::fs::write(
