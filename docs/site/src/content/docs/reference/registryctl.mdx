@@ -1,516 +1,315 @@
 ---
-title: registryctl CLI reference
-description: Commands, subcommands, and flags for registryctl, the tool that runs Registry Stack services locally.
+title: Registryctl 1.0 command reference
+description: Contract reference for the ten Registryctl 1.0 root commands, their ownership boundaries, and stable exit meanings.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-30"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
-import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourneys.astro';
+Registryctl 1.0 has seven ordinary workflow commands and three advanced namespaces.
+The released command parser and `--help` output are the source of truth.
 
-`registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
+## Root commands
 
-This page describes `registryctl 0.15.2`. Use the binary, installer, image
-lock, and verification material from that same release. Run
-`registryctl <command> --help` for built-in usage text.
-Most human-facing commands also perform a once-per-day update check; see
-[Update check](#update-check).
-
-## Registry Stack project authoring
-
-Project authoring commands work on a Registry Stack project containing `registry-stack.yaml`,
-integration definitions and fixtures, and explicit environment bindings.
-One project defines one registry trust domain. Its deployment topology can be
-Relay only, Notary without configured claims, or Relay and Notary together;
-independent registries use separate projects. Every configured Notary claim
-requires the combined topology and a compiler-pinned Relay consultation.
-Credential issuance additionally requires exact Relay-backed evaluation
-provenance.
-The [connect your data guide](../../configure/) covers the supported adopter path from the
-maintained spreadsheet sample to a reviewed local source.
-
-| Subcommand or flag | Purpose |
+| Command | Contract |
 | --- | --- |
-| `init --from <starter>` | Copy `spreadsheet`, `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
-| `init --project-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
-| `init --format json` | Emit the versioned machine-readable initialization report instead of the default human-readable result. |
-| `add notary` | Extend the canonical spreadsheet project in the current directory with the supported local Notary add-on and private consultation Relay. Repeating the command against the unchanged add-on reports `unchanged` without rewriting files. |
-| `add notary --format json` | Emit the versioned machine-readable add-on report instead of the default human-readable result. |
-| `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
-| `test --integration <id> --fixture <name>` | Select one integration fixture. `--fixture` requires `--integration`. |
-| `test --trace` | Include the safe synthetic interaction trace in the human or JSON report. |
-| `test --format json` | Emit the versioned machine-readable test report instead of the default human-readable result. |
-| `test --watch` | Rerun the selected offline scope when an authored project file changes and print a concise pass/fail summary. Cannot be combined with `--trace` or `--live`. |
-| `test --environment <name>` | Include one explicit environment binding in offline validation. |
-| `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
-| `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
-| `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
-| `check --explain --show-authored-values` | Show directly authored non-secret scalar metadata for explicit trusted-local human review. Human output only; never a report, evidence, or export mode. |
-| `check --format json` | Emit the machine-readable success report or typed invalid-project diagnostics instead of the default human-readable report. |
-| `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
-| `preflight --project-dir <dir> --environment <name>` | Verify required secret-reference availability, runtime-file posture, environment binding, product compatibility, and non-widening offline. It performs no DNS, HTTP, token, or source contact. |
-| `preflight --format json` | Emit the strict value-free `registryctl.project_preflight.v1` readiness report. A not-ready result exits nonzero. |
-| `capabilities --project-dir <dir> --environment <name>` | Inspect which closed capabilities are compiled, declared, enabled, used, available, missing, or inactive without claiming runtime activation. |
-| `capabilities --format json` | Emit the strict value-free `registry.project.capability_inventory.v1` report. |
-| `compare --project-dir <dir> --environment <name> --from-starter` | Compare normalized effective project state with the exact starter embedded in this registryctl release. Recorded starter provenance must match exactly. |
-| `compare --from-environment <name>` | Compare two explicit environment bindings of the same local project. |
-| `compare --from-project-dir <dir> --from-environment <name>` | Compare with another explicitly environment-bound local project. Local project inputs are not treated as reviewed or signed authority. |
-| `compare --format json` | Emit the strict value-free `registry.project.semantic_comparison.v1` report. The comparison does not read runtime state or evaluate external approval. |
-| `promote --project-dir <dir> --environment <name> --against <bundle> --anchor <anchor>` | Compare a single-product project with one verified signed baseline. The command analyzes promotion only; it does not sign, activate, deploy, or mutate either environment. |
-| `promote --relay-against <bundle> --relay-anchor <anchor> --notary-against <bundle> --notary-anchor <anchor>` | Compare a combined project with separate verified Relay and Notary product baselines. All four flags are required as pairs; no project-root or atomic activation is implied. |
-| `promote --format json` | Emit the strict value-free `registry.project.promotion.v1` report. A blocked disposition exits nonzero. |
-| `migrate --project-dir <dir> --target-version 1` | Check the reviewed same-v1 compatibility catalog without changing the source project. |
-| `migrate --output <absent-dir> --write-candidate` | Emit an atomic, separate review candidate. Both flags are required, and the destination must not exist. |
-| `migrate --format json` | Emit the strict `registry.project.migration.v1` report. |
-| `authoring xw --format reference` | Print the generated `xw.v1` function reference for Script authors. |
-| `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
-| `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
-| `authoring reference` | Print the deterministic configuration reference for the five authored schemas and generated Relay and Notary runtime schemas after reviewed-intent coverage is complete. |
-| `authoring reference --coverage` | Print the seven-domain field-reference coverage audit and exit nonzero when any reachable path lacks reviewed human intent. |
-| `authoring editor --project-dir <dir>` | Create or verify version-matched VS Code and Zed schema configuration. Defaults to the current directory. |
-| `authoring editor --format json` | Emit the versioned machine-readable editor setup report. |
-| `authoring language-server` | Run Registry Stack navigation and reference diagnostics over the Language Server Protocol on standard input and output. |
-| `project diagnostics --catalog <catalog>` | Print the pure static `authoring`, `fixture`, or `operator` diagnostic reference without reading a project, environment, secret, or runtime service. |
-| `project diagnostics --catalog <catalog> --format json` | Emit only the selected versioned machine-readable catalog. Valid catalogs exit zero; invalid CLI arguments use the standard usage exit, and a failed catalog invariant exits nonzero. |
-| `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
-| `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
-| `build --format json` | Emit the versioned machine-readable build report instead of the default human-readable result. |
+| `init` | Copy a tested local template into an absent project directory |
+| `test` | Execute authored fixtures offline through production semantics |
+| `check` | Validate and explain authored intent without writing build state |
+| `build` | Emit deterministic unsigned product-lane signing inputs |
+| `dev` | Build and run an isolated disposable development environment |
+| `deploy` | Generate or verify a governed deployment package |
+| `doctor` | Diagnose host, released-artifact, and product prerequisites |
+| `review` | Compare authored intent with an approved baseline |
+| `trust` | Inspect and create independently owned trust artifacts |
+| `tooling` | Print schemas and references or install editor support |
 
-Interactive report commands print concise human-readable results by default. Add `--format json`
-when another program needs a report containing only versioned JSON on standard output.
-This policy covers `init`, `add notary`, non-watch `test`, `check`, `preflight`, `capabilities`,
-`compare`, `promote`, `migrate`, `authoring editor`, `project diagnostics`, `build`, `doctor`, `bundle`, and
-`anchor`. Watch mode prints one concise
-pass/fail summary per run and rejects JSON
-formatting. Artifact and protocol streams retain their native formats, including `authoring xw`,
-`authoring schema`, `authoring reference`, `authoring language-server`, and `logs`.
+For removed pre-1.0 commands and their 1.0 replacements, use the
+[pre-1.0 cutover guide](../../start/pre-1.0-cutover/).
 
-`authoring reference` reads only the five committed authoring schemas, the Relay and Notary schemas
-generated from their Rust configuration types, typed field knowledge, and reviewed product-owned
-human-intent metadata.
-It does not accept a project directory or read country configuration, runtime configuration,
-environment values, or secrets.
-Registry Docs runs the coverage command before the reference command and publishes neither output
-when coverage is incomplete.
+## Project and environment selection
 
-| JSON command result | Schema version |
-| --- | --- |
-| `init` | `registryctl.init.v1` |
-| `add notary` | `registryctl.add_notary.v1` |
-| Successful `test`, `check`, or `build` | `registryctl.project_command.v1` |
-| Invalid-project `check` | `registryctl.project_diagnostics.v1` |
-| `preflight` | `registryctl.project_preflight.v1` |
-| `capabilities` | `registry.project.capability_inventory.v1` |
-| `compare` | `registry.project.semantic_comparison.v1` |
-| `promote` | `registry.project.promotion.v1` |
-| `migrate` | `registry.project.migration.v1` |
-| `authoring editor` | `registryctl.project_editor.v1` |
-| `project diagnostics --catalog authoring` | `registryctl.authoring_error_reference.v1` |
-| `project diagnostics --catalog fixture` | `registryctl.fixture_error_reference.v1` |
-| `project diagnostics --catalog operator` | `registryctl.operator_error_reference.v1` |
-| `doctor` | `registryctl.validation.report.v1` |
-| `smoke` | `registryctl.smoke.v1` |
-| `bundle` or `anchor` | The operation-specific `schema_version` in the report |
+Registryctl walks from the current directory to the nearest parent containing
+`registry-stack.yaml`.
+Global `-C <project-directory>` or `--project-dir <project-directory>` selects another project
+before discovery.
 
-An initialized starter records its starter ID, Registry Stack release, and
-authored-content digest in `registry-stack.yaml`. `init` verifies that digest.
-`compare --from-starter` fails closed unless the recorded ID, release, and
-content digest identify the exact starter embedded in the current binary. It
-then compares normalized effective fields and generated review projections,
-so formatting changes and explicit defaults with the same meaning remain
-equivalent while intentional configuration changes produce a value-free review
-plan. The result is offline evidence, not runtime observation, signed approval,
-or country governance acceptance.
+Environment resolution uses this order:
 
-`check --explain` reports the current redacted acquisition, authorization,
-output, claim, and disclosure plan. It does not compare the project with its
-starter.
-For an explicit trusted-local terminal review, add `--show-authored-values`.
-This human-only view can show directly authored or environment-bound scalar metadata classified
-as public, internal, structural, or sensitive. It prints each source and sensitivity so a reviewer
-can inspect their local project without weakening the portable report boundary. Treat the output
-as project-sensitive and do not copy it into logs, tickets, or shared artifacts. It is not a
-report, evidence, or export mode.
-Secret values, secret references and runtime secret-file locators, fixture data, raw parser text,
-defaulted values, and derived values remain hidden.
-The flag requires `--explain`; combining it with `--format json` is rejected. Default human output,
-JSON output, generated artifacts, and comparison and promotion reports remain redacted.
-Without `--against`, `check` and `build` label the baseline
-`initial_without_baseline`.
-Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,
-`operator_security`, and `disclosure` dimensions. The authorized bundle signer reviews that report;
-Registry Stack does not create a separate reviewer workflow.
-The `registryctl.project_command.v1` build report identifies the complete generated build root in
-its `output` field. Automation must use that field instead of constructing a path from registryctl's
-private generated directory layout.
-Treat the Relay and Notary configuration below that root as build output, not another authoring
-surface. `registryctl` diagnostics apply to the project sources that produced it. Hand-editing
-compiled configuration is unsupported and has no project-level diagnostic path; change the project
-and regenerate the output.
+1. `--environment <id>`
+2. `REGISTRYCTL_ENVIRONMENT`
+3. The project default
+4. The sole declared environment
+5. A failure that names the declared environment ids
 
-### Same-v1 migration checks
+Signing, assembly, deployment generation, and initialization authority inputs are explicit.
+Registryctl does not resolve those authority-granting inputs from environment variables.
 
-`migrate` implements one reviewed compatibility adapter, not a new authoring contract version.
-The adapter recognizes the three project-authoring paths retired when attribute release became a
-default Registry Relay capability:
+`--format json` emits one versioned document on standard output where the command advertises the
+flag.
+Progress and diagnostics use standard error.
+Human prose is not a machine contract.
 
-- `/services/*/api/attribute_release_profiles/*/subject/input`, an unused hint whose removal
-  preserves behavior.
-- `/services/*/api/attribute_release_profiles/*/response/max_age_seconds`, whose removal changes
-  a previously cacheable response to
-  `private, no-store` and requires semantic review.
-- `/services/*/api/attribute_release_profiles/*/response`, the empty wrapper left after the
-  reviewed field removal.
+## `init`
 
-The command preserves original bytes for every unaffected authored file.
-A current starter returns `no_migration_required` and does not emit a formatting-only candidate.
-An eligible historical project returns `review_required` because the cache policy changed.
-That disposition exits zero because the check or candidate emission succeeded, but it is not
-approval or migration completion.
-Automation must inspect `disposition`, every `reviews[].status`, `blocking_reasons`, and
-`rerun_gates` before applying a separate candidate.
-
-Source version failures that can be safely inspected return a value-free JSON report with a closed
-diagnostic code, phase, and remediation.
-An unsupported target request records `target_version: null` and `direction: unsupported_target`
-for every contract because no supported target contract exists.
-Its gates are `not_applicable`, and a request with an otherwise supported source reports only the
-`target_version_unsupported` blocker, without implying contract removal, downgrade, missing
-catalog work, or an unrun gate.
-Failed schema, fixture, check, build, and generated-reference gates retain the same closed evidence
-without embedding the underlying error, authored values, or paths.
-The JSON Schema closes every diagnostic field and value.
-The Rust data-transfer object additionally enforces diagnostic-to-version-support and
-diagnostic-to-gate-status relationships that JSON Schema cannot correlate across arrays.
-
-Command-line syntax errors, an unsafe or unreadable project root, and a symlink encountered before
-safe inspection of the root YAML occur before report construction.
-Those boundary failures exit nonzero without a migration report.
-Candidate staging rejects every symlink and has bounded file-count, per-file, and total-size limits;
-the published candidate contains only the strict loader's authored-input closure.
-
-{/* Evidence: crates/registryctl/src/project_authoring/migration.rs,
-    crates/registryctl/tests/project_migration_command.rs, and
-    crates/registryctl/tests/project_migration_contract.rs. */}
-
-For invalid authoring, `check` exits nonzero and reports a nonempty typed diagnostic list.
-The default human output and `--format json` use the same diagnostics, stable codes, normalized
-project-relative authored files, safe causes, and remediation. YAML syntax and unknown-field
-diagnostics include a 1-based location and schema command when available. Script diagnostics can
-include a static released-signature suggestion.
-
-The diagnostic list is sorted and deduplicated deterministically, then capped at 64 entries with a
-`registryctl.authoring.diagnostics.truncated` entry. Safe missing entity and integration references
-aggregate. Unsafe paths, symlinks, oversized files, and files that cannot be safely inspected stop
-later inspection. This boundary check covers all environment YAML files included in the project
-digest, including environments that are not selected. Diagnostics omit authored scalar values,
-origins, secret references, fixture inputs and observations, Script arguments, and parser internals.
-If any diagnostic exists, `check` does not compile, validate generated product configuration,
-execute fixtures, or write build output.
-
-{/* Evidence: crates/registryctl/src/project_authoring/diagnostics.rs and
-    crates/registryctl/tests/project_authoring.rs. */}
-
-### Canonical starter sequences
-
-Each bundled starter follows the same offline-first authoring sequence. The integration and fixture
-selectors in this generated matrix come from the committed starter workspace, not from a separate
-documentation copy.
-
-<ProjectStarterSequence />
-
-### Maintained and conformance workspaces
-
-The following workspaces are checked-in authoring evidence, not additional public starters.
-Their command lists contain only the workflow steps supported by each workspace.
-The OpenSPP workspace uses a synthetic wire shape.
-Its offline tests, configuration checks, and build do not establish compatibility with a live
-OpenSPP release.
-
-<ProjectWorkspaceJourneys />
-
-### VS Code and Zed editor setup
-
-`init --from` creates schema-driven editing support with every starter. For a project created by an
-earlier `registryctl`, create or verify the same files with:
-
-```sh
-registryctl authoring editor --project-dir registry-project
+```text
+registryctl init <project-directory> --template <http|spreadsheet>
 ```
 
-The command copies the five JSON Schema Draft 2020-12 documents embedded in the running
-`registryctl`. It records the binary version and schema SHA-256 values in
-`.registry-stack-editor/manifest.json`, so the project does not depend on a source checkout, a
-mutable branch, or network schema retrieval.
-For automation, `authoring editor --format json` returns the project root in `project_directory`
-and every managed file in `files`. Use those `registryctl.project_editor.v1` fields instead of
-inferring additional editor paths.
+`init` is offline and copies a template embedded in the installed release.
+The destination must be absent.
+OAuth-backed Rhai adapts the HTTP project; OpenCRVS, DHIS2, FHIR, and other systems are not init
+templates.
 
-| Authored file | Project-local schema |
-| --- | --- |
-| `registry-stack.yaml` | `.registry-stack-editor/schemas/project.schema.json` |
-| `environments/*.yaml` | `.registry-stack-editor/schemas/environment.schema.json` |
-| `integrations/*/integration.yaml` | `.registry-stack-editor/schemas/integration.schema.json` |
-| `integrations/*/fixtures/*.yaml` | `.registry-stack-editor/schemas/fixture.schema.json` |
-| `entities/*.yaml` | `.registry-stack-editor/schemas/entity.schema.json` |
+## `test`
 
-The generated `.vscode/settings.json` and `.zed/settings.json` reserve the five path suffixes in the
-table. Open the Registry Stack project directory as the editor root. In VS Code, install or accept
-the workspace recommendation for Red Hat YAML. Zed includes YAML language-server support.
-
-The generated schema setup is the stable beta editor path.
-It provides YAML validation, completion, hover, and formatting without a source checkout.
-
-VS Code and Zed semantic navigation are optional beta integrations installed from the Registry
-Stack source tree. They are not marketplace extensions and are not available as release assets.
-Project configuration and editor installation are separate. Configure projects with `init` or
-`authoring editor`, and install an editor integration once from a matching source checkout:
-
-```sh
-./editors/install.sh vscode
-./editors/install.sh zed
+```text
+registryctl test
+registryctl test --integration <id>
+registryctl test --integration <id> --fixture <name> --trace
+registryctl test --integration <id> --fixture <name> --watch
 ```
 
-The installer verifies the matching `registryctl` and embedded language server without reading or
-changing a project. Pass `--open <existing-directory>` only to open a directory after installation;
-it does not configure that directory. Use these integrations when you want cross-file definitions,
-references, workspace and document symbols, and missing, duplicate, or ambiguous reference
-diagnostics.
-Both integrations launch the same semantic server, either as `registry-language-server` or through
-`registryctl authoring language-server`, alongside the YAML language server.
-The YAML language server continues to own syntax, schemas, completion, hover, and formatting.
-Follow `editors/vscode/README.md` or `editors/zed/README.md` in the same source checkout.
+`test` is offline.
+It does not start Docker, resolve a secret, or contact a source.
+`--trace` may show values from the selected synthetic fixture.
+`--watch` supports human output only.
+There is no live-test flag.
 
-The shared YAML language server interprets configured paths as suffix matches at any depth. A file
-such as `notes.yaml` keeps its normal schema detection and formatting, but a nested copy such as
-`examples/environments/local.yaml` receives the Registry Stack environment schema. Do not reuse
-the five reserved layouts for unrelated YAML inside the opened project. The Registry Stack
-extensions restrict semantic indexing to the project root and documented authored-file layouts;
-portable schema settings continue to use suffix matching.
+## `check`
 
-Completion, hover descriptions, the document outline, and inline validation then use the matching
-Registry Stack schemas. To smoke-test the association, add an unknown top-level key to an
-integration or change its `version` from the integer `1` to a string. The editor must diagnose the
-temporary edit. Remove it before running `registryctl test`.
-
-Editor setup is idempotent when every target is unchanged. On a `registryctl` upgrade, it refreshes
-a prior generated schema bundle only after the manifest shape and every available schema hash have
-been verified. Custom editor settings, malformed manifests, and schema files that disagree with
-their manifest are preserved as conflicts. The command stages all changes and rolls them back if
-publication fails. Preserve custom settings and install the mappings manually, or restore the
-expected generated files before rerunning the command. Automatic JSON-with-comments merging is not
-part of the 1.0 setup.
-
-For a project that deploys Notary, `environments/*.yaml` can set the existing
-dedicated-worker memory ceiling explicitly:
-
-```yaml
-notary_cel:
-  worker_memory_bytes: 1073741824
+```text
+registryctl check
+registryctl check --explain
+registryctl check --explain --show-authored-values
+registryctl check --format json
 ```
 
-The field accepts 32 MiB through 1 GiB and participates in the
-`operator_security` review dimension. Omit it to retain Notary's 128 MiB
-default. The value is a per-worker data/address-space ceiling, not reserved
-memory; the 1 GiB maximum exists for emulated local runtimes.
+`--explain` includes the redacted acquisition, authorization, output, claim, disclosure, and
+review plan.
+`--show-authored-values` adds directly authored non-secret values to trusted local human output
+and requires `--explain`.
+It is unavailable with JSON output.
 
-Offline fixture execution uses an implementation-owned, fixture-only binding. It runs the
-same Relay source-plan compiler, closed response decoder, typed normalization, static
-authentication and service-policy gates, and claim evaluator used by the products. Fixture YAML
-supplies only synthetic logical inputs and bounded source observations. It cannot select destinations,
-credentials, worker commands, authority context, or decoder bypasses. A product-named starter does
-not select a runtime executor or enable a protocol helper based on source product or version.
+## `build`
 
-`snapshot` is supported through an authored integration, entity definition, and private
-environment files.
-A records service and one or more snapshot integrations can reference the same logical entity.
-`build` then emits one ingest plan and materialization identity, while the governed records routes
-and exact consultations retain their separate authorization contracts.
-See the exact snapshot guide for the logical output contract and private physical mapping.
+```text
+registryctl build
+registryctl build --against <approved-set>
+registryctl build --format json
+```
 
-{/* Evidence: crates/registryctl/tests/project_authoring.rs,
-    records_and_snapshot_share_one_generated_materialization. */}
+An initial combined project can emit the closed lanes `relay-public`, `relay-consultation`, and
+`notary`.
+`--against` verifies the current approved set for an update and limits output to affected lanes.
+`build` does not sign, assemble, deploy, or activate.
 
-The governed live test reads `REGISTRY_STACK_LIVE_NOTARY_ORIGIN`,
-`REGISTRY_STACK_LIVE_NOTARY_API_KEY`, `REGISTRY_STACK_LIVE_REQUEST_FILE`, and
-`REGISTRY_STACK_LIVE_EXPECTED_FILE` from the invoking process environment. The origin must be
-HTTPS, except that HTTP loopback is accepted for local testing. The gate first requires every
-Relay-backed consultation contract to report ready, then sends the request only to
-`POST /v1/evaluations`. Returned claim fields must match the expected file and include
-source-backed provenance. Do not put registry or source credentials in the request or Registry
-Stack project.
+## `dev`
 
-Registry-backed batch is a Notary API contract, not a separate registryctl command.
-`POST /v1/batch-evaluations` requires an `Idempotency-Key` when any requested claim is
-registry-backed.
-Notary validates the complete batch before the first Relay call, executes bounded independent
-single-subject consultations, preserves item order, and replays an identical caller-scoped outer
-request without repeating its completed children.
-The `test --live` command currently exercises one `POST /v1/evaluations` request, so a successful
-live authoring check is not batch evidence.
+```text
+registryctl dev
+registryctl dev --detach
+registryctl dev status
+registryctl dev logs
+registryctl dev smoke
+registryctl dev down
+```
 
-{/* Evidence: crates/registry-notary-server/src/runtime/tests/evaluation.rs and
-    crates/registry-notary-server/src/openapi.rs. */}
+Bare `dev` starts attached.
+`--detach` applies only when starting.
+Registryctl validates the project, rebuilds stale inputs, verifies the installed release lock,
+and uses digest-locked images.
 
-## Config bundle commands
+Each environment declares one default development scenario.
+`dev` does not prompt or accept an integration or fixture selector.
+It refuses production and evidence-grade environments.
 
-The `build` output for a Registry Stack project contains an unsigned Config Bundle input directory
-for each product in the selected topology. Relay-only and Notary-only projects produce one product
-input; a combined project produces separate Relay and Notary inputs. This output is not a signed
-project root or a deployable bundle. Package and sign each product directory with `bundle sign`,
-then verify the resulting product bundle against its product trust anchor with `bundle verify`.
-Activation remains a product-specific deployment step.
-A product input carries the same human review as `reviewable/review.json` plus an internal approval
-state. Product signing covers both files. The internal state binds the report, semantic comparison
-state, and generated product closures without exposing those lower-level digests in the human
-report. In a combined build, Relay and Notary receive identical approval state, but separate product
-signatures do not make their activation atomic.
-A signed project-level deployment bundle with a root manifest that binds compatible product
-submanifests is future work and is not emitted by the current CLI.
+Development anchors, credentials, bundles, and state are isolated and disposable.
+`dev smoke` runs one denial and one authorized scenario and emits
+`registryctl.dev_smoke.v1` with scenario ids, status classes, counter deltas, minimized claim
+identifiers, and pass state.
+It contains no credential or source-returned value.
 
-| Subcommand or flag | Purpose |
+## `deploy`
+
+Bare `registryctl deploy` prints help and performs no action.
+
+```text
+registryctl deploy generate \
+  --approved-set <file> \
+  --output-dir <directory>
+registryctl deploy verify \
+  --package <directory>
+registryctl deploy verify \
+  --package <directory> \
+  --approved-set <file> \
+  --parent-compose <file>
+```
+
+`--parent-compose` is repeatable in effective-model order.
+Generation consumes one verified three-lane approved set and the signed release lock installed
+with Registryctl.
+It does not sign bundles, create production secrets, initialize product state, or activate a
+deployment.
+
+Verification reports ownership (`managed`, `adapted`, or `invalid`), freshness (`current`,
+`stale`, or `not_applicable`), scope (`package` or `package_and_parent`), and whether in-place
+regeneration is safe.
+Generation and verification are offline.
+
+## `doctor`
+
+```text
+registryctl doctor
+registryctl doctor --profile <local|hosted_lab|production|evidence_grade>
+registryctl doctor --format json
+```
+
+The profile selects diagnostics, not an operating contract.
+The report distinguishes authored-environment, release-lock, Docker client, Docker daemon,
+Compose 2.35.0, and digest-locked image readiness.
+`doctor` does not fetch replacements.
+
+## `review`
+
+```text
+registryctl review compare
+registryctl review compare --against <approved-set>
+registryctl review compare --against <approved-set> --fail-on-change
+registryctl review compare --format json
+```
+
+Omit `--against` for initial review.
+A comparison that reports changes exits with status `0` unless `--fail-on-change` selects a
+negative predicate.
+The report names exact affected lanes and performs no signing, deployment, source access, or
+project mutation.
+
+## `trust`
+
+The trust namespace preserves product-lane authority:
+
+```text
+registryctl trust anchor create ...
+registryctl trust anchor rotate ...
+registryctl trust bundle inspect ...
+registryctl trust bundle verify ...
+registryctl trust bundle sign ...
+registryctl trust approved-set assemble ...
+```
+
+### Create or rotate an anchor
+
+```text
+registryctl trust anchor create \
+  --lane <relay-public|relay-consultation|notary> \
+  --input <lane-signing-input> \
+  --public-key <public-jwk> \
+  --threshold <number> \
+  --output-file <file>
+registryctl trust anchor rotate \
+  --current-anchor <file> \
+  --next-public-key <public-jwk> \
+  --next-threshold <number> \
+  --key <key-locator> \
+  --output-dir <directory>
+```
+
+Public-key and key flags are repeatable where a threshold requires several signers.
+Rotation writes a fresh anchor and transition; it never edits the current anchor.
+
+### Inspect, verify, or sign a lane
+
+```text
+registryctl trust bundle inspect --bundle-dir <directory>
+registryctl trust bundle verify \
+  --bundle-dir <directory> \
+  --anchor <file>
+registryctl trust bundle sign \
+  --lane <relay-public|relay-consultation|notary> \
+  --input <lane-signing-input> \
+  --anchor <file> \
+  --key <file:or-op-locator> \
+  --output-dir <directory>
+```
+
+An update signing command also supplies `--against <approved-set>`.
+Registryctl accepts explicit `file:` and `op://` key locators.
+An unprefixed path or unknown scheme fails before output creation.
+
+### Assemble an approved set
+
+Initial assembly supplies all three verified lane directories:
+
+```text
+registryctl trust approved-set assemble \
+  --relay-public <directory> \
+  --relay-consultation <directory> \
+  --notary <directory> \
+  --output-file <file>
+```
+
+Update assembly supplies `--from <approved-set>` plus every affected replacement.
+The approved set is an operator handoff, not a fourth signature or activation authority.
+
+## `tooling`
+
+```text
+registryctl tooling schema --kind <project|environment|integration|fixture|entity>
+registryctl tooling reference configuration
+registryctl tooling reference xw
+registryctl tooling editor
+registryctl tooling language-server
+registryctl tooling diagnostics --catalog <authoring|fixture|operator>
+```
+
+Tooling output derives from the running Registryctl release.
+The namespace does not need Docker, source access, a secret, or a deployed product.
+
+## Stable option meanings
+
+| Option | Meaning |
 | --- | --- |
-| `bundle sign --input <dir>` | Package the generated product input directory. |
-| `bundle sign --key <jwk-or-op-reference>` | Sign with a private JWK file or `op://` reference. |
-| `bundle sign --product <id> --environment <name> --stream-id <id>` | Bind the bundle to one product, environment, and configuration stream. |
-| `bundle sign --instance-id <id>` | Optionally bind the bundle to one product instance. |
-| `bundle sign --sequence <n> --bundle-id <id> --out <dir>` | Set the monotonic sequence and bundle identity, then create the output directory. |
-| `bundle verify --bundle-dir <dir> --anchor-path <file>` | Verify the signed closure, signature, trust anchor, and configured identity bindings. |
-| `bundle --format json <subcommand>` | Emit the operation-specific machine-readable report. The global flag is also accepted after the subcommand. |
-| `anchor --format json <subcommand>` | Emit the versioned machine-readable trust-anchor report. The global flag is also accepted after the subcommand. |
-| `check --against <bundle> --anchor <file>` | Verify a signed baseline before calculating semantic changes. Both flags are required. |
-| `build --against <bundle> --anchor <file>` | Verify a signed baseline before producing updated unsigned inputs. Both flags are required. |
+| `--template` | Select an embedded initialization template |
+| `--against` | Select the current approved set for comparison or update |
+| `--approved-set` | Select an approved set for deployment generation or verification |
+| `--output-dir` | Select one directory |
+| `--output-file` | Select one file |
+| `--environment` | Select a declared project environment |
+| `--format json` | Select one strict machine document where supported |
 
-`bundle inspect --bundle-dir <dir>` reports manifest and signature metadata without replacing
-verification. Trust-anchor creation and key changes use the existing `anchor` subcommands shown by
-`registryctl anchor --help`. Bundle and trust-anchor operations print human-readable results by
-default and accept `--format json` for automation.
+Unknown fields, unsupported capabilities, and incomplete authority bindings fail closed.
+An error identifies an authored field address when one exists.
 
-{/* Evidence: crates/registryctl/src/main.rs, BundleCommand and AnchorCommand. */}
+## Exit status
 
-## Project setup
+```text
+0  The requested operation completed and every selected predicate passed.
+1  The operation completed with a negative domain result.
+2  Usage or contract version is invalid or unsupported.
+3  An operational dependency failed.
+```
 
-`registryctl init --from spreadsheet --project-dir <dir>` creates the
-canonical protected spreadsheet project. From that project root,
-`registryctl add notary` adds the supported local Notary and private
-consultation Relay over the maintained workbook. The resulting combined
-project is the live local continuation of the spreadsheet first run.
+A failed fixture, failed smoke scenario, unmet readiness requirement, or selected comparison
+predicate uses status `1`.
+An unknown command or unsupported portable document version uses status `2`.
+File input/output, Compose, or an explicitly selected secret-provider failure uses status `3`.
 
-`registryctl init --from snapshot` serves a different purpose. It creates a
-standalone Relay-and-Notary authoring project whose synthetic snapshot
-fixtures run offline. The snapshot starter does not add Notary to a
-spreadsheet project or establish that either service is running.
+## Network behavior
 
-Both project forms use `registry-stack.yaml`, explicit entity and environment
-files, and generated product inputs under `.registry-stack/`.
+`init`, `test`, `check`, `build`, `deploy generate`, `deploy verify`, `review`, `tooling`, and
+`doctor` do not contact an authored source.
+Trust commands using file-backed keys are offline.
+`trust bundle sign` may contact an explicitly selected `op://` secret provider.
 
-The first successful `add notary` report has status `updated`. Repeating the
-command when every managed add-on file is unchanged has status `unchanged`
-and does not rewrite the files. A conflicting or partially customized add-on
-is rejected instead of being overwritten.
+`dev` may pull an absent image only at the exact digest from the installed release lock.
+After authorization, it may contact only the source mode selected by the authored environment.
 
-The human-readable result identifies the authored project and next validation
-command. The JSON results contain no progress text, so another program can
-parse standard output directly. For `init`, automation must read the project
-root from `output` and supported authored entry points from `artifacts` in the
-`registryctl.init.v1` report. For `add notary`, automation must inspect
-`status`, `project`, and `files` in the `registryctl.add_notary.v1` report.
-Generated layout remains a private implementation detail.
+Registryctl 1.0 performs no update checks.
+`registryctl --version` is local and deterministic.
 
-Local runtime commands require the strict
-`registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
-binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has separately
-verified the same file at an explicit path. Registryctl does not search the
-working directory or resolve mutable image tags.
-
-{/* Evidence: crates/registryctl/src/main.rs and crates/registryctl/tests/init_output.rs. */}
-
-Use the project-authoring `init --from`, `test`, `check`, and `build` commands for Relay-only,
-Notary-only, and combined deployments. Registry Notary does not have a direct-source project
-generator. Every configured Notary claim consumes exactly one compiler-pinned
-Relay consultation. A Notary-only project may contain no claims.
-
-### Retired direct projects
-
-Registryctl 0.15.2 keeps the pre-1.0 `init relay` scaffold retired. The
-command returns a precise reinitialization path and does not modify the target
-directory.
-
-The supported `add notary` command applies only to the canonical spreadsheet
-project. It does not reopen the legacy direct-project model, migrate a legacy
-direct project, or preserve two public project models. A legacy direct project
-is rejected without conversion.
-
-Reinitialize with `init --from spreadsheet` for a protected records API or
-`init --from snapshot` for the offline claim tutorial, then re-express the
-reviewed intent in the canonical project. The
-[archived 0.13.0 documentation](/v/0.13.0/) remains the behavioral reference
-for an existing 0.13.0 scaffold during that review.
-
-## Lifecycle
-
-Lifecycle commands run against the project in the current working directory.
-
-| Subcommand | Purpose |
-| --- | --- |
-| `start` | Start the local project with Docker Compose and wait for readiness. |
-| `stop` | Stop the local project. |
-| `restart` | Stop the local project, rebuild and verify its canonical generated closure, then start and wait for readiness. |
-| `status` | Print local runtime status, including health and readiness probes. |
-
-## Inspect
-
-Inspect commands report on a running or generated project.
-
-| Subcommand or flag | Purpose |
-| --- | --- |
-| `open` | Open or print the local API docs URL. |
-| `logs` | Stream Compose logs for the local project. |
-| `doctor` | Run product doctor validation and print a human-readable diagnostic report. |
-| `doctor --profile <profile>` | Deployment profile override passed through to product doctor commands. |
-| `doctor --format json` | Emit the versioned machine-readable diagnostic report. |
-
-## Testing
-
-Smoke commands run built-in local checks and write a versioned JSON result file. The
-`registryctl.smoke.v1` report is saved at
-`.registry-stack/runtime/local/smoke-results.json`. Smoke-check ordering and
-human-readable names are not compatibility contracts.
-
-| Subcommand | Purpose |
-| --- | --- |
-| `smoke` | Run built-in local smoke checks against the Relay surface. |
-
-## Bruno
-
-`bruno` works with the optional generated Bruno API collection.
-
-| Subcommand or flag | Purpose |
-| --- | --- |
-| `bruno generate` | Generate or refresh the optional Bruno API collection. |
-| `bruno generate --force` | Overwrite existing Bruno files even if registryctl did not generate them. |
-| `bruno open` | Open the generated Bruno collection when Bruno is installed. |
-| `bruno run` | Run the generated Bruno collection when the Bruno command-line tool is installed. |
-
-## Update check
-
-`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor` and the explicit update-check commands, so doctor diagnostics are not accompanied by an update notice.
-
-| Subcommand | Purpose |
-| --- | --- |
-| `update-check` | Check whether a newer registryctl release is available and print the result. |
-
-Related environment variables are listed in the [environment variable reference](../environment-variables/): `REGISTRYCTL_NO_UPDATE_CHECK`, `REGISTRYCTL_UPDATE_CHECK`, and `REGISTRYCTL_VERSION`.
-
-## Release boundary
-
-This reference describes Registryctl 0.15.2. The
-[archived 0.13.0 reference](/v/0.13.0/reference/registryctl/) remains the
-authority for that earlier release. Do not mix commands, binaries, image
-locks, or generated projects across releases.

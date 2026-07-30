@@ -1,109 +1,42 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import {
-  chmodSync,
-  copyFileSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { after, test } from 'node:test';
-
-import { parse } from 'yaml';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { test } from 'node:test';
 
 import {
-  HTTP_STATUS_PREFIX,
-  assertHttpStatus,
+  assertFenceEquals,
+  assertFenceFileEquals,
+  assertFenceInFile,
   assertJsonSubset,
   assertOutputContainsLines,
+  assertProjectReports,
   assertTutorialLayout,
   extractFencedBlocks,
-  rebindProjectImages,
-  redactOutput,
-  replaceLiteralOnce,
-  setRelayMinGroupSize,
+  parseJsonOutput,
 } from './registryctl-tutorial.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
-const repoRoot = resolve(siteRoot, '../..');
-let registryctlBinary;
-let registryctlBinaryDirectory;
 
-after(() => {
-  if (registryctlBinaryDirectory !== undefined) {
-    rmSync(registryctlBinaryDirectory, { recursive: true, force: true });
-  }
-});
-
-function exactRegistryctlBinary() {
-  if (registryctlBinary !== undefined) return registryctlBinary;
-  if (process.env.REGISTRYCTL_BIN !== undefined) {
-    registryctlBinary = process.env.REGISTRYCTL_BIN;
-    return registryctlBinary;
-  }
-
-  const buildEvents = execFileSync(
-    'cargo',
-    [
-      'build',
-      '--locked',
-      '--quiet',
-      '-p',
-      'registryctl',
-      '--bin',
-      'registryctl',
-      '--message-format=json',
-    ],
-    { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
-  )
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const artifact = buildEvents.findLast(
-    (event) =>
-      event.reason === 'compiler-artifact' &&
-      event.target?.name === 'registryctl' &&
-      event.executable,
-  );
-  assert.ok(artifact, 'cargo did not identify the exact registryctl executable');
-  registryctlBinaryDirectory = mkdtempSync(join(tmpdir(), 'registryctl-docs-binary-'));
-  registryctlBinary = join(
-    registryctlBinaryDirectory,
-    process.platform === 'win32' ? 'registryctl.exe' : 'registryctl',
-  );
-  copyFileSync(artifact.executable, registryctlBinary);
-  chmodSync(registryctlBinary, 0o700);
-  return registryctlBinary;
-}
-
-function registryctl(args) {
-  return execFileSync(exactRegistryctlBinary(), args, {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
+function read(relativePath) {
+  return readFileSync(resolve(siteRoot, relativePath), 'utf8');
 }
 
 test('extracts shell fences with headings, occurrences, and multiline commands intact', () => {
   const markdown = `## Start
 
 \`\`\`sh
-registryctl start
+registryctl test
 \`\`\`
 
 \`\`\`text
-PASS ready
+Fixtures: 25.
 \`\`\`
 
-## Query
+## Review
 
   \`\`\`sh
-  curl -sS \\
-    http://127.0.0.1:4242/ready
+  registryctl check \\
+    --explain
   \`\`\`
 `;
   const blocks = extractFencedBlocks(markdown);
@@ -113,10 +46,10 @@ PASS ready
     [
       { heading: 'Start', language: 'sh', occurrence: 1 },
       { heading: 'Start', language: 'text', occurrence: 1 },
-      { heading: 'Query', language: 'sh', occurrence: 1 },
+      { heading: 'Review', language: 'sh', occurrence: 1 },
     ],
   );
-  assert.equal(blocks[2].content, 'curl -sS \\\n  http://127.0.0.1:4242/ready');
+  assert.equal(blocks[2].content, 'registryctl check \\\n  --explain');
 });
 
 test('layout and documented-output assertions fail on drift', () => {
@@ -130,349 +63,159 @@ test('layout and documented-output assertions fail on drift', () => {
   );
 });
 
-test('asserts instrumented HTTP status and JSON subsets without depending on array order', () => {
-  const output = `HTTP/1.1 200 OK\r
-content-type: application/json\r
-\r
-{"observations":[{"district":"south","count":2},{"district":"north","count":2}]}
-${HTTP_STATUS_PREFIX}200
-source-under-test images rebound
-`;
-  assertHttpStatus(output, 200);
+test('synchronizes fenced examples with executable output and maintained files', () => {
+  const markdown = '## Output\n\n```text\nCreated in my-registry.\n```\n\n```yaml\nvalue: exact\n```\n';
+  assertFenceEquals(
+    'Created in /tmp/reader/my-registry.\n',
+    markdown,
+    'Output',
+    'text',
+    1,
+    [['/tmp/reader/my-registry', 'my-registry']],
+  );
+  assertFenceFileEquals(markdown, 'Output', 'yaml', 1, 'value: exact\n');
+  assertFenceInFile(markdown, 'Output', 'yaml', 1, 'before\nvalue: exact\nafter\n');
+  assert.throws(
+    () => assertFenceFileEquals(markdown, 'Output', 'yaml', 1, 'value: drifted\n'),
+    /differs/,
+  );
+});
+
+test('parses one strict JSON document and asserts subsets without array-order coupling', () => {
+  const output = JSON.stringify({
+    schema_version: 'registryctl.project_command.v1',
+    observations: [
+      { district: 'south', count: 2 },
+      { district: 'north', count: 2 },
+    ],
+  });
+  assert.equal(parseJsonOutput(output).schema_version, 'registryctl.project_command.v1');
   assertJsonSubset(output, {
     observations: [
       { district: 'north', count: 2 },
       { district: 'south', count: 2 },
     ],
   });
-  assert.throws(() => assertHttpStatus(output, 403), /expected HTTP 403/);
-  assert.throws(() => assertJsonSubset(output, { observations: [] }), /must be empty/);
+  assert.throws(() => parseJsonOutput(`log line\n${output}`), /not one strict JSON document/);
 });
 
-test('rebinds generated project images without changing ports', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'registryctl-project-'));
-  try {
-    writeFileSync(
-      join(directory, 'compose.yaml'),
-      'services:\n  registry-relay:\n    image: relay:old\n    ports: ["4242:8080"]\n  registry-relay-consultation:\n    image: relay:old\n  registry-relay-consultation-bootstrap:\n    image: relay:old\n  registry-notary:\n    image: notary:old\n',
-    );
-    writeFileSync(
-      join(directory, 'registryctl.yaml'),
-      'runtime:\n  relay_image: relay:old\n  notary_image: notary:old\n',
-    );
+test('accepts matching test, check, and build reports with derived security evidence', () => {
+  const fixture = {
+    integration: 'person-record',
+    fixture: 'match::derived/authorization_before_source',
+    expected_error: 'authorization.denied',
+    source_access: false,
+    passed: true,
+  };
+  const minimization = {
+    integration: 'person-record',
+    fixture: 'match::derived/output_minimization',
+    passed: true,
+  };
+  const common = {
+    schema_version: 'registryctl.project_command.v1',
+    project: 'fictional-registry',
+    environment: 'local',
+    fixtures: [fixture, minimization],
+  };
+  const testReport = JSON.stringify({ ...common, status: 'passed' });
+  const checkReport = JSON.stringify({ ...common, status: 'valid' });
+  const buildReport = JSON.stringify({
+    schema_version: 'registryctl.reviewed_project_build_report.v1',
+    build: { ...common, status: 'built' },
+    affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+  });
 
-    rebindProjectImages(directory, 'relay:source', 'notary:source');
-
-    const compose = parse(readFileSync(join(directory, 'compose.yaml'), 'utf8'));
-    const manifest = parse(readFileSync(join(directory, 'registryctl.yaml'), 'utf8'));
-    assert.equal(compose.services['registry-relay'].image, 'relay:source');
-    assert.equal(compose.services['registry-relay-consultation'].image, 'relay:source');
-    assert.equal(compose.services['registry-relay-consultation-bootstrap'].image, 'relay:source');
-    assert.equal(compose.services['registry-notary'].image, 'notary:source');
-    assert.deepEqual(compose.services['registry-relay'].ports, ['4242:8080']);
-    assert.equal(manifest.runtime.relay_image, 'relay:source');
-    assert.equal(manifest.runtime.notary_image, 'notary:source');
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('edits Relay policy YAML by stable identifiers', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'registryctl-config-'));
-  const relayPath = join(directory, 'relay.yaml');
-  try {
-    writeFileSync(
-      relayPath,
-      'datasets:\n  - id: benefits\n    aggregates:\n      - id: by_district\n        disclosure_control:\n          min_group_size: 2\n',
-    );
-    setRelayMinGroupSize(relayPath, 'benefits', 'by_district', 3);
-
-    assert.equal(
-      parse(readFileSync(relayPath, 'utf8')).datasets[0].aggregates[0].disclosure_control
-        .min_group_size,
-      3,
-    );
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('derives one documented command substitution and rejects ambiguous replacements', () => {
-  assert.equal(replaceLiteralOnce('purpose: tutorial', 'tutorial', 'casework'), 'purpose: casework');
-  assert.throws(() => replaceLiteralOnce('tutorial tutorial', 'tutorial', 'casework'), /found 2/);
-});
-
-test('redacts generated env values and credential headers before output is printed', () => {
-  const redacted = redactOutput(
-    'token=secret-value-123\nAuthorization: Bearer visible-token\nx-api-key: visible-key\n',
-    'ROW_READER_RAW=secret-value-123\n',
+  assert.doesNotThrow(() =>
+    assertProjectReports(testReport, checkReport, buildReport, 'fictional-registry'),
   );
-  assert.equal(redacted.includes('secret-value-123'), false);
-  assert.equal(redacted.includes('visible-token'), false);
-  assert.equal(redacted.includes('visible-key'), false);
-  assert.match(redacted, /REDACTED:ROW_READER_RAW/);
-});
-
-test('canonical first API tutorial keeps doctor and smoke evidence value-free', () => {
-  const tutorial = readFileSync(
-    new URL(
-      '../src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
-      import.meta.url,
-    ),
-    'utf8',
-  );
-  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
-
-  assert.match(tutorial, /authored project can be compiled/);
-  assert.match(tutorial, /workbook passes[\s\S]*strict validation/);
-  assert.match(tutorial, /generated result matches the authored inputs/);
-  assert.match(tutorial, /listener is loopback-only/);
-  assert.match(tutorial, /It does not contain raw keys or[\s\S]*workbook rows/);
-  assert.doesNotMatch(tutorial, /relay\.startup\.config_validation_rejected|min_cell_size/);
-  assert.doesNotMatch(script, /set-relay-min-group-size|min_cell_size/);
-});
-
-test('source tutorial gate validates canonical authoring without rewriting release images', () => {
-  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
-
-  assert.match(script, /cat "\$BLOCKS\/02\.sh"/);
-  assert.match(script, /source "\$BLOCKS\/03\.sh"/);
-  assert.match(script, /registryctl preflight --project-dir \. --environment local/);
-  assert.match(script, /registryctl build --project-dir \. --environment local/);
-  assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
-  assert.doesNotMatch(script, /docker build|rebind-project|REGISTRYCTL_RELAY_STAGING_IMAGE/);
-});
-
-test('source tutorial gate does not stand in for the first-claim or runtime gates', () => {
-  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
-
-  assert.match(script, /does not execute the release installer[\s\S]*or local runtime/);
-  assert.doesNotMatch(
-    script,
-    /run_notary_tutorial|active-registration-exists|population-record-exists/,
-  );
-});
-
-test('HTTP authoring tutorial output stays synchronized with the current starter', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'registryctl-http-trace-'));
-  const projectDirectory = join(directory, 'registry-project');
-  try {
-    registryctl(['init', '--from', 'http', '--project-dir', projectDirectory]);
-    assert.match(
-      readFileSync(
-        join(
-          projectDirectory,
-          'integrations/person-record/fixtures/active.yaml',
-        ),
-        'utf8',
+  assert.throws(
+    () =>
+      assertProjectReports(
+        testReport,
+        checkReport,
+        JSON.stringify({
+          schema_version: 'registryctl.reviewed_project_build_report.v1',
+          build: { ...common, status: 'built' },
+          affected_lanes: ['relay-consultation', 'notary'],
+        }),
+        'fictional-registry',
       ),
-      /^request:$/m,
-      'the exact executable must embed the governed-request starter',
-    );
-    const actual = registryctl(
-      [
-        'test',
-        '--project-dir',
-        projectDirectory,
-        '--integration',
-        'person-record',
-        '--fixture',
-        'active-person',
-        '--trace',
-      ],
-    ).trimEnd();
-    const tutorial = readFileSync(
-      resolve(siteRoot, 'src/content/docs/tutorials/author-registry-project.mdx'),
-      'utf8',
-    );
-    const documented = extractFencedBlocks(tutorial).find(
-      (block) => block.heading === 'Trace one fixture offline' && block.language === 'text',
-    );
-    assert.ok(documented, 'tutorial trace output block is missing');
-    assert.equal(documented.content, actual);
-
-    assert.match(actual, /^PASS: 9\/9 fixtures passed$/m);
-    assert.deepEqual(
-      actual
-        .split('\n')
-        .filter((line) => line.startsWith('  PASS person-record.'))
-        .map((line) => line.trim().slice('PASS person-record.'.length)),
-      [
-        'active-person',
-        'active-person::derived/request_to_consultation_binding',
-        'active-person::derived/request_authority',
-        'active-person::derived/status_rejection',
-        'active-person::derived/malformed_decode',
-        'active-person::derived/byte_ceiling',
-        'active-person::derived/timeout',
-        'active-person::derived/authorization_before_source',
-        'active-person::derived/output_minimization',
-      ],
-    );
-
-    const built = registryctl(
-      [
-        'build',
-        '--project-dir',
-        projectDirectory,
-        '--environment',
-        'local',
-      ],
-    ).trimEnd();
-    const documentedBuild = extractFencedBlocks(tutorial).find(
-      (block) => block.heading === 'Build unsigned product inputs' && block.language === 'text',
-    );
-    assert.ok(documentedBuild, 'tutorial build output block is missing');
-    assertOutputContainsLines(built, documentedBuild.content.split('\n').slice(1).join('\n'));
-    assert.match(built, /^  Output: \.registry-stack\/build\/local$/m);
-    assert.match(tutorial, /An artifact action of `regenerate` is lifecycle metadata/);
-
-    const trustedLocal = registryctl(
-      [
-        'check',
-        '--project-dir',
-        projectDirectory,
-        '--environment',
-        'local',
-        '--explain',
-        '--show-authored-values',
-      ],
-    ).trimEnd();
-    const documentedTrustedLocal = extractFencedBlocks(tutorial).find(
-      (block) =>
-        block.heading === 'Review the generated plan' &&
-        block.language === 'text' &&
-        block.content.startsWith('WARNING: trusted-local authored values follow.'),
-    );
-    assert.ok(documentedTrustedLocal, 'trusted-local safety output block is missing');
-    assertOutputContainsLines(trustedLocal, documentedTrustedLocal.content);
-
-    const checkHelp = registryctl(['check', '--help']);
-    assert.match(
-      checkHelp,
-      /--show-authored-values[\s\S]*Show directly authored non-secret values for trusted-local terminal review/,
-    );
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+    /relay-public/,
+  );
 });
 
-test('release-form claim tutorial keeps the live no-match result bounded', () => {
-  const tutorial = readFileSync(
-    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
-    'utf8',
-  );
-  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
+test('reader gate uses 1.0 commands and leaves runtime evidence to the release workflow', () => {
+  const script = read('scripts/check-registryctl-tutorials.sh');
 
-  assert.match(tutorial, /project-record-exists/);
-  assert.match(tutorial, /"claim_id": "project-record-exists"[\s\S]*?"value": false/);
-  assert.match(tutorial, /bounded[\s\S]*no\s+match/);
-  assert.match(tutorial, /"value": "pw_999"/);
-  for (const broaderNegative of [
-    'global nonexistence',
-    'fraud',
-    'ineligibility',
-    'legal negative',
-  ]) {
-    assert.match(tutorial, new RegExp(broaderNegative.replace(' ', '\\s+')));
-  }
+  assert.match(script, /init "\$HTTP_PROJECT" --template http >"\$REPORT_ROOT\/http\/init\.txt"/);
+  assert.match(script, /-C "\$project_directory" test --format json/);
+  assert.match(script, /-C "\$project_directory" check --format json/);
+  assert.match(script, /-C "\$project_directory" build --format json/);
+  assert.match(script, /opencrvs-events-api/);
+  assert.match(script, /assert-fence-file-equals/);
+  assert.match(script, /assert-fence-equals/);
+  assert.match(script, /oauth2_bearer_no_expiry/);
+  assert.match(script, /REGISTRYCTL_BIN must be an absolute installed-binary path/);
+  assert.match(script, /REGISTRYCTL_TUTORIAL_EVIDENCE_DIR/);
+  assert.match(script, /REGISTRYCTL_TUTORIAL_PROJECT_DIR/);
+  assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
+  assert.doesNotMatch(script, /registryctl preflight|init --from|docker build|fake image|v0\.15\.2/);
+});
+
+test('current reader pages use only the two public templates and current command roots', () => {
+  const pages = [
+    read('src/content/docs/tutorials/author-registry-project.mdx'),
+    read('src/content/docs/tutorials/configure-project-script-adapter.mdx'),
+    read('src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
+    read('src/content/docs/tutorials/use-your-spreadsheet.mdx'),
+    read('src/content/docs/tutorials/verify-claim-registry-api.mdx'),
+    read('src/content/docs/tutorials/deploy-standalone-with-own-data.mdx'),
+    read('src/content/docs/reference/registryctl.mdx'),
+  ];
+  const currentText = pages.join('\n');
+
+  assert.match(currentText, /--template http/);
+  assert.match(currentText, /--template spreadsheet/);
+  assert.match(currentText, /registryctl dev smoke/);
+  assert.match(currentText, /registryctl check/);
+  assert.match(currentText, /registryctl build/);
   assert.doesNotMatch(
-    tutorial,
-    /population-record-exists|person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
+    currentText,
+    /registryctl (?:preflight|start|stop|restart|smoke|add notary)|init --from|test --live|Bruno/,
   );
-  assert.doesNotMatch(script, /project-record-exists/);
+  assert.doesNotMatch(currentText, /TODO:|Evidence:/);
 });
 
-test('release-form claim tutorial continues the canonical v0.15.2 project live', () => {
-  const tutorial = readFileSync(
-    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
-    'utf8',
-  );
+test('OAuth guidance distinguishes expiring and strict no-expiry profiles', () => {
+  const oauth = read('src/content/docs/configure/oauth-client-credentials.mdx');
+  const adapter = read('src/content/docs/tutorials/configure-project-script-adapter.mdx');
+
+  assert.match(oauth, /request: form/);
+  assert.match(oauth, /request: json/);
+  assert.match(oauth, /response_profile: oauth2_bearer/);
+  assert.match(oauth, /response_profile: oauth2_bearer_no_expiry/);
+  assert.match(oauth, /`access_token` must be non-empty and bounded/);
+  assert.match(oauth, /`token_type` must be exactly `Bearer`/);
+  assert.match(oauth, /`expires_in` must be an integer/);
+  assert.match(oauth, /caching is disabled/);
+  assert.match(oauth, /private source origin and token endpoint/);
+  assert.match(oauth, /secret references/);
+  assert.match(adapter, /file: adapter\.rhai/);
+});
+
+test('OpenCRVS remains a synthetic case study, not a template or conformance claim', () => {
+  const tutorial = read('src/content/docs/tutorials/verify-opencrvs-claims.mdx');
 
   assert.match(tutorial, /^status: current$/m);
-  assert.match(tutorial, /registryctl 0\.15\.2 with its matching image lock/i);
-  assert.match(tutorial, /Continue from[\s\S]*`my-first-api`/);
-  assert.match(tutorial, /registryctl add notary/);
-  assert.match(tutorial, /\.registry-stack\/runtime\/local\/secrets\/local\.env/);
-  assert.match(tutorial, /http:\/\/127\.0\.0\.1:4255\/v1\/evaluations/);
-  assert.match(tutorial, /HTTP 403/);
-  assert.match(tutorial, /REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_RAW/);
-  assert.match(tutorial, /REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_RAW/);
-  assert.match(tutorial, /evidence:projects:read/);
-  assert.match(tutorial, /public-works-case-management/);
-  assert.match(tutorial, /project-status-accepted/);
-  assert.match(tutorial, /PASS: 6\/6 fixtures passed/);
-  assert.match(tutorial, /"value": "pw_001"/);
-  assert.match(tutorial, /"value": "PW-002"/);
-  assert.match(tutorial, /"value": "pw_999"/);
-  assert.match(tutorial, /registryctl restart/);
-  assert.match(tutorial, /registryctl stop/);
-  assert.match(tutorial, /You\s+do not edit `?\.registry-stack\//);
-  assert.doesNotMatch(
-    tutorial,
-    /registryctl init --from snapshot|Main checkout|git clone|git switch|git rev-parse|cargo build|registryctl build|manifest_source_ref|tag_target/,
-  );
-});
-
-test('live claim tutorial restarts after an authored status-policy change', () => {
-  const tutorial = readFileSync(
-    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
-    'utf8',
-  );
-  const plannedHeading = tutorial.indexOf('## Evaluate the planned project');
-  const initialResult = tutorial.indexOf('"value": false', plannedHeading);
-  const authoredEdit = tutorial.indexOf(
-    'project.matched && (project.status == "active" || project.status == "planned")',
-    initialResult,
-  );
-  const restart = tutorial.indexOf('registryctl restart', authoredEdit);
-  const changedResult = tutorial.indexOf('"value": true', restart);
-  const cleanup = tutorial.indexOf('registryctl stop', changedResult);
-
-  assert.ok(initialResult > plannedHeading, 'initial planned-project result is missing');
-  assert.ok(authoredEdit > initialResult, 'authored policy edit must follow the initial result');
-  assert.ok(restart > authoredEdit, 'restart must follow the authored policy edit');
-  assert.ok(changedResult > restart, 'changed live result must follow restart');
-  assert.ok(cleanup > changedResult, 'cleanup must follow the changed live result');
-});
-
-test('current-source bootstrap stays executable and outside adopter release-form pages', () => {
-  const bootstrap = readFileSync(
-    new URL('../src/content/docs/start/test-current-source-revision.mdx', import.meta.url),
-    'utf8',
-  );
-  const authoring = readFileSync(
-    new URL('../src/content/docs/tutorials/author-registry-project.mdx', import.meta.url),
-    'utf8',
-  );
-  const notary = readFileSync(
-    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
-    'utf8',
-  );
-  const reference = readFileSync(
-    new URL('../src/content/docs/reference/registryctl.mdx', import.meta.url),
-    'utf8',
-  );
-
-  assert.match(bootstrap, /^status: current$/m);
-  assert.match(bootstrap, /^doc_type: how-to$/m);
-  assert.match(bootstrap, /git switch --detach "\$SOURCE_REF"/);
-  assert.match(bootstrap, /cargo build --locked -p registryctl/);
-  assert.match(bootstrap, /npm run test:tutorial:registryctl/);
-  assert.match(bootstrap, /npm run check:tutorial:registryctl/);
-  assert.match(bootstrap, /temporary source-test lock/);
-  assert.match(bootstrap, /generation-only image sentinels/);
-  assert.match(bootstrap, /does not retain or publish the[\s\S]*lock as a reusable artifact/);
-  assert.match(bootstrap, /\.manifest_source_ref == \$source_ref/);
-  assert.match(bootstrap, /\.tag_target == \$source_ref/);
-  assert.match(bootstrap, /export REGISTRYCTL_IMAGE_LOCK="\$LOCK_PATH"/);
-  assert.match(
-    bootstrap,
-    /not a release, release candidate, signed artifact set, production image, country[\s\S]*acceptance result, or interoperability result/,
-  );
-
-  for (const page of [authoring, reference, notary]) {
-    assert.doesNotMatch(page, /test-current-source-revision/);
-    assert.doesNotMatch(page, /git switch --detach|cargo build --locked/);
-  }
+  assert.match(tutorial, /does not ship an OpenCRVS template/);
+  assert.match(tutorial, /synthetic/i);
+  assert.match(tutorial, /does not establish compatibility/i);
+  assert.match(tutorial, /country configuration/i);
+  assert.match(tutorial, /POST \/api\/events\/events\/search/);
+  assert.match(tutorial, /birth-event-search/);
+  assert.match(tutorial, /birth-event-match/);
+  assert.match(tutorial, /birth-event-found/);
+  assert.match(tutorial, /birth-event-registered/);
+  assert.doesNotMatch(tutorial, /--template opencrvs|init --from opencrvs/);
 });

@@ -1,72 +1,75 @@
 ---
-title: Configure a script source adapter
-description: Add bounded Rhai adaptation for pagination, branching, and normalization without granting ambient source or credential access.
-status: draft
-draft: true
+title: Add OAuth-backed Rhai adaptation
+description: Adapt an HTTP project to use OAuth client credentials and bounded Rhai mapping while Relay retains source and secret authority.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-13"
+  - registry-relay
+last_reviewed: "2026-07-30"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+Use this guide to adapt a project created with the HTTP template when its source requires OAuth
+2.0 client credentials and a reviewed Rhai script must normalize the response.
 
-Use the script capability when one fixed HTTP request is not enough. Rhai is the v1 script
-runtime, but the capability is product-neutral. A DHIS2 label or version does not enable it, and
-an unknown source product can use exactly the same host API.
+## When to use this
 
-The worker has no network, filesystem, environment, subprocess, clock, random, credential, or
-production logging access. It asks the Relay parent to make each bounded source call. Relay
-validates the complete request against the authored same-origin authority, commits the request
-before dispatch, consumes the next durable call permit, and returns only bounded JSON or text.
+Use Rhai when a fixed HTTP request plus JSON-pointer output mapping cannot express the source
+contract.
+Examples include explicit match and no-match branches, identifier checks, bounded pagination,
+and construction of a smaller output object.
 
-## Try the bundled script starter
+Keep the ordinary HTTP capability when fixed mapping is sufficient.
+Rhai does not grant another destination, credential, request, or output authority.
 
-The DHIS2 Tracker starter is one concrete script example. Its product name and version are review
-evidence only; any reviewed source system can use the same script capability and host API.
+Registryctl 1.0 provides `http` and `spreadsheet` templates.
+OAuth-backed Rhai is an adaptation of `http`, not another template.
 
-<ProjectStarterSequence starter="dhis2-tracker" />
+## Before you start
 
-## Keep DHIS2 evidence separate from consumer action
+Create the HTTP starter and confirm its three fixtures pass:
 
-The bundled health-evidence journey follows one responsibility flow:
+```sh
+registryctl init my-registry --template http
+cd my-registry
+registryctl test
+```
 
-1. DHIS2 remains the system of record.
-2. Registry Relay performs bounded, same-origin DHIS2 acquisition and preserves the starter's
-   declared typed health outputs. The child-program and dose outputs use nullable booleans so an
-   unknown source value does not become a negative fact.
-3. Registry Notary exposes those outputs as atomic evidence claims under evidence authorization
-   and disclosure policy.
-4. In this example, a public-health programme is both the evidence consumer and decision owner. It
-   combines the evidence with its own rules and case state to decide whether outreach, follow-up,
-   or another action is required.
+Keep the passing result as the comparison point for the adaptation.
+You also need a reviewed non-production source contract and wholly synthetic observations for
+each accepted and rejected result.
+Review [Configure OAuth client credentials](../../configure/oauth-client-credentials/) for the
+token request, response profile, private binding, and rotation contract before adding Rhai.
 
-Do not add claims such as `outreach-required` or `follow-up-priority` to the evidence service.
-Those names describe consumer decisions. A source-owned decision is the exception: a
-claim can attest it only when the claim id and its review evidence identify the decision as
-source-owned.
+## Declare the OAuth and script boundary
 
-The adapter and fixtures must preserve source meaning. For a matched subject, a completed DHIS2
-programme-stage event maps to `true`, an existing non-completed event maps to `false`, and an
-absent enrollment or stage maps to `null`. A `404` maps to `no_match`, not to negative health
-evidence. Source rejection and subject mismatch are failures and produce no claims. Ambiguity is
-explicitly not applicable to this singleton DHIS2 resource; another adapter must prove ambiguity
-or handle it separately. Missing evidence is not a negative fact.
+Replace `integrations/person-record/integration.yaml` with this bounded contract:
 
-{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/. */}
-
-## Declare source authority
-
-The public integration declares input schemas, authentication interface, allowed source paths,
-the script file, outputs, and only the limits that differ from the defaults:
-
-~~~yaml
+```yaml
 version: 1
-id: person-status
+id: person-record
 revision: 1
+
+source:
+  product: fictional-civic-registry
+  versions:
+    unverified: [events-api-v1]
+  auth:
+    type: oauth2_client_credentials
+    request: form
+    response_profile: oauth2_bearer
+    scope: records.read
+    audience: https://registry.invalid
+    refresh_skew: 20s
+  allow:
+    - method: GET
+      path: /v1/people/*
+  response:
+    format: json
+    max_bytes: 256KiB
 
 input:
   person_id:
@@ -74,62 +77,69 @@ input:
     type: string
     maxLength: 64
 
-source:
-  product: fictional-registry
-  versions: { unverified: [project-api-v1] }
-  auth: { type: static_bearer }
-  allow:
-    - method: GET
-      path: /v1/people/**
-  response:
-    format: json
-  response_headers: [Link]
-
 capability:
   script:
     file: adapter.rhai
 
 outputs:
   active: { type: boolean }
-  programme_code: { type: [string, "null"], maxLength: 32 }
-~~~
 
-Source product and version are interoperability evidence only. Runtime dispatch uses the generic
-source, capability, and environment contracts.
+limits:
+  calls: 1
+  source_bytes: 256KiB
+  request_bytes: 4KiB
+  deadline: 15s
+```
 
-Every input lives in one typed map and declares `role: selector` or `role: parameter`. An
-integration has one to eight non-null selectors and at most sixteen total inputs. The canonical
-selector values share a fixed 4096-byte ceiling. A nullable parameter is still present in the
-consultation request as explicit JSON null; the adapter receives the validated value beneath
-`ctx.input`.
+`oauth2_bearer` accepts a bounded `access_token`, exact `token_type: Bearer`, and integer
+`expires_in`.
+Relay bounds token caching by that expiry.
 
-An asterisk admits one non-empty path segment. A terminal double asterisk admits zero or more
-complete non-empty segments. Matching is case-sensitive. Dot segments, encoded separators,
-fragments, user information, and another origin fail before credentials are resolved. A source
-POST also requires `semantics: read_only` and evidence that the admitted operation is
-non-mutating.
+Use `oauth2_bearer_no_expiry` only when the reviewed source response omits expiry.
+That profile rejects `expires_in` and refresh controls, disables caching, and performs a fresh
+bounded token exchange for every authorized execution.
 
-The defaults are five calls, 64 KiB of aggregate author-controlled request bytes, a 512 KiB
-per-response body, 2 MiB of aggregate source-response bytes, and a 15 second deadline. The hard
-ceilings are 16 calls, 1 MiB of request bytes, 8 MiB per response, 16 MiB of source responses, and
-20 seconds. Deployment settings may lower these limits but cannot widen the reviewed integration.
-The isolated worker's active execution budget covers script work and IPC. Relay-owned credential,
-permit, TLS, and source waits do not consume that budget, but the existing absolute consultation
-deadline still caps the complete exchange.
+Neither profile exposes the client secret, token, or token response to Rhai.
+Project authoring's hard ceilings are 1 MiB per request, 16 MiB from the source, and 20 seconds.
+Keep the integration's actual limits smaller when the reviewed source contract permits it.
+
+## Bind endpoint and secret references
+
+Replace the `person-record` source binding in `environments/local.yaml`:
+
+```yaml
+integrations:
+  person-record:
+    source:
+      origin: https://registry.invalid
+      credential:
+        client_id: { secret: REGISTRY_CLIENT_ID }
+        client_secret: { secret: REGISTRY_CLIENT_SECRET }
+        generation: 1
+      oauth:
+        origin: https://identity.invalid
+        path: /oauth/token
+        generation: 1
+```
+
+Keep the remaining environment fields created by the HTTP template.
+The environment contains secret references, not secret values.
+An operator supplies the referenced values to the consultation Relay for governed deployment.
+
+Relay owns token acquisition, strict token-response decoding, cache policy, the authorization
+header, redirects, Transport Layer Security, and the source call.
 
 ## Write the adapter
 
-Create adapter.rhai with one consult(ctx) function:
+Create `integrations/person-record/adapter.rhai`:
 
-~~~rhai
+```rhai
 fn consult(ctx) {
     let target = source.path(
         "/v1/people/{person_id}",
         #{ person_id: ctx.input.person_id }
     );
-    let response = source.get(target, #{
-        query: #{ fields: "id,active,programmeCode" }
-    });
+    let response = source.get(target, #{ query: #{} });
 
     if response.status == 404 {
         return result.no_match();
@@ -137,108 +147,121 @@ fn consult(ctx) {
     if response.status != 200 {
         return result.fail(failure.source_rejected);
     }
-    if response.body.id != ctx.input.person_id {
+    if response.body.person_id != ctx.input.person_id {
         return result.fail(failure.subject_mismatch);
     }
 
-    result.match(#{
-        active: response.body.active,
-        programme_code: response.body.programmeCode
-    })
+    result.match(#{ active: response.body.active })
 }
-~~~
+```
 
-The host API provides `source.path`, `source.get`, `source.post_json`, `source.post_form`, the three
-successful result constructors, and fixed source failure constants. Every response has `status`,
-`body`, and the safe headers named by `source.response_headers`. The body is bounded decoded JSON
-by default. Set `source.response.format: text` when the reviewed endpoint returns text. Non-2xx
-statuses return normally except `401`, `403`, and `429`, which remain host-owned failures. JSON
-null is Rhai unit. A match returns every declared output with its exact type and nullability.
+The script receives typed consultation input and a bounded source response.
+It can return only a match, no match, ambiguity, or a closed failure.
+For a match, it must return the complete declared output map.
 
-An adapter may branch, transform collections, repeat a request, and follow a bounded same-origin
-pagination link. Relay canonicalizes an absolute returned link back to a relative source reference,
-rejects another origin, and reapplies the path, method, header, request, response, call, and deadline
-checks before dispatch. Each call is independently authorized and counts against the same
-cumulative budgets.
+Rhai has no ambient network, filesystem, environment, subprocess, clock, random, credential, or
+production logging access.
+Each `source.*` call returns to Relay for authorization against the authored method, path, and
+remaining budgets.
 
-## Split an adapter into local modules
+## Update the synthetic match fixture
 
-For a larger adapter, list up to 32 project-local Rhai files in their deterministic evaluation
-order:
+Replace the interactions in
+`integrations/person-record/fixtures/active.yaml` with an OAuth exchange and one source call:
 
-~~~yaml
-capability:
-  script:
-    file: adapter.rhai
-    modules:
-      - lib/normalization.rhai
-      - lib/cardinality.rhai
-~~~
-
-Local modules contain ordinary top-level Rhai functions. They cannot add source authority or load
-another file at runtime. `registryctl` resolves each normalized `.rhai` path beneath the integration
-directory without following symlinks, combines the declared modules with the entrypoint, and
-enforces a 64 KiB compiled-script ceiling. Module paths, order, and contents are hash-covered by the
-authored and generated closures, so a module edit changes the review and deployment inputs. There
-is no ambient module search path, remote package resolution, or runtime `import` fallback.
-
-## Add interaction fixtures
-
-Committed fixtures must be wholly synthetic and prove the rendered request as well as response:
-
-~~~yaml
-name: match
-classification: synthetic
-input:
-  person_id: SYNTHETIC_PERSON_001
+```yaml
 interactions:
   - expect:
+      method: POST
+      path: /oauth/token
+      body: { grant_type: client_credentials }
+    respond:
+      status: 200
+      headers: { Content-Type: application/json }
+      body:
+        access_token: SYNTHETIC_FIXTURE_TOKEN
+        token_type: Bearer
+        expires_in: 300
+  - expect:
       method: GET
-      path: /v1/people/SYNTHETIC_PERSON_001
-      query:
-        fields: id,active,programmeCode
+      path: /v1/people/AB-123456
     respond:
       status: 200
       body:
-        id: SYNTHETIC_PERSON_001
+        person_id: AB-123456
         active: true
-        programmeCode: DEMO
 expect:
   outcome: match
-  outputs:
-    active: true
-    programme_code: DEMO
-~~~
+  outputs: { active: true }
+  claims: { person-record-exists: true, person-active: true }
+```
 
-Keep match, no-match, ambiguity, identifier-mismatch, and meaningful project variations. The
-harness derives malformed decoding, limits, timeout, authorization-before-source, output
-minimization, and protocol-verification negatives. Large synthetic bodies belong in
-fixtures/bodies/.
+Keep the request, input, name, and classification fields from the starter fixture.
+Adapt the no-match and ambiguity fixtures to include the same valid token exchange before their
+source result.
 
-## Verify
+Add wholly synthetic fixtures for source rejection, subject mismatch, malformed OAuth response,
+malformed source response, timeout, and oversize response.
+The complete fixture set must also prove that authorization denial causes neither a token call
+nor a source call.
 
-~~~sh
-registryctl test --project-dir <project> --integration person-status --fixture match --trace
-registryctl test --project-dir <project> --integration person-status --watch
-registryctl check --project-dir <project> --environment <environment> --explain
-~~~
+## Verify offline
 
-Offline tests are portable and use no real credentials or network. Production activation remains
-Linux-only while the process controls are code-owned. Fixture success proves the adapter against
-synthetic observations, not production source interoperability or deployment approval.
-Keep the offline fixtures as the deterministic acceptance path. A live DHIS2 compatibility check
-is optional and requires a reachable instance, dedicated credentials, reviewed source authority,
-and separate evidence recording. Public demo availability does not determine whether the project
-passes its offline acceptance checks.
+Run the focused trace, then the complete fixture set:
+
+```sh
+registryctl test \
+  --integration person-record \
+  --fixture active-person \
+  --trace
+registryctl test
+```
+
+The focused trace may show the synthetic token request and source observation.
+The complete test passes only when every declared and derived security case agrees with the
+authored contract.
+Fixture success remains synthetic evidence, not live-source interoperability evidence.
+
+## Verify the development path
+
+Start the same generic development runtime used by the HTTP starter:
+
+```sh
+registryctl dev --detach
+registryctl dev smoke
+registryctl dev down
+```
+
+For this OAuth scenario, the denial report has zero token and source calls.
+The authorized report has one token exchange, one source call, and the minimized claim
+identifiers `person-active` and `person-record-exists`.
+Retained output contains no token, credential, or source-returned value.
+
+## Review and rebuild
+
+Review the redacted plan and regenerate the unsigned lane inputs:
+
+```sh
+registryctl check --explain
+registryctl build
+```
+
+Confirm that the evidence service still has exactly one Relay consultation.
+The consultation Relay owns the OAuth destination, credential consumers, Rhai script, source
+authority, and minimized `active` output.
+Notary owns claims and disclosure, and receives no OAuth credential or source origin.
+
+For an exact maintained execution of the no-expiry branch, use the
+[synthetic OpenCRVS Events API-shaped search](../verify-opencrvs-claims/).
+Its integration, environment fragments, Rhai adapter, service, and match test are checked
+directly against the maintained project that the documentation gate executes.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| A source call fails before dispatch | The method, path, target, header, query, body, or remaining budget is outside authored authority. | Narrowly admit the real read operation or correct the adapter. |
-| A terminal result is rejected | The adapter omitted an output or returned a wrong name, type, nullability, or size. | Return the complete declared output map. |
-| A fixture response matches but its request proof does not | Its expected interaction differs from the production canonical request. | Update the synthetic request expectation or fix the adapter. |
-| Production reports the worker unavailable | The adjacent code-owned worker or required Linux isolation is absent. | Correct the deployment. Do not configure an in-process fallback. |
-
-Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review and build
-the project.
+| The OAuth fixture rejects a success body | The response has an unknown field, wrong token type, missing required expiry, or invalid expiry. | Match the selected closed response profile. |
+| A source call fails before dispatch | The method, path, target, query, or budget is outside authored authority. | Correct the script or narrowly update the reviewed allow policy. |
+| A match result is rejected | The script omitted an output or returned the wrong type. | Return the complete declared output map. |
+| A token or secret appears in Rhai | The credential boundary has been crossed. | Stop testing and report the failure through the repository security process. |
+| The live source differs from fixtures | Synthetic contract evidence does not establish live interoperability. | Record a separate source-owner compatibility review before changing a version from `unverified` to `tested`. |

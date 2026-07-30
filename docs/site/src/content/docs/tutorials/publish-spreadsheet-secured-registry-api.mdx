@@ -1,368 +1,221 @@
 ---
-title: Run your first protected registry API
-description: Install Registryctl, start the maintained spreadsheet sample, and prove that caller identity controls which records Relay returns.
+title: Run your first spreadsheet-backed registry project
+description: Create the spreadsheet starter and prove its authorization, source lookup, minimization, and claim path with synthetic data.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-07-27"
+  - registry-notary
+last_reviewed: "2026-07-30"
 doc_type: tutorial
 locale: en
-standards_referenced:
-  - openapi
+standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Registry Relay can publish a protected, read-only API over a spreadsheet
-without copying the workbook into a second database. In this tutorial, you
-will start the maintained synthetic sample and prove that an anonymous caller
-is denied while an authorized caller receives only its own projected record.
+Create the maintained spreadsheet project, test its synthetic workbook contract offline, and run
+the same protected Relay-to-Notary path in a disposable local environment.
 
 <QuickstartMeta
-  outcome="A protected API over a synthetic workbook, available only on your computer, with denied and authorized requests you can inspect."
-  time="About 15 minutes after Docker is installed"
-  level="Local single-node"
-  prerequisites={['Linux amd64', 'Bash', 'Docker Engine with Compose v2', 'curl', 'Outbound HTTPS access to GitHub', 'Port 4242 available on loopback'] }
+  outcome="A tested spreadsheet project with a protected records policy, one consultation-backed claim service, and a disposable local runtime."
+  time="About 15 minutes after Registryctl and Docker are installed"
+  level="Local development with a synthetic workbook"
+  prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell and a text editor'] }
 />
 
-The workbook and caller identifiers in this tutorial are synthetic. Do not put
-personal data or production credentials in this project.
+The workbook and identifiers in this tutorial are synthetic.
+Do not put personal data or production credentials in this project.
 
 ## Before you start
 
-This complete local runtime is supported on Linux amd64. Registryctl also has
-Linux arm64 and macOS arm64 command-line assets for authoring, validation, and
-build tasks, but the complete runtime is not supported on those hosts in this
-release.
-
-Confirm that Docker Engine and Compose v2 are available:
+Confirm the required tools:
 
 ```sh
-docker info >/dev/null
+registryctl --version
 docker compose version
 ```
 
-The first command prints nothing when Docker is available. The second prints a
-Compose v2 version, for example:
+Registryctl reports its installed version without a network check.
+Compose must report version 2.35.0 or later.
 
-```text
-Docker Compose version v2.x.x
-```
+Start outside any existing Registry Stack project.
 
-This proves that the local container provider is reachable. Registryctl will
-perform its own stricter runtime and project checks before starting Relay.
+## Create the spreadsheet project
 
-## Install Registryctl
-
-Download and run the Registryctl 0.15.2 installer:
+Initialize the tested spreadsheet template and enter the project:
 
 ```sh
-tag=v0.15.2
-curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
-bash "./registryctl-${tag}-install.sh"
-registryctl --version
+registryctl init my-first-registry --template spreadsheet
+cd my-first-registry
 ```
 
-The installer reports its chosen install directory. The last command prints
-exactly:
+Initialization names the created project and prints `registryctl test` as the next action.
+Registryctl copies the starter and workbook from the installed release.
 
-```text
-registryctl 0.15.2
-```
+The project separates authored decisions:
 
-The installer downloads release files over TLS and verifies their checksums.
-A checksum detects a damaged or mismatched download, but does not authenticate
-who published it. Follow the tag-frozen
-[release verification guide](https://github.com/registrystack/registry-stack/blob/v0.15.2/release/VERIFY.md)
-when you need signature and provenance verification before installation.
-
-If your shell cannot find `registryctl`, add the install directory reported by
-the installer to `PATH`.
-
-## Create the sample project
-
-Create the maintained spreadsheet starter in a new directory:
-
-```sh
-registryctl init --from spreadsheet --project-dir my-first-api
-cd my-first-api
-```
-
-Registryctl prints:
-
-```text
-Initialized Registry Stack project "fictional-public-works-registry".
-  Directory: my-first-api
-  Starter: spreadsheet (Registry Stack 0.15.2)
-  Starter content: matches bundled digest
-  Editor support: VS Code and Zed (my-first-api/.registry-stack-editor/manifest.json)
-
-Next:
-  cd my-first-api
-  registryctl doctor --profile local
-  registryctl start
-```
-
-The starter digest proves that the authored sample files match the copy
-bundled with this Registryctl release. The `cd` command prints nothing.
-
-You do not need to copy product configuration or edit generated Relay YAML.
-These are the files you will encounter:
-
-| Path | What it controls |
+| Path | Decision you own |
 | --- | --- |
-| `registry-stack.yaml` | The API purpose, caller scopes, filters, and returned fields |
-| `entities/projects.yaml` | The stable key and field types |
-| `environments/local.yaml` | The workbook, worksheet, columns, and local test callers |
-| `data/public_works_projects.xlsx` | The synthetic source data |
-| `.registry-stack/build/local/` | Generated product configuration. Review it, but do not edit it. |
-| `.registry-stack/runtime/local/` | Private, disposable local runtime files |
+| `data/public_works_projects.xlsx` | Synthetic source observations |
+| `entities/projects.yaml` | Stable key, field types, and materialization limits |
+| `integrations/project-record-snapshot/` | Exact snapshot lookup, minimized `status` output, and fixtures |
+| `registry-stack.yaml` | Protected records policy plus one consultation-backed evidence service |
+| `environments/local.yaml` | Workbook binding, default development scenario, and secret references |
 
-The `.registry-stack/` directory is ignored by version control. On Unix,
-Registryctl gives runtime secret directories mode `0700` and raw credential
-files mode `0600`.
+The records API projects four reviewed fields and binds the required `project_id` filter to
+authenticated principal identity.
+The evidence service has one Relay consultation and releases two predicate claims.
+Notary receives only the consultation's minimized `status` output, not a workbook row.
 
-## Check your computer and project
+## Test the synthetic evidence
 
-Check the project, release files, workbook, listener, and Docker runtime:
+Run the complete offline fixture set:
 
 ```sh
-registryctl doctor --profile local
+registryctl test
 ```
 
-A successful check starts with:
+A passing starter reports:
 
 ```text
-Registry Stack doctor: ok
-
-Project: <absolute-project-path>
-Profile: local
-registry-relay: ok (0 errors, 0 warnings)
+Registry Stack test: passed for fictional-public-works-registry.
+Fixtures: 7.
+Next: registryctl dev
 ```
 
-`<absolute-project-path>` is the path to `my-first-api` on your computer.
-Additional provider and release-file lines identify the exact inputs
-Registryctl checked.
+The fixtures distinguish:
 
-This proves that the authored project can be compiled, the workbook passes
-strict validation, the generated result matches the authored inputs, the
-listener is loopback-only, and the matching release runtime is available.
-If it fails, follow the reported correction before continuing.
+- Project `pw_001`, which exists and has status `active`
+- Project `PW-002`, which exists but does not satisfy the active-only policy
+- Project `pw_999`, which is absent from the synthetic snapshot
 
-## Start the API
+No Docker container starts, no secret resolves, and no network request leaves the project.
 
-Start the exact compiled project:
+Inspect the active-project fixture:
 
 ```sh
-registryctl start
+registryctl test \
+  --integration project-record-snapshot \
+  --fixture match \
+  --trace
 ```
 
-Container progress lines depend on your Docker version. After Relay becomes
-ready, Registryctl prints exactly:
+The trace may show fixture-authored synthetic values.
+It demonstrates that Relay releases only `status` to Notary and that Notary evaluates
+`project-record-exists` and `project-status-accepted`.
+
+## Run the protected local path
+
+Start the disposable runtime:
+
+```sh
+registryctl dev --detach
+```
+
+Registryctl validates the project, rebuilds stale inputs, checks the installed release lock, and
+starts digest-locked public Relay, consultation Relay, Notary, and synthetic source workloads.
+The command prints loopback endpoints plus the maintained request, smoke, log, and shutdown
+actions.
+
+Run the denial and authorized scenarios:
+
+```sh
+registryctl dev smoke
+```
+
+A passing spreadsheet report has this shape:
 
 ```text
-PASS readiness: compiled workbook source is ready
-Relay API:  http://127.0.0.1:4242
-API docs:   http://127.0.0.1:4242/docs
+Development smoke: passed.
+  unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0; minimized_claim_ids=none
+  authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1; minimized_claim_ids=project-record-exists,project-status-accepted
 ```
 
-This proves that Relay loaded the compiled workbook source and is ready on the
-loopback listener. The generated Compose document mounts both the compiled
-Relay configuration and workbook read-only.
+The denial path performs no source call.
+The authorized path performs one bounded spreadsheet snapshot lookup and reports only the two
+claim identifiers.
+The smoke report contains no raw credential, workbook row, or source-returned value.
 
-## Check the API
+## Inspect the authored policy
 
-Run the sample's maintained checks:
+Open these files in a text editor:
 
-```sh
-registryctl smoke
-```
-
-Registryctl prints exactly:
-
-```text
-PASS allowed public health check
-PASS allowed match source is ready
-PASS denied anonymous records request
-PASS denied wrong local API key
-PASS allowed matching principal returns one record
-PASS wrong principal safely returns no match
-```
-
-Together, these checks prove that the public health route is available, the
-protected route rejects missing and invalid credentials, the matching caller
-receives one row, and a valid caller bound to an absent key receives no other
-row.
-
-Registryctl saves a machine-readable report at
-`.registry-stack/runtime/local/smoke-results.json`. It contains check names,
-paths, status classes, and pass states. It does not contain raw keys or
-workbook rows.
-
-## Make one denied request
-
-Call the records route without a credential:
-
-```sh
-curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
-  -H "Data-Purpose: public-works-case-management" \
-  http://127.0.0.1:4242/v1/datasets/projects/entities/projects/records
-```
-
-Relay prints exactly:
-
-```text
-HTTP 401
-```
-
-The API is ready, but this protected route does not accept an anonymous
-caller. Supplying a purpose does not substitute for caller identity.
-
-## Make one allowed request
-
-Load the private local caller keys into this shell:
-
-```sh
-set -a
-. .registry-stack/runtime/local/secrets/local.env
-set +a
-```
-
-These commands print nothing. Do not print, paste, or commit the environment
-file.
-
-Use the matching synthetic caller to make the same request:
-
-```sh
-curl -sS -w '\nHTTP %{http_code}\n' \
-  -H "Authorization: Bearer $REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW" \
-  -H "Data-Purpose: public-works-case-management" \
-  http://127.0.0.1:4242/v1/datasets/projects/entities/projects/records
-```
-
-Relay returns this structure, followed by the exact status line shown. JSON
-whitespace and object-key order may differ:
-
-```json
-{
-  "data": [
-    {
-      "project_id": "pw_001",
-      "district_code": "north-01",
-      "sector": "water",
-      "status": "active"
-    }
-  ],
-  "pagination": {
-    "has_more": false
-  }
-}
-HTTP 200
-```
-
-The credential authenticates the local caller. The requested purpose and
-scopes authorize the records operation. Relay then derives the required
-`project_id` filter from that caller's principal and returns only the four
-fields in the reviewed projection.
-
-A caller cannot satisfy this required filter by adding another
-`project_id` to the URL. The principal-bound filter comes from trusted gateway
-identity, not from caller-controlled query parameters. The smoke check's
-no-match result proves the safe alternative: a valid caller whose principal
-does not match a workbook key receives an empty collection.
-
-## See what you can edit
-
-Open the following files in your text editor:
-
-| Authored input | Decision to inspect |
+| File | Decision to inspect |
 | --- | --- |
-| `registry-stack.yaml` | Purpose, operation scopes, projection, allowed filters, and principal-bound filters |
-| `entities/projects.yaml` | Stable key, strict record schema, and materialization limits |
-| `environments/local.yaml` | Workbook binding, exact worksheet headers, and synthetic local principals |
+| `entities/projects.yaml` | Primary key, field types, and source limits |
+| `environments/local.yaml` | Workbook path, sheet, exact headers, and synthetic principals |
+| `registry-stack.yaml` | Purpose, scopes, projection, principal-bound filter, consultation, and claims |
 
-Then ask Registryctl to explain the effective plan:
+Ask Registryctl to explain the effective plan:
 
 ```sh
-registryctl check --project-dir . --environment local --explain
+registryctl check --explain
 ```
 
-The output begins:
+`check` validates the workbook binding and authored policy without contacting a source or
+resolving a secret.
+Review the records projection, principal-bound filter, exact snapshot input, minimized output,
+claims, and disclosure.
+
+A workbook field is not externally readable merely because it exists in the workbook or entity
+schema.
+It must also appear in an explicitly reviewed projection or consultation output.
+
+## Build the unsigned inputs
+
+Build deterministic product-lane inputs:
+
+```sh
+registryctl build
+```
+
+The generated closure contains:
 
 ```text
-Registry Stack project: fictional-public-works-registry (valid)
-Environment: local
-Baseline: initial_without_baseline
-Semantic changes: claim, integration, service_policy, operator_security, disclosure
+.registry-stack/build/local/signing-inputs/relay-public
+.registry-stack/build/local/signing-inputs/relay-consultation
+.registry-stack/build/local/signing-inputs/notary
 ```
 
-Later sections report one records API service, the effective scopes and
-disclosure plan, and redaction counts. This proves that Registryctl validated
-the human-authored project and derived a reviewable effective plan.
+`build` does not create keys, sign product bundles, assemble an approved set, deploy, or activate
+a product.
+Keep the complete closure together and change authored files instead of generated product
+configuration.
 
-Project fields compile as sensitive regardless of whether their physical
-provider is XLSX, CSV, Parquet, or PostgreSQL. A field is not externally
-readable merely because it exists in the source or entity schema. It must also
-appear in the reviewed service projection.
+## Stop the disposable runtime
 
-## Stop and clean up
-
-Stop the local runtime:
+Stop the local workloads and remove the disposable trust, credentials, and state:
 
 ```sh
-registryctl stop
-cd ..
+registryctl dev down
 ```
 
-Docker may print container shutdown progress. Registryctl prints no additional
-success line after Compose exits successfully. `cd ..` returns you to the
-directory that contains `my-first-api`, ready for the next tutorial.
-
-This stops and removes the local containers and network. It keeps the authored
-project and workbook. The generated build and runtime directories are
-disposable and can be regenerated from the authored project.
+The authored project and workbook remain.
 
 ## What you built
 
-You ran a loopback-only Relay API over a synthetic XLSX workbook. You proved
-that:
+You created a spreadsheet-backed project with a protected records policy and one
+consultation-backed evidence service.
+You proved authorization before source access, one bounded lookup, output minimization, and
+predicate claim evaluation using synthetic data.
 
-- the anonymous and invalid-key paths are denied;
-- an authorized principal receives only its own matching record;
-- a valid non-matching principal cannot see another record; and
-- the API returns only fields selected by authored disclosure policy.
+## Next
 
-The workbook, entity schema, environment binding, and service policy remain
-human-owned. Registryctl generates and validates the product configuration
-that Relay consumes.
-
-## Continue
-
-[Verify a live registry-backed claim](../verify-claim-registry-api/) to add
-Registry Notary to this `my-first-api` project and evaluate a bounded claim
-through the running Relay path.
-
-When you are ready to replace the sample,
-[use your own spreadsheet](../use-your-spreadsheet/) to derive the entity,
-workbook mapping, disclosure policy, local principal, purpose header, and
-request URL from a reviewed workbook.
-
-Before a broader adoption, [decide when Registry Stack
-fits](../../start/when-to-use/) and review the supported product and trust
-boundaries.
+- [Use your own spreadsheet](../use-your-spreadsheet/) to adapt the maintained template from a
+  reviewed workbook.
+- [Evaluate the spreadsheet claims](../verify-claim-registry-api/) to change one claim policy
+  while preserving the consultation boundary.
+- [Review when Registry Stack fits](../../start/when-to-use/) before connecting a live source.
 
 ## Troubleshooting
 
-| Symptom | Cause | Resolution |
+| Symptom | Cause | Fix |
 | --- | --- | --- |
-| `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
-| The installer reports an unsupported platform | No Registryctl asset is published for that OS and CPU. | Use a published CLI platform for authoring, or Linux amd64 for this complete local runtime. |
-| `doctor` cannot find Docker or Compose v2 | Docker Engine is absent or stopped. | Start Docker and confirm `docker info` and `docker compose version`, then retry. |
-| `doctor` rejects the image lock | Registryctl and the image lock are absent, changed, or from different releases. | Rerun the same versioned installer. Do not substitute a mutable image tag or another release's lock. |
-| `doctor` reports a workbook failure | The declared file, sheet, header, strict columns, types, formulas, or primary key failed validation. | Correct the human-owned workbook, entity, or environment file. Do not edit generated Relay input. |
-| A generated artifact integrity check fails | A file under `.registry-stack/build/` or `.registry-stack/runtime/` was edited or replaced. | Remove the disposable generated closure and rerun `registryctl doctor`. Reapply intended changes only in human-owned files. |
-| A request returns `401` | The credential is missing or invalid. | Load the generated local environment without printing it and use the matching local key. |
-| A request returns `403` | The caller lacks the reviewed scope or purpose. | Review the service and environment bindings. Do not widen scopes merely to bypass the denial. |
-| The documented recovery does not solve the problem | The local tutorial does not cover every host or workbook condition. | Open a [public Registry Stack issue](https://github.com/registrystack/registry-stack/issues/new/choose) with the command, stable code, operating system, and Registryctl version. Do not include keys, workbook rows, or private paths. |
+| `registryctl` is not found | The verified installation directory is not on `PATH`. | Add the directory reported by the release installer. |
+| `test` rejects the workbook fixture | The integration and synthetic expectation disagree. | Update the authored fixture or contract together. |
+| `dev` rejects the release lock | Registryctl and the release lock are absent, changed, or from different releases. | Reinstall the verified release payload. |
+| `dev` reports a port collision | Another process owns a required loopback port. | Stop the process or author distinct development ports. |
+| Smoke reports source work on denial | Authorization did not stop the lookup. | Stop the runtime and report the failure through the repository security process. |
+| A generated file differs after editing | A file under `.registry-stack/` was changed directly. | Remove the disposable generated closure and rerun Registryctl. |

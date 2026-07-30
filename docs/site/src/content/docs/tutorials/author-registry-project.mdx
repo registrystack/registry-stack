@@ -1,475 +1,229 @@
 ---
-title: Author an HTTP Registry Stack project
-description: Copy the HTTP starter, run its offline fixtures, review the generated plan, and build unsigned Relay and Notary Config Bundle inputs.
+title: Build and run an HTTP registry project
+description: Create the HTTP starter, test its fixtures, run the product path locally, and build unsigned product inputs.
 status: current
-draft: true
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-30"
 doc_type: tutorial
 locale: en
 standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
-import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
 
-Create a Registry Stack project with a bounded HTTP integration without editing product source
-code.
-You will copy the built-in starter, prove its synthetic journey offline, inspect the bounded
-acquisition and disclosure plan, and build separate unsigned inputs for Registry Relay and
-Registry Notary.
-
-This tutorial uses Registryctl 0.15.2 and its matching release material. Do not
-mix the page with an older CLI, image lock, or starter.
-
-One project defines one registry trust domain. A deployment can use Relay only
-for governed materialization and records APIs, Notary without configured
-claims, or both products for consultations and claims derived from Relay outputs. Independent
-registries require separate projects.
+Create a Registry Stack project from the released HTTP starter, test its synthetic source
+contract offline, and run the same authorization and minimization boundaries through Registry
+Relay and Registry Notary.
 
 <QuickstartMeta
-  outcome="A tested project workspace with reviewable bounded HTTP configuration and unsigned Relay and Notary Config Bundle inputs."
-  time="About 10 minutes after registryctl is installed"
-  level="Local authoring with synthetic fixtures"
-  prerequisites={['registryctl 0.15.2 and its matching image lock', 'A shell and a text editor']}
+  outcome="A tested HTTP project, a disposable local runtime, and unsigned inputs for three independently approved product lanes."
+  time="About 15 minutes after Registryctl and Docker are installed"
+  level="Local development with synthetic records"
+  prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell and a text editor'] }
 />
 
-This tutorial uses a fictional registry and synthetic records.
-Do not add source credentials, production endpoints, or real subject records.
+The project and source observations in this tutorial are synthetic.
+Do not add production endpoints, source credentials, or personal data.
 
-{/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/project_authoring/,
-    and crates/registryctl/assets/project-starters/bounded-http/. */}
+## Before you start
 
-## Canonical HTTP starter sequence
-
-Use this compact sequence as the workflow checklist. The sections that follow explain each command
-and the trust boundary it verifies.
-
-<ProjectStarterSequence
-  starter="http"
-  adaptationStep="After the first watch report, complete this page's authored-contract adaptation before running the final test, check, and build commands. The expected review output later on this page assumes those substitutions."
-/>
-
-## Copy the HTTP starter
-
-Create a local project workspace:
+Confirm that Registryctl and Docker Compose are available:
 
 ```sh
-registryctl init --from http --project-dir registry-project
+registryctl --version
+docker compose version
 ```
 
-The human-readable result confirms the project, starter provenance, and next command:
+Registryctl reports its installed version without contacting the network.
+Compose must report version 2.35.0 or later.
 
-```text
-Initialized Registry Stack project "fictional-citizen-registry".
-  Directory: registry-project
-  Starter: http (Registry Stack 0.15.2)
-  Starter content: matches bundled digest
-  Editor support: VS Code and Zed (registry-project/.registry-stack-editor/manifest.json)
+Start in a directory that is not inside another Registry Stack project.
+Registryctl otherwise discovers the nearest parent containing `registry-stack.yaml`.
 
-Next:
-  cd registry-project
-  registryctl test --project-dir .
-```
+## Create the HTTP project
 
-Add `--format json` when another program needs the versioned initialization report.
-
-The copied `registry-stack.yaml` keeps the complete starter provenance,
-including its authored-content digest. Compare normalized effective state with
-the exact starter embedded in the installed release:
+Initialize the tested HTTP template and enter the project:
 
 ```sh
-registryctl compare \
-  --project-dir registry-project \
-  --environment local \
-  --from-starter
+registryctl init my-registry --template http
+cd my-registry
 ```
 
-The value-free result distinguishes an equivalent starter from an intentionally
-adapted project. It does not observe runtime behavior or grant approval.
-
-The command creates this authored layout:
+Initialization reports the created path and next action:
 
 ```text
-registry-project/
-  registry-stack.yaml
-  .registry-stack-editor/
-    manifest.json
-    schemas/
-  .vscode/
-    extensions.json
-    settings.json
-  .zed/
-    settings.json
-  integrations/
-    person-record/
-      integration.yaml
-      fixtures/
-  environments/
-    local.yaml
+Created Registry Stack project fictional-citizen-registry in my-registry.
+Next: cd my-registry && registryctl test
 ```
 
-The starter is copied into your workspace.
-Registry Stack does not resolve a remote package or download integration code at runtime.
+Registryctl copies the template from its installed release and does not fetch a remote template.
 
-## Open the editor workspace
+The authored files have separate responsibilities:
 
-Initialization copies the five schemas embedded in `registryctl` and configures both VS Code and
-Zed. The second command in the canonical sequence,
-`registryctl authoring editor --project-dir registry-project`, verifies the same deterministic
-setup and is also available for existing projects.
+| Path | Decision you own |
+| --- | --- |
+| `registry-stack.yaml` | Evidence service, purpose, caller scopes, claims, and disclosure |
+| `integrations/person-record/integration.yaml` | Typed input, fixed request, source outcomes, and minimized output |
+| `integrations/person-record/fixtures/` | Synthetic requests, responses, and expected results |
+| `environments/local.yaml` | Default development scenario, source destination, and secret references |
 
-Open `registry-project` itself as the editor root. In VS Code, accept the Red Hat YAML workspace
-recommendation. Zed starts its native YAML language server. Open
-`integrations/person-record/integration.yaml` and check key completion, field descriptions on
-hover, and the document outline.
+Files under `.registry-stack/` are generated.
+Review them when handing work to another owner, but make changes in the authored files.
 
-For a short validation demo, add an `unexpected: true` top-level field. Both editors must mark the
-unknown field as invalid. Remove the field before continuing. A separate YAML file outside the five
-reserved Registry Stack path suffixes, such as `notes.yaml`, keeps its normal editor behavior.
+## Test the authored contract
 
-## Trace one fixture offline
+Run every fixture offline:
 
-Run one matching fixture and include its safe synthetic trace before changing the source contract:
+```sh
+registryctl test
+```
+
+A passing starter reports:
+
+```text
+Registry Stack test: passed for fictional-citizen-registry.
+Fixtures: 25.
+Next: registryctl dev
+```
+
+This command exercises the three authored outcomes and their derived security cases without
+starting Docker, resolving a secret, or contacting a source.
+Fixture evidence proves the authored contract against synthetic observations, not compatibility
+with an institution's live registry.
+
+Inspect the synthetic match interaction:
 
 ```sh
 registryctl test \
-  --project-dir registry-project \
   --integration person-record \
   --fixture active-person \
   --trace
 ```
 
-The human-readable report identifies the selected fixture, typed input, source call, minimized
-output, claim results, and derived security cases. The complete report is:
+The focused result is:
 
 ```text
-PASS: 9/9 fixtures passed
-  PASS person-record.active-person
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    outputs: active
-    claims: person-active, person-record-exists
-    outcome: match
-  PASS person-record.active-person::derived/request_to_consultation_binding
-    inputs: person_id
-    calls: notary-relay-consultation
-    claims: person-record-exists
-    source access: true
-  PASS person-record.active-person::derived/request_authority
-    inputs: person_id
-    expected error: fixture.request_mismatch
-    source access: false
-  PASS person-record.active-person::derived/status_rejection
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    expected error: source.status_rejected
-    source access: true
-  PASS person-record.active-person::derived/malformed_decode
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    expected error: source.response_malformed
-    source access: true
-  PASS person-record.active-person::derived/byte_ceiling
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    expected error: source.response_too_large
-    source access: true
-  PASS person-record.active-person::derived/timeout
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    expected error: source.deadline_exceeded
-    source access: true
-  PASS person-record.active-person::derived/authorization_before_source
-    inputs: person_id
-    expected error: authorization.denied
-    source access: false
-  PASS person-record.active-person::derived/output_minimization
-    inputs: person_id
-    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
-    outputs: active
-    claims: person-active, person-record-exists
-    outcome: match
-    source access: true
+Registry Stack test: passed for fictional-citizen-registry.
+Fixtures: 9.
+Next: registryctl dev
 ```
 
-The command does not contact Registry Relay, Registry Notary, or a source registry.
-Add `--format json` when another program needs the versioned fixture report.
+The trace may show the synthetic identifier and `active` value authored in that fixture.
+Do not use `--trace` with observations copied from a production source.
 
-## Watch the selected fixture
+## Run the local product path
 
-Keep the same fixture running while you edit the project:
+Start the disposable development runtime in the background:
 
 ```sh
-registryctl test \
-  --project-dir registry-project \
-  --integration person-record \
-  --fixture active-person \
-  --watch
+registryctl dev --detach
 ```
 
-The command prints `PASS: 9/9 fixtures passed`, waits for an authored file to change, then reruns
-the selected fixture. Use the preceding non-watch command for the full trace. Press `Ctrl+C` after
-you confirm the initial pass. The watcher ignores generated `.registry-stack` output and never
-enables live source access.
+Registryctl validates the project, rebuilds stale product inputs, checks the installed release
+lock, and starts digest-locked images.
+The command prints loopback endpoints plus `Request`, `Smoke`, `Logs`, and `Down` actions.
+The authored local environment selects the synthetic `active-person` scenario, so there is no
+scenario-selection flag.
 
-## Adapt the authored contract
+The development trust anchors, credentials, bundles, and state are local disposable material.
+They use the `development` trust domain and are not inputs to a governed deployment.
 
-For this synthetic journey, make these exact substitutions with your editor:
-
-| File | Field | Replace | With |
-| --- | --- | --- | --- |
-| `registry-stack.yaml` | `registry.id` | `fictional-citizen-registry` | `fictional-civic-support-registry` |
-| `integrations/person-record/integration.yaml` | `source.product` | `replace-with-source-product` | `fictional-civic-support-api` |
-| `integrations/person-record/integration.yaml` | `source.versions.unverified` | `[replace-with-source-version]` | `[tutorial-contract-v2]` |
-| `environments/local.yaml` | `source.origin` | `https://citizen-registry.invalid` | `https://civic-support.invalid` |
-
-These values remain fictional and `.invalid` destinations cannot identify a live service. They do
-not alter the request shape proved by the starter fixtures. When you later change a method, path,
-query, header, or body, update each affected fixture's expected interaction so the test proves the
-new canonical request.
-
-For an actual integration, review all four authored surfaces and replace the fictional contract
-with approved project values:
-
-1. In `registry-stack.yaml`, name the registry, service, purpose, caller scopes, consultation
-   input mapping, outputs, claims, disclosure modes, and credential claim allow-list.
-2. In `integrations/person-record/integration.yaml`, define selector and parameter input schemas,
-   one fixed HTTP request, output pointers and schemas, cardinality, and any limit override proven
-   necessary by fixtures.
-3. In `integrations/person-record/fixtures/`, replace the synthetic interactions and expected
-   outputs and claims. Each fixture proves the canonical request as well as the response.
-4. In `environments/local.yaml`, bind the non-production source destination, secret
-   references, caller fingerprints, Relay trust, and deployment services.
-
-The integration fixes the method, path, input placement, minimized output fields, and bounds before
-deployment. The environment binds the one logical source origin and credentials.
-Consultation inputs can populate only declared request values.
-They cannot select an origin, method, credential, capability, projection, or response mapper.
-
-For target-derived consultation inputs, use one of these closed mappings:
-
-- `request.target.id` for the target's primary request identifier
-- `request.target.identifiers.<stable-id>` for a named institutional identifier
-- `request.target.attributes.<stable-name>` for an ordinary target attribute
-
-A target attribute name must match `[a-z][a-z0-9_]{0,63}`.
-Use an identifier mapping for values that identify a record within an issuing scheme.
-Use an attribute mapping for other request-bound values, and make the mapped value satisfy the
-integration input's declared type and bounds.
-An attribute is caller-supplied context. Mapping an attribute does not authenticate the value or
-turn the value into an identifier.
-Registryctl rejects any other target path before generating Relay or Notary configuration.
-
-## Apply the evidence-claim design test
-
-Keep three policy categories separate while you author the project. The integration and
-environment define Relay source access and adaptation policy. The evidence service defines Notary
-evidence authorization and disclosure policy. The evidence consumer and decision owner keep their
-use, decision, workflow, and action policy outside the project.
-
-Test every proposed claim before adding it:
-
-1. Does the claim state one atomic evidence fact or value, rather than a consumer decision?
-2. Does the claim define what `true`, `false`, `null`, `no_match`, `ambiguous`, and source failure
-   mean without turning missing evidence into a negative fact?
-3. Can another authorized service or procedure reuse the evidence without importing the first
-   consumer's eligibility, qualification, ranking, workflow, or action rules?
-
-If any answer is no, narrow or rename the claim and keep the consuming decision downstream.
-For example, prefer `programme-enrollment-active` or `measles-dose-recorded` to
-`outreach-required` or `benefits-eligible`. A Common Expression Language (CEL) rule may derive a
-precise evidence predicate from typed outputs, but it is not a general-purpose eligibility engine.
-Across other sectors, prefer evidence such as `qualification-awarded`,
-`business-registration-active`, `coverage-active`, `inspection-completed`, or
-`professional-credential-valid` to outcomes such as `admission-approved`, `licence-granted`,
-`claim-payable`, `inspection-priority`, or `access-permitted`.
-
-A claim may attest a decision that an authoritative source already made. In that exception, the
-claim id and its review evidence must identify it as a source-owned decision, and the integration
-must preserve the source's exact meaning. Notary does not recompute the decision.
-
-## Add another integration
-
-An existing project can add another protocol view over the same logical source without starting a
-second project or copying generated product configuration. Use a stable integration id such as
-`benefit-record`, then add these authored files and references:
-
-1. Create `integrations/benefit-record/integration.yaml` and
-   `integrations/benefit-record/fixtures/`. Add `adapter.rhai` and any reviewed local modules only
-   when the integration uses `capability.script`.
-2. Add `integrations.benefit-record.file: integrations/benefit-record/integration.yaml` to
-   `registry-stack.yaml`.
-3. Under the consuming evidence service, add a consultation with
-   `integration: benefit-record` and bind every integration input to one typed request path. Add
-   atomic evidence claims that select or derive from that consultation's declared outputs. Keep
-   consumer decisions outside the evidence service.
-4. Add `integrations.benefit-record.source` to `environments/local.yaml` with its
-   non-production origin, credential reference, and generation. Do not put credential values in
-   the project files.
-
-Run the new fixture first, then the complete offline and generated-config gates:
+Run the maintained denial and authorized checks:
 
 ```sh
-registryctl test --project-dir . --integration benefit-record --fixture <fixture-name> --trace
-registryctl test --project-dir .
-registryctl check --project-dir . --environment local --explain
-registryctl build --project-dir . --environment local
+registryctl dev smoke
 ```
 
-The project model allows multiple integrations only when they are reviewed views over the same
-logical source trust domain. Start a separate project for an independent registry authority.
-
-Use `source.product` as review metadata for the source system.
-It does not select a product executor or runtime capability.
-Mark a source version `unverified` until the required integration evidence exists.
-
-{/* Evidence: crates/registryctl/tests/project_authoring.rs,
-    http_starter_adapts_to_a_structurally_different_source_api and
-    source_product_is_metadata_not_runtime_dispatch. */}
-
-## Run the complete fixture journey
-
-Test every edited fixture, including match, no-match, ambiguity, source-shape, and derived security
-cases:
-
-```sh
-registryctl test --project-dir registry-project
-```
-
-The report starts with `PASS` and states how many fixtures passed:
+A passing report has this shape:
 
 ```text
-PASS: <passed>/<total> fixtures passed
+Development smoke: passed.
+  unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0; minimized_claim_ids=none
+  authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1; minimized_claim_ids=person-active,person-record-exists
 ```
 
-Failures identify the authored file and fixture.
-A fixture can supply bounded source observations, but it cannot supply a destination, credential,
-worker command, authentication bypass, or decoder mode.
+The denial result proves that authorization stopped the source call.
+The authorized result proves one bounded source call and reports only the minimized claim
+identifiers.
+The smoke report contains no credential or source-returned value.
 
-## Review the generated plan
-
-Compile the authored project through the Relay and Notary validators without writing build
-output:
+Inspect value-free log availability if a scenario fails:
 
 ```sh
-registryctl check \
-  --project-dir registry-project \
-  --environment local \
-  --explain
+registryctl dev logs
 ```
 
-The human-readable review report starts with:
+The report keeps the public Relay, consultation Relay, Notary, and synthetic source identities
+separate without copying their log values into Registryctl output.
 
-```text
-Registry Stack project: fictional-civic-support-registry (valid)
-Environment: local
-Baseline: initial_without_baseline
-```
+## Stop the disposable runtime
 
-Review the fixed request authority, input mappings, caller scopes, purpose, outputs, claims,
-disclosure modes, and credential membership. Use `--format json` only when another tool needs the
-machine-readable report.
-
-When a human reviewer needs to inspect directly authored non-secret scalar metadata in this local
-workspace, opt in to the trusted-local terminal view:
+Stop the bound runtime and remove its disposable state:
 
 ```sh
-registryctl check \
-  --project-dir registry-project \
-  --environment local \
-  --explain \
-  --show-authored-values
+registryctl dev down
 ```
 
-The extra section starts with both safety notices:
+Registryctl reports that it stopped and removed the bound development runtime.
+The authored project remains and can recreate the runtime.
 
-```text
-WARNING: trusted-local authored values follow. This output includes project-sensitive metadata and must not be shared.
-Secret values, secret references and runtime secret-file locators, fixture data, raw parser text, defaulted values, and derived values remain hidden.
-```
+## Review and build the project
 
-This view can show directly authored or environment-bound public, internal, structural, and
-sensitive metadata, including its source and sensitivity. It is human output only, requires
-`--explain`, and is not a report, evidence, or export mode. Treat the terminal output as
-project-sensitive, and do not share it. Default human output and `--format json` remain redacted;
-combining `--show-authored-values` with JSON output is rejected.
-
-An initial project without an approved baseline requires the `claim`, `integration`,
-`service_policy`, `operator_security`, and `disclosure` review classes.
-A valid report is not legal approval, source interoperability evidence, or deployment authority.
-
-## Build unsigned product inputs
-
-Generate deterministic unsigned product inputs for the existing Config Bundle v1 workflow:
+Validate the authored project and inspect its redacted effective plan:
 
 ```sh
-registryctl build \
-  --project-dir registry-project \
-  --environment local
+registryctl check --explain
 ```
 
-The human-readable report starts with the built project and output directory:
+Review the fixed request, authorization policy, source bounds, minimized output, claims, and
+disclosure.
+`check` is offline and does not resolve a secret.
+
+Build deterministic unsigned inputs:
+
+```sh
+registryctl build
+```
+
+The human result identifies the build path and governed handoff:
 
 ```text
-Built Registry Stack project "fictional-civic-support-registry".
-  Environment: local
-  Output: .registry-stack/build/local
+Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Build output: .registry-stack/build/local
+Next: sign each emitted affected lane, then assemble the approved set
 ```
 
-Add `--format json` when another program needs the versioned build report.
-
-The build report identifies `.registry-stack/build/local/artifact-manifest.json`, relative to the
-project directory. Treat that strict `registry.project.artifact_manifest.v1` document as the
-complete tree and classification source.
-It records every reviewable, private, operations, secret-consumer, approval-state, Relay, and
-Notary artifact plus its digest, edit policy, publication boundary, consumers, and permitted
-lifecycle actions. The top-level `generator` records which `registryctl` version produced the tree.
-An artifact action of `regenerate` is lifecycle metadata, not a per-artifact command. Rerun the
-top-level `registryctl build` command above to regenerate the complete environment output. Do not
-maintain or automate against a copied directory listing.
-
-The product input directories remain separate and contain secret references, not secret values.
-They are inputs to each product's Config Bundle workflow, not a signed project root or a deployable
-bundle. `build` does not create a bundle manifest, sign a bundle, or read a secret value. Package,
-sign, verify, and activate each product directory through that product's Config Bundle workflow.
-One signed project-level deployment bundle whose root binds compatible product submanifests is
-future work; the current CLI does not emit that artifact.
-Treat every generated directory as institutionally sensitive and keep it out of source control.
-
-## Clean up generated output
-
-Keep `registry-project/` as the authored project workspace.
-If you do not need the generated inputs, remove only
-`registry-project/.registry-stack/build/local/`.
-You can reproduce that directory with the same `build` command.
+For this combined project, that directory contains signing inputs for `relay-public`,
+`relay-consultation`, and `notary`.
+`build` does not create production keys, sign a bundle, assemble an approved baseline set, or
+activate a product.
+The public Relay, consultation Relay, and Notary remain independently approved.
 
 ## What you built
 
-You copied a local HTTP starter, proved its positive and denial fixtures without source
-access, adapted the reviewed source contract, inspected the complete redacted plan, and generated
-separate unsigned Relay and Notary inputs.
-The generated profile keeps source acquisition in Relay and claim disclosure in Notary.
+You tested a bounded HTTP integration, ran the real Relay and Notary path against a fixed
+synthetic source, and produced unsigned inputs for three product lanes.
+The denial path performed no source work.
+The authorized path released only the configured claim identifiers.
 
 ## Next
 
-- [Configure API-key source authentication](../configure-project-api-key-authentication/) when
-  the upstream requires a fixed header or query credential.
-- [Configure a FHIR R4 integration](../configure-project-fhir-r4/) when the reviewed journey uses
-  a fixed Patient anchor and declared relation.
-- [Configure an exact snapshot materialization](../configure-project-snapshot-materialization/)
-  when consultation reads an immutable local snapshot.
-- [Configure a script source adapter](../configure-project-script-adapter/) only when the reviewed
-  source recipe needs more than one bounded HTTP request.
+- [Add OAuth-backed Rhai adaptation](../configure-project-script-adapter/) when the source needs
+  client credentials or response normalization.
+- [Review the Registryctl command reference](../../reference/registryctl/) before automating
+  machine-readable output.
+- [Run the generated Compose package](../../operate/single-node-compose-behind-proxy/) after the
+  three product lanes have independent approval.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `project destination must be absent or an empty real directory` | `init` found content, a non-directory, or a symlink. | Choose an absent or empty real directory. |
-| `input.pattern_mismatch` | A fixture input does not satisfy the declared type or pattern. | Correct the synthetic fixture or the reviewed input contract. |
-| A fixture request proof differs from the trace | The expected interaction does not match the canonical request produced by the integration. | Correct the integration or update the wholly synthetic interaction proof. |
-| `--against and --anchor must be supplied together` | Only one approved-baseline argument was present. | Supply the verified bundle and matching trust anchor together. |
-| Generated configuration fails validation | Authored fields cannot produce a valid Relay or Notary startup contract. | Correct the reported authored file and field, then rerun `test` and `check`. |
+| `init` refuses the destination | The directory exists, is unsafe, or conflicts with another project. | Choose an absent directory outside another Registry Stack project. |
+| `test` reports a request mismatch | The integration and fixture no longer describe the same request. | Update the authored integration and its wholly synthetic fixture together. |
+| `dev` reports an unavailable image | A digest-locked release image is absent. | Load the exact image archive from the verified release payload. |
+| `dev` reports a port collision | Another process owns a required loopback port. | Stop that process or author distinct local development ports. |
+| `dev smoke` reports source work on denial | An authorization-before-source invariant failed. | Stop the runtime and report the failure through the repository security process. |
+| A generated file differs after editing | A file under `.registry-stack/` was changed directly. | Remove the disposable generated closure and rerun the producing command. |

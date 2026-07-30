@@ -164,10 +164,12 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"author-registry-project:32"
-	"publish-spreadsheet-secured-registry-api:24"
-	"use-your-spreadsheet:19"
-	"verify-claim-registry-api:87"
+	"author-registry-project:15"
+	"configure-project-script-adapter:13"
+	"publish-spreadsheet-secured-registry-api:14"
+	"use-your-spreadsheet:11"
+	"verify-claim-registry-api:15"
+	"verify-opencrvs-claims:12"
 )
 
 count_sh_command_lines() {
@@ -213,21 +215,19 @@ require_literal() {
 }
 
 require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
-	'registryctl init --from http --project-dir registry-project'
+	'registryctl init my-registry --template http'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
-	'registryctl authoring editor --project-dir registry-project'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
-	'outputs:'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
-	'protocol.fhir.parse_searchset'
+	'registryctl dev smoke'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'file: adapter.rhai'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'result.match(#{'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
-	'kind: records_api'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
-	'outputs:'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
+	'../verify-opencrvs-claims/'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
+	'POST /api/events/events/search'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
+	'birth-event-found'
 
 if ((DRY_RUN)); then
 	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'

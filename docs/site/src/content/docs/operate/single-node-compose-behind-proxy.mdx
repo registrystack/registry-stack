@@ -1,209 +1,303 @@
 ---
-title: Run single-node Compose behind your reverse proxy
-description: Place a Registry Stack project behind an institution-owned reverse proxy, identity provider, and front rate limiter.
-status: draft
+title: Run the generated single-node Compose package
+description: Generate, verify, run, include, and adapt the governed Registry Stack Compose package without editing product configuration.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-30"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this guide when an institution runs a single-node Docker Compose deployment behind its own
-reverse proxy and identity and access management layer. The proxy owns public Transport Layer
-Security (TLS), hostnames, request admission, and edge logs. Relay and Notary still enforce their
-own authentication, scopes, purpose, disclosure, and audit contracts.
+Use this guide to hand independently approved Registry Relay and Registry Notary bundles to a
+single-node Docker Compose deployment, either alone or as a module in an existing application.
+The generated package remains portable after handoff and can run with Docker Compose without
+Registryctl.
 
 ## When to use this
 
-Use this topology when:
+Use the managed package when:
 
-- One virtual machine runs the product containers.
-- An institutional reverse proxy already owns public TLS and front rate limiting.
-- The proxy reaches the containers over loopback or a private network.
-- The deployment has an approved Registry Stack project and separately verified product bundles.
+- One Docker host runs one public Relay, one private consultation Relay, one Notary, and the
+  release-owned PostgreSQL state plane
+- Docker Compose 2.35.0 or later is available
+- Each product lane has an independently signed bundle and trust anchor
+- An existing application may need to reach public Registry Stack services on `registry-edge`
 
-Do not use this guide for Kubernetes, active-active high availability, service mesh, or native
-exchange-layer adapters.
-
-## Boundary map
-
-```mermaid
-flowchart LR
-  Consumer["Consumer organization"] --> Edge["Institutional edge<br/>TLS, IAM, request admission"]
-  Edge --> Relay["Registry Relay<br/>source access, consultation, protected APIs"]
-  Edge --> Notary["Registry Notary<br/>claim evaluation, issuance"]
-  Notary -->|"compiler-pinned consultation"| Relay
-  Relay --> Source["Registry source<br/>source of record"]
-```
-
-Relay owns every registry source origin, credential, adaptation recipe, and minimized
-consultation result. Notary consumes exactly one compiler-pinned Relay
-consultation for every configured claim. A Notary-only deployment may start
-without claims, but cannot evaluate evidence. Credential issuance requires a combined deployment and a
-fresh exact Relay-backed evaluation for every selected claim.
+The managed profile does not provide high availability, Kubernetes, an external database, or
+direct non-loopback host publishing.
+Use an operator override or export a separate adapted package when the managed choices do not fit.
+Registryctl reports the reduced verification claim instead of blocking Docker.
 
 ## Before you start
 
 You need:
 
-- Docker Compose on the virtual machine
-- Public Relay and Notary hostnames for the selected topology
-- An institutional secret store and audit destination
-- A reviewed project environment with private source and workload bindings
-- Verified Relay and Notary Config Bundles for the products in the topology
-- An edge policy that forwards only the required authentication, purpose, tracing, and content
-  headers
+- One verified `ApprovedBaselineSetV1` containing `relay-public`, `relay-consultation`, and
+  `notary`
+- The released Registryctl installation whose signed release lock authorizes the images
+- Operator-owned secret and certificate files
+- Durable storage for PostgreSQL and each product's anti-rollback state
 
-## Author and verify the project
+The approved set is compatibility evidence and a portable locator.
+It is not a fourth signature, trust root, or product activation authority.
 
-Run the offline fixture and semantic gates before deployment:
-
-```sh
-PROJECT_DIR=registry-project
-ENVIRONMENT=staging
-registryctl test --project-dir "$PROJECT_DIR"
-registryctl check \
-  --project-dir "$PROJECT_DIR" \
-  --environment "$ENVIRONMENT" \
-  --explain
-registryctl build \
-  --project-dir "$PROJECT_DIR" \
-  --environment "$ENVIRONMENT"
-```
-
-The human-readable test report starts with `PASS`, the check report marks the project `valid`, and
-the build report identifies the generated output directory.
-Confirm the selected topology emits only the expected product inputs. A combined project emits
-separate Relay and Notary inputs with the same approval state. It does not emit a signed
-project-level root.
-
-Package and sign each generated product input, then verify it against the product trust anchor:
+Run the host checks from the authored project, or select it with the global `-C` option:
 
 ```sh
-PRODUCT_INPUT=registry-project/.registry-stack/build/staging/private/relay
-SIGNING_KEY=operator-inputs/approved-signing-key.jwk
-SIGNED_BUNDLE=operator-inputs/signed-relay-bundle
-TRUST_ANCHOR=operator-inputs/relay-trust-anchor.json
-registryctl bundle sign \
-  --input "$PRODUCT_INPUT" \
-  --key "$SIGNING_KEY" \
-  --product registry-relay \
-  --environment staging \
-  --stream-id configuration \
-  --sequence 42 \
-  --bundle-id staging-relay-42 \
-  --out "$SIGNED_BUNDLE"
-registryctl bundle verify \
-  --bundle-dir "$SIGNED_BUNDLE" \
-  --anchor-path "$TRUST_ANCHOR"
+registryctl -C ../registry-project doctor --profile production
 ```
 
-Activation remains product-specific. Keep each verified bundle, trust anchor, anti-rollback state,
-and secret provider binding within the owning product's deployment boundary.
+The command reports authored-environment, release-lock, Docker client, Docker daemon, Compose
+2.35.0, and digest-locked image readiness.
+It does not fetch a replacement release lock.
 
-## Bind Compose ports to the proxy side
+## Generate the package
 
-Publish product ports only to loopback when the proxy runs on the same virtual machine:
+From the operator workspace, generate into an absent or empty directory:
+
+```sh
+registryctl deploy generate \
+  --approved-set ./approved-set.v1.json \
+  --output-dir ./registry-stack
+```
+
+The first generation creates a safe `binding.yaml` and transfers that file to the operator.
+Registryctl owns `generated/`.
+The operator owns `binding.yaml`, `operator/`, and the optional `operator-override.yaml`.
+
+The package has this shape:
+
+```text
+registry-stack/
+  binding.yaml
+  operator/
+    secrets/
+    certificates/
+  generated/
+    compose.empty.env
+    compose.yaml
+    compose.initialize.yaml
+    deployment-plan.v1.json
+    deployment-manifest.v1.json
+    RUNBOOK.md
+    inputs/
+    bundles/
+    anchors/
+```
+
+The package copies the three signed product bundles and their anchors into separate,
+digest-specific directories.
+It does not create secret files, production keys, or anti-rollback state.
+
+Record the approved-set digest and generated closure root printed by the command outside the
+package.
+Use those values to check the package after transfer.
+
+## Supply operator-owned inputs
+
+Read `generated/RUNBOOK.md`.
+Place each required secret and certificate at the package-relative path that the runbook lists.
+Use owner-only file modes.
+
+Edit `binding.yaml` only when the visible managed defaults need to change.
+The binding can select loopback ports, package-relative secret and certificate locators, durable
+state locations, an existing edge network, resource limits, restart policy, and value-free
+logging policy.
+
+Do not edit files under `generated/`.
+Do not edit generated Relay or Notary configuration.
+The signed product bundles remain the configuration authority.
+
+## Verify the managed package
+
+Verify the package before initialization:
+
+```sh
+registryctl deploy verify --package ./registry-stack
+```
+
+The report identifies:
+
+- Ownership as `managed`, `adapted`, or `invalid`
+- Freshness as `current`, `stale`, or `not_applicable`
+- Verification scope as `package`
+- Whether in-place regeneration is safe
+- Each file that established an adapted state
+
+Package-only verification does not inspect an external reverse proxy or parent Compose
+application.
+
+## Initialize each product once
+
+Initialization is explicit and product-owned.
+Ordinary `docker compose up` does not select an initialization service.
+
+Change to the package directory:
+
+```sh
+cd registry-stack
+```
+
+First validate the initialization model:
+
+```sh
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  -f generated/compose.initialize.yaml \
+  config --no-interpolate --no-env-resolution --quiet
+```
+
+Then run every `prepare-state` and `initialize` command in the exact order printed in
+`generated/RUNBOOK.md`:
+
+```sh
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-relay-public-prepare-state
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-relay-consultation-prepare-state
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-notary-prepare-state
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-relay-public-initialize
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-relay-consultation-initialize
+docker compose --env-file generated/compose.empty.env \
+  -f generated/compose.yaml -f generated/compose.initialize.yaml \
+  run --rm registry-notary-initialize
+```
+
+Preparation creates or migrates only the owning product's database schema and roles.
+Initialization verifies the bundle and anchor, records acceptance audit, and creates only the
+owning product's absent anti-rollback state.
+
+Initialization fails when anti-rollback state already exists or does not match.
+Do not reset state to make an older bundle start.
+
+## Run the package standalone
+
+Validate the ordinary model:
+
+```sh
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  config --no-interpolate --no-env-resolution --quiet
+```
+
+Start and inspect the services:
+
+```sh
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up -d
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps
+```
+
+The public Relay and Notary application ports bind to host loopback.
+The consultation Relay, administration, and posture endpoints have no host port.
+Metrics use separate configured loopback listeners.
+
+Stop the ordinary services without deleting durable volumes:
+
+```sh
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down
+```
+
+Internet exposure and Transport Layer Security (TLS) termination remain operator concerns.
+A same-host proxy outside a verified parent Compose model is not part of the Registryctl
+verification claim.
+
+## Include the package in an existing application
+
+Add the generated package to the parent `compose.yaml` without copying or merging its services:
 
 ```yaml
-services:
-  registry-relay:
-    ports:
-      - "127.0.0.1:4242:8080"
-  registry-notary:
-    ports:
-      - "127.0.0.1:4255:8080"
+include:
+  - ./registry-stack/generated/compose.yaml
 ```
 
-Omit the product that is not part of the selected topology. When the proxy runs on another host,
-bind the private interface and block direct public access at the firewall.
+Parent services may depend on `registry-relay-public` or `registry-notary` and join
+`registry-edge`.
+They must not join `registry-private`, share the consultation Relay's network namespace, mount a
+product secret or state path, or replace a Registry Stack image, command, entrypoint, or security
+setting.
 
-Do not publish admin, metrics, posture, or reload routes through the public edge. Keep internal
-Notary-to-Relay traffic on the private Compose network. The Notary Relay binding is a workload
-consultation client, not a registry source connector.
-
-Validate the Compose file:
+Verify the parent and package together:
 
 ```sh
-docker compose -f compose.yaml config
+registryctl deploy verify \
+  --package ./registry-stack \
+  --parent-compose ./compose.yaml
 ```
 
-The command prints the normalized Compose configuration and exits non-zero for an invalid file.
+The successful scope is `package_and_parent`.
+Registryctl parses only a finite local include graph, uses a controlled empty environment file,
+and asks Compose for a normalized model without interpolation or environment resolution.
 
-## Configure the edge
+An institution-owned proxy can join `registry-edge` in that parent model.
+The proxy owns external TLS, hostnames, and edge request admission.
+Relay and Notary still enforce their own authentication, authorization, purpose, disclosure, and
+audit contracts.
 
-The institutional edge owns:
+## Customize the managed package
 
-| Responsibility | Placement |
-| --- | --- |
-| Public TLS certificate and HTTPS redirect | Reverse proxy listeners for the public product hostnames |
-| Organization membership or IAM admission | Before proxying to the virtual machine |
-| Front rate limiting | At the same edge, before forwarding to Relay or Notary |
-| Header normalization | Strip caller-supplied identity headers and forward only reviewed headers |
-| Body, header, and connection timeouts | Reverse proxy listeners before the product containers |
-| Correlation trail | Edge access logs joined to product audit references |
-
-Proxy authentication does not replace product authentication. Relay and Notary must validate the
-API key or bearer token they receive. Do not authorize a product route from `X-User`, `X-Org`, or
-another forwarded identity header.
-
-## Preserve the combined boundary
-
-For a combined deployment, verify these properties before starting public traffic:
-
-- Only Relay receives registry source origins, credentials, private certificates, and protocol
-  adaptation configuration.
-- Notary receives the compiler-pinned Relay profile, contract hash, workload client id, and token
-  file required by the generated claim configuration.
-- The private Notary-to-Relay route is reachable without traversing the public proxy.
-- The Relay workload policy admits only the consultation profiles required by the active Notary
-  claims.
-- Public callers never receive the Notary workload credential or a source credential.
-
-For a Notary-only deployment, verify that no Relay service or registry source binding is present.
-
-## Start and verify
-
-Start the activated product configuration:
+Use `binding.yaml` for supported managed choices.
+After editing it, rerun generation against the same output directory:
 
 ```sh
-docker compose -f compose.yaml up -d
-docker compose -f compose.yaml ps
+registryctl deploy generate \
+  --approved-set ./approved-set.v1.json \
+  --output-dir ./registry-stack
+registryctl deploy verify --package ./registry-stack
 ```
 
-Check the products in the selected topology through the public edge:
+Registryctl preserves the operator-owned binding and directories, replaces only the verified
+generator-owned closure, and reports the package as current after successful regeneration.
+
+For an edge case outside the binding schema, create `operator-override.yaml`.
+Every standalone command must add the override after the base file:
 
 ```sh
-curl -fsS https://registry.example.gov/healthz
-curl -fsS https://registry.example.gov/ready
-curl -fsS https://notary.example.gov/healthz
-curl -fsS https://notary.example.gov/ready
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  -f operator-override.yaml \
+  config --no-interpolate --no-env-resolution --quiet
 ```
 
-Omit checks for a product that is not deployed. Then run an authorized protected Relay read or
-Notary evaluation using synthetic identifiers. Confirm anonymous calls fail, required purpose and
-scope checks run before source work, and the edge and product audit references can be joined
-without exposing credentials or raw subject identifiers.
+An intact generated closure plus one verified override is `adapted` and can remain safe for
+in-place regeneration.
+Registryctl preserves the override and does not claim the package is managed.
+
+If you edit a generated file, translate to another orchestrator, or use behavior the verifier
+cannot model, generate a fresh managed package into another directory.
+Keep the adapted package for operator-owned use.
+Registryctl does not merge arbitrary YAML or overwrite that package.
+
+Manual edits remain available for operator edge cases.
+Registryctl reports the resulting ownership boundary and never prevents Docker Compose from
+running an operator-owned package.
+
+Changing a product image, command, entrypoint, verified bundle or anchor mount, anti-rollback
+state ownership, private endpoint exposure, user, capabilities, or privilege restriction is
+invalid, not an adaptation.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| All clients appear as the proxy IP | The trusted proxy address is absent or incorrect. | Bind the exact proxy address or reviewed CIDR in the owning product configuration. |
-| Authenticated calls fail through the proxy | The proxy removed a required authentication or purpose header. | Forward only the reviewed product headers and keep caller identity headers untrusted. |
-| Notary cannot call Relay | The private service name, workload credential, or Relay policy does not match the generated combined topology. | Restore the compiler-generated Relay binding and keep the call on the private Compose network. |
-| Notary contains a source credential | The deployment bypassed the convergence boundary. | Remove the direct binding and rebuild the combined project so Relay owns source access. |
-| The edge rate limit is not visible to product diagnostics | Deployment evidence was asserted before the edge control was active. | Activate and test the edge policy before recording the deployment evidence. |
-
-## Next
-
-- [Back up and restore a deployment](../backup-and-restore/)
-- [Retention and persistent state](../retention-and-persistent-state/)
-- [Upgrade and roll back a deployment](../upgrade-and-rollback/)
-- [Harden a production deployment](../../security/hardening-checklist/)
-- [Registry Stack project authoring](../../tutorials/author-registry-project/)
+| Generation refuses a non-empty output | The directory is not an intact verified package. | Select an absent or empty directory, or restore the complete verified package. |
+| Verification reports `managed` and `stale` | A managed input changed after generation. | Regenerate the generator-owned closure before startup. |
+| Verification reports `adapted` | An operator override or unsupported model changed the ownership boundary. | Read the named files and guarantees, then use Docker under operator ownership or generate a separate managed package. |
+| Verification reports `invalid` | A hard product, secret, state, network, or privilege invariant failed. | Restore the generated boundary. Do not downgrade the failure to an override. |
+| Ordinary startup reports missing state | The one-time initialization was not completed or durable state was lost. | Complete first installation, or restore the exact recovery consistency group. Do not reinitialize an existing identity. |
+| The parent proxy cannot reach a public service | The proxy is not on `registry-edge` or uses the wrong generated service name. | Correct the parent model and rerun parent-scoped verification. |

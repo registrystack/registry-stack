@@ -1,136 +1,248 @@
 #!/usr/bin/env bash
 #
-# Verify the canonical first-API tutorial against checked-out source.
+# Execute the Registryctl 1.0 authoring tutorials from fresh reader directories.
 #
-# This source-contract gate deliberately does not execute the release installer
-# or local runtime. The candidate workflow runs the exact sealed installer,
-# doctor, start, smoke, denied, allowed, listener, and stop sequence through
-# release/scripts/first-country-release-form.py. Keeping those roles separate
-# prevents a locally rewritten image reference from standing in for immutable
-# candidate evidence.
+# This pull-request gate builds Registryctl from the checked-out source and
+# proves the offline init, test, check, and build contract. It does not stand in
+# for the release workflow, which separately exercises the sealed installer,
+# released image lock, doctor, and disposable development runtime.
 
 set -euo pipefail
 
 SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
-TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
+HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
+OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
+OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
+OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
+OPENCRVS_FIXTURE="$REPO_ROOT/crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api"
+OPENCRVS_PROJECT_FILE="$OPENCRVS_FIXTURE/registry-stack.yaml"
+OPENCRVS_ENVIRONMENT="$OPENCRVS_FIXTURE/environments/local.yaml"
+OPENCRVS_INTEGRATION="$OPENCRVS_FIXTURE/integrations/birth-event-search/integration.yaml"
+OPENCRVS_ADAPTER="$OPENCRVS_FIXTURE/integrations/birth-event-search/adapter.rhai"
+OPENCRVS_MATCH="$OPENCRVS_FIXTURE/integrations/birth-event-search/fixtures/match.yaml"
 TARGET_DIR="$REPO_ROOT/target/registryctl-tutorial-source"
 BUILD_PROFILE="${REGISTRYCTL_TUTORIAL_CARGO_PROFILE:-ci}"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/registryctl-tutorial-source.XXXXXX")"
-BLOCKS="$WORK_ROOT/blocks"
-PROJECT_ROOT="$WORK_ROOT/reader"
-REGISTRYCTL_BIN=""
-SOURCE_IMAGE_LOCK=""
+REGISTRYCTL_BIN="${REGISTRYCTL_BIN:-}"
+EVIDENCE_DIR="${REGISTRYCTL_TUTORIAL_EVIDENCE_DIR:-}"
+RETAINED_PROJECT="${REGISTRYCTL_TUTORIAL_PROJECT_DIR:-}"
+RUNNER_MODE="source"
+REPORT_ROOT="$WORK_ROOT/reports"
 
 cleanup() {
 	local exit_code=$?
 	set +e
-	if [[ -n "$SOURCE_IMAGE_LOCK" ]]; then
-		rm -f "$SOURCE_IMAGE_LOCK"
-	fi
 	rm -rf "$WORK_ROOT"
 	if ((exit_code == 0)); then
-		printf 'registryctl tutorial source contract: PASS\n'
+		printf 'registryctl 1.0 reader journeys: PASS\n'
 	else
-		printf 'registryctl tutorial source contract: FAIL (exit %d)\n' "$exit_code" >&2
+		printf 'registryctl 1.0 reader journeys: FAIL (exit %d)\n' "$exit_code" >&2
 	fi
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-for tool in cargo node grep; do
+for tool in node grep cp; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
 	fi
 done
-if [[ ! -f "$SITE_ROOT/node_modules/yaml/package.json" ]]; then
-	printf 'docs dependencies are not installed; run npm ci in %s\n' "$SITE_ROOT" >&2
+if [[ ! -d "$OPENCRVS_FIXTURE" ]]; then
+	printf 'maintained OpenCRVS Events API fixture is missing: %s\n' "$OPENCRVS_FIXTURE" >&2
+	printf 'do not substitute the legacy OpenCRVS DCI fixture\n' >&2
 	exit 1
 fi
-if [[ "$BUILD_PROFILE" != "ci" && "$BUILD_PROFILE" != "release" ]]; then
-	printf 'unsupported tutorial Cargo profile: %s (expected ci or release)\n' "$BUILD_PROFILE" >&2
+if [[ -n "$EVIDENCE_DIR" ]]; then
+	if [[ "$EVIDENCE_DIR" != /* ]]; then
+		printf 'REGISTRYCTL_TUTORIAL_EVIDENCE_DIR must be absolute: %s\n' "$EVIDENCE_DIR" >&2
+		exit 1
+	fi
+	if [[ -e "$EVIDENCE_DIR" ]]; then
+		printf 'tutorial evidence directory must be absent: %s\n' "$EVIDENCE_DIR" >&2
+		exit 1
+	fi
+	mkdir -p "$EVIDENCE_DIR"
+	REPORT_ROOT="$EVIDENCE_DIR"
+fi
+if [[ -n "$RETAINED_PROJECT" ]]; then
+	if [[ "$RETAINED_PROJECT" != /* ]]; then
+		printf 'REGISTRYCTL_TUTORIAL_PROJECT_DIR must be absolute: %s\n' "$RETAINED_PROJECT" >&2
+		exit 1
+	fi
+	if [[ -e "$RETAINED_PROJECT" ]]; then
+		printf 'retained tutorial project must be absent: %s\n' "$RETAINED_PROJECT" >&2
+		exit 1
+	fi
+fi
+
+node "$HELPER" assert-contains "$HTTP_TUTORIAL" \
+	'registryctl init my-registry --template http' \
+	'registryctl test' \
+	'registryctl dev smoke' \
+	'registryctl check --explain' \
+	'registryctl build'
+node "$HELPER" assert-contains "$OAUTH_HOWTO" \
+	'request: form' \
+	'request: json' \
+	'response_profile: oauth2_bearer' \
+	'response_profile: oauth2_bearer_no_expiry' \
+	'caching is disabled'
+node "$HELPER" assert-contains "$OAUTH_TUTORIAL" \
+	'type: oauth2_client_credentials' \
+	'capability:' \
+	'file: adapter.rhai' \
+	'../verify-opencrvs-claims/' \
+	'registryctl test' \
+	'registryctl check --explain' \
+	'registryctl build'
+node "$HELPER" assert-contains "$OPENCRVS_TUTORIAL" \
+	'OAuth' \
+	'Rhai' \
+	'POST /api/events/events/search' \
+	'birth-event-found' \
+	'birth-event-registered' \
+	'registryctl test' \
+	'registryctl check --explain' \
+	'registryctl build'
+node "$HELPER" assert-fence-file-equals \
+	"$OPENCRVS_TUTORIAL" 'Declare the synthetic event lookup' yaml 1 "$OPENCRVS_INTEGRATION"
+node "$HELPER" assert-fence-in-file \
+	"$OPENCRVS_TUTORIAL" 'Declare the synthetic event lookup' yaml 2 "$OPENCRVS_PROJECT_FILE"
+node "$HELPER" assert-fence-in-file \
+	"$OPENCRVS_TUTORIAL" 'Bind OAuth and source origins' yaml 1 "$OPENCRVS_ENVIRONMENT"
+node "$HELPER" assert-fence-in-file \
+	"$OPENCRVS_TUTORIAL" 'Bind OAuth and source origins' yaml 2 "$OPENCRVS_ENVIRONMENT"
+node "$HELPER" assert-fence-file-equals \
+	"$OPENCRVS_TUTORIAL" 'Map the minimized outputs' rhai 1 "$OPENCRVS_ADAPTER"
+node "$HELPER" assert-fence-in-file \
+	"$OPENCRVS_TUTORIAL" 'Keep one consultation-backed claim' yaml 1 "$OPENCRVS_PROJECT_FILE"
+node "$HELPER" assert-fence-file-equals \
+	"$OPENCRVS_TUTORIAL" 'Author the synthetic match fixture' yaml 1 "$OPENCRVS_MATCH"
+
+if [[ -n "$REGISTRYCTL_BIN" ]]; then
+	if [[ "$REGISTRYCTL_BIN" != /* ]]; then
+		printf 'REGISTRYCTL_BIN must be an absolute installed-binary path: %s\n' "$REGISTRYCTL_BIN" >&2
+		exit 1
+	fi
+	RUNNER_MODE="sealed"
+	printf 'using the explicitly installed Registryctl binary\n'
+else
+	if ! command -v cargo >/dev/null 2>&1; then
+		printf 'required tool not on PATH: cargo\n' >&2
+		exit 1
+	fi
+	if [[ "$BUILD_PROFILE" != "ci" && "$BUILD_PROFILE" != "release" ]]; then
+		printf 'unsupported tutorial Cargo profile: %s (expected ci or release)\n' "$BUILD_PROFILE" >&2
+		exit 1
+	fi
+	printf 'building the exact Registryctl source binary\n'
+	CARGO_INCREMENTAL=0 \
+	CARGO_PROFILE_DEV_DEBUG=0 \
+	CARGO_PROFILE_TEST_DEBUG=0 \
+	CARGO_TARGET_DIR="$TARGET_DIR" \
+		cargo build --locked --profile "$BUILD_PROFILE" -p registryctl
+	REGISTRYCTL_BIN="$TARGET_DIR/$BUILD_PROFILE/registryctl"
+fi
+if [[ ! -x "$REGISTRYCTL_BIN" ]]; then
+	printf 'Registryctl binary is not executable: %s\n' "$REGISTRYCTL_BIN" >&2
+	exit 1
+fi
+REGISTRYCTL_VERSION="$("$REGISTRYCTL_BIN" --version | awk 'NR == 1 { print $2 }')"
+if [[ ! "$REGISTRYCTL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+	printf 'unexpected Registryctl version: %s\n' "$REGISTRYCTL_VERSION" >&2
 	exit 1
 fi
 
-node "$HELPER" assert-layout "$TUTORIAL" \
-	'["Before you start","Install Registryctl","Create the sample project","Check your computer and project","Start the API","Check the API","Make one denied request","Make one allowed request","Make one allowed request","See what you can edit","Stop and clean up"]'
-node "$HELPER" extract-shell "$TUTORIAL" "$BLOCKS"
+run_reports() {
+	local project_directory=$1
+	local label=$2
+	local report_directory="$REPORT_ROOT/$label"
+	mkdir -p "$report_directory"
 
-expected_install=$'tag=v0.15.2\ncurl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"\nbash "./registryctl-${tag}-install.sh"\nregistryctl --version'
-if [[ "$(cat "$BLOCKS/02.sh")" != "$expected_install" ]]; then
-	printf 'release-form installer block changed without updating its source contract\n' >&2
-	exit 1
-fi
+	"$REGISTRYCTL_BIN" -C "$project_directory" test --format json >"$report_directory/test.json"
+	"$REGISTRYCTL_BIN" -C "$project_directory" check --format json >"$report_directory/check.json"
+	"$REGISTRYCTL_BIN" -C "$project_directory" build --format json >"$report_directory/build.json"
+	node "$HELPER" assert-project-reports \
+		"$report_directory/test.json" \
+		"$report_directory/check.json" \
+		"$report_directory/build.json"
 
-printf 'building current registryctl for the canonical source contract\n'
-CARGO_TARGET_DIR="$TARGET_DIR" \
-	cargo build --locked --profile "$BUILD_PROFILE" -p registryctl
-REGISTRYCTL_BIN="$TARGET_DIR/$BUILD_PROFILE/registryctl"
-[[ -x "$REGISTRYCTL_BIN" ]] || {
-	printf 'registryctl source binary is not executable: %s\n' "$REGISTRYCTL_BIN" >&2
-	exit 1
+	for lane in relay-public relay-consultation notary; do
+		test -f \
+			"$project_directory/.registry-stack/build/local/signing-inputs/$lane/signing-input.v1.json"
+	done
+	test -f "$project_directory/.registry-stack/build/local/artifact-manifest.json"
+	test ! -e "$project_directory/.registry-stack/runtime"
+
+	if grep -E -r -n \
+		'REGISTRYCTL_LOCAL_.*_RAW=|api_key_raw|audit_hash_secret|client_secret[[:space:]]*:[[:space:]]*[^{$]' \
+		"$project_directory/.registry-stack/build"; then
+		printf 'secret-shaped material leaked into %s build output\n' "$label" >&2
+		exit 1
+	fi
 }
 
-registryctl_version="$("$REGISTRYCTL_BIN" --version | awk '{print $2}')"
-if [[ ! "$registryctl_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-	printf 'unexpected registryctl source version: %s\n' "$registryctl_version" >&2
+HTTP_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/http-reader}"
+mkdir -p "$REPORT_ROOT/http"
+"$REGISTRYCTL_BIN" init "$HTTP_PROJECT" --template http >"$REPORT_ROOT/http/init.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/http/init.txt" \
+	"$HTTP_TUTORIAL" \
+	'Create the HTTP project' \
+	text \
+	1 \
+	"$HTTP_PROJECT" \
+	my-registry
+run_reports "$HTTP_PROJECT" http
+"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" test >"$REPORT_ROOT/http/test.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/http/test.txt" "$HTTP_TUTORIAL" 'Test the authored contract' text 1
+"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" test \
+	--integration person-record \
+	--fixture active-person \
+	--trace >"$REPORT_ROOT/http/trace.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/http/trace.txt" "$HTTP_TUTORIAL" 'Test the authored contract' text 2
+"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" build >"$REPORT_ROOT/http/build.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/http/build.txt" "$HTTP_TUTORIAL" 'Review and build the project' text 1
+printf 'HTTP reader journey: PASS\n'
+
+OPENCRVS_PROJECT="$WORK_ROOT/opencrvs-reader"
+cp -R "$OPENCRVS_FIXTURE" "$OPENCRVS_PROJECT"
+if ! grep -E -r -q 'type:[[:space:]]*oauth2_client_credentials' "$OPENCRVS_PROJECT"; then
+	printf 'OpenCRVS fixture does not declare OAuth client credentials\n' >&2
 	exit 1
 fi
-source_ref="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-SOURCE_IMAGE_LOCK="$(dirname "$REGISTRYCTL_BIN")/registryctl-v${registryctl_version}-image-lock.json"
-printf '%s\n' \
-	'{' \
-	'  "schema_version": "registryctl.release_image_lock.v1",' \
-	"  \"release_tag\": \"v${registryctl_version}\"," \
-	"  \"manifest_source_ref\": \"${source_ref}\"," \
-	"  \"tag_target\": \"${source_ref}\"," \
-	'  "platform": "linux/amd64",' \
-	'  "images": {' \
-	'    "registry-relay": "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",' \
-	'    "registry-notary": "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
-	'  }' \
-	'}' >"$SOURCE_IMAGE_LOCK"
-
-registryctl() {
-	"$REGISTRYCTL_BIN" "$@"
-}
-export -f registryctl
-export REGISTRYCTL_BIN REGISTRYCTL_NO_UPDATE_CHECK=1
-
-mkdir -p "$PROJECT_ROOT"
-cd "$PROJECT_ROOT"
-source "$BLOCKS/03.sh"
-
-test -f registry-stack.yaml
-test -f entities/projects.yaml
-test -f environments/local.yaml
-test -f data/public_works_projects.xlsx
-test ! -e relay
-test ! -e compose.yaml
-
-registryctl test --project-dir .
-registryctl preflight --project-dir . --environment local
-registryctl check --project-dir . --environment local --explain
-registryctl build --project-dir . --environment local
-
-test -f .registry-stack/build/local/artifact-manifest.json
-test -f .registry-stack/build/local/private/relay/config/relay.yaml
-test ! -e .registry-stack/runtime/local
-
-if grep -E -r -n 'REGISTRYCTL_LOCAL_RELAY_.*_RAW=|api_key_raw|audit_hash_secret' \
-	.registry-stack/build registry-stack.yaml entities environments data; then
-	printf 'raw local runtime material leaked into the source-contract closure\n' >&2
+if ! grep -E -r -q 'response_profile:[[:space:]]*oauth2_bearer_no_expiry' "$OPENCRVS_PROJECT"; then
+	printf 'OpenCRVS fixture does not declare the strict no-expiry OAuth profile\n' >&2
 	exit 1
 fi
+if ! grep -E -r -q 'file:[[:space:]]*adapter[.]rhai' "$OPENCRVS_PROJECT"; then
+	printf 'OpenCRVS fixture does not declare its reviewed Rhai adapter\n' >&2
+	exit 1
+fi
+if ! find "$OPENCRVS_PROJECT" -name adapter.rhai -type f -print -quit | grep -q .; then
+	printf 'OpenCRVS fixture does not contain its reviewed Rhai adapter\n' >&2
+	exit 1
+fi
+run_reports "$OPENCRVS_PROJECT" opencrvs
+printf 'OAuth and Rhai reader journey: PASS\n'
+printf 'OpenCRVS Events API case-study journey: PASS\n'
 
-node "$HELPER" assert-contains \
-	<(registryctl check --project-dir . --environment local --explain 2>&1) \
-	'Relay-only' 'projects-records'
-node "$HELPER" assert-contains \
-	.registry-stack/build/local/private/relay/config/relay.yaml \
-	'project_id' 'district_code' 'sector' 'status'
-
+manifest_args=("$REPORT_ROOT" "$RUNNER_MODE" "$REGISTRYCTL_VERSION")
+if [[ -n "$RETAINED_PROJECT" ]]; then
+	manifest_args+=("$RETAINED_PROJECT")
+fi
+node "$HELPER" write-evidence-manifest "${manifest_args[@]}"
+if [[ -n "$EVIDENCE_DIR" ]]; then
+	printf 'reader-journey evidence: %s\n' "$EVIDENCE_DIR"
+fi
+if [[ -n "$RETAINED_PROJECT" ]]; then
+	printf 'retained HTTP project: %s\n' "$RETAINED_PROJECT"
+fi
 printf '%s\n' \
-	'source-contract note: the exact runtime sequence is release-gated from the sealed candidate payload'
+	'release-boundary note: exact runtime sequence is release-gated from the sealed candidate payload'
