@@ -15,8 +15,8 @@ This repository is the monorepo source of truth for Registry Stack product code,
 release manifests, and docs.
 
 > **Status:** The current source implements the Registry Stack 1.0 command and
-> deployment cutover. Use matching released Registryctl, image-lock, and
-> documentation artifacts for an adopter journey.
+> deployment cutover. Use matching released Registryctl, signed release lock,
+> and documentation artifacts for an adopter journey.
 
 ## Start Here
 
