@@ -7,6 +7,16 @@
   fields, nested types, item counts, canonical serialized-size limits, and
   global depth and node bounds before a match is published. Every recursive
   schema detail is part of the public contract hash.
+- No-expiry OAuth Script consultations now persist an explicit disabled
+  token-cache contract instead of relying on signed DCI permit topology as an
+  implicit proxy. This changes the PostgreSQL state-plane capability
+  fingerprint. Drain or quiesce consultations and cleanly re-bootstrap the
+  pre-1.0 state plane before upgrading.
+- Interactive Script workers no longer count Relay-owned credential, permit,
+  TLS, and source waits against the active script budget. Those waits and the
+  complete worker exchange remain capped by the existing absolute durable
+  consultation deadline. Process, memory, instruction, call, IPC, and output
+  limits are unchanged.
 
 ## 0.15.2
 

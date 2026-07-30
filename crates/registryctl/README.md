@@ -102,6 +102,20 @@ authoring surface. `registryctl` diagnostics apply to the project sources that
 produced that output. Hand-editing compiled configuration is unsupported and
 has no project-level diagnostic path; change the project and regenerate it.
 
+OAuth client-credentials integrations select one exact token-response shape
+with `source.auth.response_profile`:
+
+| Profile | Accepted response | Freshness behavior |
+|---|---|---|
+| `oauth2_bearer` | Exactly `access_token`, case-sensitive `token_type: Bearer`, and bounded `expires_in` | Relay may cache only within the compiled expiry bound and safety skew. |
+| `oauth2_bearer_no_expiry` | Exactly `access_token` and case-sensitive `token_type: Bearer` | Relay disables token caching. It acquires a token for the current bounded consultation and does not retain it for another consultation. |
+
+Choose `oauth2_bearer_no_expiry` only when the token endpoint does not return
+`expires_in`. It rejects an expiry member, extra members, and `refresh_skew`.
+Registryctl does not infer expiry from unverified token contents. Both profiles
+retain the same host-owned credential, destination, TLS, SSRF, response-size,
+and fail-closed source-dispatch boundaries.
+
 `script` uses the release-gated Rhai v1 authoring ABI. Its offline conformance
 fixtures use the isolated implementation-owned worker harness, and deployment
 uses the same fixed source authority, budgets, and reviewed script closure.

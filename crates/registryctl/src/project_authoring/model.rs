@@ -1248,6 +1248,16 @@ enum OAuthRequestFormat {
 #[serde(rename_all = "snake_case")]
 enum OAuthResponseProfile {
     Oauth2Bearer,
+    Oauth2BearerNoExpiry,
+}
+
+impl OAuthResponseProfile {
+    const fn uses_expiry_bound_cache(self) -> bool {
+        match self {
+            Self::Oauth2Bearer => true,
+            Self::Oauth2BearerNoExpiry => false,
+        }
+    }
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]

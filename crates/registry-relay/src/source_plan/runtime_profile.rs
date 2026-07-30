@@ -660,6 +660,13 @@ impl CompiledRuntimeProfile {
         self.completion_seed_template.credential_token_lifetime_ms()
     }
 
+    pub(crate) const fn credential_token_cache_mode(&self) -> Option<&'static str> {
+        match self.completion_seed_template.credential_token_cache_mode() {
+            Some(mode) => Some(mode.as_str()),
+            None => None,
+        }
+    }
+
     pub(crate) const fn completion_seed_canonical_bytes_max(&self) -> usize {
         self.completion_seed_canonical_bytes_max
     }

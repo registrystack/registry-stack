@@ -113,6 +113,9 @@ The defaults are five calls, 64 KiB of aggregate author-controlled request bytes
 per-response body, 2 MiB of aggregate source-response bytes, and a 15 second deadline. The hard
 ceilings are 16 calls, 1 MiB of request bytes, 8 MiB per response, 16 MiB of source responses, and
 20 seconds. Deployment settings may lower these limits but cannot widen the reviewed integration.
+The isolated worker's active execution budget covers script work and IPC. Relay-owned credential,
+permit, TLS, and source waits do not consume that budget, but the existing absolute consultation
+deadline still caps the complete exchange.
 
 ## Write the adapter
 

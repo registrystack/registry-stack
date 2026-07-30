@@ -2374,7 +2374,13 @@ fn platform_call_budget_result(
             matches!(
                 runtime.block_on(
                     WorkerProcess::with_program(worker_program)
-                        .evaluate_with_host(&request, &mut CallBudgetCoverageHost),
+                        .evaluate_with_host(
+                            &request,
+                            &mut CallBudgetCoverageHost,
+                            tokio::time::Instant::now()
+                                .checked_add(std::time::Duration::from_secs(10))
+                                .expect("fixture hard deadline is representable"),
+                        ),
                 ),
                 Err(WorkerError::BudgetExceeded)
             )

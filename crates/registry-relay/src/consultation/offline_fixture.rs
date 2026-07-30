@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use registry_platform_crypto::canonicalize_json;
@@ -795,7 +796,14 @@ impl SourceHost for OfflineRhaiHost<'_> {
                         return Err(HostFailure::SourceAuth);
                     }
                 };
-                require_basic_success(observed, 64 * 1024).map_err(|_| HostFailure::SourceAuth)?;
+                if let Err(error) = require_credential_success(
+                    observed,
+                    credential.parser().max_response_bytes(),
+                    |status, body| credential.parser().parse(status, body),
+                ) {
+                    self.terminal_error = Some(error);
+                    return Err(HostFailure::SourceAuth);
+                }
                 self.credential_used = true;
             }
         }
@@ -949,13 +957,14 @@ impl OfflineRhaiHost<'_> {
                     )
                     .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
             )?;
-            require_basic_success(
+            require_credential_success(
                 self.interactions.take(
                     credential.id().as_str(),
                     credential_request.path.as_str(),
                     &credential_request,
                 )?,
-                64 * 1024,
+                credential.parser().max_response_bytes(),
+                |status, body| credential.parser().parse(status, body),
             )?;
             self.credential_used = true;
         }
@@ -1183,7 +1192,12 @@ fn execute_rhai(
         source_bytes: 0,
         terminal_error: None,
     };
-    let output = run_rhai_worker(&request, &mut host, worker_program);
+    let hard_deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_millis(u64::from(
+            plan.limits().operation().timeout_ms,
+        )))
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let output = run_rhai_worker(&request, &mut host, worker_program, hard_deadline);
     if let Some(error) = host.terminal_error {
         return Err(error);
     }
@@ -1309,6 +1323,7 @@ fn run_rhai_worker(
     request: &WorkerRequest,
     host: &mut OfflineRhaiHost<'_>,
     worker_program: Option<&Path>,
+    hard_deadline: tokio::time::Instant,
 ) -> Result<crate::rhai_worker::WorkerOutput, OfflineFixtureError> {
     let worker = worker_program
         .map_or_else(WorkerProcess::dedicated_executable, |program| {
@@ -1319,7 +1334,7 @@ fn run_rhai_worker(
         .enable_all()
         .build()
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
-        .block_on(worker.evaluate_with_host(request, host))
+        .block_on(worker.evaluate_with_host(request, host, hard_deadline))
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
 }
 
@@ -1573,9 +1588,10 @@ fn execute_http(
                         )
                         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
                 )?;
-                require_basic_success(
+                require_credential_success(
                     interactions.take(credential.id().as_str(), request.path.as_str(), &request)?,
-                    64 * 1024,
+                    credential.parser().max_response_bytes(),
+                    |status, body| credential.parser().parse(status, body),
                 )?;
                 credential_used = true;
             }
@@ -1705,13 +1721,14 @@ fn execute_dci(
             )
             .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
     )?;
-    require_basic_success(
+    require_credential_success(
         interactions.take(
             credential.id().as_str(),
             credential_request.path.as_str(),
             &credential_request,
         )?,
-        64 * 1024,
+        credential.parser().max_response_bytes(),
+        |status, body| credential.parser().parse(status, body),
     )?;
     let verification_request = verification
         .transport_template()
@@ -2120,14 +2137,72 @@ fn snapshot_projected_value(
     }
 }
 
-fn require_basic_success(
+fn require_credential_success<T, E>(
     response: OfflineSourceResponse,
     max_bytes: u32,
+    parse: impl FnOnce(u16, &[u8]) -> Result<T, E>,
 ) -> Result<(), OfflineFixtureError> {
     match response {
-        OfflineSourceResponse::CredentialSuccess => Ok(()),
-        other => require_http_body(other, max_bytes).map(drop),
+        OfflineSourceResponse::Http {
+            status: 200,
+            headers,
+            body,
+        } => {
+            if !offline_has_closed_json_content_type(&headers) {
+                return Err(OfflineFixtureError::SourceResponseMalformed);
+            }
+            if body.len() > max_bytes as usize {
+                return Err(OfflineFixtureError::SourceResponseTooLarge);
+            }
+            parse(200, &body)
+                .map(drop)
+                .map_err(|_| OfflineFixtureError::SourceResponseMalformed)
+        }
+        OfflineSourceResponse::DeclaredBodyBytes {
+            status: 200,
+            body_bytes,
+        } if body_bytes > u64::from(max_bytes) => Err(OfflineFixtureError::SourceResponseTooLarge),
+        OfflineSourceResponse::DeclaredBodyBytes { status: 200, .. }
+        | OfflineSourceResponse::CredentialSuccess => {
+            Err(OfflineFixtureError::SourceResponseMalformed)
+        }
+        OfflineSourceResponse::Http { .. } | OfflineSourceResponse::DeclaredBodyBytes { .. } => {
+            Err(OfflineFixtureError::SourceStatusRejected)
+        }
+        OfflineSourceResponse::Timeout => Err(OfflineFixtureError::SourceDeadlineExceeded),
+        OfflineSourceResponse::NoMatch | OfflineSourceResponse::Unavailable => {
+            Err(OfflineFixtureError::SourceUnavailable)
+        }
     }
+}
+
+// Keep this closed predicate aligned with production
+// `BoundedDestinationResponse::require_json_content_type`.
+fn offline_has_closed_json_content_type(headers: &BTreeMap<String, String>) -> bool {
+    let mut values = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str());
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    let Some(media_type) = parts.next() else {
+        return false;
+    };
+    if !media_type.trim().eq_ignore_ascii_case("application/json") {
+        return false;
+    }
+    let Some(parameter) = parts.next() else {
+        return true;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    let Some((name, value)) = parameter.split_once('=') else {
+        return false;
+    };
+    name.trim().eq_ignore_ascii_case("charset") && value.trim().eq_ignore_ascii_case("utf-8")
 }
 
 fn require_http_body(
@@ -2780,6 +2855,53 @@ mod tests {
             assert_eq!(
                 host.terminal_error,
                 Some(OfflineFixtureError::SourceResponseMalformed)
+            );
+        }
+    }
+
+    #[test]
+    fn no_expiry_credential_fixture_uses_the_compiled_response_parser() {
+        let plan = crate::source_plan::open_crvs_no_expiry_script_runtime_plan_fixture();
+        let parser = plan
+            .credential_operation()
+            .expect("OpenCRVS plan has a credential operation")
+            .parser();
+        let execute = |content_type: Option<&str>, body: &[u8]| {
+            require_credential_success(
+                OfflineSourceResponse::Http {
+                    status: 200,
+                    headers: content_type
+                        .map(|value| {
+                            BTreeMap::from([("Content-Type".to_owned(), value.to_owned())])
+                        })
+                        .unwrap_or_default(),
+                    body: body.to_vec(),
+                },
+                parser.max_response_bytes(),
+                |status, body| parser.parse(status, body),
+            )
+        };
+        let valid = br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer"}"#;
+
+        for content_type in ["application/json", "APPLICATION/JSON; CHARSET=UTF-8"] {
+            assert_eq!(execute(Some(content_type), valid), Ok(()));
+        }
+        for (content_type, malformed) in [
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"bearer"}"#.as_slice(),
+            ),
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer","expires_in":60}"#
+                    .as_slice(),
+            ),
+            (None, valid.as_slice()),
+            (Some("text/plain"), valid.as_slice()),
+        ] {
+            assert_eq!(
+                execute(content_type, malformed),
+                Err(OfflineFixtureError::SourceResponseMalformed)
             );
         }
     }

@@ -2,7 +2,9 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    future::pending,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -15,6 +17,12 @@ use serde_json::json;
 
 fn relay_worker() -> WorkerProcess {
     WorkerProcess::with_program(env!("CARGO_BIN_EXE_registry-relay-rhai-worker"))
+}
+
+fn deadline_after(duration: Duration) -> tokio::time::Instant {
+    tokio::time::Instant::now()
+        .checked_add(duration)
+        .expect("test deadline is representable")
 }
 
 fn request(script: impl Into<String>) -> WorkerRequest {
@@ -54,6 +62,28 @@ impl SourceHost for QueueHost {
         self.responses
             .pop_front()
             .unwrap_or(Err(HostFailure::ContractViolation))
+    }
+}
+
+struct DelayedHost {
+    delay: Duration,
+    response: Option<SourceResponse>,
+}
+
+#[async_trait]
+impl SourceHost for DelayedHost {
+    async fn call(&mut self, _call: SourceCall) -> Result<SourceResponse, HostFailure> {
+        tokio::time::sleep(self.delay).await;
+        self.response.take().ok_or(HostFailure::ContractViolation)
+    }
+}
+
+struct HangingHost;
+
+#[async_trait]
+impl SourceHost for HangingHost {
+    async fn call(&mut self, _call: SourceCall) -> Result<SourceResponse, HostFailure> {
+        pending().await
     }
 }
 
@@ -142,6 +172,78 @@ fn opencrvs_output_request(script: &str) -> WorkerRequest {
         },
     );
     request
+}
+
+#[tokio::test]
+async fn bounded_host_wait_does_not_consume_the_script_active_budget() {
+    let worker = relay_worker();
+    let mut request = request(
+        "fn consult(ctx) { let response = source.get(\"/record\"); \
+         result.match(#{ active: response.body.active }) }",
+    );
+    request.limits.wall_time_ms = 250;
+    let mut host = DelayedHost {
+        delay: Duration::from_millis(500),
+        response: Some(SourceResponse {
+            status: 200,
+            body: json!({"active": true}),
+            headers: BTreeMap::new(),
+        }),
+    };
+
+    let output = worker
+        .evaluate_with_host(&request, &mut host, deadline_after(Duration::from_secs(5)))
+        .await
+        .expect("bounded host wait must not consume active script time");
+    assert_eq!(
+        matched(output).get("active"),
+        Some(&TypedValue::Boolean { value: Some(true) })
+    );
+}
+
+#[tokio::test]
+async fn absolute_host_deadline_terminates_a_hanging_host() {
+    let worker = relay_worker();
+    let request = request(
+        "fn consult(ctx) { source.get(\"/record\"); \
+         result.match(#{ active: true }) }",
+    );
+    let mut host = HangingHost;
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        worker.evaluate_with_host(
+            &request,
+            &mut host,
+            deadline_after(Duration::from_millis(50)),
+        ),
+    )
+    .await
+    .expect("the worker must terminate within the outer test guard");
+    assert_eq!(result, Err(WorkerError::TimedOut));
+}
+
+#[tokio::test]
+async fn host_wait_exclusion_does_not_widen_the_script_active_budget() {
+    let worker = relay_worker();
+    let mut request = request("fn consult(ctx) { source.get(\"/record\"); while true {} }");
+    request.limits.max_operations = 5_000_000;
+    request.limits.wall_time_ms = 20;
+    let mut host = DelayedHost {
+        delay: Duration::from_millis(100),
+        response: Some(SourceResponse {
+            status: 200,
+            body: json!({}),
+            headers: BTreeMap::new(),
+        }),
+    };
+
+    assert_eq!(
+        worker
+            .evaluate_with_host(&request, &mut host, deadline_after(Duration::from_secs(2)),)
+            .await,
+        Err(WorkerError::BudgetExceeded)
+    );
 }
 
 #[tokio::test]
@@ -435,7 +537,7 @@ async fn one_worker_interactively_orchestrates_multiple_bounded_source_calls() {
     ]);
 
     let output = worker
-        .evaluate_with_host(&request, &mut host)
+        .evaluate_with_host(&request, &mut host, deadline_after(Duration::from_secs(10)))
         .await
         .expect("interactive worker");
     assert_eq!(
@@ -485,7 +587,7 @@ async fn post_form_is_an_explicit_host_call_and_results_remain_natural_maps() {
         headers: BTreeMap::new(),
     }]);
     let output = worker
-        .evaluate_with_host(&request, &mut host)
+        .evaluate_with_host(&request, &mut host, deadline_after(Duration::from_secs(10)))
         .await
         .expect("form worker");
     assert_eq!(
@@ -528,7 +630,9 @@ async fn host_failures_terminate_without_becoming_script_values() {
         calls: Arc::new(Mutex::new(Vec::new())),
     };
     assert_eq!(
-        worker.evaluate_with_host(&request, &mut host).await,
+        worker
+            .evaluate_with_host(&request, &mut host, deadline_after(Duration::from_secs(10)))
+            .await,
         Err(WorkerError::HostFailed(HostFailure::SourceAuth))
     );
 }
@@ -599,7 +703,9 @@ async fn process_denies_instruction_depth_output_call_and_wall_time_overruns() {
         headers: BTreeMap::new(),
     }]);
     assert_eq!(
-        worker.evaluate_with_host(&calls, &mut host).await,
+        worker
+            .evaluate_with_host(&calls, &mut host, deadline_after(Duration::from_secs(10)))
+            .await,
         Err(WorkerError::BudgetExceeded)
     );
 
@@ -630,7 +736,9 @@ async fn process_rejects_oversized_ipc_frames_and_host_responses() {
         headers: BTreeMap::new(),
     }]);
     assert_eq!(
-        worker.evaluate_with_host(&source, &mut host).await,
+        worker
+            .evaluate_with_host(&source, &mut host, deadline_after(Duration::from_secs(10)))
+            .await,
         Err(WorkerError::BudgetExceeded)
     );
 }

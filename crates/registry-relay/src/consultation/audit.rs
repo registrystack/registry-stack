@@ -239,6 +239,13 @@ impl RuntimeConsultationCompletionSeed {
         if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 60_000 {
             return Err(ConsultationAuditBuildError::ProfileMismatch);
         }
+        let mut credential = json!({
+            "reference": profile.credential_reference(),
+            "generation": profile.credential_generation(),
+        });
+        if let Some(cache_mode) = profile.credential_token_cache_mode() {
+            credential["token_cache_mode"] = Value::String(cache_mode.to_owned());
+        }
         let value = json!({
             "schema": "registry.relay.consultation-completion-seed/v1",
             "correlation": {
@@ -284,10 +291,7 @@ impl RuntimeConsultationCompletionSeed {
                 "data_destination_id": profile.data_destination_id(),
                 "verification_destination_id": profile.verification_destination_id(),
             },
-            "credential": {
-                "reference": profile.credential_reference(),
-                "generation": profile.credential_generation(),
-            },
+            "credential": credential,
             "dispatch": {
                 "plan_kind": source_plan_kind_str(profile.kind()),
                 "permit_bindings": permit_bindings_value(profile),
@@ -1158,7 +1162,8 @@ mod tests {
     use crate::source_plan::runtime_profile::CompiledConsentProfile;
     use crate::source_plan::{
         bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
-        maximum_runtime_profile_fixture, rhai_runtime_vector_plan_fixture, CompiledSourcePlan,
+        maximum_runtime_profile_fixture, open_crvs_no_expiry_script_runtime_plan_fixture,
+        rhai_runtime_vector_plan_fixture, CompiledSourcePlan,
     };
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1217,6 +1222,38 @@ mod tests {
             ),
             Err(ConsultationAuditBuildError::ProfileMismatch)
         ));
+    }
+
+    #[test]
+    fn production_seed_preserves_the_compiled_no_expiry_cache_discriminator() {
+        let plan = open_crvs_no_expiry_script_runtime_plan_fixture();
+        let profile = plan.runtime_profile();
+        let purpose = profile.purposes().next().expect("fixture purpose");
+        let digests = ConsultationDigests::from_labels_for_test(DIGEST);
+        let seed = RuntimeConsultationCompletionSeed::build_from_parts(
+            profile,
+            None,
+            purpose,
+            VerifiedConsentDecision::not_required_for_test(),
+            &digests,
+        )
+        .expect("typed production seed");
+
+        assert_eq!(
+            seed.safe_value()["credential"]["token_cache_mode"],
+            json!("disabled")
+        );
+        assert_eq!(
+            seed.safe_value()["bounds"]["credential_token_lifetime_ms"],
+            Value::Null
+        );
+        assert_eq!(
+            seed.safe_value()["dispatch"]["permit_bindings"],
+            json!([
+                {"kind": "credential", "ordinal": 0},
+                {"kind": "data", "ordinal": 0},
+            ])
+        );
     }
 
     #[test]

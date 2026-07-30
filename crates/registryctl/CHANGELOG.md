@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   300-second proof-freshness default, and supports authenticated-requester
   witnesses in offline fixtures. It rejects shared credential roots and proof
   inputs that the target-selection ceremony cannot supply.
+- Project authoring can select `oauth2_bearer_no_expiry` for OAuth
+  client-credentials endpoints that return exactly `access_token` and
+  `token_type: Bearer` without `expires_in`. The generated Relay contract
+  disables token caching, rejects expiry and extra response members, and does
+  not infer freshness from token contents.
 
 ## [0.15.2] - 2026-07-28
 

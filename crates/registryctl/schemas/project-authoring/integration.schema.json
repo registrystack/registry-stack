@@ -241,15 +241,42 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "request", "response_profile"],
+          "allOf": [
+            {
+              "x-registry-field": "branch",
+              "if": {
+                "x-registry-field": "branch",
+                "properties": {
+                  "response_profile": {
+                    "x-registry-field": "property",
+                    "description": "Matches the strict no-expiry bearer profile before applying its refresh-control constraint.",
+                    "const": "oauth2_bearer_no_expiry"
+                  }
+                },
+                "required": ["response_profile"]
+              },
+              "then": {
+                "x-registry-field": "branch",
+                "not": {
+                  "x-registry-field": "branch",
+                  "required": ["refresh_skew"]
+                }
+              }
+            }
+          ],
           "properties": {
             "type": {"x-registry-field": "property", "const": "oauth2_client_credentials" },
             "request": {"x-registry-field": "property", "enum": ["form", "json"] },
-            "response_profile": {"x-registry-field": "property", "const": "oauth2_bearer" },
+            "response_profile": {
+              "x-registry-field": "property",
+              "description": "Selects either the strict three-member bearer response with bounded expiry caching or the strict two-member bearer response with caching disabled.",
+              "enum": ["oauth2_bearer", "oauth2_bearer_no_expiry"]
+            },
             "scope": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 1024 },
             "audience": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 2048 },
             "refresh_skew": {
               "x-registry-field": "property",
-              "description": "Positive OAuth refresh interval below the generated token contract's 60-second minimum lifetime.",
+              "description": "Positive OAuth refresh interval below the generated token contract's 60-second minimum lifetime. Valid only with response_profile oauth2_bearer.",
               "type": "string",
               "pattern": "^(?:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4})ms|(?:[1-9]|[1-5][0-9])s)$"
             }

@@ -5716,9 +5716,18 @@ fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
         let project = copy_project("opencrvs", temporary.path());
         replace_in_file(
             &project.join("integrations/birth-record/integration.yaml"),
-            "    response_profile: oauth2_bearer",
+            "    response_profile: oauth2_bearer_no_expiry",
             &format!("    response_profile: oauth2_bearer\n    refresh_skew: {authored}"),
         );
+        for fixture_name in ["match.yaml", "no-match.yaml", "ambiguous.yaml"] {
+            let fixture = project
+                .join("integrations/birth-record/fixtures")
+                .join(fixture_name);
+            let mut document = read_yaml(&fixture);
+            document["interactions"][0]["respond"]["body"]["expires_in"] =
+                serde_norway::from_str("60").expect("OAuth fixture expiry");
+            write_yaml(&fixture, &document);
+        }
         let report = build_registry_project(&ProjectBuildOptions {
             project_directory: project.clone(),
             environment: "local".to_string(),
@@ -5738,6 +5747,136 @@ fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
         assert_eq!(
             pack["spec"]["plan"]["credential_operation"]["response"]["expiry_safety_skew_ms"],
             expected_ms
+        );
+    }
+}
+
+#[test]
+fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("opencrvs", temporary.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("strict two-member OAuth fixtures execute");
+
+    let report = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("no-expiry OAuth project builds through the Relay compiler");
+    let output = resolve_build_output(
+        &project,
+        report.output.expect("no-expiry OAuth build output"),
+    );
+    let pack: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            output.join("private/relay/config/artifacts/integration-packs/birth-record.json"),
+        )
+        .expect("generated OpenCRVS integration pack reads"),
+    )
+    .expect("generated OpenCRVS integration pack is JSON");
+    assert_eq!(
+        pack["spec"]["plan"]["credential_operation"]["response"],
+        serde_json::json!({
+            "max_bytes": 8192,
+            "accepted_statuses": [200],
+            "schema": "strict_access_token_bearer_no_expiry",
+            "access_token_max_bytes": 4096,
+            "token_type": "Bearer",
+            "cache_mode": "disabled"
+        })
+    );
+    let binding: serde_json::Value =
+        serde_json::from_slice(
+            &std::fs::read(output.join(
+                "private/relay/config/artifacts/private-bindings/birth-verification-birth.json",
+            ))
+            .expect("generated OpenCRVS private binding reads"),
+        )
+        .expect("generated OpenCRVS private binding is JSON");
+    assert!(
+        binding["limits"].get("max_token_lifetime_ms").is_none(),
+        "a no-expiry token must not gain a cache lifetime from private configuration"
+    );
+
+    let skew_root = tempfile::tempdir().expect("temporary directory");
+    let skew_project = copy_project("opencrvs", skew_root.path());
+    replace_in_file(
+        &skew_project.join("integrations/birth-record/integration.yaml"),
+        "    response_profile: oauth2_bearer_no_expiry",
+        "    response_profile: oauth2_bearer_no_expiry\n    refresh_skew: 20s",
+    );
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: skew_project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("no-expiry profile rejects refresh skew");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("schema_path=/properties/source/properties/auth/oneOf keyword=oneOf"),
+        "unexpected no-expiry refresh-skew diagnostic: {rendered}"
+    );
+    assert!(!rendered.contains("oauth2_bearer_no_expiry"));
+    assert!(!rendered.contains("20s"));
+}
+
+#[test]
+fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
+    const EXACT_BODY: &str = "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }\n";
+    for (case, body, content_type) in [
+        (
+            "lowercase token type",
+            "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: bearer }\n",
+            Some("application/json"),
+        ),
+        (
+            "unexpected expiry",
+            "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer, expires_in: 60 }\n",
+            Some("application/json"),
+        ),
+        ("missing content type", EXACT_BODY, None),
+        ("wrong content type", EXACT_BODY, Some("text/plain")),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("opencrvs", temporary.path());
+        let fixture = project.join("integrations/birth-record/fixtures/ambiguous.yaml");
+        let mut document = read_yaml(&fixture);
+        document["interactions"][0]["respond"]["body"] =
+            serde_norway::from_str(body).expect("OAuth response fixture");
+        if let Some(content_type) = content_type {
+            document["interactions"][0]["respond"]["headers"]["Content-Type"] =
+                serde_norway::Value::String(content_type.to_owned());
+        } else {
+            document["interactions"][0]["respond"]
+                .as_mapping_mut()
+                .expect("OAuth fixture response")
+                .remove(serde_norway::Value::String("headers".to_owned()));
+        }
+        write_yaml(&fixture, &document);
+
+        let error = test_registry_project_selected(
+            &ProjectTestOptions {
+                project_directory: project,
+                environment: None,
+                live: false,
+            },
+            &ProjectTestSelection {
+                integration: Some("birth-record".to_string()),
+                fixture: Some("birth-record-ambiguous".to_string()),
+                trace: true,
+            },
+        )
+        .unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("source.response_malformed"),
+            "{case} must fail through the production OAuth response contract: {rendered}"
         );
     }
 }
@@ -5877,7 +6016,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "ef5231ed6ad392a3f2eabac126e74115db68050387f44dbd04039578d18e875d",
+        "e43844d2ee179f57034bad37d64cb14853459d5e10e5e2b8bc011a46f4072e5c",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
