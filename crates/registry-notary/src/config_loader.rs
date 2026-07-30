@@ -2,6 +2,41 @@ use crate::*;
 
 use registry_notary_server::{NotaryActivationCode, NotaryActivationFailure};
 
+const NOTARY_CONFIG_BUNDLE_PRODUCT: &str = "registry-notary";
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum ServerConfigInput {
+    LocalFile(PathBuf),
+    SignedBundle {
+        bundle_dir: PathBuf,
+        anchor_path: PathBuf,
+        state_path: PathBuf,
+    },
+}
+
+impl fmt::Debug for ServerConfigInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalFile(_) => formatter.write_str("ServerConfigInput::LocalFile(<redacted>)"),
+            Self::SignedBundle { .. } => {
+                formatter.write_str("ServerConfigInput::SignedBundle(<redacted>)")
+            }
+        }
+    }
+}
+
+impl From<&Path> for ServerConfigInput {
+    fn from(config_path: &Path) -> Self {
+        Self::LocalFile(config_path.to_path_buf())
+    }
+}
+
+impl From<&PathBuf> for ServerConfigInput {
+    fn from(config_path: &PathBuf) -> Self {
+        Self::from(config_path.as_path())
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct LoadedServerConfig {
     pub(crate) config: StandaloneRegistryNotaryConfig,
@@ -123,6 +158,10 @@ pub(crate) fn load_server_config(
                 return Err(bundle_verification_failure(code));
             }
         };
+    // A bundle and anchor can be internally consistent while belonging to a
+    // different product. Bind the verified manifest to this binary before the
+    // legacy loader may consider any local recovery selection.
+    ensure_notary_config_bundle_product(&verified)?;
     match load_verified_bundle_server_config(config_trust, initialize_state, verified) {
         Ok(loaded) => Ok(loaded),
         Err(error) => {
@@ -137,20 +176,72 @@ pub(crate) fn load_server_config(
     }
 }
 
+pub(crate) fn load_server_config_input(
+    input: &ServerConfigInput,
+    initialize_state: bool,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    match input {
+        ServerConfigInput::LocalFile(config_path) => {
+            load_server_config(config_path, initialize_state)
+        }
+        ServerConfigInput::SignedBundle {
+            bundle_dir,
+            anchor_path,
+            state_path,
+        } => load_direct_signed_bundle_server_config(
+            bundle_dir,
+            anchor_path,
+            state_path,
+            initialize_state,
+        ),
+    }
+}
+
+pub(crate) fn load_direct_signed_bundle_server_config(
+    bundle_dir: &Path,
+    anchor_path: &Path,
+    state_path: &Path,
+    initialize_state: bool,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    // These operator-selected paths are the complete trust input for direct
+    // startup. Do not consult config_trust from another file or fall back to an
+    // unsigned selection when verification or anti-rollback checks fail.
+    let verified = verify_config_bundle(bundle_dir, anchor_path).map_err(|error| {
+        let code = log_bundle_verification_error(&error);
+        bundle_verification_failure(code)
+    })?;
+    load_verified_bundle_server_config_with_state(state_path, None, initialize_state, verified)
+}
+
 pub(crate) fn load_verified_bundle_server_config(
     config_trust: &ConfigTrustConfig,
     initialize_state: bool,
     verified: VerifiedConfigBundle,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    load_verified_bundle_server_config_with_state(
+        &config_trust.antirollback_state_path,
+        config_trust.break_glass_override_path.as_deref(),
+        initialize_state,
+        verified,
+    )
+}
+
+fn load_verified_bundle_server_config_with_state(
+    state_path: &Path,
+    rollback_override_path: Option<&Path>,
+    initialize_state: bool,
+    verified: VerifiedConfigBundle,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    ensure_notary_config_bundle_product(&verified)?;
     let key = antirollback_key_from_verified_bundle(&verified);
     let state_decision = resolve_bundle_state_action(BundleStateRequest {
-        state_path: &config_trust.antirollback_state_path,
+        state_path,
         key: &key,
         sequence: verified.manifest.sequence,
         config_hash: &verified.manifest.config_hash,
         bundle_manifest_hash: &verified.manifest_hash,
         previous_config_hash: verified.manifest.previous_config_hash.as_deref(),
-        rollback_override_path: config_trust.break_glass_override_path.as_deref(),
+        rollback_override_path,
         initialize_state,
     })
     .map_err(map_config_boot_error)?;
@@ -196,7 +287,7 @@ pub(crate) fn load_verified_bundle_server_config(
         config_source: ConfigSource::SignedBundleFile,
         config_provenance: Some(provenance),
         pending_bundle_acceptance: Some(PendingBundleAcceptance {
-            state_path: config_trust.antirollback_state_path.clone(),
+            state_path: state_path.to_path_buf(),
             key,
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some(verified.manifest.bundle_id),
@@ -215,6 +306,22 @@ pub(crate) fn load_verified_bundle_server_config(
             override_path: state_decision.override_path,
         }),
     })
+}
+
+fn ensure_notary_config_bundle_product(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if verified.manifest.product == NOTARY_CONFIG_BUNDLE_PRODUCT {
+        return Ok(());
+    }
+    log_safe_bundle_rejection(
+        "config.bundle_rejected",
+        BundleVerificationCode::REJECTED_BINDING,
+        None,
+    );
+    Err(bundle_verification_failure(
+        BundleVerificationCode::REJECTED_BINDING,
+    ))
 }
 
 pub(crate) fn load_unsigned_break_glass_or_pin_server_config(

@@ -441,3 +441,142 @@ fn env_bind_override_is_loaded_by_cli() {
         Some("0.0.0.0:8080".parse().expect("socket addr parses"))
     );
 }
+
+#[test]
+fn direct_signed_bundle_startup_arguments_resolve_as_one_closed_input() {
+    let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+    let args = Args::try_parse_from([
+        "registry-notary",
+        "--bundle-dir",
+        "operator-inputs/notary-bundle",
+        "--anchor-path",
+        "operator-inputs/notary-trust-anchor.json",
+        "--state-path",
+        "runtime-state/notary-antirollback.json",
+        "--initialize-state",
+    ])
+    .expect("complete direct bundle arguments parse");
+
+    assert_eq!(
+        server_config_input(&args).expect("server input resolves"),
+        ServerConfigInput::SignedBundle {
+            bundle_dir: PathBuf::from("operator-inputs/notary-bundle"),
+            anchor_path: PathBuf::from("operator-inputs/notary-trust-anchor.json"),
+            state_path: PathBuf::from("runtime-state/notary-antirollback.json"),
+        }
+    );
+    assert!(args.initialize_state);
+}
+
+#[test]
+fn direct_signed_bundle_startup_rejects_every_partial_argument_set() {
+    let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+    for partial in [
+        vec!["--bundle-dir", "bundle"],
+        vec!["--anchor-path", "anchor.json"],
+        vec!["--state-path", "state.json"],
+        vec!["--bundle-dir", "bundle", "--anchor-path", "anchor.json"],
+        vec!["--bundle-dir", "bundle", "--state-path", "state.json"],
+        vec!["--anchor-path", "anchor.json", "--state-path", "state.json"],
+    ] {
+        let mut argv = vec!["registry-notary"];
+        argv.extend(partial);
+        let error = Args::try_parse_from(argv).expect_err("partial bundle input must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+}
+
+#[test]
+fn local_and_direct_signed_bundle_startup_inputs_are_mutually_exclusive() {
+    let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+    let error = Args::try_parse_from([
+        "registry-notary",
+        "--config",
+        "/private/SENTINEL_LOCAL_CONFIG.yaml",
+        "--bundle-dir",
+        "bundle",
+        "--anchor-path",
+        "anchor.json",
+        "--state-path",
+        "state.json",
+    ])
+    .expect_err("mixed local and signed-bundle inputs must not parse");
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    assert!(!error.to_string().contains("SENTINEL_LOCAL_CONFIG"));
+}
+
+#[test]
+fn environment_local_config_cannot_silently_mix_with_direct_bundle_startup() {
+    let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+    std::env::set_var(
+        "REGISTRY_NOTARY_CONFIG",
+        "/private/SENTINEL_LOCAL_BOOTSTRAP_CONFIG.yaml",
+    );
+    let error = Args::try_parse_from([
+        "registry-notary",
+        "--bundle-dir",
+        "bundle",
+        "--anchor-path",
+        "anchor.json",
+        "--state-path",
+        "state.json",
+    ])
+    .expect_err("environment config must conflict with direct bundle input");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    assert!(
+        !error
+            .to_string()
+            .contains("SENTINEL_LOCAL_BOOTSTRAP_CONFIG"),
+        "clap conflict diagnostics must not disclose the environment config path"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn env_file_local_config_cannot_silently_mix_with_direct_bundle_startup() {
+    let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let env_path = tmp.path().join("SENTINEL_PRIVATE_STARTUP.env");
+    std::fs::write(
+        &env_path,
+        "REGISTRY_NOTARY_CONFIG=/private/SENTINEL_LOCAL_BOOTSTRAP_CONFIG.yaml\n",
+    )
+    .expect("env file writes");
+    let args = Args::try_parse_from([
+        "registry-notary",
+        "--bundle-dir",
+        "bundle",
+        "--anchor-path",
+        "anchor.json",
+        "--state-path",
+        "state.json",
+        "--env-file",
+        env_path.to_str().expect("env path is UTF-8"),
+    ])
+    .expect("arguments parse before the env file is loaded");
+
+    let error = run(args)
+        .await
+        .expect_err("env-file local config must reject direct bundle startup");
+    std::env::remove_var("REGISTRY_NOTARY_CONFIG");
+
+    assert_value_free_activation_failure(
+        error.as_ref(),
+        NotaryActivationCode::CONFIGURATION_INVALID,
+        &[
+            "SENTINEL_PRIVATE_STARTUP",
+            "SENTINEL_LOCAL_BOOTSTRAP_CONFIG",
+            env_path.to_str().expect("env path is UTF-8"),
+        ],
+    );
+}

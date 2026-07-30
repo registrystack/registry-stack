@@ -13,13 +13,14 @@ fn value_free_runtime_activation_failure<E>(
 }
 
 pub(crate) async fn run_server(
-    config_path: &Path,
+    config_input: impl Into<ServerConfigInput>,
     bind_override: Option<SocketAddr>,
     initialize_state: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing().map_err(value_free_configuration_failure)?;
 
-    let loaded = load_server_config(config_path, initialize_state)?;
+    let config_input = config_input.into();
+    let loaded = load_server_config_input(&config_input, initialize_state)?;
     let mut config = loaded.config;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;

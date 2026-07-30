@@ -83,6 +83,27 @@ struct Args {
     /// YAML config path.
     #[arg(short, long, env = "REGISTRY_NOTARY_CONFIG", global = true)]
     config: Option<PathBuf>,
+    /// Signed Config Bundle directory used for direct server startup.
+    #[arg(
+        long,
+        requires_all = ["anchor_path", "state_path"],
+        conflicts_with = "config"
+    )]
+    bundle_dir: Option<PathBuf>,
+    /// Trust anchor JSON path used for direct signed-bundle startup.
+    #[arg(
+        long,
+        requires_all = ["bundle_dir", "state_path"],
+        conflicts_with = "config"
+    )]
+    anchor_path: Option<PathBuf>,
+    /// Anti-rollback state JSON path used for direct signed-bundle startup.
+    #[arg(
+        long,
+        requires_all = ["bundle_dir", "anchor_path"],
+        conflicts_with = "config"
+    )]
+    state_path: Option<PathBuf>,
     /// Dotenv-style file to load before config validation resolves env vars.
     #[arg(long, env = "REGISTRY_NOTARY_ENV_FILE", global = true)]
     env_file: Option<PathBuf>,
@@ -287,6 +308,17 @@ fn top_level_error_message(
 
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let server_startup = args.command.is_none();
+    let server_config_input = if server_startup {
+        Some(server_config_input(&args).map_err(value_free_configuration_failure)?)
+    } else {
+        if args.bundle_dir.is_some() || args.anchor_path.is_some() || args.state_path.is_some() {
+            return Err(
+                "--bundle-dir, --anchor-path, and --state-path are server-startup-only arguments"
+                    .into(),
+            );
+        }
+        None
+    };
     let doctor_command = matches!(
         &args.command,
         Some(Command::Doctor { .. })
@@ -301,11 +333,23 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Err(error) => return Err(error),
     };
+    if matches!(
+        server_config_input.as_ref(),
+        Some(ServerConfigInput::SignedBundle { .. })
+    ) && env_report.contains("REGISTRY_NOTARY_CONFIG")
+    {
+        return Err(Box::new(value_free_configuration_failure(
+            "REGISTRY_NOTARY_CONFIG cannot be supplied by --env-file for direct bundle startup",
+        )));
+    }
     match args.command {
         None => {
-            let config_path = required_config_path(args.config.as_deref())
-                .map_err(value_free_configuration_failure)?;
-            run_server(config_path, args.bind, args.initialize_state).await?;
+            run_server(
+                server_config_input.expect("server startup input was resolved"),
+                args.bind,
+                args.initialize_state,
+            )
+            .await?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Openapi) => {
@@ -402,6 +446,30 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             print!("{}", registry_notary_core::config::schema::document_json());
             Ok(ExitCode::SUCCESS)
         }
+    }
+}
+
+fn server_config_input(args: &Args) -> Result<ServerConfigInput, &'static str> {
+    match (
+        args.config.as_ref(),
+        args.bundle_dir.as_ref(),
+        args.anchor_path.as_ref(),
+        args.state_path.as_ref(),
+    ) {
+        (Some(config_path), None, None, None) => {
+            Ok(ServerConfigInput::LocalFile(config_path.clone()))
+        }
+        (None, Some(bundle_dir), Some(anchor_path), Some(state_path)) => {
+            Ok(ServerConfigInput::SignedBundle {
+                bundle_dir: bundle_dir.clone(),
+                anchor_path: anchor_path.clone(),
+                state_path: state_path.clone(),
+            })
+        }
+        (None, None, None, None) => {
+            Err("--config or the complete signed-bundle startup arguments are required")
+        }
+        _ => Err("local config and signed-bundle startup arguments cannot be combined"),
     }
 }
 
