@@ -19,7 +19,7 @@ expected = {
   "integrations/person-record/fixtures/ambiguous.yaml": "6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
   "integrations/person-record/fixtures/no-match.yaml": "f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
-  "README.md": "e298f53390b5798b0608bc57f11d0855dd3c5bfb1f3f5d1b55c144f924d89b01",
+  "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
   "registry-stack.yaml": "4ae46281a04c27e542edc7e1d19f72425252171c9dd3b1a4ef46cbe648b38e82"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}

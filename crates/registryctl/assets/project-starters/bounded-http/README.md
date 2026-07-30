@@ -27,3 +27,9 @@ so `registryctl dev` needs no integration or fixture flags. Generated developmen
 lanes under `.registry-stack/dev-artifacts/` and bound runtime state under
 `.registry-stack/dev/` are disposable, ignored by Git, and are not production
 inputs.
+
+After the local journey succeeds, use the maintained
+[initial approval](https://docs.registrystack.org/operate/approve-initial-baseline/)
+and [generated Compose package](https://docs.registrystack.org/operate/single-node-compose-behind-proxy/)
+guides. Signing, operator secrets, initialization, and Docker activation stay
+explicit and separate from `registryctl dev`.

@@ -407,6 +407,9 @@ fn shipped_http_starter_readme_uses_the_1_0_hierarchy_and_runtime_ownership() {
         ".registry-stack/dev-artifacts/",
         ".registry-stack/dev/",
         "not production",
+        "https://docs.registrystack.org/operate/approve-initial-baseline/",
+        "https://docs.registrystack.org/operate/single-node-compose-behind-proxy/",
+        "explicit and separate from `registryctl dev`",
     ] {
         assert!(
             readme.contains(current),
