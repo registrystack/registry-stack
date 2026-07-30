@@ -744,6 +744,11 @@ impl Oid4vciCredentialConfigurationConfig {
                 "credential configuration '{configuration_id}' representative_issuance requires subject_access.allowed_operations.evaluate = true"
             ));
         }
+        if !subject_access.allowed_operations.issue_credential {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance requires subject_access.allowed_operations.issue_credential = true"
+            ));
+        }
         if !credential_status.enabled {
             return invalid_oid4vci(format!(
                 "credential configuration '{configuration_id}' representative_issuance requires credential_status.enabled = true"

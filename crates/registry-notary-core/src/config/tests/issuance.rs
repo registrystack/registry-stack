@@ -161,6 +161,18 @@ fn representative_oid4vci_requires_delegated_evaluation() {
 }
 
 #[test]
+fn representative_oid4vci_requires_credential_issuance() {
+    let mut config = valid_representative_oid4vci_config();
+    config.subject_access.allowed_operations.issue_credential = false;
+
+    let reason = expect_oid4vci_error(&config);
+    assert!(
+        reason.contains("allowed_operations.issue_credential = true"),
+        "unexpected error: {reason}"
+    );
+}
+
+#[test]
 fn representative_oid4vci_rejects_a_subject_bound_root() {
     let mut config = valid_representative_oid4vci_config();
     config.subject_access.allowed_claims = vec!["dependent-date-of-birth".to_string()];
