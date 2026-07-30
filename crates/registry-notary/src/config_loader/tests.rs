@@ -686,30 +686,32 @@ fn bootstrap_startup_rejects_verified_cross_product_bundle_without_fallback() {
     let key = registry_platform_ops::AntiRollbackKey {
         acceptance_identity: relay_identity,
     };
-    registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
-        .initialize(registry_platform_ops::AntiRollbackRecord {
-            key: key.clone(),
-            last_sequence: 2,
-            last_config_hash: sha256_uri(b"newer-cross-product-config"),
-            last_bundle_manifest_hash:
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
-            last_bundle_id: "newer-cross-product-bundle".to_string(),
-            accepted_anchor: notary_accepted_anchor_pin(),
-            override_pin: Some(registry_platform_ops::ConfigOverridePin {
-                active: true,
-                mode: ConfigOverrideMode::AcceptUnsigned,
-                config_hash: sha256_uri(unsigned_config.as_bytes()),
-                config_path: Some(unsigned_path.to_string_lossy().into_owned()),
-                expires_at: Some("2099-01-01T00:00:00Z".to_string()),
-                used_at: "2026-07-30T00:00:00Z".to_string(),
-                operator: "security-review".to_string(),
-                reason: "pin fallback regression".to_string(),
-            }),
-            break_glass: Default::default(),
-            local_approvals: Default::default(),
-        })
-        .expect("fallback state initializes");
+    let fallback_state = registry_platform_ops::AntiRollbackRecord {
+        key: key.clone(),
+        last_sequence: 2,
+        last_config_hash: sha256_uri(b"newer-cross-product-config"),
+        last_bundle_manifest_hash:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        last_bundle_id: "newer-cross-product-bundle".to_string(),
+        accepted_anchor: notary_accepted_anchor_pin(),
+        override_pin: Some(registry_platform_ops::ConfigOverridePin {
+            active: true,
+            mode: ConfigOverrideMode::AcceptUnsigned,
+            config_hash: sha256_uri(unsigned_config.as_bytes()),
+            config_path: Some(unsigned_path.to_string_lossy().into_owned()),
+            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+            used_at: "2026-07-30T00:00:00Z".to_string(),
+            operator: "security-review".to_string(),
+            reason: "pin fallback regression".to_string(),
+        }),
+        break_glass: Default::default(),
+        local_approvals: Default::default(),
+    };
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&fallback_state).expect("fallback state serializes"),
+    )
+    .expect("pre-existing fallback state writes");
     let config_path = tmp.path().join("bootstrap.yaml");
     std::fs::write(&config_path, notary_bootstrap_config(&fixture)).expect("bootstrap writes");
 
@@ -820,9 +822,11 @@ fn direct_signed_bundle_rejects_stale_antirollback_state() {
         .expect("pending acceptance");
     let mut newer_record = acceptance.initial_record();
     newer_record.last_sequence += 1;
-    registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
-        .initialize(newer_record)
-        .expect("newer state initializes");
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&newer_record).expect("newer state serializes"),
+    )
+    .expect("pre-existing newer state writes");
 
     let error = load_direct_signed_bundle_server_config(
         &fixture.bundle_dir,

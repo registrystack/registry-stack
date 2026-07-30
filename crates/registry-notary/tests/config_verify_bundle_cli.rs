@@ -604,39 +604,40 @@ fn write_bundle_fixture_with_config(
     let accepted_anchor =
         registry_platform_ops::AcceptedAnchorPinV1::from_trust_anchor(&verified.trust_anchor)
             .expect("anchor pin derives");
-    FileAntiRollbackStore::new(&state_path)
-        .initialize(AntiRollbackRecord {
-            key: AntiRollbackKey {
-                acceptance_identity: notary_acceptance_identity(),
-            },
-            last_sequence: if last_sequence == 0 {
-                manifest.sequence
-            } else {
-                last_sequence
-            },
-            last_config_hash: if last_sequence == 0 {
-                config_hash.clone()
-            } else {
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                    .to_string()
-            },
-            last_bundle_manifest_hash: if last_sequence == 0 {
-                verified.manifest_hash
-            } else {
-                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                    .to_string()
-            },
-            last_bundle_id: if last_sequence == 0 {
-                BUNDLE_ID.to_string()
-            } else {
-                "preceding-bundle".to_string()
-            },
-            accepted_anchor,
-            override_pin: None,
-            break_glass: Default::default(),
-            local_approvals: Default::default(),
-        })
-        .expect("state initializes");
+    let state = AntiRollbackRecord {
+        key: AntiRollbackKey {
+            acceptance_identity: notary_acceptance_identity(),
+        },
+        last_sequence: if last_sequence == 0 {
+            manifest.sequence
+        } else {
+            last_sequence
+        },
+        last_config_hash: if last_sequence == 0 {
+            config_hash.clone()
+        } else {
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string()
+        },
+        last_bundle_manifest_hash: if last_sequence == 0 {
+            verified.manifest_hash
+        } else {
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string()
+        },
+        last_bundle_id: if last_sequence == 0 {
+            BUNDLE_ID.to_string()
+        } else {
+            "preceding-bundle".to_string()
+        },
+        accepted_anchor,
+        override_pin: None,
+        break_glass: Default::default(),
+        local_approvals: Default::default(),
+    };
+    std::fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&state).expect("state serializes"),
+    )
+    .expect("pre-existing state writes");
 
     BundleFixture {
         bundle_dir,

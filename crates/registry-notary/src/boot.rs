@@ -279,16 +279,19 @@ async fn finalize_server_acceptance(
                 store,
                 plan,
             } = *mutation;
-            let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(plan.audit_intent());
-            emit_boot_config_audits_for_action(
-                runtime,
-                &acceptance,
-                "serve",
-                Some(&audit_evidence),
-            )
-            .await?;
             store
-                .commit_acceptance(plan)
+                .commit_acceptance(plan, |intent| async move {
+                    ensure_acceptance_audit_matches_plan(&acceptance, &intent)?;
+                    let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(&intent);
+                    emit_boot_config_audits_for_action(
+                        runtime,
+                        &acceptance,
+                        "serve",
+                        Some(&audit_evidence),
+                    )
+                    .await
+                })
+                .await
                 .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
             Ok(())
         }
@@ -336,17 +339,19 @@ pub(crate) async fn initialize_state_once(
     .await
     .map_err(registry_notary_server::NotaryActivationFailure::from)?;
 
-    let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(plan.audit_intent());
-    let audit_result = emit_boot_config_audits_for_action(
-        &runtime,
-        &acceptance,
-        "initialize_state",
-        Some(&audit_evidence),
-    )
-    .await;
-    audit_result.map_err(value_free_runtime_activation_failure)?;
     store
-        .commit_acceptance(plan)
+        .commit_acceptance(plan, |intent| async move {
+            ensure_acceptance_audit_matches_plan(&acceptance, &intent)?;
+            let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(&intent);
+            emit_boot_config_audits_for_action(
+                &runtime,
+                &acceptance,
+                "initialize_state",
+                Some(&audit_evidence),
+            )
+            .await
+        })
+        .await
         .map_err(|error| value_free_runtime_activation_failure(ConfigBootError::Store(error)))?;
     Ok(())
 }
