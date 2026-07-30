@@ -155,7 +155,10 @@ fn compile_project_for_environment(
                 .into_bytes()
                 .into_boxed_slice(),
         );
-        if !profiles.is_empty() {
+        if environment.notary_relay.is_some() {
+            if profiles.is_empty() {
+                relay_consultation_private.clear();
+            }
             let consultation_relay_config = generated_relay_config(
                 loaded,
                 environment_name,
@@ -2726,10 +2729,7 @@ mod artifact_projection_tests {
         })
         .expect("string schema compiles");
 
-        assert_eq!(
-            date,
-            json!({"type": "date", "nullable": false})
-        );
+        assert_eq!(date, json!({"type": "date", "nullable": false}));
         assert_eq!(
             relay_output_schema_for_output(&OutputDeclaration {
                 output_type: OutputType::Date,

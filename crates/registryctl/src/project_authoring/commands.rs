@@ -66,7 +66,6 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<crate::Init
         },
         artifacts: crate::InitArtifacts {
             project_file: options.directory.join(PROJECT_FILE),
-            bruno_collection: None,
             editor_manifest: Some(options.directory.join(EDITOR_MANIFEST_PATH)),
         },
     })
@@ -499,6 +498,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
         .collect();
     Ok(EnvironmentDocument {
         version: 1,
+        development: None,
         integrations,
         entities,
         issuance: requires_issuance.then(|| IssuanceBinding {
@@ -1543,7 +1543,10 @@ fn validate_governed_live_target(
                 bail!("live request requester contains a duplicate identifier scheme");
             }
         }
-        if requester_identifiers.keys().copied().collect::<BTreeSet<_>>()
+        if requester_identifiers
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>()
             != requester_identifier_contracts
                 .keys()
                 .map(String::as_str)
@@ -1555,9 +1558,7 @@ fn validate_governed_live_target(
         }
         for (scheme, contracts) in &requester_identifier_contracts {
             let value = requester_identifiers.get(scheme.as_str()).ok_or_else(|| {
-                anyhow!(
-                    "live request requester identifier is absent after exact-shape validation"
-                )
+                anyhow!("live request requester identifier is absent after exact-shape validation")
             })?;
             validate_governed_live_input(
                 &format!("requester.identifiers.{scheme}"),
@@ -2261,15 +2262,11 @@ fn promotion_action_lanes(
     baselines: &[VerifiedBaseline],
 ) -> Vec<RequiredProductAction> {
     let mut lanes = BTreeSet::new();
-    if loaded
-        .environment
-        .as_ref()
-        .is_some_and(|environment| {
-            project_promotion_products(environment).contains(&PromotionProjectedProduct::Relay)
-        })
-        || baselines
-            .iter()
-            .any(|baseline| baseline.lane == VerifiedBaselineLane::Relay)
+    if loaded.environment.as_ref().is_some_and(|environment| {
+        project_promotion_products(environment).contains(&PromotionProjectedProduct::Relay)
+    }) || baselines
+        .iter()
+        .any(|baseline| baseline.lane == VerifiedBaselineLane::Relay)
     {
         lanes.insert(RequiredProductAction::RelayPublic);
     }
@@ -2280,15 +2277,11 @@ fn promotion_action_lanes(
     {
         lanes.insert(RequiredProductAction::RelayConsultation);
     }
-    if loaded
-        .environment
-        .as_ref()
-        .is_some_and(|environment| {
-            project_promotion_products(environment).contains(&PromotionProjectedProduct::Notary)
-        })
-        || baselines
-            .iter()
-            .any(|baseline| baseline.lane == VerifiedBaselineLane::Notary)
+    if loaded.environment.as_ref().is_some_and(|environment| {
+        project_promotion_products(environment).contains(&PromotionProjectedProduct::Notary)
+    }) || baselines
+        .iter()
+        .any(|baseline| baseline.lane == VerifiedBaselineLane::Notary)
     {
         lanes.insert(RequiredProductAction::Notary);
     }
@@ -2325,10 +2318,7 @@ fn promotion_compatibility(
             .is_some_and(|digest| digest.is_string() == required && (required || digest.is_null()))
     }) && closures.get("relay_consultation").is_some_and(|digest| {
         digest.is_null()
-            || (digest.is_string()
-                && current
-                    .products
-                    .contains(&PromotionProjectedProduct::Relay))
+            || (digest.is_string() && current.products.contains(&PromotionProjectedProduct::Relay))
     }) {
         let consultation_required = closures
             .get("relay_consultation")
@@ -3384,7 +3374,6 @@ fn build_registry_project_inner(
         &loaded.root,
         &output,
         &compiled,
-        None,
         &loaded.project.registry.id,
         &options.environment,
         &artifact_inputs,

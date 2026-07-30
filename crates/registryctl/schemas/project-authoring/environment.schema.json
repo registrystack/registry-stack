@@ -9,6 +9,20 @@
   "required": ["version", "deployment"],
   "properties": {
     "version": {"x-registry-field": "public_property", "const": 1, "description": "Environment authoring format version." },
+    "development": {
+      "x-registry-field": "property",
+      "description": "Closed local-development selection. Registryctl uses the exact authored default and never prompts or guesses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_mode", "default_integration", "default_fixture"],
+      "properties": {
+        "source_mode": {"x-registry-field": "property", "enum": ["synthetic", "operator_bound"]},
+        "default_integration": {"x-registry-field": "property", "$ref": "#/$defs/stableId"},
+        "default_fixture": {"x-registry-field": "property", "$ref": "#/$defs/stableId"},
+        "relay_port": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65535},
+        "notary_port": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
     "integrations": {"x-registry-field": "property", "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/integration" } },
     "entities": {"x-registry-field": "property", "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/entity" } },
     "issuance": {

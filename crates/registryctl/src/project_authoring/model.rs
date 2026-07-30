@@ -1709,6 +1709,8 @@ struct BoundsDeclaration {
 struct EnvironmentDocument {
     version: u8,
     #[serde(default)]
+    development: Option<DevelopmentDeclaration>,
+    #[serde(default)]
     integrations: BTreeMap<String, EnvironmentIntegration>,
     #[serde(default)]
     entities: BTreeMap<String, EnvironmentEntityBinding>,
@@ -1729,6 +1731,33 @@ struct EnvironmentDocument {
     #[serde(default)]
     oid4vci: Option<Oid4vciBinding>,
     deployment: DeploymentBinding,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentDeclaration {
+    #[cfg_attr(test, schemars(required))]
+    #[serde(default)]
+    source_mode: Option<DevelopmentSourceMode>,
+    #[cfg_attr(test, schemars(required))]
+    #[serde(default)]
+    default_integration: Option<String>,
+    #[cfg_attr(test, schemars(required))]
+    #[serde(default)]
+    default_fixture: Option<String>,
+    #[serde(default)]
+    relay_port: Option<u16>,
+    #[serde(default)]
+    notary_port: Option<u16>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DevelopmentSourceMode {
+    Synthetic,
+    OperatorBound,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]

@@ -5,6 +5,7 @@ This starter demonstrates one bounded product-neutral HTTP integration.
 From this workspace directory:
 
 ```bash
+registryctl dev
 registryctl authoring editor --project-dir .
 registryctl test --project-dir . --integration person-record --fixture active-person --trace
 registryctl test --project-dir . --integration person-record --fixture active-person --watch
@@ -19,3 +20,7 @@ from this `registryctl` build for VS Code and Zed.
 
 Edit `integrations/person-record/integration.yaml` and its synthetic fixtures.
 Keep real destinations and credentials only in `environments/` secret bindings.
+The authored `local` environment selects the `active-person` synthetic fixture,
+so `registryctl dev` needs no integration or fixture flags. Its local trust,
+request file, credentials, and state under `.registry-stack/dev/` are
+disposable and are ignored by Git.

@@ -1,5 +1,10 @@
 version: 1
 
+development:
+  source_mode: synthetic
+  default_integration: person-record
+  default_fixture: active-person
+
 integrations:
   person-record:
     source:

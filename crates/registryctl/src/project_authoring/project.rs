@@ -889,7 +889,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:34f511cf351a6671ca18b81fe92b91e87621ea4af2532b59dd89f3010a9e0c58";
+    "sha256:b5a50f164fa02f86d0c9875eb4689120f4c42384cc60fcc7df8298e4f4424129";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -2946,7 +2946,9 @@ fn validate_environment(
         bail!("environment issuance binding is required exactly when credential profiles exist");
     }
     if environment.notary_relay.is_some() != requires_notary_relay {
-        bail!("the Notary-to-Relay connection is required exactly for Relay consultations");
+        bail!(
+            "the Notary-to-Relay connection is required exactly when Relay and Notary are both deployed"
+        );
     }
     let remote_integrations = integrations
         .values()
@@ -3439,10 +3441,8 @@ fn project_issues_credentials(project: &RegistryProject) -> bool {
 }
 
 fn project_requires_notary_relay(project: &RegistryProject) -> bool {
-    project
-        .services
-        .values()
-        .any(|service| service.kind == ServiceKind::Evidence && !service.consultations.is_empty())
+    let (requires_relay, requires_notary) = project_product_topology(project);
+    requires_relay && requires_notary
 }
 
 fn is_script_runtime_released(capability: ReleasedScriptRuntime) -> bool {

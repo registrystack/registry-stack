@@ -1,4 +1,10 @@
 version: 1
+
+development:
+  source_mode: synthetic
+  default_integration: project-record-snapshot
+  default_fixture: match
+
 entities:
   projects:
     provider:
@@ -14,6 +20,15 @@ entities:
       status: status
     source_revision: synthetic-public-works-v1
     generation: "1"
+
+callers:
+  public-works-service:
+    api_key_fingerprint: { secret: REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_HASH }
+    scopes: ["evidence:projects:read"]
+  public-works-under-scoped:
+    api_key_fingerprint: { secret: REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_HASH }
+    scopes: ["evidence:projects:metadata"]
+
 relay:
   origin: https://records-relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
@@ -24,6 +39,13 @@ relay:
     match_principal: pw_001
     no_match_principal: registryctl_local_no_match
     scopes: [projects:metadata, projects:rows]
+
+notary_relay:
+  base_url: http://127.0.0.1:8080
+  workload_client_id: registryctl-local-notary
+  token_file: /run/secrets/relay-workload-token
+
 deployment:
   profile: local
   relay: { service: records-relay }
+  notary: { service: registryctl-local-notary }

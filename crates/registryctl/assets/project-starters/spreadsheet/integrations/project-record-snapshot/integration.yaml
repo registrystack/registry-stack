@@ -1,0 +1,26 @@
+version: 1
+id: public-works-project-snapshot
+revision: 1
+
+input:
+  project_id:
+    role: selector
+    type: string
+    maxLength: 64
+
+capability:
+  snapshot:
+    entity: projects
+    exact:
+      project_id: { input: project_id }
+    freshness: 24h
+
+outputs: [status]
+
+not_applicable:
+  ambiguity:
+    rationale: The exact project selector is the entity primary key, whose materialized unique-key constraint permits at most one record.
+    request_fixture: match
+  subject_mismatch:
+    rationale: The selected snapshot output projection omits the primary key, so it contains no identifier comparable with the requested project identifier.
+    request_fixture: match

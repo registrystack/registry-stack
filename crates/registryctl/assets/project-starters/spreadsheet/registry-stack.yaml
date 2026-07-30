@@ -2,10 +2,14 @@ version: 1
 starter:
   id: spreadsheet
   release: 0.15.2
-  content_digest: sha256:c073ae247bea9a06199c44c384d0af1e15f21032f194751c0037e2fff03ad9b5
+  content_digest: sha256:3eaf4261637f6e98fd6da2dd0da75ad6a787d2f60bc59d7d9785339bcb8e69ce
 
 registry:
   id: fictional-public-works-registry
+
+integrations:
+  project-record-snapshot:
+    file: integrations/project-record-snapshot/integration.yaml
 
 entities:
   projects:
@@ -33,3 +37,23 @@ services:
       filters: { project_id: [eq] }
       required_principal_filters: [project_id]
       standards: { ogc_features: false, sp_dci: false }
+
+  public-works-verification:
+    kind: evidence
+    version: 1
+    subject_type: project
+    purpose: public-works-case-management
+    legal_basis: public-service-delivery
+    consent: not_required
+    access: { scopes: ["evidence:projects:read"] }
+    consultations:
+      project:
+        integration: project-record-snapshot
+        input: { project_id: request.target.identifiers.project_id }
+    claims:
+      project-record-exists:
+        cel: project.matched
+        disclosure: predicate
+      project-status-accepted:
+        cel: 'project.matched && project.status == "active"'
+        disclosure: predicate

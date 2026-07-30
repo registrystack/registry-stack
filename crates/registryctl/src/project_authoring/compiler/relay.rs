@@ -140,8 +140,18 @@ fn generated_relay_config(
             source_credentials.push(entry);
         }
     }
-    let datasets = generated_records_datasets(loaded, environment)?;
-    let standards = generated_records_standards(loaded)?;
+    let empty_consultation_runtime =
+        kind == GeneratedRelayConfigKind::Consultation && profiles.is_empty();
+    let datasets = if empty_consultation_runtime {
+        Vec::new()
+    } else {
+        generated_records_datasets(loaded, environment)?
+    };
+    let standards = if empty_consultation_runtime {
+        json!({})
+    } else {
+        generated_records_standards(loaded)?
+    };
     let mut allowed_clients = relay.allowed_clients.clone();
     allowed_clients.sort();
     allowed_clients.dedup();

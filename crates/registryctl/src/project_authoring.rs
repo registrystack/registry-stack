@@ -93,6 +93,7 @@ use duration_authority::*;
 mod byte_size_authority;
 use byte_size_authority::*;
 include!("project_authoring/model.rs");
+include!("project_authoring/development.rs");
 include!("project_authoring/editor.rs");
 include!("project_authoring/schema_authority.rs");
 include!("project_authoring/authoring_contract.rs");

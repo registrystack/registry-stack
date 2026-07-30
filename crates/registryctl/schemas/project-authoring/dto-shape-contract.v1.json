@@ -1486,6 +1486,48 @@
             ],
             "type": "string"
           },
+          "DevelopmentDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "default_fixture": {
+                "default": null,
+                "type": "string"
+              },
+              "default_integration": {
+                "default": null,
+                "type": "string"
+              },
+              "notary_port": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "relay_port": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "source_mode": {
+                "default": null,
+                "enum": [
+                  "synthetic",
+                  "operator_bound"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "EnvironmentCredential": {
             "additionalProperties": false,
             "properties": {
@@ -2358,6 +2400,17 @@
           },
           "deployment": {
             "$ref": "#/$defs/DeploymentBinding"
+          },
+          "development": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DevelopmentDeclaration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "entities": {
             "additionalProperties": {

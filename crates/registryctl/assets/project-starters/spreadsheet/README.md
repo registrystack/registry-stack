@@ -6,6 +6,7 @@ This starter publishes a protected records API from the synthetic workbook in
 From this project directory:
 
 ```bash
+registryctl dev
 registryctl authoring editor --project-dir .
 registryctl test --project-dir .
 registryctl preflight --project-dir . --environment local
@@ -21,3 +22,8 @@ preflight. `path` is the read-only container path emitted to Registry Relay.
 Spreadsheet fields start as sensitive and are published only when they are
 listed in `api.projection`. Review the service purpose, sensitivity,
 access-rights classification, and projection before using real data.
+
+The authored `local` environment selects the synthetic `match` fixture for the
+project snapshot integration, so `registryctl dev` needs no integration or
+fixture flags. Its local trust, request file, credentials, and state under
+`.registry-stack/dev/` are disposable and are ignored by Git.

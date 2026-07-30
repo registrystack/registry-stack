@@ -658,7 +658,6 @@ fn project_check_cli_renders_the_same_typed_diagnostic_in_human_and_json() {
                 "--format",
                 format,
             ])
-            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
             .output()
             .expect("registryctl check executes")
     };
@@ -724,7 +723,6 @@ fn project_check_cli_rejects_an_unselected_environment_symlink_with_typed_output
                 "--format",
                 format,
             ])
-            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
             .output()
             .expect("registryctl check executes")
     };
@@ -805,7 +803,6 @@ fn project_check_cli_reports_malformed_root_before_unselected_environment_bounda
                 "--format",
                 format,
             ])
-            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
             .output()
             .expect("registryctl check executes")
     };
@@ -2344,10 +2341,7 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
             release,
             content_state,
             ..
-        } = initialized.source
-        else {
-            panic!("starter initialization reports starter provenance");
-        };
+        } = initialized.source;
         assert!(!id.is_empty());
         assert_eq!(release, env!("CARGO_PKG_VERSION"));
         assert_eq!(content_state, "matches");
@@ -8247,6 +8241,7 @@ fn generated_product_inputs_sign_and_verify_without_secret_values() {
             lane,
             input,
             anchor,
+            preceding_approved_set: None,
             keys: vec![format!("file:{}", private_key.display())],
             output_dir: signed_output.clone(),
         })
