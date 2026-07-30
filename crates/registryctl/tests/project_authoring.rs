@@ -5828,15 +5828,20 @@ fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
 
 #[test]
 fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
-    for (case, body) in [
+    const EXACT_BODY: &str = "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }\n";
+    for (case, body, content_type) in [
         (
             "lowercase token type",
             "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: bearer }\n",
+            Some("application/json"),
         ),
         (
             "unexpected expiry",
             "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer, expires_in: 60 }\n",
+            Some("application/json"),
         ),
+        ("missing content type", EXACT_BODY, None),
+        ("wrong content type", EXACT_BODY, Some("text/plain")),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = copy_project("opencrvs", temporary.path());
@@ -5844,6 +5849,15 @@ fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
         let mut document = read_yaml(&fixture);
         document["interactions"][0]["respond"]["body"] =
             serde_norway::from_str(body).expect("OAuth response fixture");
+        if let Some(content_type) = content_type {
+            document["interactions"][0]["respond"]["headers"]["Content-Type"] =
+                serde_norway::Value::String(content_type.to_owned());
+        } else {
+            document["interactions"][0]["respond"]
+                .as_mapping_mut()
+                .expect("OAuth fixture response")
+                .remove(serde_norway::Value::String("headers".to_owned()));
+        }
         write_yaml(&fixture, &document);
 
         let error = test_registry_project_selected(
@@ -5862,7 +5876,7 @@ fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
         let rendered = format!("{error:#}");
         assert!(
             rendered.contains("source.response_malformed"),
-            "{case} must fail through the compiled OAuth response parser: {rendered}"
+            "{case} must fail through the production OAuth response contract: {rendered}"
         );
     }
 }

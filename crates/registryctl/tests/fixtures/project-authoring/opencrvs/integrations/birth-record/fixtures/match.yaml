@@ -19,6 +19,7 @@ interactions:
       body: { grant_type: client_credentials }
     respond:
       status: 200
+      headers: { Content-Type: application/json }
       body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }
   - expect: { method: GET, path: /.well-known/jwks.json }
     respond: { status: 200, body: { file: bodies/jwks.json } }

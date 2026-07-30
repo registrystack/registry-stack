@@ -2144,12 +2144,19 @@ fn require_credential_success<T, E>(
 ) -> Result<(), OfflineFixtureError> {
     match response {
         OfflineSourceResponse::Http {
-            status: 200, body, ..
-        } if body.len() <= max_bytes as usize => parse(200, &body)
-            .map(drop)
-            .map_err(|_| OfflineFixtureError::SourceResponseMalformed),
-        OfflineSourceResponse::Http { status: 200, .. } => {
-            Err(OfflineFixtureError::SourceResponseTooLarge)
+            status: 200,
+            headers,
+            body,
+        } => {
+            if !offline_has_closed_json_content_type(&headers) {
+                return Err(OfflineFixtureError::SourceResponseMalformed);
+            }
+            if body.len() > max_bytes as usize {
+                return Err(OfflineFixtureError::SourceResponseTooLarge);
+            }
+            parse(200, &body)
+                .map(drop)
+                .map_err(|_| OfflineFixtureError::SourceResponseMalformed)
         }
         OfflineSourceResponse::DeclaredBodyBytes {
             status: 200,
@@ -2167,6 +2174,35 @@ fn require_credential_success<T, E>(
             Err(OfflineFixtureError::SourceUnavailable)
         }
     }
+}
+
+// Keep this closed predicate aligned with production
+// `BoundedDestinationResponse::require_json_content_type`.
+fn offline_has_closed_json_content_type(headers: &BTreeMap<String, String>) -> bool {
+    let mut values = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str());
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    let Some(media_type) = parts.next() else {
+        return false;
+    };
+    if !media_type.trim().eq_ignore_ascii_case("application/json") {
+        return false;
+    }
+    let Some(parameter) = parts.next() else {
+        return true;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    let Some((name, value)) = parameter.split_once('=') else {
+        return false;
+    };
+    name.trim().eq_ignore_ascii_case("charset") && value.trim().eq_ignore_ascii_case("utf-8")
 }
 
 fn require_http_body(
@@ -2830,29 +2866,41 @@ mod tests {
             .credential_operation()
             .expect("OpenCRVS plan has a credential operation")
             .parser();
-        let execute = |body: &[u8]| {
+        let execute = |content_type: Option<&str>, body: &[u8]| {
             require_credential_success(
                 OfflineSourceResponse::Http {
                     status: 200,
-                    headers: BTreeMap::new(),
+                    headers: content_type
+                        .map(|value| {
+                            BTreeMap::from([("Content-Type".to_owned(), value.to_owned())])
+                        })
+                        .unwrap_or_default(),
                     body: body.to_vec(),
                 },
                 parser.max_response_bytes(),
                 |status, body| parser.parse(status, body),
             )
         };
+        let valid = br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer"}"#;
 
-        assert_eq!(
-            execute(br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer"}"#),
-            Ok(())
-        );
-        for malformed in [
-            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"bearer"}"#.as_slice(),
-            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer","expires_in":60}"#
-                .as_slice(),
+        for content_type in ["application/json", "APPLICATION/JSON; CHARSET=UTF-8"] {
+            assert_eq!(execute(Some(content_type), valid), Ok(()));
+        }
+        for (content_type, malformed) in [
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"bearer"}"#.as_slice(),
+            ),
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer","expires_in":60}"#
+                    .as_slice(),
+            ),
+            (None, valid.as_slice()),
+            (Some("text/plain"), valid.as_slice()),
         ] {
             assert_eq!(
-                execute(malformed),
+                execute(content_type, malformed),
                 Err(OfflineFixtureError::SourceResponseMalformed)
             );
         }
