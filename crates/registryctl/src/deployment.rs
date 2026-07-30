@@ -4704,7 +4704,7 @@ fn runbook(
 Package: `{package_name}`\n\n\
 Record the approved-set digest and generated closure root printed by `registryctl deploy generate` outside this package. After transfer, run `registryctl deploy verify --package .` and compare both externally recorded values before any initialization.\n\n\
 ## Required operator files\n\n\
-The signed inventory is also recorded at `generated/operator-files.v1.json`. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package .`. Do not create placeholders or print file values. Add `-f operator-override.yaml` as the final file argument to every command below when that file exists.\n\n\
+The signed inventory is also recorded at `generated/operator-files.v1.json`. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package .`. The PostgreSQL certificate chain must validate the fixed private DNS identity `registry-postgres`; bootstrap uses TLS `verify-full` and fails closed on any other identity. Do not create placeholders or print file values. Add `-f operator-override.yaml` as the final file argument to every command below when that file exists.\n\n\
 | Path | Consumers and targets | Format | Mode | Allowed owners |\n\
 |---|---|---|---|---|\n\
 {operator_files}\n\n\

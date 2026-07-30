@@ -10,7 +10,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
 
 
 SCRIPT = Path(__file__).with_name("registry_release_lock.py")
