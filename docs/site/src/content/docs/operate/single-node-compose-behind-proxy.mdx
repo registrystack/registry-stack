@@ -86,6 +86,8 @@ registry-stack/
     compose.initialize.yaml
     deployment-plan.v1.json
     deployment-manifest.v1.json
+    operator-files.v1.json
+    postgresql-server.env
     RUNBOOK.md
     inputs/
     bundles/
@@ -116,10 +118,17 @@ The signed product bundles remain the configuration authority.
 
 ## Verify the generated package
 
-Verify the package before initialization:
+Set `TRANSFER_CLOSURE_SHA256` from the generated closure root recorded outside the transferred
+package.
+Do not derive it from files in that package.
+After placing the operator-owned inputs, verify the package before initialization:
 
 ```sh
-registryctl deploy verify --package ./registry-stack
+TRANSFER_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>
+registryctl deploy verify \
+  --package ./registry-stack \
+  --expected-closure-sha256 "$TRANSFER_CLOSURE_SHA256" \
+  --check-operator-files
 ```
 
 The package-only report identifies:
@@ -130,6 +139,10 @@ The package-only report identifies:
 - Whether in-place regeneration is safe
 - Any generated-package violation
 
+A package-only self-check without the independently recorded digest is not sufficient for transfer
+acceptance.
+The operator-file check confirms each required file's existence, isolation, mode, and owner
+without reading its value.
 Package-only verification does not inspect or certify an application that includes the package.
 
 ## Initialize each product once

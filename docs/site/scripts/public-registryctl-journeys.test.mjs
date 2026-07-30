@@ -218,6 +218,27 @@ test('Compose command blocks exactly reproduce the generated runbook sequence', 
   assert.doesNotMatch(page, /registry-runtime-stage-secrets/);
 });
 
+test('transferred package acceptance uses external closure and operator-file checks', () => {
+  const page = read('src/content/docs/operate/single-node-compose-behind-proxy.mdx');
+  const verifyBlock = fence(page, 'Verify the generated package', 'sh');
+
+  assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*operator-files\.v1\.json/);
+  assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*postgresql-server\.env/);
+  assert.match(
+    verifyBlock,
+    /^TRANSFER_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>$/m,
+  );
+  assert.match(
+    verifyBlock,
+    /--expected-closure-sha256 "\$TRANSFER_CLOSURE_SHA256" \\\n  --check-operator-files/,
+  );
+  assert.match(page, /Do not derive it from files in that package/);
+  assert.match(page, /not sufficient for transfer\s+acceptance/);
+  assert.ok(
+    page.indexOf('--check-operator-files') < page.indexOf('## Initialize each product once'),
+  );
+});
+
 test('Compose include remains operator-owned and outside package verification', () => {
   const page = read('src/content/docs/operate/single-node-compose-behind-proxy.mdx');
   assert.match(page, /Registryctl verifies only the generated package/);
@@ -247,6 +268,12 @@ test('initial approval bridge covers every lane before approved-set assembly', (
   assert.match(page, /--environment local/);
   assert.match(page, /--output-file operator-handoff\/approved-set\.v1\.json/);
   assert.match(page, /registryctl deploy verify --package operator-handoff\/registry-stack/);
+  assert.match(page, /requires OpenSSL with Ed25519 support and Python 3/);
+  assert.match(
+    page,
+    /--package operator-handoff\/registry-stack \\\n  --expected-closure-sha256 "\$GENERATED_CLOSURE_SHA256"/,
+  );
+  assert.match(page, /does not accept it for\s+initialization/);
   assert.match(page, /registryctl trust anchor rotate/);
   assert.match(page, /--current-anchor "\$CURRENT_ANCHOR"/);
   assert.match(page, /--against "\$CURRENT_APPROVED_SET"/);

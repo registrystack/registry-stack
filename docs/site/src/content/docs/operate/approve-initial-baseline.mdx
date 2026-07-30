@@ -46,6 +46,9 @@ The build creates one unsigned input under each of these directories:
 .registry-stack/build/local/signing-inputs/notary
 ```
 
+The optional local evaluation-key procedure requires OpenSSL with Ed25519 support and Python 3.
+Production trust owners use their approved custody tooling instead.
+
 Prepare a fresh handoff directory.
 Each lane trust owner also needs an approved public JSON Web Key (JWK) file and the matching
 private key through an explicit `file:` or `op://` locator.
@@ -285,12 +288,17 @@ test -f operator-handoff/approved-set.v1.json
 registryctl deploy generate \
   --approved-set operator-handoff/approved-set.v1.json \
   --output-dir operator-handoff/registry-stack
-registryctl deploy verify --package operator-handoff/registry-stack
+GENERATED_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>
+registryctl deploy verify \
+  --package operator-handoff/registry-stack \
+  --expected-closure-sha256 "$GENERATED_CLOSURE_SHA256"
 ```
 
 Keep the approved-set digest and generated closure root outside the package before transfer.
+This check binds the generated package to that external record, but does not accept it for
+initialization.
 Continue with [Run the generated single-node Compose package](../single-node-compose-behind-proxy/)
-for operator files, one-time initialization, and ordinary startup.
+to supply and check operator files before one-time initialization and ordinary startup.
 
 ## Troubleshooting
 
