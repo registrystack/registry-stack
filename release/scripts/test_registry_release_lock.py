@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import tempfile
@@ -160,6 +161,29 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 },
             )
             postgresql = payload["runtime"]["postgresql_state_plane"]
+            for lane, product in [
+                ("relay-public", "registry-relay"),
+                ("relay-consultation", "registry-relay"),
+                ("notary", "registry-notary"),
+            ]:
+                recipe = payload["runtime"][lane.replace("-", "_")]
+                prefix = ["product-action"]
+                if product == "registry-relay":
+                    prefix.append(lane)
+                for action in [
+                    "serve",
+                    "prepare_state_store",
+                    "initialize_state",
+                    "verify_state",
+                ]:
+                    self.assertEqual(
+                        recipe[action]["command"],
+                        [*prefix, action],
+                    )
+                self.assertEqual(
+                    recipe["health_probe"],
+                    ["CMD", f"/usr/local/bin/{product}", "healthcheck"],
+                )
             self.assertEqual(postgresql["hardening"]["user"], "999:999")
             self.assertEqual(
                 postgresql["bootstrap"]["environment_files"],
@@ -168,6 +192,12 @@ class RegistryReleaseLockTests(unittest.TestCase):
             self.assertIn(
                 "ssl_cert_file=/run/secrets/postgresql-tls.crt",
                 postgresql["serve"]["command"],
+            )
+            self.assertEqual(
+                hashlib.sha256(
+                    postgresql["bootstrap"]["command"][2].encode()
+                ).hexdigest(),
+                "f0804dbb6564a08144ded38123daa40d6c1293ddec168dc37e0ad4d3bbf299aa",
             )
             bootstrap_file = next(
                 file

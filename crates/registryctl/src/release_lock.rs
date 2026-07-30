@@ -44,6 +44,12 @@ const PRODUCT_ANCHOR_TARGET: &str = "/run/registry/anchor";
 const PRODUCT_STATE_TARGET: &str = "/var/lib/registry/state";
 const PRODUCT_AUDIT_TARGET: &str = "/var/lib/registry/audit";
 const POSTGRESQL_DATA_TARGET: &str = "/var/lib/postgresql/data";
+// SHA-256 of `POSTGRESQL_BOOTSTRAP_SCRIPT` in
+// `release/scripts/registry_release_lock.py`. The release-lock verifier must
+// authorize the exact reviewed script, not a shell command that contains a
+// few expected fragments.
+const POSTGRESQL_BOOTSTRAP_SCRIPT_SHA256: &str =
+    "f0804dbb6564a08144ded38123daa40d6c1293ddec168dc37e0ad4d3bbf299aa";
 const POSTGRESQL_BOOTSTRAP_KEYS: [&str; 8] = [
     "REGISTRY_RELAY_MIGRATOR_PASSWORD",
     "REGISTRY_RELAY_RUNTIME_PASSWORD",
@@ -855,6 +861,7 @@ impl LockedProductRecipeV1 {
             recipe.validate(&format!("{label} {action}"))?;
         }
         validate_command(&self.health_probe, &format!("{label} health_probe"))?;
+        validate_product_recipe_commands(self, label)?;
         validate_product_recipe_shape(self, label)
     }
 }
@@ -862,7 +869,20 @@ impl LockedProductRecipeV1 {
 impl LockedSupportingRecipeV1 {
     fn validate(&self, label: &str) -> Result<()> {
         validate_command(&self.command, &format!("{label} command"))?;
-        validate_command(&self.health_probe, &format!("{label} health probe"))
+        validate_command(&self.health_probe, &format!("{label} health probe"))?;
+        if label != "private namespace holder" {
+            bail!("supporting runtime recipe label is unsupported");
+        }
+        validate_exact_command(
+            &self.command,
+            &["sleep", "infinity"],
+            "private namespace holder command",
+        )?;
+        validate_exact_command(
+            &self.health_probe,
+            &["CMD-SHELL", "kill -0 1"],
+            "private namespace holder health probe",
+        )
     }
 }
 
@@ -871,6 +891,7 @@ impl LockedPostgresqlRecipeV1 {
         self.serve.validate(&format!("{label} serve"))?;
         self.bootstrap.validate(&format!("{label} bootstrap"))?;
         validate_command(&self.health_probe, &format!("{label} health probe"))?;
+        validate_postgresql_recipe_commands(self)?;
         if self.server_environment
             != [
                 "POSTGRES_USER=registry_stack_bootstrap",
@@ -907,32 +928,6 @@ impl LockedPostgresqlRecipeV1 {
             &["postgresql-admin-password", "postgresql-tls-certificate"],
             "PostgreSQL state plane bootstrap",
         )?;
-        if self.bootstrap.command.len() != 3
-            || self.bootstrap.command[0] != "/bin/bash"
-            || self.bootstrap.command[1] != "-ceu"
-        {
-            bail!("PostgreSQL state plane bootstrap must use the closed bash recipe");
-        }
-        let script = &self.bootstrap.command[2];
-        for required in [
-            "sslmode=verify-full",
-            "registry_relay_owner",
-            "registry_relay_migrator",
-            "registry_relay_runtime",
-            "registry_relay_maintenance",
-            "registry_relay_reader",
-            "registry_notary_owner",
-            "registry_notary_migrator",
-            "registry_notary_runtime",
-            "registry_notary_maintenance",
-            "registry_notary_reader",
-            "REVOKE ALL ON DATABASE",
-            "REVOKE ALL ON SCHEMA public FROM PUBLIC",
-        ] {
-            if !script.contains(required) {
-                bail!("PostgreSQL state plane bootstrap recipe is incomplete");
-            }
-        }
         Ok(())
     }
 }
@@ -1061,6 +1056,85 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             serve_secrets,
             &format!("{label} {name}"),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str) -> Result<()> {
+    let (product, lane) = match label {
+        "Relay public" => ("registry-relay", Some("relay-public")),
+        "Relay consultation" => ("registry-relay", Some("relay-consultation")),
+        "Notary" => ("registry-notary", None),
+        _ => bail!("product runtime recipe label is unsupported"),
+    };
+    for (name, action) in [
+        ("serve", &recipe.serve),
+        ("prepare_state_store", &recipe.prepare_state_store),
+        ("initialize_state", &recipe.initialize_state),
+        ("verify_state", &recipe.verify_state),
+    ] {
+        let expected = if let Some(lane) = lane {
+            vec!["product-action", lane, name]
+        } else {
+            vec!["product-action", name]
+        };
+        validate_exact_command(
+            &action.command,
+            &expected,
+            &format!("{label} {name} command"),
+        )?;
+    }
+    let health_binary = format!("/usr/local/bin/{product}");
+    validate_exact_command(
+        &recipe.health_probe,
+        &["CMD", health_binary.as_str(), "healthcheck"],
+        &format!("{label} health probe"),
+    )
+}
+
+fn validate_postgresql_recipe_commands(recipe: &LockedPostgresqlRecipeV1) -> Result<()> {
+    validate_exact_command(
+        &recipe.serve.command,
+        &[
+            "postgres",
+            "-c",
+            "ssl=on",
+            "-c",
+            "ssl_cert_file=/run/secrets/postgresql-tls.crt",
+            "-c",
+            "ssl_key_file=/run/secrets/postgresql-tls.key",
+            "-c",
+            "ssl_min_protocol_version=TLSv1.2",
+            "-c",
+            "password_encryption=scram-sha-256",
+            "-c",
+            "listen_addresses=0.0.0.0",
+        ],
+        "PostgreSQL state plane serve command",
+    )?;
+    validate_exact_command(
+        &recipe.health_probe,
+        &[
+            "CMD",
+            "pg_isready",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "5432",
+            "--username",
+            "registry_stack_bootstrap",
+            "--dbname",
+            "postgres",
+        ],
+        "PostgreSQL state plane health probe",
+    )?;
+    if recipe.bootstrap.command.len() != 3
+        || recipe.bootstrap.command[0] != "/bin/bash"
+        || recipe.bootstrap.command[1] != "-ceu"
+        || hex::encode(Sha256::digest(recipe.bootstrap.command[2].as_bytes()))
+            != POSTGRESQL_BOOTSTRAP_SCRIPT_SHA256
+    {
+        bail!("PostgreSQL state plane bootstrap command is not the exact reviewed recipe");
     }
     Ok(())
 }
@@ -1303,6 +1377,17 @@ fn validate_command(command: &[String], label: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_exact_command(command: &[String], expected: &[&str], label: &str) -> Result<()> {
+    if command
+        .iter()
+        .map(String::as_str)
+        .ne(expected.iter().copied())
+    {
+        bail!("{label} is not the exact supported command");
+    }
+    Ok(())
+}
+
 fn validate_digest(value: &str, label: &str) -> Result<()> {
     let Some(hex) = value.strip_prefix("sha256:") else {
         bail!("{label} must use sha256:<64 lowercase hex>");
@@ -1350,6 +1435,107 @@ mod tests {
         include_str!("../tests/fixtures/release-lock/cosign-3.0.4-checksums.sigstore.json");
     const COSIGN_V3_IDENTITY: &str = "keyless@projectsigstore.iam.gserviceaccount.com";
     const COSIGN_V3_ISSUER: &str = "https://accounts.google.com";
+
+    fn command_action(parts: &[&str]) -> LockedRuntimeActionV1 {
+        LockedRuntimeActionV1 {
+            command: parts.iter().map(|part| (*part).to_string()).collect(),
+            mounts: Vec::new(),
+            environment_files: Vec::new(),
+            secret_files: Vec::new(),
+        }
+    }
+
+    fn command_recipe(product: &str, lane: Option<&str>) -> LockedProductRecipeV1 {
+        let action = |name: &str| {
+            let mut command = vec!["product-action"];
+            if let Some(lane) = lane {
+                command.push(lane);
+            }
+            command.push(name);
+            command_action(&command)
+        };
+        LockedProductRecipeV1 {
+            serve: action("serve"),
+            prepare_state_store: action("prepare_state_store"),
+            initialize_state: action("initialize_state"),
+            verify_state: action("verify_state"),
+            health_probe: vec![
+                "CMD".to_string(),
+                format!("/usr/local/bin/{product}"),
+                "healthcheck".to_string(),
+            ],
+        }
+    }
+
+    #[test]
+    fn closed_product_action_slots_reject_swapped_commands() {
+        for (label, product, lane) in [
+            ("Relay public", "registry-relay", Some("relay-public")),
+            (
+                "Relay consultation",
+                "registry-relay",
+                Some("relay-consultation"),
+            ),
+            ("Notary", "registry-notary", None),
+        ] {
+            let recipe = command_recipe(product, lane);
+            validate_product_recipe_commands(&recipe, label)
+                .expect("the release generator's exact action mapping is accepted");
+
+            for slot in [
+                "serve",
+                "prepare_state_store",
+                "initialize_state",
+                "verify_state",
+            ] {
+                let mut swapped = recipe.clone();
+                let action = match slot {
+                    "serve" => &mut swapped.serve,
+                    "prepare_state_store" => &mut swapped.prepare_state_store,
+                    "initialize_state" => &mut swapped.initialize_state,
+                    "verify_state" => &mut swapped.verify_state,
+                    _ => unreachable!(),
+                };
+                *action
+                    .command
+                    .last_mut()
+                    .expect("product action command has an action name") = if slot == "serve" {
+                    "initialize_state".to_string()
+                } else {
+                    "serve".to_string()
+                };
+                let error = validate_product_recipe_commands(&swapped, label)
+                    .expect_err("an action command cannot move to another closed slot");
+                assert!(
+                    error.to_string().contains("exact supported command"),
+                    "{label} {slot}: {error:#}"
+                );
+            }
+
+            let mut wrong_health = recipe;
+            wrong_health.health_probe[2] = "serve".to_string();
+            assert!(validate_product_recipe_commands(&wrong_health, label).is_err());
+        }
+    }
+
+    #[test]
+    fn private_namespace_holder_recipe_is_exact() {
+        let recipe = LockedSupportingRecipeV1 {
+            command: vec!["sleep".to_string(), "infinity".to_string()],
+            health_probe: vec!["CMD-SHELL".to_string(), "kill -0 1".to_string()],
+        };
+        recipe
+            .validate("private namespace holder")
+            .expect("the exact namespace-holder recipe is accepted");
+
+        let mut wrong_command = recipe.clone();
+        wrong_command.command[0] = "sh".to_string();
+        assert!(wrong_command.validate("private namespace holder").is_err());
+
+        let mut wrong_probe = recipe;
+        wrong_probe.health_probe[1] = "true".to_string();
+        assert!(wrong_probe.validate("private namespace holder").is_err());
+    }
 
     #[test]
     fn reviewed_trust_root_digest_remains_pinned() {
