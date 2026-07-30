@@ -379,6 +379,7 @@ evidence.relay.allowed_private_cidrs
 evidence.relay.allowed_private_cidrs[]
 evidence.relay.base_url
 evidence.relay.max_in_flight
+evidence.relay.root_certificate_path
 evidence.relay.token_file
 evidence.relay.workload_client_id
 evidence.service_id
@@ -683,9 +684,12 @@ inputs authorize or parameterize that consultation; they are not evidence.
 ## Relay connection
 
 The Relay connection contains the Relay origin and an owner-readable workload
-token file. Exact private CIDRs may be admitted when required. Notary does not
-configure source origins, OAuth token endpoints, source credentials, protocol
-keys, source request limits, or adapter scripts.
+token file. For an HTTPS Relay using a private trust root,
+`root_certificate_path` names a bounded regular PEM bundle with mode `0400` or
+`0600`, owned by root or the Notary effective user. Exact private CIDRs may be
+admitted when required. Notary does not configure source origins, OAuth token
+endpoints, source credentials, protocol keys, source request limits, or adapter
+scripts.
 
 Notary validates each expected consultation's identity, purpose, input roles
 and schemas, outcome union, output schemas, provenance, runtime requirements,
