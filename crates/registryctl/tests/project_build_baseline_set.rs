@@ -2,11 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
+use registry_platform_config::ProductAcceptanceLaneV1;
 use registryctl::{
     add_config_anchor_key, build_registry_project_with_baselines_and_context,
-    build_registry_project_with_context, init_config_anchor, init_registry_project,
-    sign_config_bundle, BundleSignOptions, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
-    ProjectExecutionContext, ProjectInitOptions, ProjectStarter,
+    build_registry_project_with_context, create_trust_anchor, init_config_anchor,
+    init_registry_project, sign_config_bundle, sign_product_bundle, BundleSignOptions,
+    ProductBundleSignOptions, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
+    ProjectExecutionContext, ProjectInitOptions, ProjectStarter, TrustAnchorCreateOptions,
 };
 
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
@@ -56,6 +58,72 @@ fn sign_product_baseline(
     environment: &str,
     suffix: &str,
 ) -> SignedProductBaseline {
+    assert_eq!(environment, "local");
+    let lane = match product_directory {
+        "relay-public" => ProductAcceptanceLaneV1::RelayPublic,
+        "relay-consultation" => ProductAcceptanceLaneV1::RelayConsultation,
+        "notary" => ProductAcceptanceLaneV1::Notary,
+        _ => panic!("unexpected product signing-input directory"),
+    };
+    assert_eq!(
+        product,
+        match lane {
+            ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation =>
+                "registry-relay",
+            ProductAcceptanceLaneV1::Notary => "registry-notary",
+        }
+    );
+    let private_key = temporary.join(format!("{suffix}-private.jwk"));
+    let public_key = temporary.join(format!("{suffix}-public.jwk"));
+    let anchor = temporary.join(format!("{suffix}-anchor.json"));
+    let signed = temporary.join(format!("{suffix}-signed"));
+    std::fs::write(&private_key, TEST_PRIVATE_JWK).expect("private test key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = std::fs::metadata(&private_key)
+            .expect("private key metadata reads")
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&private_key, permissions)
+            .expect("private key becomes owner-only");
+    }
+    std::fs::write(&public_key, TEST_PUBLIC_JWK).expect("public test key writes");
+    let input = output.join("signing-inputs").join(product_directory);
+    create_trust_anchor(&TrustAnchorCreateOptions {
+        lane,
+        input: input.clone(),
+        public_keys: vec![public_key],
+        threshold: 1,
+        output_file: anchor.clone(),
+    })
+    .expect("derived product trust anchor initializes");
+    sign_product_bundle(&ProductBundleSignOptions {
+        lane,
+        input,
+        anchor,
+        keys: vec![format!("file:{}", private_key.display())],
+        output_dir: signed.clone(),
+    })
+    .expect("derived product baseline signs");
+    SignedProductBaseline {
+        bundle: signed.join("bundle"),
+        anchor: signed.join("anchor.json"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_product_baseline_with_identity(
+    output: &Path,
+    temporary: &Path,
+    product: &str,
+    product_directory: &str,
+    environment: &str,
+    stream: &str,
+    instance: &str,
+    suffix: &str,
+) -> SignedProductBaseline {
     let private_key = temporary.join(format!("{suffix}-private.jwk"));
     let public_key = temporary.join(format!("{suffix}-public.jwk"));
     let anchor = temporary.join(format!("{suffix}-anchor.json"));
@@ -66,8 +134,8 @@ fn sign_product_baseline(
         &anchor,
         product.to_string(),
         environment.to_string(),
-        format!("{suffix}-stream"),
-        format!("{suffix}-instance"),
+        stream.to_string(),
+        instance.to_string(),
     )
     .expect("product trust anchor initializes");
     add_config_anchor_key(&anchor, &public_key, true).expect("product signer is trusted");
@@ -76,8 +144,8 @@ fn sign_product_baseline(
         key: private_key.display().to_string(),
         product: product.to_string(),
         environment: environment.to_string(),
-        stream_id: format!("{suffix}-stream"),
-        instance_id: Some(format!("{suffix}-instance")),
+        stream_id: stream.to_string(),
+        instance_id: Some(instance.to_string()),
         sequence: 1,
         bundle_id: format!("{suffix}-bundle"),
         out: bundle.clone(),
@@ -258,17 +326,27 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
             ["product"],
         "registry-relay"
     );
+    let bundle_ids = [
+        state["baseline"]["verified_manifests"]["relay"]["bundle_id"]
+            .as_str()
+            .expect("Relay closure digest"),
+        state["baseline"]["verified_manifests"]["relay_consultation"]["bundle_id"]
+            .as_str()
+            .expect("consultation Relay closure digest"),
+        state["baseline"]["verified_manifests"]["notary"]["bundle_id"]
+            .as_str()
+            .expect("Notary closure digest"),
+    ];
+    assert!(bundle_ids
+        .iter()
+        .all(|bundle_id| bundle_id.starts_with("sha256:")));
     assert_eq!(
-        state["baseline"]["verified_manifests"]["relay"]["bundle_id"],
-        "common-relay-bundle"
-    );
-    assert_eq!(
-        state["baseline"]["verified_manifests"]["notary"]["bundle_id"],
-        "common-notary-bundle"
-    );
-    assert_eq!(
-        state["baseline"]["verified_manifests"]["relay_consultation"]["bundle_id"],
-        "common-relay-consultation-bundle"
+        bundle_ids
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3,
+        "each product lane binds its distinct complete signing-input closure"
     );
 }
 
@@ -329,12 +407,48 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     };
     assert_value_free_rejection(&project, &tampered, temporary.path());
 
-    let wrong_environment = sign_product_baseline(
+    let wrong_project_and_stream = sign_product_baseline_with_identity(
+        &output,
+        temporary.path(),
+        "registry-relay",
+        "relay-public",
+        "local",
+        "other-project",
+        "fictional-registry-relay",
+        "wrong-project-stream-relay",
+    );
+    let wrong_project_and_stream = ProjectBuildBaselineSetOptions {
+        relay_against: Some(wrong_project_and_stream.bundle),
+        relay_anchor: Some(wrong_project_and_stream.anchor),
+        ..baselines.clone()
+    };
+    assert_value_free_rejection(&project, &wrong_project_and_stream, temporary.path());
+
+    let wrong_instance = sign_product_baseline_with_identity(
+        &output,
+        temporary.path(),
+        "registry-relay",
+        "relay-public",
+        "local",
+        "fictional-citizen-registry",
+        "other-relay-instance",
+        "wrong-instance-relay",
+    );
+    let wrong_instance = ProjectBuildBaselineSetOptions {
+        relay_against: Some(wrong_instance.bundle),
+        relay_anchor: Some(wrong_instance.anchor),
+        ..baselines.clone()
+    };
+    assert_value_free_rejection(&project, &wrong_instance, temporary.path());
+
+    let wrong_environment = sign_product_baseline_with_identity(
         &output,
         temporary.path(),
         "registry-relay",
         "relay-public",
         "other",
+        "fictional-citizen-registry",
+        "fictional-registry-relay",
         "wrong-environment-relay",
     );
     let wrong_environment = ProjectBuildBaselineSetOptions {
@@ -421,14 +535,16 @@ fn legacy_v3_relay_baseline_requires_split_lane_re_review() {
     let mut state_bytes = serde_json::to_vec_pretty(&state).expect("legacy state serializes");
     state_bytes.push(b'\n');
     for product_directory in ["relay-public", "notary"] {
-        std::fs::write(
-            legacy_output
-                .join("private")
-                .join(product_directory)
-                .join("approval/project-state.json"),
-            &state_bytes,
-        )
-        .expect("legacy approval state writes");
+        for input_kind in ["private", "signing-inputs"] {
+            std::fs::write(
+                legacy_output
+                    .join(input_kind)
+                    .join(product_directory)
+                    .join("approval/project-state.json"),
+                &state_bytes,
+            )
+            .expect("legacy approval state writes");
+        }
     }
 
     let relay = sign_product_baseline(

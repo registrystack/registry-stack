@@ -70,7 +70,7 @@ workspaces:
     focus: solmara
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release
-    steps: [check, build]
+    steps: [check]
     environment: local
     check_explain: true
 
@@ -119,7 +119,7 @@ workspaces:
     classification: maintained
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization
-    steps: [check, build]
+    steps: [test, check]
     environment: local
     check_explain: true
 
@@ -130,7 +130,7 @@ workspaces:
     classification: maintained
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/relay-only-records
-    steps: [check, build]
+    steps: [test, check]
     environment: local
     check_explain: true
 

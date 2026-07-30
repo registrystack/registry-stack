@@ -1054,12 +1054,6 @@ fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
             "{} check",
             journey.id
         );
-        assert!(
-            journey.steps.contains(&"build".to_string()),
-            "{} build",
-            journey.id
-        );
-
         let project = read_yaml(&catalog_workspace(journey).join("registry-stack.yaml"));
         let has_integrations = project["integrations"]
             .as_mapping()
@@ -1089,13 +1083,35 @@ fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
             "{} topology",
             journey.id
         );
+        if derived_topology == "combined" {
+            assert!(
+                journey.steps.contains(&"build".to_string()),
+                "{} combined governed build",
+                journey.id
+            );
+        } else {
+            assert!(
+                !journey.steps.contains(&"build".to_string()),
+                "{} partial topology must not advertise a governed build",
+                journey.id
+            );
+            if journey.classification == "maintained" {
+                assert!(
+                    journey.steps.contains(&"test".to_string()),
+                    "{} maintained partial topology keeps offline test",
+                    journey.id
+                );
+            }
+        }
 
         let has_authored_fixtures = catalog_has_authored_fixtures(journey, &project);
         if !has_authored_fixtures {
-            assert_eq!(
-                journey.steps,
-                ["check", "build"],
-                "{} is fixtureless and must not invent test, trace, or watch journeys",
+            assert!(
+                !journey
+                    .steps
+                    .iter()
+                    .any(|step| step == "trace" || step == "watch"),
+                "{} is fixtureless and must not invent trace or watch journeys",
                 journey.id
             );
             assert!(
@@ -1308,7 +1324,9 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
             })
             .unwrap_or_else(|error| panic!("{} offline test failed: {error:#}", journey.id));
             assert_eq!(report.status, "passed", "{} test", journey.id);
-            assert!(!report.fixtures.is_empty(), "{} fixtures", journey.id);
+            if journey.topology == "combined" {
+                assert!(!report.fixtures.is_empty(), "{} fixtures", journey.id);
+            }
             assert!(
                 report.fixtures.iter().all(|fixture| fixture.passed),
                 "{} fixtures",
@@ -1326,6 +1344,21 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
         .unwrap_or_else(|error| panic!("{} check failed: {error:#}", journey.id));
         assert_eq!(check.status, "valid", "{} check", journey.id);
         assert!(check.explanation.is_some(), "{} explanation", journey.id);
+
+        if !journey.steps.contains(&"build".to_string()) {
+            let error = build_registry_project(&ProjectBuildOptions {
+                project_directory: project,
+                environment: journey.environment.clone(),
+                against: None,
+                anchor: None,
+            })
+            .expect_err("partial product topology must not publish a governed build");
+            let message = format!("{error:#}");
+            assert!(message.contains("project test"), "{message}");
+            assert!(message.contains("project check"), "{message}");
+            assert!(message.contains("before project build"), "{message}");
+            continue;
+        }
 
         let build = build_registry_project(&ProjectBuildOptions {
             project_directory: project.clone(),
@@ -1963,7 +1996,11 @@ fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
         anchor: None,
     })
     .expect_err("Relay-only project cannot ship a partial governed signed set");
-    assert!(format!("{relay_build:#}").contains("governed build requires"));
+    let relay_message = format!("{relay_build:#}");
+    assert!(relay_message.contains("governed build requires"));
+    assert!(relay_message.contains("project test"));
+    assert!(relay_message.contains("project check"));
+    assert!(relay_message.contains("add deployment.notary before project build"));
 
     let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
     let notary = copy_project("notary-only-evaluation", notary_root.path());
@@ -1989,7 +2026,11 @@ fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
         anchor: None,
     })
     .expect_err("Notary-only project cannot ship a partial governed signed set");
-    assert!(format!("{notary_build:#}").contains("governed build requires"));
+    let notary_message = format!("{notary_build:#}");
+    assert!(notary_message.contains("governed build requires"));
+    assert!(notary_message.contains("project test"));
+    assert!(notary_message.contains("project check"));
+    assert!(notary_message.contains("add deployment.relay before project build"));
 }
 
 #[test]

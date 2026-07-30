@@ -35,6 +35,9 @@ pub const SIGNING_INPUT_SCHEMA_VERSION: &str = "1.0";
 const TRUST_ANCHOR_CREATE_REPORT_SCHEMA_VERSION: &str = "registryctl.trust_anchor_create_report.v1";
 const TRUST_ANCHOR_ROTATE_REPORT_SCHEMA_VERSION: &str = "registryctl.trust_anchor_rotate_report.v1";
 const PRODUCT_BUNDLE_SIGN_REPORT_SCHEMA_VERSION: &str = "registryctl.product_bundle_sign_report.v1";
+const MAX_SIGNING_INPUT_FILES: usize = 4_096;
+const MAX_SIGNING_INPUT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_SIGNING_INPUT_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -316,7 +319,9 @@ fn sign_product_bundle_with_resolver(
         bail!("bundle signing requires at least the anchor threshold of key locators");
     }
     validate_absent_output_dir(&options.output_dir)?;
-    let files = collect_signing_input_files(&options.input)?;
+    let file_backed_keys =
+        validate_file_backed_keys_outside_signing_input(&locators, &options.input)?;
+    let files = collect_signing_input_files(&options.input, &file_backed_keys)?;
     let primary_config_path = primary_config_path(options.lane, &files)?;
     let config_hash = files
         .iter()
@@ -494,9 +499,111 @@ struct SigningInputFile {
     sha256: String,
 }
 
-fn collect_signing_input_files(input: &Path) -> Result<Vec<SigningInputFile>> {
+#[derive(Debug)]
+struct SigningInputBudget {
+    files: usize,
+    total_bytes: u64,
+}
+
+impl SigningInputBudget {
+    fn add_file(&mut self, bytes: u64) -> Result<()> {
+        self.files = self
+            .files
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("signing-input closure file count overflowed"))?;
+        if self.files > MAX_SIGNING_INPUT_FILES {
+            bail!(
+                "signing-input closure exceeds the {MAX_SIGNING_INPUT_FILES}-file limit; remove generated or unrelated files before signing"
+            );
+        }
+        self.total_bytes = self
+            .total_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| anyhow!("signing-input closure byte count overflowed"))?;
+        if self.total_bytes > MAX_SIGNING_INPUT_TOTAL_BYTES {
+            bail!(
+                "signing-input closure exceeds the {MAX_SIGNING_INPUT_TOTAL_BYTES}-byte total limit; remove generated or unrelated files before signing"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct FileBackedKeyIdentity {
+    canonical_path: PathBuf,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl FileBackedKeyIdentity {
+    fn matches(&self, path: &Path, metadata: &fs::Metadata) -> Result<bool> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            if self.device == metadata.dev() && self.inode == metadata.ino() {
+                return Ok(true);
+            }
+        }
+        Ok(
+            fs::canonicalize(path).context("failed to resolve signing-input closure entry")?
+                == self.canonical_path,
+        )
+    }
+}
+
+fn validate_file_backed_keys_outside_signing_input(
+    locators: &[KeyLocator],
+    input: &Path,
+) -> Result<Vec<FileBackedKeyIdentity>> {
+    let canonical_input =
+        fs::canonicalize(input).context("failed to resolve signing-input directory")?;
+    let mut identities = Vec::new();
+    for locator in locators {
+        let KeyLocator::File(path) = locator else {
+            continue;
+        };
+        let file = open_read_only_no_follow(path)
+            .context("failed to inspect file: signing key before closure validation")?;
+        let metadata = validate_open_regular_file(&file, true)
+            .context("file: signing key is unsafe before closure validation")?;
+        let canonical_path =
+            fs::canonicalize(path).context("failed to resolve file: signing key")?;
+        if canonical_path.starts_with(&canonical_input) {
+            bail!(
+                "file: signing key must be outside the signing-input directory; move the private key outside the generated input and retry"
+            );
+        }
+        identities.push(FileBackedKeyIdentity {
+            canonical_path,
+            #[cfg(unix)]
+            device: {
+                use std::os::unix::fs::MetadataExt as _;
+                metadata.dev()
+            },
+            #[cfg(unix)]
+            inode: {
+                use std::os::unix::fs::MetadataExt as _;
+                metadata.ino()
+            },
+        });
+    }
+    Ok(identities)
+}
+
+fn collect_signing_input_files(
+    input: &Path,
+    file_backed_keys: &[FileBackedKeyIdentity],
+) -> Result<Vec<SigningInputFile>> {
     let mut files = Vec::new();
-    collect_signing_input_files_under(input, input, &mut files)?;
+    let mut budget = SigningInputBudget {
+        files: 0,
+        total_bytes: 0,
+    };
+    collect_signing_input_files_under(input, input, 0, file_backed_keys, &mut budget, &mut files)?;
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     if files.is_empty() {
         bail!("signing-input directory contains no regular files");
@@ -513,8 +620,16 @@ fn collect_signing_input_files(input: &Path) -> Result<Vec<SigningInputFile>> {
 fn collect_signing_input_files_under(
     root: &Path,
     directory: &Path,
+    depth: usize,
+    file_backed_keys: &[FileBackedKeyIdentity],
+    budget: &mut SigningInputBudget,
     files: &mut Vec<SigningInputFile>,
 ) -> Result<()> {
+    if depth > MAX_SIGNING_INPUT_DEPTH {
+        bail!(
+            "signing-input closure exceeds the {MAX_SIGNING_INPUT_DEPTH}-directory depth limit; flatten the generated input before signing"
+        );
+    }
     let metadata =
         fs::symlink_metadata(directory).context("failed to inspect signing-input directory")?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -533,7 +648,14 @@ fn collect_signing_input_files_under(
             bail!("signing-input closure must not contain symbolic links");
         }
         if metadata.is_dir() {
-            collect_signing_input_files_under(root, &path, files)?;
+            collect_signing_input_files_under(
+                root,
+                &path,
+                depth + 1,
+                file_backed_keys,
+                budget,
+                files,
+            )?;
             continue;
         }
         if !metadata.is_file() {
@@ -542,6 +664,14 @@ fn collect_signing_input_files_under(
         if metadata.len() > MAX_BUNDLE_FILE_BYTES {
             bail!("signing-input file exceeds the bundle file size limit");
         }
+        for key in file_backed_keys {
+            if key.matches(&path, &metadata)? {
+                bail!(
+                    "signing-input closure contains a file: signing key; move the private key outside the generated input and retry"
+                );
+            }
+        }
+        budget.add_file(metadata.len())?;
         let relative_path = normalized_relative_path(root, &path)?;
         if matches!(
             relative_path.as_str(),
@@ -551,6 +681,17 @@ fn collect_signing_input_files_under(
         }
         let bytes = read_bounded_file_no_follow(&path, MAX_BUNDLE_FILE_BYTES, false)
             .context("failed to read signing-input closure entry")?;
+        if bytes.len() as u64 != metadata.len() {
+            bail!("signing-input closure changed while it was being validated; retry with a stable input directory");
+        }
+        if std::str::from_utf8(&bytes)
+            .ok()
+            .is_some_and(|text| PrivateJwk::parse(text).is_ok())
+        {
+            bail!(
+                "signing-input closure contains private JWK material; remove the private key from the generated input and retry"
+            );
+        }
         files.push(SigningInputFile {
             sha256: registry_platform_config::sha256_uri(&bytes),
             relative_path,
@@ -847,13 +988,37 @@ fn stage_output_directory(output: &Path) -> Result<tempfile::TempDir> {
 }
 
 fn publish_staged_directory(staging: tempfile::TempDir, output: &Path) -> Result<()> {
-    validate_absent_output_dir(output)?;
     let staged = staging.keep();
-    if let Err(error) = fs::rename(&staged, output) {
+    if let Err(error) = rename_noreplace(&staged, output) {
         let _ = fs::remove_dir_all(&staged);
         return Err(error).context("failed to publish immutable trust output");
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace trust-output publication is unsupported",
+    ))
 }
 
 fn create_owner_only_dir(path: &Path) -> Result<()> {
@@ -1336,6 +1501,150 @@ mod tests {
         let locator = KeyLocator::parse(&format!("file:/missing/{SENTINEL}.jwk")).unwrap();
         let error = resolve_private_key_locator(&locator).unwrap_err();
         assert!(!format!("{error:#}").contains(SENTINEL));
+    }
+
+    #[test]
+    fn file_backed_private_key_inside_signing_input_is_rejected_before_resolution_or_copy() {
+        const PRIVATE_KEY_CANARY: &str = "registryctl-private-key-copy-canary";
+
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input");
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        write_signing_input(&input, acceptance_identity.clone());
+        let anchor_path = temp.path().join("anchor.json");
+        write_anchor(&anchor_path, acceptance_identity);
+        let private_key = input.join("private-key.jwk");
+        fs::write(
+            &private_key,
+            TEST_PRIVATE_JWK.replace("registryctl-test-private-key", PRIVATE_KEY_CANARY),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mut permissions = fs::metadata(&private_key).unwrap().permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&private_key, permissions).unwrap();
+        }
+        let output = temp.path().join("signed");
+        let calls = Cell::new(0);
+        let error = sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input,
+                anchor: anchor_path,
+                keys: vec![format!("file:{}", private_key.display())],
+                output_dir: output.clone(),
+            },
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string()))
+            },
+        )
+        .expect_err("private signing key inside the closure must fail closed");
+        assert_eq!(calls.get(), 0);
+        assert!(format!("{error:#}").contains("outside the signing-input directory"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn copied_file_backed_private_key_is_rejected_before_resolution_or_publication() {
+        const PRIVATE_KEY_CANARY: &str = "registryctl-copied-private-key-canary";
+
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input");
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        write_signing_input(&input, acceptance_identity.clone());
+        let anchor_path = temp.path().join("anchor.json");
+        write_anchor(&anchor_path, acceptance_identity);
+        let private_key = temp.path().join("private-key.jwk");
+        fs::write(
+            &private_key,
+            TEST_PRIVATE_JWK.replace("registryctl-test-private-key", PRIVATE_KEY_CANARY),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mut permissions = fs::metadata(&private_key).unwrap().permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&private_key, permissions).unwrap();
+        }
+        fs::copy(&private_key, input.join("copied-private-key.jwk")).unwrap();
+
+        let output = temp.path().join("signed");
+        let calls = Cell::new(0);
+        let error = sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input,
+                anchor: anchor_path,
+                keys: vec![format!("file:{}", private_key.display())],
+                output_dir: output.clone(),
+            },
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string()))
+            },
+        )
+        .expect_err("copied private signing key in the closure must fail closed");
+        assert_eq!(calls.get(), 0);
+        assert!(format!("{error:#}").contains("private JWK material"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn signing_input_budget_enforces_closure_wide_file_and_byte_caps() {
+        let mut file_budget = SigningInputBudget {
+            files: MAX_SIGNING_INPUT_FILES,
+            total_bytes: 0,
+        };
+        let error = file_budget
+            .add_file(0)
+            .expect_err("one file beyond the closure-wide cap must fail");
+        assert!(format!("{error:#}").contains("file limit"));
+
+        let mut byte_budget = SigningInputBudget {
+            files: 0,
+            total_bytes: MAX_SIGNING_INPUT_TOTAL_BYTES,
+        };
+        let error = byte_budget
+            .add_file(1)
+            .expect_err("one byte beyond the closure-wide cap must fail");
+        assert!(format!("{error:#}").contains("total limit"));
+    }
+
+    #[test]
+    fn signing_input_closure_enforces_directory_depth_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input");
+        write_signing_input(&input, identity(ProductAcceptanceLaneV1::Notary));
+        let mut nested = input;
+        for index in 0..=MAX_SIGNING_INPUT_DEPTH {
+            nested = nested.join(format!("d{index}"));
+        }
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("leaf"), b"bounded").unwrap();
+        let error = collect_signing_input_files(&temp.path().join("input"), &[])
+            .expect_err("closure nesting beyond the depth cap must fail");
+        assert!(format!("{error:#}").contains("depth limit"));
+    }
+
+    #[test]
+    fn immutable_directory_publication_does_not_replace_a_racing_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("published");
+        let staging = stage_output_directory(&output).unwrap();
+        write_new_private_file(&staging.path().join("staged"), b"staged").unwrap();
+        fs::create_dir(&output).unwrap();
+        fs::write(output.join("winner"), b"winner").unwrap();
+
+        publish_staged_directory(staging, &output)
+            .expect_err("a destination created after staging must win without replacement");
+        assert_eq!(fs::read(output.join("winner")).unwrap(), b"winner");
+        assert!(!output.join("staged").exists());
     }
 
     #[cfg(unix)]

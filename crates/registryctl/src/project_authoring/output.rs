@@ -599,7 +599,7 @@ fn write_compiled_project(
         || compiled.notary_private.is_empty()
     {
         bail!(
-            "governed build requires complete relay-public, relay-consultation, and notary signing inputs"
+            "governed build requires complete relay-public, relay-consultation, and notary signing inputs; continue authoring with project test and project check, then add the missing product binding before project build"
         );
     }
     let expected_parent = root.join(BUILD_ROOT);
@@ -667,10 +667,7 @@ fn write_compiled_project(
         create_dir_owner_only(&lane_root)?;
         write_file_map(&lane_root, files)?;
         write_private_file(&lane_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
-        write_private_file(
-            &lane_root.join(APPROVAL_STATE_PATH),
-            &approval_state_bytes,
-        )?;
+        write_private_file(&lane_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
         let marker = crate::SigningInputMarkerV1::governed(identity.clone())?;
         let marker_bytes = crate::trust::canonical_signing_input_marker(&marker)?;
         write_private_file(
@@ -740,12 +737,20 @@ fn governed_signing_input_identities(
         .deployment
         .relay
         .as_ref()
-        .ok_or_else(|| anyhow!("governed build requires a public and consultation Relay binding"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "governed build requires a public and consultation Relay binding; continue authoring with project test and project check, then add deployment.relay before project build"
+            )
+        })?;
     let notary = environment
         .deployment
         .notary
         .as_ref()
-        .ok_or_else(|| anyhow!("governed build requires a Notary binding"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "governed build requires a Notary binding; continue authoring with project test and project check, then add deployment.notary before project build"
+            )
+        })?;
     let project = loaded.project.registry.id.clone();
     let identity = |lane, product, instance| ProductAcceptanceIdentityV1 {
         trust_domain: ProductTrustDomainV1::Governed,
@@ -997,9 +1002,7 @@ impl VerifiedBaselineLane {
             Self::Relay | Self::RelayConsultation => {
                 registry_platform_config::ProductAcceptanceProductV1::RegistryRelay
             }
-            Self::Notary => {
-                registry_platform_config::ProductAcceptanceProductV1::RegistryNotary
-            }
+            Self::Notary => registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
         }
     }
 
@@ -1033,8 +1036,8 @@ impl VerifiedBaselineSet {
             self.relay_consultation.as_ref(),
             self.notary.as_ref(),
         ]
-            .into_iter()
-            .flatten()
+        .into_iter()
+        .flatten()
     }
 
     fn common(&self) -> Option<&VerifiedBaseline> {
@@ -1162,19 +1165,21 @@ fn load_verified_approved_baseline_set(
         let products = project_promotion_products(environment);
         let requires_relay = products.contains(&PromotionProjectedProduct::Relay);
         let requires_notary = products.contains(&PromotionProjectedProduct::Notary);
-        let requires_relay_consultation =
-            project_requires_relay_consultation_baseline(loaded)
-                || baselines.common().is_some_and(|baseline| {
-                    baseline
-                        .approval_state
-                        .pointer("/generated_closure_digests/relay_consultation")
-                        .is_some_and(Value::is_string)
-                });
+        let requires_relay_consultation = project_requires_relay_consultation_baseline(loaded)
+            || baselines.common().is_some_and(|baseline| {
+                baseline
+                    .approval_state
+                    .pointer("/generated_closure_digests/relay_consultation")
+                    .is_some_and(Value::is_string)
+            });
         if requires_relay_consultation
             && baselines.relay_consultation.is_none()
             && baselines.common().is_some_and(|baseline| {
                 matches!(
-                    baseline.approval_state.get("schema").and_then(Value::as_str),
+                    baseline
+                        .approval_state
+                        .get("schema")
+                        .and_then(Value::as_str),
                     Some(
                         APPROVAL_STATE_SCHEMA_V1
                             | APPROVAL_STATE_SCHEMA_V2
@@ -1230,11 +1235,21 @@ fn load_verified_baseline(
         }
         registry_platform_config::ProductAcceptanceLaneV1::Notary => VerifiedBaselineLane::Notary,
     });
-    if identity.product != lane.product()
-        || identity.lane != lane.acceptance_lane()
-        || identity.environment != environment
-    {
-        bail!("verified baseline manifest is not bound to this product lane and environment");
+    let expected_identities = governed_signing_input_identities(loaded)?;
+    let expected_identity = match lane {
+        VerifiedBaselineLane::Relay => &expected_identities[0],
+        VerifiedBaselineLane::RelayConsultation => &expected_identities[1],
+        VerifiedBaselineLane::Notary => &expected_identities[2],
+    };
+    if identity != expected_identity {
+        bail!(
+            "verified baseline manifest acceptance identity does not exactly match the derived governed project, environment, lane, product, stream, and instance"
+        );
+    }
+    if &verified.trust_anchor.acceptance_identity != expected_identity {
+        bail!(
+            "verified baseline trust-anchor acceptance identity does not exactly match the derived governed project, environment, lane, product, stream, and instance"
+        );
     }
     let review_bytes =
         read_verified_bundle_payload(bundle, &verified.manifest, APPROVAL_REVIEW_PATH, "review")?;
@@ -1384,7 +1399,7 @@ fn validate_verified_product_closure(
         .filter(|file| {
             !matches!(
                 file.path.as_str(),
-                APPROVAL_REVIEW_PATH | APPROVAL_STATE_PATH
+                APPROVAL_REVIEW_PATH | APPROVAL_STATE_PATH | crate::SIGNING_INPUT_MARKER_FILE
             )
         })
         .map(|file| json!({ "path": file.path, "sha256": file.sha256 }))
