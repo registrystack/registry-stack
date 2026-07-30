@@ -4,10 +4,11 @@
 //! collection. This crate owns the shared public contract and the emit-only
 //! sensitivity-tier filter used before posture leaves a runtime.
 
+use std::ffi::OsString;
 use std::fmt::{self, Display, Write as _};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -392,6 +393,9 @@ const AUDIT_ACK_CURSOR_SCHEMA_CONST: &str = "registry.audit.ack_cursor.v1";
 /// Ack cursors contain four short scalar fields. Bound reads keep a readiness
 /// probe from allocating based on an attacker-controlled or misconfigured file.
 const MAX_AUDIT_ACK_CURSOR_BYTES: u64 = 16 * 1024;
+pub const MAX_ANTI_ROLLBACK_STATE_BYTES: u64 = 256 * 1024;
+pub const MAX_ANTI_ROLLBACK_HISTORY_ENTRIES: usize = 1_024;
+pub const MAX_ACCEPTED_ANCHOR_SIGNERS: usize = 128;
 
 /// Observed off-host audit shipping state derived from the local ack cursor.
 ///
@@ -1943,6 +1947,8 @@ pub enum AntiRollbackStoreError {
     UnexpectedAnchorTransition,
     AnchorTransitionRejected,
     SequenceMustAdvanceByOne,
+    GovernedMutationRequiresAcceptancePath,
+    AuditIntentFailed,
     NonMonotonicSequence,
     RootVersionRollback,
     PreviousConfigHashMismatch,
@@ -1995,6 +2001,15 @@ impl Display for AntiRollbackStoreError {
             }
             Self::SequenceMustAdvanceByOne => {
                 write!(f, "bundle sequence must advance by exactly one")
+            }
+            Self::GovernedMutationRequiresAcceptancePath => {
+                write!(
+                    f,
+                    "governed anti-rollback state requires the audited acceptance path"
+                )
+            }
+            Self::AuditIntentFailed => {
+                write!(f, "acceptance intent audit failed before state mutation")
             }
             Self::NonMonotonicSequence => write!(f, "bundle sequence is not monotonic"),
             Self::RootVersionRollback => write!(f, "root version is not monotonic"),
@@ -2155,13 +2170,16 @@ impl FileAntiRollbackStore {
         &self,
         key: &AntiRollbackKey,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(AntiRollbackStoreError::MissingState);
-            }
-            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
-        };
+        let state_path = self.resolved_state_path(false)?;
+        self.load_from_path(&state_path, key)
+    }
+
+    fn load_from_path(
+        &self,
+        state_path: &Path,
+        key: &AntiRollbackKey,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let bytes = read_anti_rollback_state(state_path)?;
         let record: AntiRollbackRecord = serde_json::from_slice(&bytes)
             .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
         record.validate()?;
@@ -2197,9 +2215,10 @@ impl FileAntiRollbackStore {
         let accepted_anchor = AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
             .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
         let record = record_from_expectation(expected, accepted_anchor, None)?;
-        self.ensure_state_absent()?;
+        let state_path = self.resolved_state_path(false)?;
+        self.ensure_state_absent_at(&state_path)?;
         Ok(AcceptanceStatePlanV1 {
-            state_path: self.path.clone(),
+            state_path,
             preceding: None,
             candidate: candidate.clone(),
             current_anchor: None,
@@ -2222,7 +2241,8 @@ impl FileAntiRollbackStore {
                 "anchor acceptance identity",
             ));
         }
-        let current = self.load(&candidate.key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let current = self.load_from_path(&state_path, &candidate.key)?;
         let update = AcceptanceStateUpdateV1 {
             expectation: expected,
             previous_config_hash: candidate.previous_config_hash.as_deref(),
@@ -2232,7 +2252,7 @@ impl FileAntiRollbackStore {
         let mutation = validate_acceptance_update(&current, update, &accepted_anchor)?;
         let accepted = record_from_expectation(expected, accepted_anchor, Some(&current))?;
         Ok(AcceptanceStatePlanV1 {
-            state_path: self.path.clone(),
+            state_path,
             preceding: Some(current),
             candidate: candidate.clone(),
             current_anchor: current_anchor.cloned(),
@@ -2241,28 +2261,37 @@ impl FileAntiRollbackStore {
         })
     }
 
-    pub fn commit_acceptance(
+    pub async fn commit_acceptance<AuditFn, AuditFuture, AuditError>(
         &self,
         plan: AcceptanceStatePlanV1,
-    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        if plan.state_path != self.path {
+        audit_fn: AuditFn,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError>
+    where
+        AuditFn: FnOnce(AcceptanceAuditIntentV1) -> AuditFuture,
+        AuditFuture: std::future::Future<Output = Result<(), AuditError>>,
+    {
+        audit_fn(plan.intent.clone())
+            .await
+            .map_err(|_| AntiRollbackStoreError::AuditIntentFailed)?;
+        let state_path = self.resolved_state_path(true)?;
+        if plan.state_path != state_path {
             return Err(AntiRollbackStoreError::StateMismatch("state path"));
         }
-        let _lock = self.acquire_lock()?;
+        let _lock = self.acquire_lock(&state_path)?;
         match plan.preceding {
             None => {
                 validate_initial_candidate(&plan.candidate)?;
-                self.ensure_state_absent()?;
+                self.ensure_state_absent_at(&state_path)?;
                 let accepted_anchor =
                     AcceptedAnchorPinV1::from_trust_anchor(&plan.candidate.anchor)
                         .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
                 let accepted =
                     record_from_expectation(plan.candidate.expectation(), accepted_anchor, None)?;
-                self.write_record(&accepted)?;
+                self.write_record(&state_path, &accepted, true)?;
                 Ok(accepted)
             }
             Some(preceding) => {
-                let locked_current = self.load(&plan.candidate.key)?;
+                let locked_current = self.load_from_path(&state_path, &plan.candidate.key)?;
                 if locked_current != preceding {
                     return Err(AntiRollbackStoreError::StateMismatch(
                         "concurrent acceptance state",
@@ -2283,31 +2312,23 @@ impl FileAntiRollbackStore {
                     accepted_anchor,
                     Some(&locked_current),
                 )?;
-                self.write_record(&accepted)?;
+                self.write_record(&state_path, &accepted, false)?;
                 Ok(accepted)
             }
         }
     }
 
     pub fn initialize(&self, record: AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
+        reject_governed_legacy_mutation(&record.key)?;
         record.validate()?;
-        let target_path = self.write_target_path()?;
-        match fs::symlink_metadata(&target_path) {
-            Ok(_) => {
-                return Err(AntiRollbackStoreError::InvalidState(
-                    "anti-rollback state already exists".to_string(),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
-        }
-        self.write_record(&record)
+        let state_path = self.resolved_state_path(true)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        self.ensure_state_absent_at(&state_path)?;
+        self.write_record(&state_path, &record, true)
     }
 
-    fn ensure_state_absent(&self) -> Result<(), AntiRollbackStoreError> {
-        let target_path = self.write_target_path()?;
-        match fs::symlink_metadata(target_path) {
+    fn ensure_state_absent_at(&self, state_path: &Path) -> Result<(), AntiRollbackStoreError> {
+        match fs::symlink_metadata(state_path) {
             Ok(_) => Err(AntiRollbackStoreError::InvalidState(
                 "anti-rollback state already exists".to_string(),
             )),
@@ -2321,6 +2342,7 @@ impl FileAntiRollbackStore {
         key: &AntiRollbackKey,
         proposal: AntiRollbackProposal,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.accept_at(key, proposal, current_unix_seconds()?)
     }
 
@@ -2330,8 +2352,10 @@ impl FileAntiRollbackStore {
         proposal: AntiRollbackProposal,
         now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
         let _legacy_root_version = proposal.root_version;
         if proposal.sequence < current.last_sequence {
             return Err(AntiRollbackStoreError::NonMonotonicSequence);
@@ -2407,7 +2431,7 @@ impl FileAntiRollbackStore {
             local_approvals,
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
@@ -2419,6 +2443,7 @@ impl FileAntiRollbackStore {
         config_hash: String,
         bundle_manifest_hash: String,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.accept_bundle_at(
             key,
             bundle_id,
@@ -2438,8 +2463,10 @@ impl FileAntiRollbackStore {
         bundle_manifest_hash: String,
         _now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
         validate_non_empty("last_bundle_id", &bundle_id)?;
         validate_hash(&bundle_manifest_hash)?;
         validate_hash(&config_hash)?;
@@ -2471,7 +2498,7 @@ impl FileAntiRollbackStore {
             local_approvals: LocalApprovalState::default(),
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
@@ -2480,6 +2507,7 @@ impl FileAntiRollbackStore {
         key: &AntiRollbackKey,
         pin: ConfigOverridePin,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.persist_override_pin_at(key, pin, current_unix_seconds()?)
     }
 
@@ -2489,8 +2517,10 @@ impl FileAntiRollbackStore {
         pin: ConfigOverridePin,
         now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
         validate_override_pin(&pin)?;
         validate_active_override_pin_window(&pin, now_unix_seconds)?;
         let accepted = AntiRollbackRecord {
@@ -2498,21 +2528,27 @@ impl FileAntiRollbackStore {
             ..current
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
-    fn write_record(&self, record: &AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
-        let target_path = self.write_target_path()?;
-        if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
-        }
+    fn write_record(
+        &self,
+        state_path: &Path,
+        record: &AntiRollbackRecord,
+        no_replace: bool,
+    ) -> Result<(), AntiRollbackStoreError> {
         let bytes = serde_json::to_vec_pretty(record)
             .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
-        let tmp_path = target_path.with_extension("tmp");
+        let serialized_len = bytes.len().saturating_add(1);
+        if u64::try_from(serialized_len).unwrap_or(u64::MAX) > MAX_ANTI_ROLLBACK_STATE_BYTES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "serialized anti-rollback state exceeds the size limit".to_string(),
+            ));
+        }
+        let tmp_path = state_path.with_extension(format!("tmp-{}", Ulid::new()));
         {
-            let mut file = fs::File::create(&tmp_path)
+            let mut file = create_private_temp_file(&tmp_path)
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
             file.write_all(&bytes)
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
@@ -2521,40 +2557,309 @@ impl FileAntiRollbackStore {
             file.sync_all()
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
         }
-        fs::rename(&tmp_path, &target_path)
-            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        let publish_result = if no_replace {
+            rename_noreplace(&tmp_path, state_path)
+        } else {
+            fs::rename(&tmp_path, state_path)
+        };
+        if let Err(error) = publish_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(AntiRollbackStoreError::Io(error.to_string()));
+        }
         Ok(())
     }
 
-    fn write_target_path(&self) -> Result<PathBuf, AntiRollbackStoreError> {
-        match fs::symlink_metadata(&self.path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => self
-                .path
-                .canonicalize()
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string())),
-            Ok(_) => Ok(self.path.clone()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(self.path.clone()),
-            Err(error) => Err(AntiRollbackStoreError::Io(error.to_string())),
-        }
+    fn resolved_state_path(&self, create_parent: bool) -> Result<PathBuf, AntiRollbackStoreError> {
+        resolve_state_path_identity(&self.path, create_parent)
     }
 
-    fn acquire_lock(&self) -> Result<AntiRollbackStoreLock, AntiRollbackStoreError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
-        }
-        let lock_path = self.path.with_extension("lock");
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lock_path)
+    fn acquire_lock(
+        &self,
+        state_path: &Path,
+    ) -> Result<AntiRollbackStoreLock, AntiRollbackStoreError> {
+        let lock_path = state_path.with_extension("lock");
+        let file = open_anti_rollback_lock(&lock_path)
             .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        validate_regular_single_link_file(&file, "anti-rollback lock")?;
         file.lock_exclusive()
             .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
         Ok(AntiRollbackStoreLock { file })
     }
+}
+
+fn reject_governed_legacy_mutation(key: &AntiRollbackKey) -> Result<(), AntiRollbackStoreError> {
+    if key.acceptance_identity.trust_domain
+        == registry_platform_config::ProductTrustDomainV1::Governed
+    {
+        return Err(AntiRollbackStoreError::GovernedMutationRequiresAcceptancePath);
+    }
+    Ok(())
+}
+
+fn resolve_state_path_identity(
+    path: &Path,
+    create_parent: bool,
+) -> Result<PathBuf, AntiRollbackStoreError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?
+            .join(path)
+    };
+    let normalized = normalize_absolute_path(&absolute)?;
+    let file_name = normalized.file_name().ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path must name a file".to_string(),
+        )
+    })?;
+    let parent = normalized.parent().ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path must have a parent".to_string(),
+        )
+    })?;
+    if create_parent {
+        fs::create_dir_all(parent)
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    }
+    let canonical_parent = canonicalize_existing_parent(parent)?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, AntiRollbackStoreError> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state path escapes its root".to_string(),
+                    ));
+                }
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    if !normalized.is_absolute() {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path is not absolute".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn canonicalize_existing_parent(parent: &Path) -> Result<PathBuf, AntiRollbackStoreError> {
+    let mut cursor = parent.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match cursor.canonicalize() {
+            Ok(mut canonical) => {
+                if !canonical
+                    .metadata()
+                    .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?
+                    .is_dir()
+                {
+                    return Err(AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state parent is not a directory".to_string(),
+                    ));
+                }
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = cursor.file_name().ok_or_else(|| {
+                    AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state parent cannot be resolved".to_string(),
+                    )
+                })?;
+                missing.push(component.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .ok_or_else(|| {
+                        AntiRollbackStoreError::InvalidState(
+                            "anti-rollback state parent cannot be resolved".to_string(),
+                        )
+                    })?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+        }
+    }
+}
+
+fn read_anti_rollback_state(path: &Path) -> Result<Vec<u8>, AntiRollbackStoreError> {
+    let mut file = match open_anti_rollback_state(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AntiRollbackStoreError::MissingState);
+        }
+        Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+    };
+    validate_regular_single_link_file(&file, "anti-rollback state")?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if metadata.len() > MAX_ANTI_ROLLBACK_STATE_BYTES {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state exceeds the size limit".to_string(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_ANTI_ROLLBACK_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ANTI_ROLLBACK_STATE_BYTES {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state exceeds the size limit".to_string(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_regular_single_link_file(
+    file: &File,
+    label: &'static str,
+) -> Result<(), AntiRollbackStoreError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(AntiRollbackStoreError::InvalidState(format!(
+            "{label} is not a regular file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if metadata.nlink() != 1 {
+            return Err(AntiRollbackStoreError::InvalidState(format!(
+                "{label} has multiple hard links"
+            )));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(AntiRollbackStoreError::InvalidState(format!(
+                "{label} is a reparse point"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(windows)]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "anti-rollback state symbolic links are not allowed",
+        ));
+    }
+    File::open(path)
+}
+
+#[cfg(unix)]
+fn open_anti_rollback_lock(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_anti_rollback_lock(path: &Path) -> std::io::Result<File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+}
+
+#[cfg(unix)]
+fn create_private_temp_file(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::CLOEXEC
+            | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn create_private_temp_file(path: &Path) -> std::io::Result<File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-clobber anti-rollback publication is unsupported",
+    ))
 }
 
 struct AntiRollbackStoreLock {
@@ -2584,6 +2889,11 @@ impl AntiRollbackRecord {
         if let Some(pin) = &self.override_pin {
             validate_override_pin(pin)?;
         }
+        if self.break_glass.accepted.len() > MAX_ANTI_ROLLBACK_HISTORY_ENTRIES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "break_glass.accepted exceeds the entry limit".to_string(),
+            ));
+        }
         for accepted in &self.break_glass.accepted {
             validate_non_empty(
                 "break_glass.approval_reference",
@@ -2594,6 +2904,11 @@ impl AntiRollbackRecord {
                 &accepted.rate_limit_identity,
             )?;
             validate_hash(&accepted.config_hash)?;
+        }
+        if self.local_approvals.accepted.len() > MAX_ANTI_ROLLBACK_HISTORY_ENTRIES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "local_approvals.accepted exceeds the entry limit".to_string(),
+            ));
         }
         for accepted in &self.local_approvals.accepted {
             validate_non_empty(
@@ -2619,9 +2934,11 @@ impl AcceptedAnchorPinV1 {
                 "accepted_anchor.version must be non-zero".to_string(),
             ));
         }
-        if self.enabled_signers.is_empty() {
+        if self.enabled_signers.is_empty()
+            || self.enabled_signers.len() > MAX_ACCEPTED_ANCHOR_SIGNERS
+        {
             return Err(AntiRollbackStoreError::InvalidState(
-                "accepted_anchor.enabled_signers must not be empty".to_string(),
+                "accepted_anchor.enabled_signers count is invalid".to_string(),
             ));
         }
         if self.threshold == 0 || self.threshold as usize > self.enabled_signers.len() {
@@ -3138,6 +3455,7 @@ fn override_mode_from_break_glass(
 pub fn persist_bundle_acceptance(
     acceptance: &PendingBundleAcceptance,
 ) -> Result<(), ConfigBootError> {
+    reject_governed_legacy_mutation(&acceptance.key)?;
     let store = FileAntiRollbackStore::new(&acceptance.state_path);
     match acceptance.state_action {
         BundleStateAction::Initialize => store.initialize(acceptance.initial_record())?,
@@ -4056,6 +4374,24 @@ mod tests {
         encoded
     }
 
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        struct NoopWake;
+
+        impl std::task::Wake for NoopWake {
+            fn wake(self: std::sync::Arc<Self>) {}
+        }
+
+        let waker = std::task::Waker::from(std::sync::Arc::new(NoopWake));
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                std::task::Poll::Ready(output) => return output,
+                std::task::Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
     #[test]
     fn audit_shipping_target_maps_every_sink_kind() {
         // stdout and syslog are always their own shipping target, regardless of
@@ -4448,7 +4784,7 @@ mod tests {
     fn test_key() -> AntiRollbackKey {
         AntiRollbackKey {
             acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1 {
-                trust_domain: registry_platform_config::ProductTrustDomainV1::Governed,
+                trust_domain: registry_platform_config::ProductTrustDomainV1::Development,
                 project: "civil-registry".to_string(),
                 environment: "production".to_string(),
                 lane: registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
@@ -4457,6 +4793,13 @@ mod tests {
                 instance: "relay-001".to_string(),
             },
         }
+    }
+
+    fn governed_test_key() -> AntiRollbackKey {
+        let mut key = test_key();
+        key.acceptance_identity.trust_domain =
+            registry_platform_config::ProductTrustDomainV1::Governed;
+        key
     }
 
     fn test_anchor(key: &AntiRollbackKey) -> registry_platform_config::ConfigTrustAnchor {
@@ -4711,7 +5054,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");
         let store = FileAntiRollbackStore::new(&state_path);
-        let key = test_key();
+        let key = governed_test_key();
         let anchor = test_anchor(&key);
         let invalid_sequence = acceptance_candidate(
             &key,
@@ -4767,16 +5110,19 @@ mod tests {
         let failed_audit_plan = store
             .plan_initialize(&initial)
             .expect("planning precedes external audit");
-        let audit_result: Result<(), ()> = Err(());
-        if audit_result.is_ok() {
-            store
-                .commit_acceptance(failed_audit_plan)
-                .expect("successful audit would permit commit");
-        }
+        assert_eq!(
+            block_on(store.commit_acceptance(failed_audit_plan, |_| async { Err::<(), ()>(()) }))
+                .unwrap_err(),
+            AntiRollbackStoreError::AuditIntentFailed
+        );
         assert_eq!(
             store.load(&key),
             Err(AntiRollbackStoreError::MissingState),
             "failed external audit leaves planned state absent"
+        );
+        assert!(
+            !state_path.with_extension("lock").exists(),
+            "failed audit must precede lock creation"
         );
         let plan = store.plan_initialize(&initial).expect("initial plan");
         assert_eq!(
@@ -4788,11 +5134,301 @@ mod tests {
             Err(AntiRollbackStoreError::MissingState),
             "planning and the external audit boundary do not mutate state"
         );
-        let accepted = store
-            .commit_acceptance(plan)
+        let accepted = block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
             .expect("commit follows successful external audit");
         assert_eq!(accepted.last_sequence, 1);
         assert_eq!(store.verify_state(initial.expectation()), Ok(accepted));
+    }
+
+    #[test]
+    fn governed_state_rejects_every_legacy_mutation_entry_point_without_io() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let rejection = AntiRollbackStoreError::GovernedMutationRequiresAcceptancePath;
+        let record = antirollback_record(key.clone(), 1, test_hash('a'), None);
+
+        assert_eq!(store.initialize(record.clone()).unwrap_err(), rejection);
+        assert!(!state_path.exists());
+        assert!(!state_path.with_extension("lock").exists());
+
+        fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&record).expect("fixture serializes"),
+        )
+        .expect("fixture writes");
+        let before = fs::read(&state_path).expect("state bytes");
+        let proposal = AntiRollbackProposal {
+            sequence: 2,
+            previous_config_hash: Some(test_hash('a')),
+            config_hash: test_hash('b'),
+            root_version: None,
+            break_glass: None,
+            break_glass_rate_limit: None,
+            local_approval: None,
+            local_approval_rate_limit: None,
+        };
+        let pin = override_pin(ConfigOverrideMode::AcceptRollback, test_hash('b'));
+
+        assert_eq!(store.accept(&key, proposal.clone()).unwrap_err(), rejection);
+        assert_eq!(
+            store.accept_at(&key, proposal, 1_800_000_000).unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .accept_bundle(
+                    &key,
+                    "bundle-2".to_string(),
+                    2,
+                    test_hash('b'),
+                    test_hash('c'),
+                )
+                .unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .accept_bundle_at(
+                    &key,
+                    "bundle-2".to_string(),
+                    2,
+                    test_hash('b'),
+                    test_hash('c'),
+                    1_800_000_000,
+                )
+                .unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store.persist_override_pin(&key, pin.clone()).unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .persist_override_pin_at(&key, pin, 1_800_000_000)
+                .unwrap_err(),
+            rejection
+        );
+
+        let override_path = dir.path().join("break-glass.json");
+        fs::write(&override_path, b"must not be consumed").expect("override fixture writes");
+        let acceptance = pending_acceptance(
+            state_path.clone(),
+            key,
+            ConfigSource::SignedBundleFile,
+            BundleStateAction::AlreadyPinned,
+            test_hash('a'),
+            None,
+            Some(override_path.clone()),
+        );
+        assert_eq!(
+            persist_bundle_acceptance(&acceptance).unwrap_err(),
+            ConfigBootError::Store(rejection)
+        );
+        assert_eq!(fs::read(&state_path).expect("state bytes"), before);
+        assert_eq!(
+            fs::read(&override_path).expect("override bytes"),
+            b"must not be consumed"
+        );
+        assert!(!state_path.with_extension("lock").exists());
+    }
+
+    #[test]
+    fn acceptance_commit_audits_before_mutation_and_never_clobbers_competing_initialization() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &test_anchor(&key),
+        );
+        let plan = store.plan_initialize(&initial).expect("initial plan");
+        let competing_bytes = b"competing initialization";
+
+        let error = block_on(store.commit_acceptance(plan, |_| {
+            assert!(
+                !state_path.exists(),
+                "the audit callback runs before the first durable state mutation"
+            );
+            fs::write(&state_path, competing_bytes).expect("competing state writes");
+            async { Ok::<(), ()>(()) }
+        }))
+        .expect_err("competing initialization wins");
+
+        assert!(matches!(error, AntiRollbackStoreError::InvalidState(_)));
+        assert_eq!(
+            fs::read(&state_path).expect("competing state remains"),
+            competing_bytes
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acceptance_aliases_share_one_lock_and_reject_the_stale_plan() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_dir = dir.path().join("state");
+        fs::create_dir(&state_dir).expect("state directory");
+        fs::create_dir(state_dir.join("nested")).expect("nested directory");
+        let state_path = state_dir.join("antirollback.json");
+        let alias_dir = dir.path().join("state-alias");
+        symlink(&state_dir, &alias_dir).expect("state directory symlink");
+        let alias_path = alias_dir
+            .join("nested")
+            .join("..")
+            .join("antirollback.json");
+        let direct_store = FileAntiRollbackStore::new(&state_path);
+        let alias_store = FileAntiRollbackStore::new(&alias_path);
+        let key = governed_test_key();
+        let anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        block_on(
+            direct_store.commit_acceptance(
+                direct_store
+                    .plan_initialize(&initial)
+                    .expect("initial plan"),
+                |_| async { Ok::<(), ()>(()) },
+            ),
+        )
+        .expect("initial state");
+        let update = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &anchor,
+        );
+        let direct_plan = direct_store
+            .plan_acceptance(&update, None, None)
+            .expect("direct plan");
+        let alias_plan = alias_store
+            .plan_acceptance(&update, None, None)
+            .expect("alias plan");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let first_barrier = std::sync::Arc::clone(&barrier);
+        let first = std::thread::spawn(move || {
+            block_on(direct_store.commit_acceptance(direct_plan, move |_| {
+                first_barrier.wait();
+                async { Ok::<(), ()>(()) }
+            }))
+        });
+        let second = std::thread::spawn(move || {
+            block_on(alias_store.commit_acceptance(alias_plan, move |_| {
+                barrier.wait();
+                async { Ok::<(), ()>(()) }
+            }))
+        });
+        let results = [
+            first.join().expect("direct commit thread"),
+            second.join().expect("alias commit thread"),
+        ];
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Err(AntiRollbackStoreError::StateMismatch(
+                            "concurrent acceptance state"
+                        ))
+                    )
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            FileAntiRollbackStore::new(&state_path)
+                .verify_state(update.expectation())
+                .expect("single accepted update")
+                .last_sequence,
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antirollback_state_reads_reject_symlinks_and_fifos_without_blocking() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target_path = dir.path().join("target.json");
+        let key = test_key();
+        fs::write(
+            &target_path,
+            serde_json::to_vec_pretty(&antirollback_record(key.clone(), 1, test_hash('a'), None))
+                .expect("fixture serializes"),
+        )
+        .expect("target writes");
+        let symlink_path = dir.path().join("state-symlink.json");
+        symlink(&target_path, &symlink_path).expect("state symlink");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&symlink_path).load(&key),
+            Err(AntiRollbackStoreError::Io(_)) | Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+
+        let fifo_path = dir.path().join("state.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("mkfifo executes");
+        assert!(status.success(), "mkfifo creates the test state");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&fifo_path).load(&key),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn antirollback_state_reads_and_collections_are_bounded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oversized_path = dir.path().join("oversized.json");
+        fs::write(
+            &oversized_path,
+            vec![b'x'; (MAX_ANTI_ROLLBACK_STATE_BYTES + 1) as usize],
+        )
+        .expect("oversized state writes");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&oversized_path).load(&test_key()),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+
+        let mut record = antirollback_record(test_key(), 1, test_hash('a'), None);
+        let accepted = BreakGlassAcceptance {
+            accepted_at_unix_seconds: 1,
+            approval_reference: "approval-1".to_string(),
+            emergency_change_class: None,
+            rate_limit_identity: "relay-001".to_string(),
+            sequence: 1,
+            config_hash: test_hash('a'),
+            expires_at_unix_seconds: 2,
+        };
+        record.break_glass.accepted = vec![accepted; MAX_ANTI_ROLLBACK_HISTORY_ENTRIES + 1];
+        assert!(matches!(
+            FileAntiRollbackStore::new(dir.path().join("bounded.json")).initialize(record),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
     }
 
     #[test]
@@ -4800,7 +5436,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");
         let store = FileAntiRollbackStore::new(&state_path);
-        let key = test_key();
+        let key = governed_test_key();
         let anchor = test_anchor(&key);
         let initial = acceptance_candidate(
             &key,
@@ -4815,9 +5451,11 @@ mod tests {
             store.verify_state(initial.expectation()),
             Err(AntiRollbackStoreError::MissingState)
         );
-        store
-            .commit_acceptance(store.plan_initialize(&initial).expect("initial plan"))
-            .expect("state initializes");
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
         let before = fs::read(&state_path).expect("state bytes");
 
         let mut future = initial.clone();
@@ -4865,14 +5503,17 @@ mod tests {
         {
             let pinned_path = dir.path().join(format!("pinned-{index}.json"));
             let pinned_store = FileAntiRollbackStore::new(&pinned_path);
-            pinned_store
-                .initialize(antirollback_record(
+            fs::write(
+                &pinned_path,
+                serde_json::to_vec_pretty(&antirollback_record(
                     key.clone(),
                     1,
                     test_hash('a'),
                     Some(pin),
                 ))
-                .expect("legacy pinned fixture");
+                .expect("legacy pinned fixture serializes"),
+            )
+            .expect("legacy pinned fixture writes");
             let pinned_before = fs::read(&pinned_path).expect("pinned bytes");
             assert_eq!(
                 pinned_store.verify_state(initial.expectation()),
@@ -4887,7 +5528,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");
         let store = FileAntiRollbackStore::new(&state_path);
-        let key = test_key();
+        let key = governed_test_key();
         let anchor = test_anchor(&key);
         let initial = acceptance_candidate(
             &key,
@@ -4898,9 +5539,11 @@ mod tests {
             "bundle-1",
             &anchor,
         );
-        store
-            .commit_acceptance(store.plan_initialize(&initial).expect("initial plan"))
-            .expect("state initializes");
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
         for (sequence, previous) in [
             (3, Some(test_hash('a'))),
             (2, None),
@@ -4942,8 +5585,7 @@ mod tests {
             AcceptanceMutationKindV1::Advance
         );
         assert_eq!(store.load(&key).expect("pre-audit state").last_sequence, 1);
-        store
-            .commit_acceptance(plan)
+        block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
             .expect("commit follows successful external audit");
         assert_eq!(
             store
@@ -4959,7 +5601,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");
         let store = FileAntiRollbackStore::new(&state_path);
-        let key = test_key();
+        let key = governed_test_key();
         let current_anchor = test_anchor(&key);
         let initial = acceptance_candidate(
             &key,
@@ -4970,9 +5612,11 @@ mod tests {
             "bundle-1",
             &current_anchor,
         );
-        store
-            .commit_acceptance(store.plan_initialize(&initial).expect("initial plan"))
-            .expect("state initializes");
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
         let mut next_anchor = current_anchor.clone();
         next_anchor.version = 2;
         let update = acceptance_candidate(
@@ -5009,8 +5653,7 @@ mod tests {
             AcceptanceMutationKindV1::RotateAnchor
         );
         assert_eq!(fs::read(&state_path).expect("state bytes"), before);
-        let accepted = store
-            .commit_acceptance(plan)
+        let accepted = block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
             .expect("commit follows successful external audit");
         assert_eq!(
             accepted.accepted_anchor,

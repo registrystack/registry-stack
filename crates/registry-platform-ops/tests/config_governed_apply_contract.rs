@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 fn key() -> AntiRollbackKey {
     AntiRollbackKey {
         acceptance_identity: ProductAcceptanceIdentityV1 {
-            trust_domain: ProductTrustDomainV1::Governed,
+            trust_domain: ProductTrustDomainV1::Development,
             project: "civil-registry".to_string(),
             environment: "production".to_string(),
             lane: ProductAcceptanceLaneV1::RelayPublic,
@@ -405,7 +405,7 @@ fn antirollback_state_key_serialization_and_equality_bind_complete_acceptance_id
     assert_eq!(
         serialized["key"]["acceptance_identity"],
         json!({
-            "trust_domain": "governed",
+            "trust_domain": "development",
             "project": "civil-registry",
             "environment": "production",
             "lane": "relay-public",
@@ -430,7 +430,7 @@ fn antirollback_state_key_serialization_and_equality_bind_complete_acceptance_id
     let original = key();
     for changed in [
         ProductAcceptanceIdentityV1 {
-            trust_domain: ProductTrustDomainV1::Development,
+            trust_domain: ProductTrustDomainV1::Governed,
             ..original.acceptance_identity.clone()
         },
         ProductAcceptanceIdentityV1 {
