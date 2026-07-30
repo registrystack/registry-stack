@@ -17,13 +17,13 @@ use approved_set::{
     APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 use deployment::{
-    generate_deployment_package_with_test_inputs, verify_deployment_package_with_models,
-    verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentGenerateRequestV1,
-    DeploymentOwnershipStateV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
-    DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
-    ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
-    LockedSupportingRuntimeV1, ManagedTopologyImagesV1, PackageFreshnessV1,
-    VerifiedDeploymentInputsV1,
+    generate_deployment_package_with_test_inputs, scrub_normalized_bind_sources,
+    verify_deployment_package_with_models, verify_deployment_package_with_test_inputs,
+    DeploymentBindingV1, DeploymentGenerateRequestV1, DeploymentOwnershipStateV1,
+    DeploymentPackageVerificationRequestV1, DeploymentPlanV1, DeploymentReleaseMetadataV1,
+    EffectiveComposeModelsV1, ExpectedGenerationInputsV1, ImageIdentityV1,
+    LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
+    ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
 };
 use release_lock::{
     LockedMountSourceV1, LockedOperatorFileFormatV1, LockedOperatorFileV1, LockedRuntimeActionV1,
@@ -44,7 +44,6 @@ fn plan() -> DeploymentPlanV1 {
         relay: image("registry-relay", 'a'),
         notary: image("registry-notary", 'b'),
         postgresql_state_plane: image("postgresql", 'c'),
-        private_namespace_holder: image("private-namespace", 'd'),
     })
 }
 
@@ -309,10 +308,6 @@ fn runtime() -> LockedRuntimeMappingV1 {
                 ],
             },
         },
-        private_namespace_holder: LockedSupportingRuntimeV1 {
-            command: vec!["/private-namespace-holder".to_string()],
-            health_probe: vec!["CMD".to_string(), "/namespace-health".to_string()],
-        },
         operator_files: operator_files(),
     }
 }
@@ -401,6 +396,7 @@ fn package_fixture() -> PackageFixture {
         DeploymentGenerateRequestV1 {
             approved_set_file: approved.clone(),
             output_dir: package.clone(),
+            binding_file: None,
         },
         verified_inputs.clone(),
         None,
@@ -470,7 +466,7 @@ fn verify(
         &DeploymentPackageVerificationRequestV1 {
             package_dir: &fixture.package,
             verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: &[],
+            check_operator_files: false,
             expected_inputs: ExpectedGenerationInputsV1::default(),
         },
         models,
@@ -483,34 +479,12 @@ fn initialization_effective(fixture: &PackageFixture) -> Value {
         .unwrap()
 }
 
-fn included_parent(ordinary: &Value) -> Value {
-    let mut parent = ordinary.clone();
-    parent["services"]["parent-edge-client"] = json!({
-        "image": "example.invalid/parent@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-        "networks": {"registry-edge": {}}
-    });
-    parent
-}
-
 #[test]
-fn deployment_plan_round_trips_the_packet_zero_topology() {
+fn deployment_plan_round_trips_the_closed_topology() {
     let plan = plan();
     plan.validate().unwrap();
-    let mut packet: Value = serde_json::from_str(include_str!(
-        "../../../release/conformance/adopter-runtime/deployment-plan.probe.v1.json"
-    ))
-    .unwrap();
-    let object = packet.as_object_mut().unwrap();
-    object.remove("schema");
-    object.insert(
-        "schema_id".to_string(),
-        json!(deployment::DEPLOYMENT_PLAN_SCHEMA_ID),
-    );
-    object.insert(
-        "schema_version".to_string(),
-        json!(deployment::DEPLOYMENT_PLAN_SCHEMA_VERSION),
-    );
-    let decoded: DeploymentPlanV1 = serde_json::from_value(packet).unwrap();
+    let decoded: DeploymentPlanV1 =
+        serde_json::from_slice(&serde_json::to_vec(&plan).unwrap()).unwrap();
     assert_eq!(decoded, plan);
     assert_eq!(
         serde_json::from_slice::<DeploymentPlanV1>(&serde_json::to_vec(&decoded).unwrap()).unwrap(),
@@ -541,12 +515,11 @@ fn portable_documents_reject_unknown_fields_and_unsupported_versions() {
 }
 
 #[test]
-fn managed_package_is_current_for_standalone_and_included_models() {
+fn managed_package_is_current_for_its_generated_models() {
     let fixture = package_fixture();
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: fixture.models.ordinary.clone(),
         initialization: initialization_effective(&fixture),
-        parent: Some(included_parent(&fixture.models.ordinary)),
     };
     let report = verify(&fixture, &effective);
     assert_eq!(
@@ -572,6 +545,93 @@ fn managed_package_is_current_for_standalone_and_included_models() {
 }
 
 #[test]
+fn package_path_scrubbing_is_component_confined_and_fallible() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = temp.path().join("package");
+    let generated = package.join("generated");
+    let operator = package.join("operator");
+    let attacker_generated = temp.path().join("attacker/generated");
+    let attacker_operator = temp.path().join("attacker/operator");
+    for directory in [
+        &generated,
+        &operator,
+        &attacker_generated,
+        &attacker_operator,
+    ] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    let generated_file = generated.join("bundle");
+    let operator_file = operator.join("secret");
+    let attacker_generated_file = attacker_generated.join("PATH-VALUE-CANARY");
+    let attacker_operator_file = attacker_operator.join("PATH-VALUE-CANARY");
+    for file in [
+        &generated_file,
+        &operator_file,
+        &attacker_generated_file,
+        &attacker_operator_file,
+    ] {
+        fs::write(file, b"value-free\n").unwrap();
+    }
+
+    let model = json!({
+        "services": {
+            "service": {
+                "env_file": [
+                    generated_file.display().to_string(),
+                    attacker_generated_file.display().to_string()
+                ],
+                "volumes": [
+                    {"type": "bind", "source": package.display().to_string()},
+                    {"type": "bind", "source": generated.display().to_string()},
+                    {"type": "bind", "source": operator.display().to_string()},
+                    {"type": "bind", "source": attacker_operator_file.display().to_string()}
+                ]
+            }
+        },
+        "secrets": {
+            "inside": {"file": operator_file.display().to_string()},
+            "outside": {"file": attacker_operator_file.display().to_string()}
+        }
+    });
+    let scrubbed = scrub_normalized_bind_sources(&package, model).unwrap();
+    assert_eq!(scrubbed["services"]["service"]["env_file"][0], "./bundle");
+    assert_eq!(
+        scrubbed["services"]["service"]["env_file"][1],
+        attacker_generated_file.display().to_string()
+    );
+    assert_eq!(
+        scrubbed["services"]["service"]["volumes"][0]["source"],
+        ".."
+    );
+    assert_eq!(scrubbed["services"]["service"]["volumes"][1]["source"], ".");
+    assert_eq!(
+        scrubbed["services"]["service"]["volumes"][2]["source"],
+        "../operator"
+    );
+    assert_eq!(
+        scrubbed["services"]["service"]["volumes"][3]["source"],
+        attacker_operator_file.display().to_string()
+    );
+    assert_eq!(scrubbed["secrets"]["inside"]["file"], "../operator/secret");
+    assert_eq!(
+        scrubbed["secrets"]["outside"]["file"],
+        attacker_operator_file.display().to_string()
+    );
+
+    let escape = json!({
+        "services": {
+            "service": {
+                "env_file": ["/../PATH-VALUE-CANARY"]
+            }
+        }
+    });
+    let error = scrub_normalized_bind_sources(&package, escape)
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("PATH-VALUE-CANARY"));
+}
+
+#[test]
 fn changed_binding_is_managed_but_stale() {
     let fixture = package_fixture();
     let mut binding: Value =
@@ -586,7 +646,6 @@ fn changed_binding_is_managed_but_stale() {
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: fixture.models.ordinary.clone(),
         initialization: initialization_effective(&fixture),
-        parent: None,
     };
     let report = verify(&fixture, &effective);
     assert_eq!(
@@ -599,7 +658,7 @@ fn changed_binding_is_managed_but_stale() {
 }
 
 #[test]
-fn verified_override_is_adapted_and_safe_for_generated_closure_regeneration() {
+fn operator_override_is_invalid_and_unsafe_for_regeneration() {
     let fixture = package_fixture();
     fs::write(
         fixture.package.join("operator-override.yaml"),
@@ -615,17 +674,19 @@ fn verified_override_is_adapted_and_safe_for_generated_closure_regeneration() {
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: ordinary.clone(),
         initialization,
-        parent: Some(included_parent(&ordinary)),
     };
     let report = verify(&fixture, &effective);
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Adapted);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
     assert_eq!(report.package_freshness, PackageFreshnessV1::NotApplicable);
-    assert_eq!(report.adapted_files, ["operator-override.yaml"]);
-    assert!(report.in_place_regeneration_safe);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("move overrides to a parent Compose project")));
+    assert!(!report.in_place_regeneration_safe);
 }
 
 #[test]
-fn edited_generated_file_is_adapted_and_requires_a_new_output() {
+fn edited_generated_file_is_invalid_and_requires_a_new_output() {
     let fixture = package_fixture();
     fs::write(
         fixture.package.join("generated/RUNBOOK.md"),
@@ -635,29 +696,25 @@ fn edited_generated_file_is_adapted_and_requires_a_new_output() {
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: fixture.models.ordinary.clone(),
         initialization: initialization_effective(&fixture),
-        parent: None,
     };
     let report = verify(&fixture, &effective);
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Adapted);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
     assert_eq!(report.package_freshness, PackageFreshnessV1::NotApplicable);
     assert!(report
-        .adapted_files
-        .contains(&"generated/RUNBOOK.md".to_string()));
+        .violations
+        .iter()
+        .any(|violation| violation.contains("RUNBOOK.md")));
     assert!(!report.in_place_regeneration_safe);
 }
 
 #[test]
-fn hard_invariant_changes_and_parent_private_access_are_invalid() {
+fn hard_invariant_changes_are_invalid() {
     let fixture = package_fixture();
     let mut ordinary = fixture.models.ordinary.clone();
     ordinary["services"]["registry-notary"]["command"] = json!(["/operator-command"]);
-    let mut parent = included_parent(&ordinary);
-    parent["services"]["parent-edge-client"]["networks"] =
-        json!({"registry-edge": {}, "registry-private": {}});
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: ordinary,
         initialization: initialization_effective(&fixture),
-        parent: Some(parent),
     };
     let report = verify(&fixture, &effective);
     assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
@@ -666,10 +723,6 @@ fn hard_invariant_changes_and_parent_private_access_are_invalid() {
         .violations
         .iter()
         .any(|violation| violation.contains("locked command")));
-    assert!(report
-        .violations
-        .iter()
-        .any(|violation| violation.contains("private product boundary")));
     assert!(!report.in_place_regeneration_safe);
 }
 
@@ -678,7 +731,7 @@ fn supporting_entrypoints_and_required_dependencies_are_hard_invariants() {
     let fixture = package_fixture();
     assert_eq!(
         fixture.models.ordinary["services"]["registry-postgres"]["depends_on"]
-            ["registry-private-namespace"]["required"],
+            ["registry-runtime-stage-secrets"]["required"],
         json!(true)
     );
     let mut ordinary = fixture.models.ordinary.clone();
@@ -688,7 +741,6 @@ fn supporting_entrypoints_and_required_dependencies_are_hard_invariants() {
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: ordinary,
         initialization: initialization_effective(&fixture),
-        parent: None,
     };
     let report = verify(&fixture, &effective);
     assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
@@ -708,6 +760,12 @@ fn binding_contains_only_locators_not_secret_values() {
     binding.validate().unwrap();
     let rendered = serde_norway::to_string(&binding).unwrap();
     assert!(rendered.contains("operator/secrets/notary-signing-key"));
+    for lane in ["relay-public", "relay-consultation", "notary"] {
+        assert!(rendered.contains(&format!("operator/secrets/{lane}-environment")));
+        assert!(!rendered.contains(&format!("{lane}-serve-environment")));
+        assert!(!rendered.contains(&format!("{lane}-prepare-environment")));
+        assert!(!rendered.contains(&format!("{lane}-initialize-environment")));
+    }
     assert!(!rendered.contains("private_key"));
     assert_eq!(binding.certificate_files, BTreeMap::new());
 }
@@ -723,6 +781,7 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         vec![
             "registry-notary-initialize",
             "registry-notary-prepare-state",
+            "registry-postgres",
             "registry-postgres-bootstrap",
             "registry-relay-consultation-initialize",
             "registry-relay-consultation-prepare-state",
@@ -758,10 +817,27 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
     }
     let bootstrap = &delta_services["registry-postgres-bootstrap"];
     assert_eq!(bootstrap["networks"], json!({"registry-private": {}}));
+    assert_eq!(
+        bootstrap["env_file"],
+        json!([
+            "./postgresql-server.env",
+            "../operator/secrets/postgresql-bootstrap-environment"
+        ])
+    );
     assert!(bootstrap.get("network_mode").is_none());
     assert_eq!(
         bootstrap["depends_on"]["registry-postgres"]["condition"],
         "service_healthy"
+    );
+    assert_eq!(
+        delta_services["registry-postgres"]["entrypoint"],
+        json!(["docker-entrypoint.sh"])
+    );
+    assert!(
+        fixture.models.ordinary["services"]["registry-postgres"]["entrypoint"][2]
+            .as_str()
+            .unwrap()
+            .contains("data directory is empty")
     );
 }
 
@@ -777,7 +853,6 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
     assert_eq!(stager["read_only"], true);
     assert_eq!(stager["security_opt"], json!(["no-new-privileges:true"]));
     for service_name in [
-        "registry-private-namespace",
         "registry-postgres",
         "registry-relay-public",
         "registry-relay-consultation",
@@ -855,21 +930,42 @@ fn package_normalizes_locators_and_mounts_digest_specific_lane_inputs() {
 }
 
 #[test]
-fn private_namespace_holder_owns_shared_loopback_port_publication() {
+fn ordinary_networking_publishes_only_public_applications_on_loopback() {
     let fixture = package_fixture();
     let services = &fixture.models.ordinary["services"];
+    assert!(services.get("registry-private-namespace").is_none());
+    assert_eq!(
+        services["registry-relay-public"]["ports"],
+        json!(["127.0.0.1:4242:4242"])
+    );
     assert!(services["registry-relay-consultation"]
         .get("ports")
         .is_none());
-    assert!(services["registry-notary"].get("ports").is_none());
     assert_eq!(
-        services["registry-private-namespace"]["ports"],
-        json!([
-            "127.0.0.1:4255:4255",
-            "127.0.0.1:9243:9243",
-            "127.0.0.1:9255:9255"
-        ])
+        services["registry-notary"]["ports"],
+        json!(["127.0.0.1:4255:4255"])
     );
+    assert!(services["registry-postgres"].get("ports").is_none());
+    assert_eq!(
+        services["registry-relay-consultation"]["networks"],
+        json!({"registry-private": {}})
+    );
+    assert_eq!(
+        services["registry-postgres"]["networks"],
+        json!({"registry-private": {}})
+    );
+    assert_eq!(
+        services["registry-notary"]["networks"],
+        json!({"registry-edge": {}, "registry-private": {}})
+    );
+    for service_name in [
+        "registry-relay-public",
+        "registry-relay-consultation",
+        "registry-notary",
+        "registry-postgres",
+    ] {
+        assert!(services[service_name].get("network_mode").is_none());
+    }
 }
 
 #[test]
@@ -890,7 +986,6 @@ fn exact_mount_source_type_access_and_lane_are_hard_invariants() {
         let effective = EffectiveComposeModelsV1 {
             standalone_ordinary: ordinary,
             initialization: initialization_effective(&fixture),
-            parent: None,
         };
         let report = verify(&fixture, &effective);
         assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
@@ -902,7 +997,7 @@ fn exact_mount_source_type_access_and_lane_are_hard_invariants() {
 }
 
 #[test]
-fn only_narrow_non_security_service_adaptations_are_accepted() {
+fn any_effective_service_adaptation_is_invalid() {
     let fixture = package_fixture();
     fs::write(
         fixture.package.join("operator-override.yaml"),
@@ -924,11 +1019,10 @@ fn only_narrow_non_security_service_adaptations_are_accepted() {
         &EffectiveComposeModelsV1 {
             standalone_ordinary: ordinary,
             initialization,
-            parent: None,
         },
     );
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Adapted);
-    assert!(report.in_place_regeneration_safe);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(!report.in_place_regeneration_safe);
 }
 
 #[test]
@@ -937,13 +1031,12 @@ fn generated_closure_is_re_rendered_and_external_root_is_enforced() {
     let effective = EffectiveComposeModelsV1 {
         standalone_ordinary: fixture.models.ordinary.clone(),
         initialization: initialization_effective(&fixture),
-        parent: None,
     };
     let report = verify_deployment_package_with_models(
         &DeploymentPackageVerificationRequestV1 {
             package_dir: &fixture.package,
             verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: &[],
+            check_operator_files: false,
             expected_inputs: ExpectedGenerationInputsV1 {
                 externally_recorded_closure_sha256: Some(fixture.externally_recorded_root.clone()),
                 ..ExpectedGenerationInputsV1::default()
@@ -963,7 +1056,7 @@ fn generated_closure_is_re_rendered_and_external_root_is_enforced() {
         &DeploymentPackageVerificationRequestV1 {
             package_dir: &fixture.package,
             verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: &[],
+            check_operator_files: false,
             expected_inputs: ExpectedGenerationInputsV1 {
                 externally_recorded_closure_sha256: Some(format!("sha256:{}", "0".repeat(64))),
                 ..ExpectedGenerationInputsV1::default()
@@ -973,6 +1066,97 @@ fn generated_closure_is_re_rendered_and_external_root_is_enforced() {
     )
     .unwrap();
     assert_eq!(mismatched.ownership, DeploymentOwnershipStateV1::Invalid);
+}
+
+#[test]
+fn manifest_only_tamper_and_nonempty_compose_environment_are_invalid() {
+    let fixture = package_fixture();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let manifest_file = fixture
+        .package
+        .join("generated/deployment-manifest.v1.json");
+    let original_manifest = fs::read(&manifest_file).unwrap();
+    let mut manifest: Value = serde_json::from_slice(&original_manifest).unwrap();
+    manifest["generator_release"] = json!("tampered-release");
+    fs::write(
+        &manifest_file,
+        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+    )
+    .unwrap();
+    let report = verify(&fixture, &effective);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("closure was changed")));
+    let externally_checked = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1 {
+                externally_recorded_closure_sha256: Some(fixture.externally_recorded_root.clone()),
+                ..ExpectedGenerationInputsV1::default()
+            },
+        },
+        &effective,
+    )
+    .unwrap();
+    assert_eq!(
+        externally_checked.ownership,
+        DeploymentOwnershipStateV1::Invalid
+    );
+
+    fs::write(&manifest_file, original_manifest).unwrap();
+    fs::write(
+        fixture.package.join("generated/compose.empty.env"),
+        b"SHOULD_STAY_EMPTY=true\n",
+    )
+    .unwrap();
+    let report = verify(&fixture, &effective);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("compose.empty.env")));
+}
+
+#[test]
+fn operator_file_checks_are_opt_in_structural_and_value_free() {
+    let fixture = package_fixture();
+    let sentinel = "OPERATOR_VALUE_SENTINEL_9c7f";
+    fs::write(
+        fixture.package.join("operator/secrets/unrelated"),
+        sentinel.as_bytes(),
+    )
+    .unwrap();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify(&fixture, &effective);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert!(!serde_json::to_string(&report).unwrap().contains(sentinel));
+
+    let report = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: true,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        },
+        &effective,
+    )
+    .unwrap();
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(!serde_json::to_string(&report).unwrap().contains(sentinel));
+    assert!(report
+        .violations
+        .iter()
+        .all(|violation| !violation.contains(sentinel)));
 }
 
 #[test]
@@ -1000,24 +1184,23 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
 }
 
 #[test]
-fn packet_zero_compose_contract_passes_at_the_available_compose_version() {
-    let status = std::process::Command::new("bash")
-        .arg("release/scripts/check_adopter_compose_contract.sh")
-        .arg("--current-only")
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .status()
-        .expect("Packet 0 Compose checker starts");
-    assert!(status.success(), "Packet 0 Compose checker failed");
-}
-
-#[test]
 fn production_verifier_owns_real_compose_normalization() {
     let fixture = package_fixture();
+    let rendered = deployment::render_compose_package(
+        &fixture.verified_inputs,
+        &serde_norway::from_slice(&fs::read(fixture.package.join("binding.yaml")).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let expected = deployment::normalize_rendered_models(&fixture.package, &rendered).unwrap();
+    let actual = deployment::normalize_package_models(&fixture.package).unwrap();
+    assert_eq!(actual.standalone_ordinary, expected.standalone_ordinary);
+    assert_eq!(actual.initialization, expected.initialization);
     let report =
         verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
             package_dir: &fixture.package,
             verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: &[],
+            check_operator_files: false,
             expected_inputs: ExpectedGenerationInputsV1 {
                 externally_recorded_closure_sha256: Some(fixture.externally_recorded_root.clone()),
                 ..ExpectedGenerationInputsV1::default()
@@ -1034,66 +1217,6 @@ fn production_verifier_owns_real_compose_normalization() {
 }
 
 #[test]
-fn production_verifier_parses_local_parent_includes_and_rejects_private_access() {
-    let fixture = package_fixture();
-    let parent_file = fixture
-        .package
-        .parent()
-        .unwrap()
-        .join("parent-compose.yaml");
-    fs::write(
-        &parent_file,
-        format!(
-            "include:\n  - {}\nservices:\n  parent-edge-client:\n    image: example.invalid/parent@sha256:{}\n    networks: [registry-edge]\n",
-            fixture.package.join("generated/compose.yaml").display(),
-            "e".repeat(64),
-        ),
-    )
-    .unwrap();
-    let report =
-        verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
-            package_dir: &fixture.package,
-            verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: std::slice::from_ref(&parent_file),
-            expected_inputs: ExpectedGenerationInputsV1::default(),
-        })
-        .unwrap();
-    assert_eq!(
-        report.ownership,
-        DeploymentOwnershipStateV1::Managed,
-        "{:?}",
-        report.violations
-    );
-    assert_eq!(
-        report.verification_scope,
-        deployment::DeploymentVerificationScopeV1::PackageAndParent
-    );
-
-    fs::write(
-        &parent_file,
-        format!(
-            "include:\n  - {}\nservices:\n  parent-private-client:\n    image: example.invalid/parent@sha256:{}\n    networks: [registry-private]\n",
-            fixture.package.join("generated/compose.yaml").display(),
-            "e".repeat(64),
-        ),
-    )
-    .unwrap();
-    let report =
-        verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
-            package_dir: &fixture.package,
-            verified_inputs: &fixture.verified_inputs,
-            parent_compose_files: std::slice::from_ref(&parent_file),
-            expected_inputs: ExpectedGenerationInputsV1::default(),
-        })
-        .unwrap();
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
-    assert!(report
-        .violations
-        .iter()
-        .any(|violation| violation.contains("private product boundary")));
-}
-
-#[test]
 fn high_level_generation_derives_a_safe_binding_from_signed_identity() {
     let fixture = package_fixture();
     fs::remove_dir_all(&fixture.package).unwrap();
@@ -1101,6 +1224,7 @@ fn high_level_generation_derives_a_safe_binding_from_signed_identity() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         fixture.verified_inputs.clone(),
         None,
@@ -1115,6 +1239,7 @@ fn high_level_generation_derives_a_safe_binding_from_signed_identity() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         fixture.verified_inputs.clone(),
         Some(&fixture.verified_inputs),
@@ -1124,7 +1249,34 @@ fn high_level_generation_derives_a_safe_binding_from_signed_identity() {
 }
 
 #[test]
-fn regeneration_preserves_binding_operator_and_verified_override_byte_for_byte() {
+fn generation_accepts_an_explicit_closed_binding_for_the_signed_identity() {
+    let fixture = package_fixture();
+    let binding_file = fixture.package.parent().unwrap().join("binding.yaml");
+    let mut explicit: DeploymentBindingV1 =
+        serde_norway::from_slice(&fs::read(fixture.package.join("binding.yaml")).unwrap()).unwrap();
+    explicit.ports.relay_public = 4343;
+    fs::write(&binding_file, serde_norway::to_string(&explicit).unwrap()).unwrap();
+    fs::remove_dir_all(&fixture.package).unwrap();
+
+    let report = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+            binding_file: Some(binding_file),
+        },
+        fixture.verified_inputs.clone(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.models.ordinary["services"]["registry-relay-public"]["ports"],
+        json!(["127.0.0.1:4343:4242"])
+    );
+}
+
+#[test]
+fn regeneration_refuses_operator_override_without_mutating_the_package() {
     let fixture = package_fixture();
     let operator_file = fixture.package.join("operator/secrets/operator-kept");
     fs::write(&operator_file, b"operator-owned\n").unwrap();
@@ -1136,19 +1288,20 @@ fn regeneration_preserves_binding_operator_and_verified_override_byte_for_byte()
     .unwrap();
     let binding_before = fs::read(fixture.package.join("binding.yaml")).unwrap();
     let operator_before = file_tree(&fixture.package.join("operator"));
-    let override_before = fs::read(&override_file).unwrap();
     let next = updated_inputs(&fixture, "1.0.1", 17);
 
-    generate_deployment_package_with_test_inputs(
+    let error = generate_deployment_package_with_test_inputs(
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
     )
-    .unwrap();
+    .unwrap_err();
 
+    assert!(error.to_string().contains("intact managed package"));
     assert_eq!(
         fs::read(fixture.package.join("binding.yaml")).unwrap(),
         binding_before
@@ -1157,8 +1310,8 @@ fn regeneration_preserves_binding_operator_and_verified_override_byte_for_byte()
         file_tree(&fixture.package.join("operator")),
         operator_before
     );
-    assert_eq!(fs::read(override_file).unwrap(), override_before);
-    assert!(fixture.package.join("generated.previous").is_dir());
+    assert!(override_file.is_file());
+    assert!(!fixture.package.join("generated.previous").exists());
 }
 
 #[test]
@@ -1176,6 +1329,7 @@ fn regeneration_verifies_the_older_lock_and_retains_its_generated_closure() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
@@ -1211,6 +1365,7 @@ fn regeneration_refuses_an_unresolved_preceding_closure() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
@@ -1232,6 +1387,7 @@ fn regeneration_refuses_adapted_generator_owned_files() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
@@ -1239,7 +1395,7 @@ fn regeneration_refuses_adapted_generator_owned_files() {
     .unwrap_err();
     assert!(error
         .to_string()
-        .contains("outside managed or override-only ownership"));
+        .contains("requires an intact managed package"));
     assert!(!fixture.package.join("generated.previous").exists());
 }
 
@@ -1251,6 +1407,7 @@ fn regeneration_refuses_a_postgresql_major_transition_before_staging() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
@@ -1273,6 +1430,7 @@ fn regeneration_does_not_mix_a_binding_change_with_a_release_update() {
         DeploymentGenerateRequestV1 {
             approved_set_file: fixture.approved_set_file.clone(),
             output_dir: fixture.package.clone(),
+            binding_file: None,
         },
         next,
         Some(&fixture.verified_inputs),
