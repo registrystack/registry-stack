@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use registry_platform_config::ProductAcceptanceLaneV1;
 use registryctl::{
     build_registry_project_with_baselines_and_context, build_registry_project_with_context,
-    check_registry_project_with_context, compare_registry_projects_semantically,
-    create_trust_anchor, init_registry_project, inspect_project_capabilities,
-    preflight_registry_project, render_project_authoring_diagnostics,
+    check_registry_project_with_context, create_trust_anchor, init_registry_project,
+    inspect_project_capabilities, preflight_registry_project, render_project_authoring_diagnostics,
     setup_registry_project_editor, sign_product_bundle,
     test_registry_project_selected_with_context, test_registry_project_with_context,
     verify_config_bundle_cli, ClassifierSafeReportedValue, InitSource, ProductBundleSignOptions,
@@ -16,8 +15,7 @@ use registryctl::{
     ProjectCapabilityOptions, ProjectCheckOptions, ProjectEditorSetupOptions,
     ProjectExecutionContext, ProjectExplanationReportV1, ProjectFieldAddress,
     ProjectFieldExplanation, ProjectInitOptions, ProjectPreflightOptions, ProjectSchemaKind,
-    ProjectSemanticComparisonOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
-    SemanticComparisonEquivalence, TrustAnchorCreateOptions,
+    ProjectStarter, ProjectTestOptions, ProjectTestSelection, TrustAnchorCreateOptions,
 };
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -1266,26 +1264,6 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
             .unwrap_or_else(|error| panic!("{} editor setup failed: {error:#}", journey.id));
             assert_eq!(report.status, "configured", "{} editor", journey.id);
         }
-
-        let comparison =
-            compare_registry_projects_semantically(&ProjectSemanticComparisonOptions {
-                current_project_directory: project.clone(),
-                current_environment: journey.environment.clone(),
-                baseline_project_directory: catalog_workspace(&journey),
-                baseline_environment: journey.environment.clone(),
-            })
-            .unwrap_or_else(|error| panic!("{} semantic comparison failed: {error:#}", journey.id));
-        assert_eq!(
-            comparison.equivalence,
-            SemanticComparisonEquivalence::Equivalent,
-            "{} semantic comparison",
-            journey.id
-        );
-        assert!(
-            comparison.changes.is_empty(),
-            "{} semantic comparison changes",
-            journey.id
-        );
 
         if journey.steps.contains(&"trace".to_string()) {
             let (integration, fixture) = catalog_focused_selection(&journey);
@@ -2545,19 +2523,6 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
         serde_json::to_value(&preflight).expect("preflight serializes"),
         serde_json::to_value(&repeated_preflight).expect("repeated preflight serializes")
     );
-    let comparison = compare_registry_projects_semantically(&ProjectSemanticComparisonOptions {
-        current_project_directory: project.clone(),
-        current_environment: "local".to_string(),
-        baseline_project_directory: project.clone(),
-        baseline_environment: "local".to_string(),
-    })
-    .expect("spreadsheet project compares to itself");
-    assert_eq!(
-        comparison.equivalence,
-        SemanticComparisonEquivalence::Equivalent
-    );
-    assert!(comparison.changes.is_empty());
-
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),

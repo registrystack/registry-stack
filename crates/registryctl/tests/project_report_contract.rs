@@ -14,7 +14,6 @@ pub use report_contract::{ProjectRelativePath, Sha256Digest};
 mod fixture_coverage;
 
 use fixture_coverage::ProjectFixtureCoverageReportV1;
-use registryctl::ProjectSemanticComparisonReportV1;
 use report_contract::{
     ClassifierApprovedJson, DimensionOnlySemanticChange, FieldSensitivity, JsonPointer,
     ProjectArtifactManifestV1, ProjectCommandReportV1, ProjectExplanationReportV1,
@@ -28,7 +27,6 @@ const PROJECT_EXPLANATION_SCHEMA_ID: &str = "https://id.registrystack.org/schema
 const PROJECT_SEMANTIC_IMPACT_SCHEMA_ID: &str = "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.semantic_impact.v1.schema.json";
 const PROJECT_ARTIFACT_MANIFEST_SCHEMA_ID: &str = "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.artifact_manifest.v1.schema.json";
 const PROJECT_FIXTURE_COVERAGE_SCHEMA_ID: &str = "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.fixture_coverage.v1.schema.json";
-const PROJECT_SEMANTIC_COMPARISON_SCHEMA_ID: &str = "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.semantic_comparison.v1.schema.json";
 
 const PROJECT_COMMAND_SCHEMA: &str =
     include_str!("../schemas/project-reports/registryctl.project_command.v1.schema.json");
@@ -40,8 +38,6 @@ const PROJECT_ARTIFACT_MANIFEST_SCHEMA: &str =
     include_str!("../schemas/project-reports/registry.project.artifact_manifest.v1.schema.json");
 const PROJECT_FIXTURE_COVERAGE_SCHEMA: &str =
     include_str!("../schemas/project-reports/registry.project.fixture_coverage.v1.schema.json");
-const PROJECT_SEMANTIC_COMPARISON_SCHEMA: &str =
-    include_str!("../schemas/project-reports/registry.project.semantic_comparison.v1.schema.json");
 
 const PROJECT_COMMAND_FIXTURE: &str =
     include_str!("fixtures/project-reports/registryctl.project_command.v1.json");
@@ -55,8 +51,6 @@ const PROJECT_FIXTURE_COVERAGE_FIXTURE: &str =
     include_str!("fixtures/project-reports/registry.project.fixture_coverage.v1.json");
 const PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE: &str =
     include_str!("fixtures/project-reports/registry.project.fixture_coverage.no-target.v1.json");
-const PROJECT_SEMANTIC_COMPARISON_FIXTURE: &str =
-    include_str!("fixtures/project-reports/registry.project.semantic_comparison.v1.json");
 
 fn parse(input: &str) -> Value {
     serde_json::from_str(input).expect("JSON parses")
@@ -85,10 +79,6 @@ fn validator(schema: &str) -> jsonschema::JSONSchema {
         .with_document(
             PROJECT_FIXTURE_COVERAGE_SCHEMA_ID.to_string(),
             parse(PROJECT_FIXTURE_COVERAGE_SCHEMA),
-        )
-        .with_document(
-            PROJECT_SEMANTIC_COMPARISON_SCHEMA_ID.to_string(),
-            parse(PROJECT_SEMANTIC_COMPARISON_SCHEMA),
         );
     options
         .compile(&parse(schema))
@@ -155,10 +145,6 @@ fn draft_2020_12_schemas_validate_all_canonical_fixtures() {
             PROJECT_FIXTURE_COVERAGE_SCHEMA,
             PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE,
         ),
-        (
-            PROJECT_SEMANTIC_COMPARISON_SCHEMA,
-            PROJECT_SEMANTIC_COMPARISON_FIXTURE,
-        ),
     ] {
         assert_valid(schema, &parse(fixture));
     }
@@ -173,9 +159,6 @@ fn strict_dtos_roundtrip_canonical_fixtures_without_loss() {
     assert_exact_roundtrip::<ProjectFixtureCoverageReportV1>(PROJECT_FIXTURE_COVERAGE_FIXTURE);
     assert_exact_roundtrip::<ProjectFixtureCoverageReportV1>(
         PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE,
-    );
-    assert_exact_roundtrip::<ProjectSemanticComparisonReportV1>(
-        PROJECT_SEMANTIC_COMPARISON_FIXTURE,
     );
 
     for (schema, fixture, expected_version) in [
@@ -203,11 +186,6 @@ fn strict_dtos_roundtrip_canonical_fixtures_without_loss() {
             PROJECT_FIXTURE_COVERAGE_SCHEMA,
             PROJECT_FIXTURE_COVERAGE_FIXTURE,
             "registry.project.fixture_coverage.v1",
-        ),
-        (
-            PROJECT_SEMANTIC_COMPARISON_SCHEMA,
-            PROJECT_SEMANTIC_COMPARISON_FIXTURE,
-            "registry.project.semantic_comparison.v1",
         ),
     ] {
         let mut wrong_version = parse(fixture);
@@ -470,7 +448,6 @@ fn canonical_fixtures_exclude_runtime_and_country_sensitive_material() {
         PROJECT_SEMANTIC_IMPACT_FIXTURE,
         PROJECT_ARTIFACT_MANIFEST_FIXTURE,
         PROJECT_FIXTURE_COVERAGE_FIXTURE,
-        PROJECT_SEMANTIC_COMPARISON_FIXTURE,
     ] {
         for forbidden in [
             "http://",

@@ -1330,6 +1330,18 @@ fn validate_baseline_pair(against: Option<&Path>, anchor: Option<&Path>) -> Resu
     Ok(())
 }
 
+fn validate_named_baseline_pair(
+    against_name: &str,
+    against: Option<&Path>,
+    anchor_name: &str,
+    anchor: Option<&Path>,
+) -> Result<()> {
+    if against.is_some() != anchor.is_some() {
+        bail!("{against_name} and {anchor_name} must be supplied together");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct ApprovedBaselineSetPaths<'a> {
     against: Option<&'a Path>,
@@ -1374,18 +1386,6 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
         }
     }
 
-    fn promotion(options: &'a ProjectPromotionOptions) -> Self {
-        Self {
-            against: options.against.as_deref(),
-            anchor: options.anchor.as_deref(),
-            relay_against: options.relay_against.as_deref(),
-            relay_anchor: options.relay_anchor.as_deref(),
-            relay_consultation_against: options.relay_consultation_against.as_deref(),
-            relay_consultation_anchor: options.relay_consultation_anchor.as_deref(),
-            notary_against: options.notary_against.as_deref(),
-            notary_anchor: options.notary_anchor.as_deref(),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]

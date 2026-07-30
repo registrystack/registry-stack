@@ -255,25 +255,6 @@ pub struct ProjectCapabilityOptions {
     pub environment: String,
 }
 
-/// Options for an offline promotion decision. The comparison baseline must be
-/// a verified product bundle so the decision never treats an unauthenticated
-/// local artifact as reviewed authority.
-#[derive(Debug, Clone)]
-pub struct ProjectPromotionOptions {
-    pub project_directory: PathBuf,
-    pub environment: String,
-    /// One verified product baseline for single-lane Relay or Notary projects.
-    /// Multi-lane projects should use the lane-specific pairs below.
-    pub against: Option<PathBuf>,
-    pub anchor: Option<PathBuf>,
-    pub relay_against: Option<PathBuf>,
-    pub relay_anchor: Option<PathBuf>,
-    pub relay_consultation_against: Option<PathBuf>,
-    pub relay_consultation_anchor: Option<PathBuf>,
-    pub notary_against: Option<PathBuf>,
-    pub notary_anchor: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCommandReport {
