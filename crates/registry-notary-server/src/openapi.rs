@@ -744,7 +744,7 @@ fn build_openapi_document() -> Value {
                         {
                             "name": "Idempotency-Key",
                             "in": "header",
-                            "required": false,
+                            "required": true,
                             "description": "Required for every batch. The value is caller-bound and may contain 1 to 256 bytes.",
                             "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
                         }
@@ -4813,6 +4813,22 @@ mod tests {
             json!("^[^/]+(/[^/]+)*$"),
             "well-known vct_path parameter schema must carry a pattern permitting slash-separated segments"
         );
+    }
+
+    #[test]
+    fn batch_openapi_requires_the_idempotency_header() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let operation = &doc["paths"]["/v1/batch-evaluations"]["post"];
+        let idempotency_key = operation["parameters"]
+            .as_array()
+            .expect("batch parameters are an array")
+            .iter()
+            .find(|parameter| parameter["name"] == "Idempotency-Key")
+            .expect("Idempotency-Key is documented");
+
+        assert_eq!(idempotency_key["required"], json!(true));
+        assert_eq!(idempotency_key["schema"]["minLength"], json!(1));
+        assert_eq!(idempotency_key["schema"]["maxLength"], json!(256));
     }
 
     #[test]

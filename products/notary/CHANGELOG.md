@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Removed the `self_attested` evidence mode. Every configured claim now
-  requires at least one compiler-pinned Registry Relay consultation. Subject
+  requires exactly one compiler-pinned Registry Relay consultation. Subject
   access remains authorization only. The former `delegated_attestation` wire
   value and `evidence:self_attest` scope are replaced by
   `delegated_subject_access` and `evidence:subject_access`.

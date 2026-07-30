@@ -607,13 +607,12 @@ fn project_declaration_semantic_diagnostics(
             } else if let Some(expression) = claim.cel.as_deref() {
                 let roots = cel_member_roots(expression);
                 if roots.as_ref().is_err()
-                    || (claim.value.is_none()
-                        && roots.is_ok_and(|roots| {
-                            !service
-                                .consultations
-                                .keys()
-                                .any(|name| roots.contains(name.as_str()))
-                        }))
+                    || roots.is_ok_and(|roots| {
+                        !service
+                            .consultations
+                            .keys()
+                            .any(|name| roots.contains(name.as_str()))
+                    })
                 {
                     diagnostics.push(cross_file_diagnostic(
                         "registryctl.authoring.project.invalid",

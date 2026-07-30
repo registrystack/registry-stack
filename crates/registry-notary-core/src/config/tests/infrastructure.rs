@@ -248,7 +248,21 @@ syslog_socket_path: /dev/log
 
 pub(super) fn valid_federation_config() -> StandaloneRegistryNotaryConfig {
     let mut config = minimal_config();
-    config.evidence.claims = vec![minimal_claim("disability-status")];
+    let mut claim = minimal_claim("disability-status");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("minimal claim is registry backed")
+    };
+    consultations
+        .get_mut("test_source")
+        .expect("minimal consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        );
+    config.evidence.claims = vec![claim];
     config.federation = FederationConfig {
         enabled: true,
         node_id: "did:web:agency-a.example.gov".to_string(),
@@ -312,6 +326,28 @@ pub(super) fn federation_config_validates_enabled_mvp_shape() {
     valid_federation_config()
         .validate()
         .expect("federation config validates");
+}
+
+#[test]
+pub(super) fn federation_profile_rejects_relay_inputs_unavailable_from_subject() {
+    let mut config = valid_federation_config();
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut config.evidence.claims[0].evidence_mode
+    else {
+        panic!("federation claim is registry backed")
+    };
+    consultations
+        .get_mut("test_source")
+        .expect("federation consultation exists")
+        .inputs
+        .insert("subject_id".to_string(), RelayConsultationInput::TargetId);
+
+    let reason = expect_federation_error(&config);
+
+    assert!(
+        reason.contains("Relay inputs must derive from request.target.identifiers.national_id"),
+        "unexpected: {reason}"
+    );
 }
 
 #[test]

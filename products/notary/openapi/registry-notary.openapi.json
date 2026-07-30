@@ -4072,7 +4072,7 @@
             "description": "Required for every batch. The value is caller-bound and may contain 1 to 256 bytes.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 256,
               "minLength": 1,

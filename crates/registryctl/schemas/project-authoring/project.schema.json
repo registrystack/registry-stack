@@ -453,7 +453,7 @@
       }
     },
     "evidenceService": {
-      "description": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Every claim derives from at least one declared Relay consultation.",
+      "description": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Every claim derives from exactly one declared Relay consultation.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "version", "purpose", "legal_basis", "consent", "access", "claims"],

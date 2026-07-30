@@ -41,7 +41,7 @@ pub(super) fn validate_federation_claims(
         return Err(FederationProblem::invalid_token());
     }
     let jti = string_extra(verified, "jti").ok_or_else(FederationProblem::invalid_token)?;
-    if Ulid::from_string(jti).is_err() {
+    if !Ulid::from_string(jti).is_ok_and(|candidate| candidate.to_string() == jti) {
         return Err(FederationProblem::invalid_token());
     }
     let protocol =
@@ -237,6 +237,17 @@ mod tests {
     #[test]
     fn accepts_token_with_valid_lifetime() {
         assert!(validate(1_000, 1_000, 1_300).is_ok());
+    }
+
+    #[test]
+    fn rejects_noncanonical_ulid_jti() {
+        let mut token = verified_token(1_000, 1_000, 1_300);
+        token
+            .claims
+            .extra
+            .insert("jti".to_string(), json!("01j9z6q6q6q6q6q6q6q6q6q6q6"));
+
+        assert!(validate_federation_claims(&federation(), &peer(), &token).is_err());
     }
 
     #[test]

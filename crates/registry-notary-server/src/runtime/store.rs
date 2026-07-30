@@ -13,10 +13,14 @@ const BATCH_OWNER_HEARTBEAT_SECONDS: u64 = 10;
 const BATCH_WAIT_INITIAL_MILLIS: u64 = 50;
 const BATCH_WAIT_MAX_MILLIS: u64 = 1_000;
 // Version 2 adopts the pre-1.0 subject-access vocabulary in persisted
-// evaluation and idempotency response envelopes. Version 1 used the removed
-// subject-access field and access-mode vocabulary and is intentionally not
+// evaluation and idempotency response envelopes. Records written before the
+// delegated-subject-access terminology change remain version 2, so reads
+// normalize that one retired access-mode spelling before strict decoding.
+// Version 1 used the removed subject-access field and is intentionally not
 // accepted by the clean 1.0 storage contract.
 const STORED_RECORD_VERSION: i16 = 2;
+const LEGACY_DELEGATED_ACCESS_MODE: &str = "delegated_attestation";
+const DELEGATED_SUBJECT_ACCESS_MODE: &str = "delegated_subject_access";
 
 #[cfg(all(test, feature = "registry-notary-cel"))]
 type EvaluationReadTamper =
@@ -584,10 +588,26 @@ async fn get_postgres_evaluation(
     let record_json: String = row
         .try_get("record_json")
         .map_err(|_| EvidenceError::RuleEvaluationFailed)?;
-    let mut evaluation: registry_notary_core::StoredEvaluation =
-        serde_json::from_str(&record_json).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+    let mut evaluation = deserialize_stored_evaluation_v2(&record_json)?;
     evaluation.client_id = client_id.to_owned();
     Ok(Some(evaluation))
+}
+
+fn deserialize_stored_evaluation_v2(
+    record_json: &str,
+) -> Result<registry_notary_core::StoredEvaluation, EvidenceError> {
+    let mut record: serde_json::Value =
+        serde_json::from_str(record_json).map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+    if let Some(access_mode) = record
+        .get_mut("subject_access")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|subject_access| subject_access.get_mut("access_mode"))
+    {
+        if access_mode.as_str() == Some(LEGACY_DELEGATED_ACCESS_MODE) {
+            *access_mode = serde_json::Value::String(DELEGATED_SUBJECT_ACCESS_MODE.to_owned());
+        }
+    }
+    serde_json::from_value(record).map_err(|_| EvidenceError::RuleEvaluationFailed)
 }
 
 async fn reserve_postgres_batch<'a>(
@@ -969,6 +989,50 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&record).unwrap()["client_id"],
             ""
+        );
+    }
+
+    #[test]
+    fn stored_version_two_delegated_access_mode_remains_readable() {
+        let record = serde_json::json!({
+            "client_id": "",
+            "purpose": "test",
+            "claim_ids": ["person-is-alive"],
+            "disclosure": "predicate",
+            "format": "application/json",
+            "results": [],
+            "created_at": "2026-07-14T00:00:00Z",
+            "expires_at": "2026-07-14T00:15:00Z",
+            "request_hash": "request-hash",
+            "subject_access": {
+                "access_mode": LEGACY_DELEGATED_ACCESS_MODE,
+                "issuer": "https://idp.example.test",
+                "principal_hash": "hmac-sha256:principal",
+                "subject_id_type": "national_id",
+                "subject_binding_claim": "national_id",
+                "subject_binding_hash": "hmac-sha256:requester",
+                "dependent_target_hash": "hmac-sha256:dependent",
+                "relationship_type": "guardian",
+                "proof_claim_id": "guardian-link",
+                "requested_claims_hash": "sha256:claims",
+                "disclosure": "predicate",
+                "result_format": "application/json"
+            }
+        });
+
+        let decoded = deserialize_stored_evaluation_v2(
+            &serde_json::to_string(&record).expect("stored record serializes"),
+        )
+        .expect("legacy version-2 access mode remains readable");
+
+        assert_eq!(
+            decoded.access_mode(),
+            registry_notary_core::AccessMode::DelegatedSubjectAccess
+        );
+        assert_eq!(
+            serde_json::to_value(decoded).expect("normalized record serializes")["subject_access"]
+                ["access_mode"],
+            serde_json::json!(DELEGATED_SUBJECT_ACCESS_MODE)
         );
     }
 

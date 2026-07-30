@@ -1,0 +1,5 @@
+# One-time accepted diff for PR #580: every remaining claim is registry-backed,
+# and the batch runtime requires an idempotency key before evaluating one.
+# This pre-1.0 contract break is documented in the release notes. The line below
+# stops matching once the baseline includes it.
+POST /v1/batch-evaluations the 'header' request parameter 'Idempotency-Key' became required

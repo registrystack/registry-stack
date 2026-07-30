@@ -153,21 +153,20 @@ impl FederationConfig {
                 "federation.evaluation_profiles[].claim_id",
                 &profile.claim_id,
             )?;
-            if !evidence
-                .claims
-                .iter()
-                .any(|claim| claim.id == profile.claim_id)
-            {
-                return Err(EvidenceConfigError::InvalidFederationConfig {
-                    reason:
-                        "federation.evaluation_profiles[].claim_id must reference an evidence claim"
-                            .to_string(),
-                });
-            }
             validate_federation_non_empty(
                 "federation.evaluation_profiles[].subject_id_type",
                 &profile.subject_id_type,
             )?;
+            let claim = evidence
+                .claims
+                .iter()
+                .find(|claim| claim.id == profile.claim_id)
+                .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                    reason:
+                        "federation.evaluation_profiles[].claim_id must reference an evidence claim"
+                            .to_string(),
+                })?;
+            validate_federation_claim_inputs(evidence, profile, claim)?;
             if let Some(disclosure) = profile.disclosure.as_deref() {
                 if DisclosureProfile::parse(disclosure).is_none() {
                     return invalid_federation(
@@ -224,6 +223,54 @@ impl FederationConfig {
         }
         Ok(())
     }
+}
+
+fn validate_federation_claim_inputs(
+    evidence: &EvidenceConfig,
+    profile: &FederationEvaluationProfileConfig,
+    root: &ClaimDefinition,
+) -> Result<(), EvidenceConfigError> {
+    let expected_path = format!("request.target.identifiers.{}", profile.subject_id_type);
+    let mut pending = vec![root.id.as_str()];
+    let mut visited = HashSet::new();
+    while let Some(claim_id) = pending.pop() {
+        if !visited.insert(claim_id) {
+            continue;
+        }
+        let claim = evidence
+            .claims
+            .iter()
+            .find(|candidate| candidate.id == claim_id)
+            .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                reason: format!(
+                    "federation evaluation profile '{}' references an incomplete claim dependency closure",
+                    profile.id
+                ),
+            })?;
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+            return invalid_federation(format!(
+                "federation evaluation profile '{}' must select only registry_backed claims",
+                profile.id
+            ));
+        };
+        if consultations
+            .values()
+            .flat_map(|consultation| consultation.inputs.values())
+            .any(|input| {
+                !matches!(
+                    input,
+                    RelayConsultationInput::TargetIdentifier(path) if path == &expected_path
+                )
+            })
+        {
+            return invalid_federation(format!(
+                "federation evaluation profile '{}' claim '{}' Relay inputs must derive from {}",
+                profile.id, claim.id, expected_path
+            ));
+        }
+        pending.extend(claim.depends_on.iter().map(String::as_str));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

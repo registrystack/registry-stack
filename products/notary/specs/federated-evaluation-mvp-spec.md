@@ -404,11 +404,15 @@ Audit events must not include raw source rows, bearer tokens, private keys,
 private JWK fields, compact JWT strings, or raw source credentials. Parsed JWT
 claims may be logged only after redacting subject identifiers and token ids.
 
-Federation v0.1 does not compose with `registry_backed` claims. Configuration
-must reject an evaluation profile that references one until federation audit
-preserves the Notary evaluation id and Relay consultation ids across success,
-denial, and post-forward failure paths. This keeps Relay-backed federation out
-of the MVP rather than allowing an unreconcilable audit gap.
+Federation v0.1 composes only with `registry_backed` claims. Configuration
+must reject an evaluation profile unless every Relay consultation input in the
+selected claim and its dependency closure maps to the exact signed subject
+identifier at
+`request.target.identifiers.<evaluation_profile.subject_id_type>`. The
+verified canonical request `jti` is passed to Relay as the consultation audit
+correlation id, while Notary retains its own local evaluation id. This keeps
+the federation and Relay audit records correlatable without accepting
+caller-selected Relay inputs.
 
 ## Out Of Scope
 
@@ -578,7 +582,9 @@ when behavior changes.
 | `access.ruleset` resolves to an evaluation profile ruleset | `validate_registry_notary_access` checks `evaluation_profiles[*].ruleset` | `validation_rejects_registry_notary_unresolved_ruleset` |
 | Federation disabled by default and route hidden | `standalone_router` mounts federation router only when enabled | `federation_route_is_not_mounted_until_enabled` |
 | Startup validates node/issuer binding and peer policy | `FederationConfig::validate` | `federation_config_validates_enabled_mvp_shape` and negative config tests |
+| Evaluation profiles permit only Relay inputs derived from the signed subject identifier | `validate_federation_claim_inputs` traverses the selected claim dependency closure | `federation_profile_rejects_relay_inputs_unavailable_from_subject` |
 | Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `crates/registry-notary-server/src/federation/mod.rs` request handler, with helper logic in `claims.rs`, `signing.rs`, and `runtime.rs` | focused federation request-verification tests |
+| The canonical federation request `jti` becomes the Relay evaluation id | `relay_evaluation_id` selects the verified federation correlation id for Relay consultations | `federation_request_jti_becomes_the_relay_evaluation_id` |
 | Denials before policy pass do not evaluate claims | `handle_federated_evaluate` orders verification before `evaluate_with_capability` | focused denial-order tests |
 | Oversized request bodies are rejected before full buffering | `to_bytes(body, inbound_body_limit_bytes)` in federation handler | focused oversized-body test |
 | Replay retains one-time identifiers through protocol expiry and rejects duplicates | `registry-notary-server/src/replay.rs` and `registry-platform-replay` | replay unit tests and `federation_evaluation_returns_signed_response_and_rejects_replay` |

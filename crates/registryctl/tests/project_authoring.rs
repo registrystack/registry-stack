@@ -4420,6 +4420,8 @@ fn project_check_points_to_representative_semantic_reference_and_value_failures(
     let mut project = read_yaml(&project_path);
     project["services"]["household-eligibility"]["claims"]["household-record-exists"]["cel"] =
         serde_norway::Value::String("missing_consultation.matched".to_string());
+    project["services"]["household-eligibility"]["claims"]["household-record-exists"]["value"] =
+        serde_norway::from_str("{ type: boolean }").expect("claim value YAML parses");
     write_yaml(&project_path, &project);
     assert_exact_pointer(
         &cel_project,

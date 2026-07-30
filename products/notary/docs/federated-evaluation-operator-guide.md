@@ -120,6 +120,11 @@ The federation endpoint can select only a claim with
 `evidence_mode.type: registry_backed`. The verified federation request `jti`
 is passed to Relay as the bounded audit correlation id. Notary has no direct
 registry-source or caller-input evidence fallback.
+Every Relay consultation input in the selected claim and its dependency
+closure must map to
+`request.target.identifiers.<evaluation_profile.subject_id_type>`.
+Configuration is rejected at startup when a federation profile could consume
+another request path.
 
 `allow_insecure_private_network` is a development and lab escape hatch for
 private Compose networks. It allows HTTP peer JWKS fetches through the shared
