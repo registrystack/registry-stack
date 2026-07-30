@@ -49,7 +49,7 @@ const POSTGRESQL_DATA_TARGET: &str = "/var/lib/postgresql/data";
 // authorize the exact reviewed script, not a shell command that contains a
 // few expected fragments.
 const POSTGRESQL_BOOTSTRAP_SCRIPT_SHA256: &str =
-    "f0804dbb6564a08144ded38123daa40d6c1293ddec168dc37e0ad4d3bbf299aa";
+    "cbad443afb9700702df52be6513cf8afd95b97747d75a0a417df4fd079a2e79c";
 const POSTGRESQL_BOOTSTRAP_KEYS: [&str; 8] = [
     "REGISTRY_RELAY_MIGRATOR_PASSWORD",
     "REGISTRY_RELAY_RUNTIME_PASSWORD",
@@ -1304,13 +1304,7 @@ fn validate_registryctl_artifacts(
 }
 
 fn validate_starters(starters: &[LockedEmbeddedStarterV1], product_version: &str) -> Result<()> {
-    let expected = BTreeSet::from([
-        "dhis2-tracker",
-        "fhir-r4",
-        "http",
-        "opencrvs-dci",
-        "snapshot",
-    ]);
+    let expected = BTreeSet::from(["http"]);
     let mut actual = BTreeSet::new();
     for starter in starters {
         if !actual.insert(starter.id.as_str()) {
@@ -1542,25 +1536,27 @@ mod tests {
     }
 
     #[test]
-    fn signed_lock_starter_roster_excludes_the_unshipped_spreadsheet_starter() {
+    fn signed_lock_starter_roster_is_only_the_public_http_starter() {
         let starter = |id: &str| LockedEmbeddedStarterV1 {
             id: id.to_string(),
             release: "1.0.0".to_string(),
             content_digest: format!("sha256:{}", "a".repeat(64)),
         };
-        let mut starters = [
-            "dhis2-tracker",
-            "fhir-r4",
-            "http",
-            "opencrvs-dci",
-            "snapshot",
-        ]
-        .map(starter)
-        .to_vec();
+        let mut starters = vec![starter("http")];
         validate_starters(&starters, "1.0.0").expect("the closed 1.0 starter roster is accepted");
 
-        starters.push(starter("spreadsheet"));
-        assert!(validate_starters(&starters, "1.0.0").is_err());
+        for internal_fixture in [
+            "dhis2-tracker",
+            "fhir-r4",
+            "opencrvs-dci",
+            "snapshot",
+            "spreadsheet",
+        ] {
+            starters.push(starter(internal_fixture));
+            assert!(validate_starters(&starters, "1.0.0").is_err());
+            starters.pop();
+        }
+        assert!(validate_starters(&[], "1.0.0").is_err());
     }
 
     #[test]

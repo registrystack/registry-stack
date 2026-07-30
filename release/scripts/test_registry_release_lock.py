@@ -146,13 +146,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 schema["properties"]["embedded_starters"]["maxItems"],
                 len(payload["embedded_starters"]),
             )
-            expected_starter_ids = {
-                "dhis2-tracker",
-                "fhir-r4",
-                "http",
-                "opencrvs-dci",
-                "snapshot",
-            }
+            expected_starter_ids = {"http"}
             self.assertEqual(
                 {starter["id"] for starter in payload["embedded_starters"]},
                 expected_starter_ids,
@@ -277,7 +271,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 hashlib.sha256(
                     postgresql["bootstrap"]["command"][2].encode()
                 ).hexdigest(),
-                "f0804dbb6564a08144ded38123daa40d6c1293ddec168dc37e0ad4d3bbf299aa",
+                "cbad443afb9700702df52be6513cf8afd95b97747d75a0a417df4fd079a2e79c",
             )
             bootstrap_file = next(
                 file
@@ -347,6 +341,32 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     ]
                 )
             )
+
+    def test_postgresql_bootstrap_marker_refuses_a_second_mutating_run(
+        self,
+    ) -> None:
+        script = release_lock.POSTGRESQL_BOOTSTRAP_SCRIPT
+        marker_statement = "CREATE TABLE public.registry_stack_bootstrap_marker ("
+        marker_position = script.index(marker_statement)
+        self.assertEqual(script.count(marker_statement), 1)
+        self.assertIn(f"<<'SQL'\n{marker_statement}", script)
+        marker_block = script[
+            marker_position : script.index(
+                "REVOKE ALL ON TABLE "
+                "public.registry_stack_bootstrap_marker FROM PUBLIC;"
+            )
+        ]
+        self.assertNotIn("IF NOT EXISTS", marker_block)
+        for mutation in [
+            "CREATE ROLE",
+            "ALTER ROLE",
+            "GRANT registry_",
+            "CREATE DATABASE",
+            "ALTER DATABASE",
+            "REVOKE ALL ON DATABASE",
+            "GRANT CONNECT ON DATABASE",
+        ]:
+            self.assertLess(marker_position, script.index(mutation), mutation)
 
     def test_assemble_carries_exact_payload_and_cosign_v3_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

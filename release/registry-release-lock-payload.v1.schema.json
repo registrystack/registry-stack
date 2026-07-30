@@ -92,8 +92,8 @@
     },
     "embedded_starters": {
       "type": "array",
-      "minItems": 5,
-      "maxItems": 5,
+      "minItems": 1,
+      "maxItems": 1,
       "items": {
         "$ref": "#/$defs/starter"
       }
@@ -523,11 +523,7 @@
       "properties": {
         "id": {
           "enum": [
-            "dhis2-tracker",
-            "fhir-r4",
-            "http",
-            "opencrvs-dci",
-            "snapshot"
+            "http"
           ]
         },
         "release": {

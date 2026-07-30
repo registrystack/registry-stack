@@ -24,14 +24,6 @@ IMAGE = re.compile(r"^[^@\s]+@(?P<digest>sha256:[0-9a-f]{64})$")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 STARTERS = {
     "http": ROOT / "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
-    "dhis2-tracker": ROOT
-    / "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/registry-stack.yaml",
-    "opencrvs-dci": ROOT
-    / "crates/registryctl/tests/fixtures/project-authoring/opencrvs/registry-stack.yaml",
-    "fhir-r4": ROOT
-    / "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/registry-stack.yaml",
-    "snapshot": ROOT
-    / "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml",
 }
 PLATFORMS = {
     "linux-amd64": "linux-amd64",
@@ -241,8 +233,15 @@ POSTGRESQL_BOOTSTRAP_KEYS = [
 ]
 
 
+# Marker creation intentionally has no IF NOT EXISTS. Under psql autocommit,
+# its durable table makes every later bootstrap stop before role/database work.
 POSTGRESQL_BOOTSTRAP_SCRIPT = r"""export PGPASSWORD="$(cat /run/secrets/postgresql-admin-password)"
 psql "host=registry-postgres port=5432 dbname=postgres user=registry_stack_bootstrap sslmode=verify-full sslrootcert=/run/secrets/postgresql-ca.pem" --set=ON_ERROR_STOP=1 <<'SQL'
+CREATE TABLE public.registry_stack_bootstrap_marker (
+    bootstrap_version integer PRIMARY KEY CHECK (bootstrap_version = 1)
+);
+INSERT INTO public.registry_stack_bootstrap_marker (bootstrap_version) VALUES (1);
+REVOKE ALL ON TABLE public.registry_stack_bootstrap_marker FROM PUBLIC;
 \getenv relay_migrator_password REGISTRY_RELAY_MIGRATOR_PASSWORD
 \getenv relay_runtime_password REGISTRY_RELAY_RUNTIME_PASSWORD
 \getenv relay_maintenance_password REGISTRY_RELAY_MAINTENANCE_PASSWORD
