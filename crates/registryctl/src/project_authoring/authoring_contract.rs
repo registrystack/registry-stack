@@ -462,7 +462,7 @@ struct AuthoredFixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
     #[serde(default)]
-    request: Option<GovernedLiveRequest>,
+    request: Option<GovernedFixtureRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,

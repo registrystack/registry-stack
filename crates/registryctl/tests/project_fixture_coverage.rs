@@ -28,9 +28,10 @@ use registryctl::{
     FixtureCoverageDimensions, FixtureCoverageEvidenceKind, FixtureCoverageGapReason,
     FixtureCoverageNotApplicableReason, FixtureCoverageNotEvaluatedReason,
     FixtureCoverageRequirementState, FixtureCoverageTarget, FixtureCoverageTargetComparisonInput,
-    FixtureCoverageTargetSetState, FixturePassState, FixtureRequirementCoverage,
-    GeneratedRecipeApplicability, GeneratorRecipeId, ProjectFixtureCoverageReportV1,
-    RequiredFixtureCoverageRequirement, Sha256Digest as RegistrySha256Digest,
+    FixtureCoverageTargetSetState, FixturePassState, FixtureRequestBindingState,
+    FixtureRequirementCoverage, FixtureSafeCode, GeneratedRecipeApplicability, GeneratorRecipeId,
+    ProjectFixtureCoverageReportV1, RequiredFixtureCoverageRequirement,
+    Sha256Digest as RegistrySha256Digest, SourceCallExpectation,
 };
 use serde_json::{json, Value};
 
@@ -173,7 +174,6 @@ fn generated_coverage_project(name: &str) -> registryctl::ProjectFixtureCoverage
         &registryctl::ProjectTestOptions {
             project_directory: project_root(name),
             environment: None,
-            live: false,
         },
         &context,
     )
@@ -187,7 +187,6 @@ fn executable_fixture_coverage(project: &Path) -> ProjectFixtureCoverageReportV1
         .args(["test", "--project-dir"])
         .arg(project)
         .args(["--format", "json"])
-        .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
         .output()
         .expect("registryctl test executes");
     assert!(
@@ -345,6 +344,7 @@ fn generated_targets_have_exact_ordered_35_requirement_contracts() {
         ("dhis2-script", FixtureCapability::Script),
         ("snapshot-exact", FixtureCapability::Snapshot),
         ("opencrvs", FixtureCapability::Script),
+        ("opencrvs-events-api", FixtureCapability::Script),
     ] {
         let report = generated_coverage_project(project);
         let document = serde_json::to_value(&report).unwrap();
@@ -396,6 +396,7 @@ fn generated_cases_remain_executable_and_isolated_under_their_target() {
         "dhis2-script",
         "snapshot-exact",
         "opencrvs",
+        "opencrvs-events-api",
     ] {
         let report = generated_coverage_project(project);
         let target = only_target(&report);
@@ -424,6 +425,117 @@ fn generated_cases_remain_executable_and_isolated_under_their_target() {
                 .evidence
                 .id
                 .starts_with(&format!("target/{}/fixture/", target.identity.integration)));
+        }
+    }
+}
+
+#[test]
+fn synthetic_opencrvs_events_api_covers_the_bounded_consultation_contract() {
+    let report = generated_coverage_project("opencrvs-events-api");
+    let target = only_target(&report);
+    assert_eq!(target.identity.integration, "birth-event-search");
+    assert_eq!(target.identity.capability, FixtureCapability::Script);
+    assert_eq!(
+        target
+            .fixture_inventory
+            .iter()
+            .map(|fixture| fixture.fixture_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "birth-event-ambiguous",
+            "birth-event-match",
+            "birth-event-no-match",
+            "birth-event-source-malformed",
+            "birth-event-source-rejected",
+            "birth-event-source-timeout",
+            "birth-event-subject-mismatch",
+            "oauth-token-expiry-rejected",
+            "oauth-token-extra-member-rejected",
+            "oauth-token-media-type-rejected",
+            "oauth-token-redirect-rejected",
+            "oauth-token-type-rejected",
+        ])
+    );
+    assert!(target
+        .fixture_inventory
+        .iter()
+        .all(|fixture| fixture.pass_state == FixturePassState::Passed));
+
+    let matched = target
+        .fixture_inventory
+        .iter()
+        .find(|fixture| fixture.fixture_id == "birth-event-match")
+        .expect("passing exact-selector fixture is present");
+    assert_eq!(matched.output_ids, ["event_type", "registered"]);
+    assert_eq!(
+        matched.claim_ids,
+        ["birth-event-found", "birth-event-registered"]
+    );
+    assert_eq!(
+        matched.request_to_consultation_binding.state,
+        FixtureRequestBindingState::Passed
+    );
+    assert_eq!(
+        matched
+            .request_to_consultation_binding
+            .actual_relay_consultations,
+        Some(1)
+    );
+    assert_eq!(
+        matched
+            .request_to_consultation_binding
+            .consultations
+            .iter()
+            .map(|consultation| {
+                (
+                    consultation.service_id.as_str(),
+                    consultation.consultation_id.as_str(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [("birth-event-verification", "event")]
+    );
+
+    for (recipe, safe_code) in [
+        (
+            GeneratorRecipeId::MalformedDecode,
+            Some(FixtureSafeCode::SourceResponseMalformed),
+        ),
+        (
+            GeneratorRecipeId::ByteCeiling,
+            Some(FixtureSafeCode::SourceResponseTooLarge),
+        ),
+        (
+            GeneratorRecipeId::Timeout,
+            Some(FixtureSafeCode::SourceDeadlineExceeded),
+        ),
+        (
+            GeneratorRecipeId::AuthorizationBeforeSource,
+            Some(FixtureSafeCode::AuthorizationDenied),
+        ),
+        (GeneratorRecipeId::OutputMinimization, None),
+    ] {
+        let generated = target
+            .generated_cases
+            .iter()
+            .find(|case| {
+                case.source_fixture.fixture_id == "birth-event-match" && case.recipe.id == recipe
+            })
+            .unwrap_or_else(|| panic!("generated {recipe:?} case is present"));
+        assert!(matches!(
+            generated.applicability,
+            GeneratedRecipeApplicability::Applicable {}
+        ));
+        assert_eq!(generated.actual_safe_code, safe_code);
+        assert_eq!(generated.pass_state, FixturePassState::Passed);
+        if recipe == GeneratorRecipeId::AuthorizationBeforeSource {
+            let assertion = generated
+                .source_access_assertion
+                .as_ref()
+                .expect("authorization denial records source-call evidence");
+            assert_eq!(assertion.expected_source_calls, SourceCallExpectation::Zero);
+            assert_eq!(assertion.actual_source_calls, Some(0));
+            assert!(assertion.passed);
         }
     }
 }
@@ -778,7 +890,6 @@ fn report_has_no_value_path_or_secret_bearing_fields() {
         &registryctl::ProjectTestOptions {
             project_directory: project,
             environment: Some("local".to_owned()),
-            live: false,
         },
         &context,
     )
@@ -1051,6 +1162,7 @@ fn recipe_applicability_does_not_promote_inapplicable_cases_to_coverage() {
         "dhis2-script",
         "snapshot-exact",
         "opencrvs",
+        "opencrvs-events-api",
     ] {
         let report = generated_coverage_project(project);
         let target = only_target(&report);

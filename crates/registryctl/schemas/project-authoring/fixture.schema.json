@@ -61,7 +61,7 @@
   ],
   "$defs": {
     "governedRequest": {
-      "description": "The same closed governed request shape accepted by project test --live.",
+      "description": "The closed governed request shape for an independently authored synthetic fixture witness.",
       "type": "object",
       "additionalProperties": false,
       "required": ["target", "claims", "purpose"],
@@ -94,7 +94,7 @@
       }
     },
     "governedTarget": {
-      "description": "The synthetic subject target presented to the same governed request boundary as a live Notary evaluation.",
+      "description": "The synthetic subject target presented to the governed offline fixture boundary.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type"],

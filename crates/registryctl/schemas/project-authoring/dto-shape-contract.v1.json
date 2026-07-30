@@ -3833,7 +3833,7 @@
             },
             "type": "object"
           },
-          "GovernedLiveIdentifier": {
+          "GovernedFixtureIdentifier": {
             "additionalProperties": false,
             "properties": {
               "scheme": {
@@ -3849,9 +3849,9 @@
             ],
             "type": "object"
           },
-          "GovernedLiveRequest": {
+          "GovernedFixtureRequest": {
             "additionalProperties": false,
-            "description": "The closed governed request accepted by both `project test --live` and an\nindependently authored synthetic fixture witness.\n\nKeeping one internal request type prevents fixture authoring from drifting\ninto a looser contract than the live Notary boundary.",
+            "description": "The closed governed request accepted by an independently authored synthetic fixture witness.",
             "properties": {
               "claims": {
                 "items": {
@@ -3877,7 +3877,7 @@
               "requester": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/GovernedLiveTarget"
+                    "$ref": "#/$defs/GovernedFixtureTarget"
                   },
                   {
                     "type": "null"
@@ -3885,7 +3885,7 @@
                 ]
               },
               "target": {
-                "$ref": "#/$defs/GovernedLiveTarget"
+                "$ref": "#/$defs/GovernedFixtureTarget"
               },
               "variables": {
                 "additionalProperties": {
@@ -3901,7 +3901,7 @@
             ],
             "type": "object"
           },
-          "GovernedLiveTarget": {
+          "GovernedFixtureTarget": {
             "additionalProperties": false,
             "properties": {
               "attributes": {
@@ -3916,7 +3916,7 @@
               },
               "identifiers": {
                 "items": {
-                  "$ref": "#/$defs/GovernedLiveIdentifier"
+                  "$ref": "#/$defs/GovernedFixtureIdentifier"
                 },
                 "type": "array"
               },
@@ -3973,7 +3973,7 @@
           "request": {
             "anyOf": [
               {
-                "$ref": "#/$defs/GovernedLiveRequest"
+                "$ref": "#/$defs/GovernedFixtureRequest"
               },
               {
                 "type": "null"

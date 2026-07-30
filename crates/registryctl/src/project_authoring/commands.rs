@@ -292,9 +292,6 @@ pub fn test_registry_project_selected_with_context(
     selection: &ProjectTestSelection,
     execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
-    if options.live && options.environment.is_none() {
-        bail!("live project tests require an explicit non-production --environment");
-    }
     let loaded = load_registry_project(&options.project_directory, options.environment.as_deref())?;
     preflight_project_rhai_scripts(&loaded)?;
     let offline_environment = offline_fixture_environment(&loaded)?;
@@ -307,7 +304,7 @@ pub fn test_registry_project_selected_with_context(
     let compiled =
         compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
     validate_generated_product_configs(&compiled)?;
-    let (mut reports, generated_observations, request_observations, call_budget_actual) =
+    let (reports, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -328,9 +325,6 @@ pub fn test_registry_project_selected_with_context(
     } else {
         None
     };
-    if options.live {
-        reports.push(execute_governed_live_test(&loaded)?);
-    }
     Ok(ProjectCommandReport {
         schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "passed",
@@ -585,684 +579,15 @@ fn offline_private_path(
         .to_owned())
 }
 
-// A remote candidate can have a small NTP offset from the operator host. Thirty
-// seconds accommodates that offset without accepting evidence outside this
-// single governed request.
-const GOVERNED_LIVE_REMOTE_CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
-
-#[derive(Clone, Copy)]
-struct GovernedLiveValidationWindow {
-    request_started_at: OffsetDateTime,
-    response_received_at: OffsetDateTime,
-}
-
-fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureReport> {
-    let environment = loaded
-        .environment_name
-        .as_deref()
-        .ok_or_else(|| anyhow!("live project tests require an environment"))?;
-    let deployment_profile = loaded
-        .environment
-        .as_ref()
-        .map(|environment| environment.deployment.profile);
-    if governed_live_environment_is_production(environment, deployment_profile) {
-        bail!("live project tests refuse production-classified environment names or profiles");
-    }
-    let origin = std::env::var("REGISTRY_STACK_LIVE_NOTARY_ORIGIN")
-        .context("live Notary origin is absent from the process environment")?;
-    let origin = validate_live_notary_origin(&origin)?;
-    let api_key = std::env::var("REGISTRY_STACK_LIVE_NOTARY_API_KEY")
-        .context("live Notary API key is absent from the process environment")?;
-    if api_key.len() < 32 || api_key.len() > 4096 || api_key.chars().any(char::is_control) {
-        bail!("live Notary API key has an invalid bounded shape");
-    }
-    let request_path = std::env::var_os("REGISTRY_STACK_LIVE_REQUEST_FILE")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("live request file is absent from the process environment"))?;
-    let request_bytes = read_bounded_external_request(&request_path)?;
-    let request = parse_json_strict(&request_bytes).context("live request is not strict JSON")?;
-    let prepared_request = prepare_governed_live_request(loaded, &request)?;
-    validate_live_relay_readiness(&origin)?;
-    let expected_path = std::env::var_os("REGISTRY_STACK_LIVE_EXPECTED_FILE")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            anyhow!("live expected-result file is absent from the process environment")
-        })?;
-    let expected_bytes = read_bounded_external_request(&expected_path)?;
-    let expected = parse_json_strict(&expected_bytes)
-        .context("live expected-result file is not strict JSON")?;
-    let endpoint = origin
-        .join("v1/evaluations")
-        .map_err(|_| anyhow!("failed to construct the governed Notary endpoint"))?;
-    let evaluation_request = governed_live_evaluation_request(&endpoint, &api_key);
-    let request_started_at = OffsetDateTime::now_utc();
-    let response = evaluation_request
-        .send_bytes(&prepared_request.body)
-        .map_err(|_| anyhow!("governed Notary evaluation failed"))?;
-    let mut response_bytes = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_LIVE_RESPONSE_BYTES + 1)
-        .read_to_end(&mut response_bytes)
-        .context("failed to read the governed Notary response")?;
-    let response_received_at = OffsetDateTime::now_utc();
-    if response_bytes.len() as u64 > MAX_LIVE_RESPONSE_BYTES {
-        bail!("governed Notary response exceeded the configured bound");
-    }
-    let response = parse_json_strict(&response_bytes)
-        .context("governed Notary response was not strict JSON")?;
-    let returned_claims = validate_live_response(
-        &response,
-        &prepared_request.validated,
-        &expected,
-        GovernedLiveValidationWindow {
-            request_started_at,
-            response_received_at,
-        },
-    )?;
-    Ok(governed_live_fixture_report(returned_claims))
-}
-
-fn governed_live_environment_is_production(
-    environment: &str,
-    deployment_profile: Option<DeploymentProfile>,
-) -> bool {
-    environment
-        .split(['-', '_', '.'])
-        .any(|segment| matches!(segment, "prod" | "production"))
-        || matches!(
-            deployment_profile,
-            Some(DeploymentProfile::Production | DeploymentProfile::EvidenceGrade)
-        )
-}
-
-fn governed_live_evaluation_request(endpoint: &url::Url, api_key: &str) -> ureq::Request {
-    ureq::post(endpoint.as_str())
-        .set("content-type", "application/json")
-        .set("accept", registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
-        .set("x-api-key", api_key)
-}
-
-fn governed_live_fixture_report(returned_claims: Vec<String>) -> FixtureReport {
-    FixtureReport {
-        integration: "governed-notary-relay".to_string(),
-        fixture: "live-evaluation".to_string(),
-        inputs: Vec::new(),
-        calls: vec!["notary-evaluation".to_string()],
-        outputs: Vec::new(),
-        claims: returned_claims,
-        // Claim expectations prove disclosed values, not the source-level
-        // match or no-match outcome that produced them.
-        outcome: None,
-        expected_error: None,
-        source_access: None,
-        passed: true,
-        failure: None,
-    }
-}
-
-fn validate_live_relay_readiness(origin: &url::Url) -> Result<()> {
-    let endpoint = origin
-        .join("ready")
-        .map_err(|_| anyhow!("failed to construct the Notary readiness endpoint"))?;
-    let response = ureq::get(endpoint.as_str())
-        .set("accept", "application/json")
-        .call()
-        .map_err(|_| anyhow!("governed Notary readiness check failed"))?;
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_LIVE_RESPONSE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .context("failed to read governed Notary readiness")?;
-    if bytes.len() as u64 > MAX_LIVE_RESPONSE_BYTES {
-        bail!("governed Notary readiness response exceeded the configured bound");
-    }
-    let readiness = parse_json_strict(&bytes)
-        .context("governed Notary readiness response was not strict JSON")?;
-    let relay = readiness
-        .pointer("/checks/relay")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("governed Notary readiness lacks the Relay dependency check"))?;
-    let total = relay
-        .get("total")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow!("governed Notary Relay readiness total is invalid"))?;
-    let ok = relay
-        .get("ok")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow!("governed Notary Relay readiness result is invalid"))?;
-    if total == 0 || ok != total {
-        bail!("governed Notary has no fully ready Relay-backed consultation dependency");
-    }
-    Ok(())
-}
-
-fn validate_live_response(
-    response: &Value,
-    request: &ValidatedLiveRequest,
-    expected: &Value,
-    validation_window: GovernedLiveValidationWindow,
-) -> Result<Vec<String>> {
-    let object = response
-        .as_object()
-        .ok_or_else(|| anyhow!("governed Notary response must be an object"))?;
-    if object.len() != 1 || !object.contains_key("results") {
-        bail!("governed Notary response has an unexpected top-level field");
-    }
-    let results = object["results"]
-        .as_array()
-        .ok_or_else(|| anyhow!("governed Notary response results must be an array"))?;
-    if results.len() != request.claims.len() {
-        bail!("governed Notary response did not return every requested claim exactly once");
-    }
-    let requested = request
-        .claims
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let expected = expected
-        .as_object()
-        .filter(|object| object.len() == 1)
-        .and_then(|object| object.get("claims"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("live expected-result file must contain only a claims object"))?;
-    if expected.keys().map(String::as_str).collect::<BTreeSet<_>>() != requested {
-        bail!("live expected-result claims do not exactly match the governed request");
-    }
-    let mut returned = BTreeSet::new();
-    let mut evaluation_id = None;
-    let mut target_ref = None;
-    let mut requester_ref = None;
-    for result in results {
-        let result_object = result
-            .as_object()
-            .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
-        validate_live_result_raw_schema(result, result_object)?;
-        let result_view: registry_notary_core::ClaimResultView =
-            serde_json::from_value(result.clone()).map_err(|_| {
-                anyhow!(
-                    "governed Notary result does not match the closed public claim-result schema"
-                )
-            })?;
-        if result_view.provenance.schema_version
-            != registry_notary_core::CLAIM_PROVENANCE_SCHEMA_VERSION
-            || result_view.provenance.generated_by.entry_type
-                != registry_notary_core::PROVENANCE_GENERATED_BY_CLAIM_EVALUATION
-        {
-            bail!(
-                "governed Notary result provenance constants do not match the closed public claim-result schema"
-            );
-        }
-        let generated_by = &result_view.provenance.generated_by;
-        if generated_by.evaluation_id != result_view.evaluation_id
-            || generated_by.claim_id != result_view.claim_id
-            || generated_by.claim_version != result_view.claim_version
-        {
-            bail!("governed Notary result provenance does not identify the returned claim result");
-        }
-        if generated_by.service_id != request.notary_service_id {
-            bail!(
-                "governed Notary result provenance does not identify the selected Notary service"
-            );
-        }
-        if generated_by.policy_id.is_some()
-            || generated_by.policy_version.is_some()
-            || generated_by.policy_hash.is_some()
-        {
-            bail!("governed Notary API-key result carries unexpected named policy provenance");
-        }
-        if evaluation_id
-            .as_ref()
-            .is_some_and(|evaluation_id| evaluation_id != &result_view.evaluation_id)
-        {
-            bail!("governed Notary response combines results from different evaluations");
-        }
-        evaluation_id.get_or_insert_with(|| result_view.evaluation_id.clone());
-        if result_view.format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON {
-            bail!("governed Notary result has an invalid claim-result format");
-        }
-        validate_live_result_timestamps(&result_view, validation_window)?;
-        if !result_view.provenance.derived_from.is_empty() {
-            bail!("governed Notary result provenance derived_from must remain empty");
-        }
-        validate_live_result_reference_handles(&result_view)?;
-        let result_target_ref = result_object
-            .get("target_ref")
-            .ok_or_else(|| anyhow!("governed Notary result lacks its target reference"))?;
-        if target_ref
-            .as_ref()
-            .is_some_and(|target_ref| target_ref != result_target_ref)
-        {
-            bail!("governed Notary response combines inconsistent evaluation references");
-        }
-        target_ref.get_or_insert_with(|| result_target_ref.clone());
-        let result_requester_ref = result_object.get("requester_ref").cloned();
-        if requester_ref
-            .as_ref()
-            .is_some_and(|requester_ref| requester_ref != &result_requester_ref)
-        {
-            bail!("governed Notary response combines inconsistent evaluation references");
-        }
-        requester_ref.get_or_insert(result_requester_ref);
-        let claim_id = result_view.claim_id.as_str();
-        if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
-            bail!("governed Notary response contains an unknown or duplicate claim result");
-        }
-        if request.claim_versions.get(claim_id).map(String::as_str)
-            != Some(result_view.claim_version.as_str())
-        {
-            bail!("governed Notary result claim version does not match the authored project");
-        }
-        if result_view.subject_type != request.subject_type {
-            bail!("governed Notary result subject type does not match the authored project");
-        }
-        let expected_result = expected[claim_id]
-            .as_object()
-            .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
-        let expected_keys = expected_result
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        if expected_keys != BTreeSet::from(["disclosure", "satisfied", "value"])
-            && expected_keys
-                != BTreeSet::from(["disclosure", "redacted_fields", "satisfied", "value"])
-        {
-            bail!(
-                "live expected claim result must contain value, satisfied, disclosure, and optional redacted_fields"
-            );
-        }
-        validate_live_result_redaction(
-            &result_view,
-            expected_result.get("redacted_fields"),
-            expected_result.get("disclosure"),
-        )?;
-        for field in ["value", "satisfied", "disclosure"] {
-            if result_object.get(field) != expected_result.get(field) {
-                bail!("governed Notary disclosed claim result did not match the expected fixture");
-            }
-        }
-        if result_view.provenance.used.relay_consultation_count == 0 {
-            bail!("governed Notary result lacks source-backed provenance");
-        }
-    }
-    Ok(returned.into_iter().collect())
-}
-
-fn validate_live_result_timestamps(
-    result: &registry_notary_core::ClaimResultView,
-    validation_window: GovernedLiveValidationWindow,
-) -> Result<()> {
-    let issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339).map_err(|_| {
-        anyhow!("governed Notary result timestamps do not match the public date-time schema")
-    })?;
-    let expires_at = result
-        .expires_at
-        .as_deref()
-        .map(|expires_at| {
-            OffsetDateTime::parse(expires_at, &Rfc3339).map_err(|_| {
-                anyhow!(
-                    "governed Notary result timestamps do not match the public date-time schema"
-                )
-            })
-        })
-        .transpose()?;
-    if validation_window.response_received_at < validation_window.request_started_at {
-        bail!("governed Notary validation window is invalid");
-    }
-    let earliest_issued_at = validation_window.request_started_at - GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
-    let latest_issued_at = validation_window.response_received_at + GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
-    if issued_at < earliest_issued_at || issued_at > latest_issued_at {
-        bail!("governed Notary result timestamps do not bind to the current live evaluation");
-    }
-    if expires_at.is_some_and(|expires_at| {
-        expires_at <= validation_window.response_received_at || expires_at <= issued_at
-    }) {
-        bail!("governed Notary result timestamps do not bind to the current live evaluation");
-    }
-    Ok(())
-}
-
-// These properties are optional in the public OpenAPI schema, but their types
-// exclude null when present. `expires_at` is intentionally not listed because
-// the public schema requires that key and permits an explicit null.
-const LIVE_RESULT_OPTIONAL_NON_NULL_PATHS: &[&str] = &[
-    "/redacted_fields",
-    "/requester_ref",
-    "/requester_ref/identifier_schemes",
-    "/requester_ref/profile",
-    "/target_ref/type",
-    "/target_ref/identifier_schemes",
-    "/target_ref/profile",
-    "/provenance/generated_by/policy_id",
-    "/provenance/generated_by/policy_version",
-    "/provenance/generated_by/policy_hash",
-];
-
-const LIVE_RESULT_SCHEMA_EXCLUDED_PATHS: &[&str] = &[
-    "/provenance/generated_by/pack_id",
-    "/provenance/generated_by/pack_version",
-];
-
-fn validate_live_result_raw_schema(
-    result: &Value,
-    result_object: &Map<String, Value>,
-) -> Result<()> {
-    if !result_object.contains_key("expires_at") {
-        bail!(
-            "governed Notary result does not match the closed public claim-result schema: expires_at is required"
-        );
-    }
-    if LIVE_RESULT_OPTIONAL_NON_NULL_PATHS
-        .iter()
-        .any(|pointer| result.pointer(pointer).is_some_and(Value::is_null))
-    {
-        bail!("governed Notary result optional public field cannot be null");
-    }
-    if LIVE_RESULT_SCHEMA_EXCLUDED_PATHS
-        .iter()
-        .any(|pointer| result.pointer(pointer).is_some())
-    {
-        bail!("governed Notary result exceeds the closed public claim-result schema");
-    }
-    Ok(())
-}
-
-fn validate_live_result_reference_handles(
-    result: &registry_notary_core::ClaimResultView,
-) -> Result<()> {
-    if !is_notary_pseudonymous_handle(&result.target_ref.handle)
-        || result
-            .requester_ref
-            .as_ref()
-            .is_some_and(|requester| !is_notary_pseudonymous_handle(&requester.handle))
-    {
-        bail!("governed Notary result contains an invalid pseudonymous reference handle");
-    }
-    Ok(())
-}
-
-fn is_notary_pseudonymous_handle(value: &str) -> bool {
-    let digest = value
-        .strip_prefix("rnref:v1:hmac-sha256:")
-        .or_else(|| value.strip_prefix("rnref:v1:sha256:"));
-    digest.is_some_and(|digest| {
-        digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    })
-}
-
-fn validate_live_result_redaction(
-    result: &registry_notary_core::ClaimResultView,
-    expected_redacted_fields: Option<&Value>,
-    expected_disclosure: Option<&Value>,
-) -> Result<()> {
-    let disclosure = registry_notary_core::DisclosureProfile::parse(&result.disclosure)
-        .ok_or_else(|| anyhow!("governed Notary result has an invalid disclosure profile"))?;
-    match disclosure {
-        registry_notary_core::DisclosureProfile::Redacted => {
-            let expected_markers = match expected_redacted_fields {
-                Some(fields) => validate_live_expected_redaction_fields(fields)?,
-                None => vec![result.claim_id.clone()],
-            };
-            if result.value.is_some()
-                || result.satisfied.is_some()
-                || result.redacted_fields != expected_markers
-                || expected_disclosure.and_then(Value::as_str) != Some("redacted")
-            {
-                bail!("governed Notary result violates full-redaction semantics");
-            }
-        }
-        registry_notary_core::DisclosureProfile::Predicate => {
-            if !result.redacted_fields.is_empty() || expected_redacted_fields.is_some() {
-                bail!("governed Notary result exposes a predicate over redacted fields");
-            }
-            let predicate_value = result.value.as_ref().and_then(Value::as_bool);
-            if predicate_value.is_none() || predicate_value != result.satisfied {
-                bail!("governed Notary result has invalid predicate evidence semantics");
-            }
-        }
-        registry_notary_core::DisclosureProfile::Value => {
-            if expected_redacted_fields.is_some() {
-                bail!("live expected redacted_fields apply only to a fully redacted claim result");
-            }
-            if result.satisfied != result.value.as_ref().and_then(Value::as_bool) {
-                bail!("governed Notary result has invalid value evidence semantics");
-            }
-            if result.redacted_fields.is_empty() {
-                return Ok(());
-            }
-            let Some(value) = result.value.as_ref().and_then(Value::as_object) else {
-                bail!("governed Notary result has invalid field-redaction semantics");
-            };
-            let unique = result
-                .redacted_fields
-                .iter()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            if result.satisfied.is_some()
-                || result.redacted_fields.len() > MAX_OUTPUTS
-                || unique.len() != result.redacted_fields.len()
-                || unique.iter().any(|field| {
-                    !is_live_top_level_redaction_field(field) || value.contains_key(*field)
-                })
-            {
-                bail!("governed Notary result has invalid field-redaction semantics");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_live_expected_redaction_fields(fields: &Value) -> Result<Vec<String>> {
-    let fields = fields
-        .as_array()
-        .filter(|fields| !fields.is_empty() && fields.len() <= MAX_OUTPUTS)
-        .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
-    let mut unique = BTreeSet::new();
-    for field in fields {
-        let field = field
-            .as_str()
-            .filter(|field| is_live_top_level_redaction_field(field))
-            .ok_or_else(|| {
-                anyhow!("live expected redacted_fields have an invalid bounded shape")
-            })?;
-        if !unique.insert(field.to_string()) {
-            bail!("live expected redacted_fields have an invalid bounded shape");
-        }
-    }
-    Ok(unique.into_iter().collect())
-}
-
-fn is_live_top_level_redaction_field(field: &str) -> bool {
-    field != "value"
-        && !field.contains('.')
-        && validate_stable_id(field, "live expected redacted field").is_ok()
-}
-
-fn validate_live_notary_origin(value: &str) -> Result<url::Url> {
-    if value.len() > 2048 || value.trim() != value {
-        bail!("live Notary origin has an invalid bounded shape");
-    }
-    let origin = url::Url::parse(value).context("live Notary origin is not a URL")?;
-    let loopback_http = origin.scheme() == "http"
-        && match origin.host() {
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
-            Some(url::Host::Domain(_)) | None => false,
-        };
-    if (origin.scheme() != "https" && !loopback_http)
-        || origin.host().is_none()
-        || !origin.username().is_empty()
-        || origin.password().is_some()
-        || origin.path() != "/"
-        || origin.query().is_some()
-        || origin.fragment().is_some()
-    {
-        bail!("live Notary origin must be an HTTPS origin or an HTTP loopback origin");
-    }
-    Ok(origin)
-}
-
-fn read_bounded_external_request(path: &Path) -> Result<Vec<u8>> {
-    #[cfg(unix)]
-    let file = {
-        use rustix::fs::{Mode, OFlags};
-
-        let descriptor = rustix::fs::open(
-            path,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-            Mode::empty(),
-        )
-        .context("failed to open the live request file safely")?;
-        fs::File::from(descriptor)
-    };
-    #[cfg(not(unix))]
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .open(path)
-        .context("failed to open the live request file")?;
-
-    let metadata = file
-        .metadata()
-        .context("failed to inspect the opened live request file")?;
-    if !metadata.is_file() || metadata.len() > MAX_AUTHORED_FILE_BYTES {
-        bail!("live request must be a bounded regular file, not a symlink");
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_AUTHORED_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .context("failed to read the live request file")?;
-    if bytes.len() as u64 > MAX_AUTHORED_FILE_BYTES {
-        bail!("live request exceeds the authored file-size bound");
-    }
-    Ok(bytes)
-}
-
-#[cfg(test)]
-mod external_request_reader_tests {
-    use super::*;
-
-    #[test]
-    fn live_request_reader_rejects_oversize_after_opening() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("oversize.json");
-        let file = fs::File::create(&path).expect("oversize file creates");
-        file.set_len(MAX_AUTHORED_FILE_BYTES + 1)
-            .expect("oversize file extends");
-
-        let error = read_bounded_external_request(&path).expect_err("oversize must fail");
-        assert!(format!("{error:#}").contains("bounded regular file"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn live_request_reader_rejects_fifo_without_blocking() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("request.pipe");
-        let status = std::process::Command::new("mkfifo")
-            .arg(&path)
-            .status()
-            .expect("mkfifo runs");
-        assert!(status.success(), "mkfifo creates the test fixture");
-
-        let error = read_bounded_external_request(&path).expect_err("FIFO must fail");
-        assert!(format!("{error:#}").contains("bounded regular file"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn live_request_reader_rejects_symlink_at_open() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let target = directory.path().join("request.json");
-        fs::write(&target, b"{}\n").expect("target writes");
-        let link = directory.path().join("request-link.json");
-        symlink(&target, &link).expect("symlink creates");
-
-        let error = read_bounded_external_request(&link).expect_err("symlink must fail");
-        assert!(format!("{error:#}").contains("open the live request file safely"));
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ValidatedLiveRequest {
-    claims: Vec<String>,
-    claim_versions: BTreeMap<String, String>,
-    notary_service_id: String,
-    subject_type: String,
-}
-
-struct PreparedGovernedLiveRequest {
-    validated: ValidatedLiveRequest,
-    body: Vec<u8>,
-}
-
-#[derive(Clone, Copy)]
-struct GovernedLiveInputContract<'a> {
+struct GovernedFixtureInputContract<'a> {
     name: &'a str,
     declaration: &'a InputDeclaration,
 }
 
-fn prepare_governed_live_request(
+fn validate_governed_fixture_request(
     loaded: &LoadedRegistryProject,
-    request: &Value,
-) -> Result<PreparedGovernedLiveRequest> {
-    let (validated, outbound) = validate_live_request_boundary(loaded, request)?;
-    let body = serde_json::to_vec(&outbound)
-        .context("failed to construct the validated governed Notary request")?;
-    Ok(PreparedGovernedLiveRequest { validated, body })
-}
-
-#[cfg(test)]
-fn validate_live_request(
-    loaded: &LoadedRegistryProject,
-    request: &Value,
-) -> Result<ValidatedLiveRequest> {
-    validate_live_request_boundary(loaded, request).map(|(validated, _)| validated)
-}
-
-fn validate_live_request_boundary(
-    loaded: &LoadedRegistryProject,
-    request: &Value,
-) -> Result<(ValidatedLiveRequest, GovernedLiveRequest)> {
-    if !request.is_object() {
-        bail!("live request must be a JSON object");
-    }
-    if contains_sensitive_request_key(request) {
-        bail!("live request contains a forbidden credential-like field");
-    }
-    let outbound: GovernedLiveRequest = serde_json::from_value(request.clone())
-        .map_err(|_| anyhow!("live request does not match the closed governed schema"))?;
-    let validated = validate_governed_request(loaded, &outbound, true)?;
-    Ok((validated, outbound))
-}
-
-fn validate_governed_request(
-    loaded: &LoadedRegistryProject,
-    outbound: &GovernedLiveRequest,
-    require_notary_service: bool,
-) -> Result<ValidatedLiveRequest> {
-    let notary_service_id = loaded
-        .environment
-        .as_ref()
-        .and_then(|environment| environment.deployment.notary.as_ref())
-        .map(|notary| notary.service.clone())
-        .map_or_else(
-            || {
-                if require_notary_service {
-                    Err(anyhow!(
-                        "live request environment does not declare a Notary service"
-                    ))
-                } else {
-                    Ok("offline-fixture".to_owned())
-                }
-            },
-            Ok,
-        )?;
+    outbound: &GovernedFixtureRequest,
+) -> Result<()> {
     let purpose = outbound.purpose.as_str();
     let services = loaded
         .project
@@ -1271,11 +596,11 @@ fn validate_governed_request(
         .filter(|service| service.kind == ServiceKind::Evidence && service.purpose == purpose)
         .collect::<Vec<_>>();
     if services.is_empty() {
-        bail!("live request purpose is not declared by this project");
+        bail!("governed fixture request purpose is not declared by this project");
     }
     let claims = &outbound.claims;
     if claims.is_empty() || claims.len() > MAX_CLAIMS {
-        bail!("live request claim count is outside the project bound");
+        bail!("governed fixture request claim count is outside the project bound");
     }
     let mut ids = Vec::with_capacity(claims.len());
     let mut claim_versions = BTreeMap::new();
@@ -1286,20 +611,20 @@ fn validate_governed_request(
             .iter()
             .copied()
             .find(|service| service.claims.contains_key(id))
-            .ok_or_else(|| anyhow!("live request contains an unknown project claim"))?;
+            .ok_or_else(|| anyhow!("governed fixture request contains an unknown project claim"))?;
         let authored_version = service.version.to_string();
         if claim
             .version
             .as_deref()
             .is_some_and(|version| version != authored_version)
         {
-            bail!("live request claim version does not match the authored project");
+            bail!("governed fixture request claim version does not match the authored project");
         }
         if claim_versions
             .insert(id.to_string(), authored_version)
             .is_some()
         {
-            bail!("live request contains an unknown or duplicate project claim");
+            bail!("governed fixture request contains an unknown or duplicate project claim");
         }
         ids.push(id.to_string());
         let selected_claim = service
@@ -1311,34 +636,34 @@ fn validate_governed_request(
     let first_claim = selected_claims
         .first()
         .map(|(_, claim)| *claim)
-        .ok_or_else(|| anyhow!("live request must select at least one project claim"))?;
+        .ok_or_else(|| anyhow!("governed fixture request must select at least one project claim"))?;
     let disclosure = outbound
         .disclosure
         .as_deref()
         .unwrap_or_else(|| expanded_disclosure(&first_claim.disclosure).0);
     if registry_notary_core::DisclosureProfile::parse(disclosure).is_none() {
-        bail!("live request disclosure profile is invalid");
+        bail!("governed fixture request disclosure profile is invalid");
     }
     if selected_claims.iter().any(|(_, claim)| {
         !expanded_disclosure(&claim.disclosure)
             .1
             .contains(&disclosure)
     }) {
-        bail!("live request disclosure is not allowed for every selected project claim");
+        bail!("governed fixture request disclosure is not allowed for every selected project claim");
     }
     if outbound
         .format
         .as_deref()
         .is_some_and(|format| format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
     {
-        bail!("live request format must be the governed claim-result media type");
+        bail!("governed fixture request format must be the governed claim-result media type");
     }
     for (name, _) in outbound.variables.iter() {
         if !selected_claims
             .iter()
             .any(|(service, _)| service.variables.contains_key(name))
         {
-            bail!("live request variable is not declared by a selected project service");
+            bail!("governed fixture request variable is not declared by a selected project service");
         }
     }
     let subject_type = selected_claim_subject_type(&selected_claims)?;
@@ -1364,7 +689,7 @@ fn validate_governed_request(
             input_claims.push(proof_claim);
         }
     }
-    validate_governed_live_target(
+    validate_governed_fixture_target(
         loaded,
         &input_claims,
         outbound.requester.as_ref(),
@@ -1372,12 +697,7 @@ fn validate_governed_request(
         &outbound.variables,
         subject_type,
     )?;
-    Ok(ValidatedLiveRequest {
-        claims: ids,
-        claim_versions,
-        notary_service_id,
-        subject_type: subject_type.to_string(),
-    })
+    Ok(())
 }
 
 fn representative_proof_claim_for_selected_ids<'a>(
@@ -1421,50 +741,50 @@ fn selected_claim_subject_type(
         .map(|(service, _)| service.effective_subject_type())
         .collect::<BTreeSet<_>>();
     if subject_types.len() != 1 {
-        bail!("live request cannot combine evidence services with different subject types");
+        bail!("governed fixture request cannot combine evidence services with different subject types");
     }
     Ok(subject_types
         .pop_first()
-        .ok_or_else(|| anyhow!("live request selected no evidence service"))?
+        .ok_or_else(|| anyhow!("governed fixture request selected no evidence service"))?
         .as_str())
 }
 
-fn validate_governed_live_target(
+fn validate_governed_fixture_target(
     loaded: &LoadedRegistryProject,
     selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
-    requester: Option<&GovernedLiveTarget>,
-    target: &GovernedLiveTarget,
+    requester: Option<&GovernedFixtureTarget>,
+    target: &GovernedFixtureTarget,
     variables: &registry_notary_core::RequestVariables,
     subject_type: &str,
 ) -> Result<()> {
     if !target.entity_type.eq_ignore_ascii_case(subject_type) {
-        bail!("live request target type does not match the authored project");
+        bail!("governed fixture request target type does not match the authored project");
     }
 
     let mut id_contracts = Vec::new();
-    let mut identifier_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+    let mut identifier_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
     let mut requester_identifier_contracts =
-        BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
-    let mut attribute_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
-    let mut variable_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+        BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
+    let mut attribute_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
+    let mut variable_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
     for (service, claim) in selected_claims {
         if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-            bail!("governed live requests require registry-backed project claims");
+            bail!("governed governed fixture requests require registry-backed project claims");
         }
         let consultation_name = claim_consultation_name(service, claim)?;
         let consultation = service
             .consultations
             .get(consultation_name)
-            .ok_or_else(|| anyhow!("selected project claim has no authored live consultation"))?;
+            .ok_or_else(|| anyhow!("selected project claim has no authored consultation"))?;
         let integration = loaded
             .integrations
             .get(&consultation.integration)
-            .ok_or_else(|| anyhow!("selected live consultation has no authored integration"))?;
+            .ok_or_else(|| anyhow!("selected consultation has no authored integration"))?;
         for (name, mapping) in &consultation.input {
             let declaration = integration.document.input.get(name).ok_or_else(|| {
-                anyhow!("selected live consultation input has no authored contract")
+                anyhow!("selected consultation input has no authored contract")
             })?;
-            let contract = GovernedLiveInputContract { name, declaration };
+            let contract = GovernedFixtureInputContract { name, declaration };
             if mapping == "request.target.id" {
                 id_contracts.push(contract);
             } else if let Some(scheme) = mapping.strip_prefix("request.target.identifiers.") {
@@ -1488,17 +808,17 @@ fn validate_governed_live_target(
                     .or_default()
                     .push(contract);
             } else {
-                bail!("authored consultation uses an unsupported governed live input");
+                bail!("authored consultation uses an unsupported governed fixture input");
             }
         }
     }
 
     if id_contracts.is_empty() != target.id.is_none() {
-        bail!("live request target fields do not exactly match the selected authored inputs");
+        bail!("governed fixture request target fields do not exactly match the selected authored inputs");
     }
     if requester_identifier_contracts.is_empty() != requester.is_none() {
         bail!(
-            "live request requester must be present exactly when selected claims bind authenticated requester identifiers"
+            "governed fixture request requester must be present exactly when selected claims bind authenticated requester identifiers"
         );
     }
     let mut identifiers = BTreeMap::new();
@@ -1507,7 +827,7 @@ fn validate_governed_live_target(
             .insert(identifier.scheme.as_str(), identifier.value.as_str())
             .is_some()
         {
-            bail!("live request target contains a duplicate identifier scheme");
+            bail!("governed fixture request target contains a duplicate identifier scheme");
         }
     }
     if identifiers.keys().copied().collect::<BTreeSet<_>>()
@@ -1525,13 +845,13 @@ fn validate_governed_live_target(
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>()
     {
-        bail!("live request target fields do not exactly match the selected authored inputs");
+        bail!("governed fixture request target fields do not exactly match the selected authored inputs");
     }
     if let Some(requester) = requester {
         validate_governed_requester_type(requester)?;
         if requester.id.is_some() || !requester.attributes.is_empty() {
             bail!(
-                "live request requester must contain only the required authenticated identifiers"
+                "governed fixture request requester must contain only the required authenticated identifiers"
             );
         }
         let mut requester_identifiers = BTreeMap::new();
@@ -1540,7 +860,7 @@ fn validate_governed_live_target(
                 .insert(identifier.scheme.as_str(), identifier.value.as_str())
                 .is_some()
             {
-                bail!("live request requester contains a duplicate identifier scheme");
+                bail!("governed fixture request requester contains a duplicate identifier scheme");
             }
         }
         if requester_identifiers
@@ -1553,14 +873,14 @@ fn validate_governed_live_target(
                 .collect::<BTreeSet<_>>()
         {
             bail!(
-                "live request requester identifiers do not exactly match the selected authored inputs"
+                "governed fixture request requester identifiers do not exactly match the selected authored inputs"
             );
         }
         for (scheme, contracts) in &requester_identifier_contracts {
             let value = requester_identifiers.get(scheme.as_str()).ok_or_else(|| {
-                anyhow!("live request requester identifier is absent after exact-shape validation")
+                anyhow!("governed fixture request requester identifier is absent after exact-shape validation")
             })?;
-            validate_governed_live_input(
+            validate_governed_fixture_input(
                 &format!("requester.identifiers.{scheme}"),
                 contracts,
                 &Value::String((*value).to_string()),
@@ -1569,13 +889,13 @@ fn validate_governed_live_target(
     }
 
     if let Some(id) = &target.id {
-        validate_governed_live_input("target.id", &id_contracts, &Value::String(id.clone()))?;
+        validate_governed_fixture_input("target.id", &id_contracts, &Value::String(id.clone()))?;
     }
     for (scheme, contracts) in &identifier_contracts {
         let value = identifiers.get(scheme.as_str()).ok_or_else(|| {
-            anyhow!("live request target identifier is absent after exact-shape validation")
+            anyhow!("governed fixture request target identifier is absent after exact-shape validation")
         })?;
-        validate_governed_live_input(
+        validate_governed_fixture_input(
             &format!("target.identifiers.{scheme}"),
             contracts,
             &Value::String((*value).to_string()),
@@ -1583,15 +903,15 @@ fn validate_governed_live_target(
     }
     for (name, contracts) in &attribute_contracts {
         let value = target.attributes.get(name).ok_or_else(|| {
-            anyhow!("live request target attribute is absent after exact-shape validation")
+            anyhow!("governed fixture request target attribute is absent after exact-shape validation")
         })?;
-        validate_governed_live_input(&format!("target.attributes.{name}"), contracts, value)?;
+        validate_governed_fixture_input(&format!("target.attributes.{name}"), contracts, value)?;
     }
     for (name, contracts) in &variable_contracts {
         let value = variables.get(name).ok_or_else(|| {
-            anyhow!("live request omits a variable required by the selected authored inputs")
+            anyhow!("governed fixture request omits a variable required by the selected authored inputs")
         })?;
-        validate_governed_live_input(
+        validate_governed_fixture_input(
             &format!("variables.{name}"),
             contracts,
             &Value::String(value.to_string()),
@@ -1600,21 +920,21 @@ fn validate_governed_live_target(
     Ok(())
 }
 
-fn validate_governed_requester_type(requester: &GovernedLiveTarget) -> Result<()> {
+fn validate_governed_requester_type(requester: &GovernedFixtureTarget) -> Result<()> {
     if !requester.entity_type.eq_ignore_ascii_case("person") {
-        bail!("live request requester type must be Person");
+        bail!("governed fixture request requester type must be Person");
     }
     Ok(())
 }
 
-fn validate_governed_live_input(
+fn validate_governed_fixture_input(
     path: &str,
-    contracts: &[GovernedLiveInputContract<'_>],
+    contracts: &[GovernedFixtureInputContract<'_>],
     value: &Value,
 ) -> Result<()> {
     for contract in contracts {
         validate_fixture_input_value(contract.name, contract.declaration, value).map_err(|_| {
-            anyhow!("live request {path} violates its selected authored type or bounds")
+            anyhow!("governed fixture request {path} violates its selected authored type or bounds")
         })?;
     }
     Ok(())
@@ -1630,242 +950,6 @@ fn contains_sensitive_request_key(value: &Value) -> bool {
         }),
         Value::Array(values) => values.iter().any(contains_sensitive_request_key),
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod governed_live_request_boundary_tests {
-    use super::*;
-
-    fn loaded_project(name: &str) -> LoadedRegistryProject {
-        load_registry_project(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/project-authoring")
-                .join(name),
-            Some("local"),
-        )
-        .unwrap_or_else(|error| panic!("{name} project loads: {error:#}"))
-    }
-
-    fn openspp_request() -> Value {
-        json!({
-            "target": {
-                "type": "Person",
-                "identifiers": [{
-                    "scheme": "openspp_individual_id",
-                    "value": "IND-AB12CD34",
-                }],
-            },
-            "claims": ["social-registry-record-exists"],
-            "disclosure": "predicate",
-            "format": registry_notary_core::FORMAT_CLAIM_RESULT_JSON,
-            "purpose": "social-programme-verification",
-        })
-    }
-
-    #[test]
-    fn representative_root_adds_its_derived_proof_to_input_validation() {
-        let loaded = loaded_project("custom-system");
-        let selected = vec!["household-record-exists".to_string()];
-        let (service, proof) = representative_proof_claim_for_selected_ids(
-            &loaded.project,
-            "household-eligibility",
-            "household-eligibility",
-            "source-household-approval-decision",
-            &selected,
-        )
-        .expect("representative proof selection validates")
-        .expect("selected representative root adds its proof");
-        assert_eq!(
-            claim_consultation_name(service, proof).expect("proof consultation resolves"),
-            "household"
-        );
-        assert!(
-            representative_proof_claim_for_selected_ids(
-                &loaded.project,
-                "household-eligibility",
-                "household-eligibility",
-                "source-household-approval-decision",
-                &[
-                    "household-record-exists".to_string(),
-                    "source-household-approval-decision".to_string(),
-                ],
-            )
-            .expect("explicit proof selection validates")
-            .is_none(),
-            "an explicitly selected proof is not added twice"
-        );
-    }
-
-    #[test]
-    fn representative_requester_type_matches_the_production_ceremony() {
-        let requester = GovernedLiveTarget {
-            entity_type: "Organisation".to_string(),
-            id: None,
-            identifiers: Vec::new(),
-            attributes: BTreeMap::new(),
-        };
-
-        let error = validate_governed_requester_type(&requester)
-            .expect_err("non-person requester must be rejected");
-        assert_eq!(
-            error.to_string(),
-            "live request requester type must be Person"
-        );
-    }
-
-    fn assert_rejected_before_outbound_body(
-        loaded: &LoadedRegistryProject,
-        request: &Value,
-        expected_error: &str,
-    ) -> String {
-        let error = prepare_governed_live_request(loaded, request)
-            .err()
-            .expect("invalid input must not produce an outbound request body");
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains(expected_error),
-            "unexpected error: {rendered}"
-        );
-        rendered
-    }
-
-    #[test]
-    fn governed_live_request_rejects_unknown_top_level_before_outbound_body() {
-        let loaded = loaded_project("openspp-exact");
-        let mut request = openspp_request();
-        request["raw_record"] = json!({ "national_id": "NID-raw-top-level" });
-
-        let error =
-            assert_rejected_before_outbound_body(&loaded, &request, "closed governed schema");
-        for private_fragment in ["raw_record", "national_id", "NID-raw-top-level"] {
-            assert!(
-                !error.contains(private_fragment),
-                "closed-schema errors must redact unknown names and values"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_request_rejects_unknown_nested_field_before_outbound_body() {
-        let loaded = loaded_project("openspp-exact");
-        let mut request = openspp_request();
-        request["target"]["raw_record"] = json!({ "record": "unreviewed" });
-
-        let error =
-            assert_rejected_before_outbound_body(&loaded, &request, "closed governed schema");
-        for private_fragment in ["raw_record", "record", "unreviewed"] {
-            assert!(
-                !error.contains(private_fragment),
-                "closed-schema errors must redact unknown names and values"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_request_rejects_unmapped_pii_shaped_field_before_outbound_body() {
-        let loaded = loaded_project("openspp-exact");
-        let mut request = openspp_request();
-        request["target"]["attributes"]["national_id"] = json!("NID-private-value");
-
-        let error = assert_rejected_before_outbound_body(
-            &loaded,
-            &request,
-            "do not exactly match the selected authored inputs",
-        );
-        for private_fragment in ["national_id", "NID-private-value"] {
-            assert!(
-                !error.contains(private_fragment),
-                "live validation errors must redact unknown names and values"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_request_validates_identifier_and_attribute_bounds() {
-        let openspp = loaded_project("openspp-exact");
-        let mut oversized_identifier = openspp_request();
-        oversized_identifier["target"]["identifiers"][0]["value"] = json!("X".repeat(257));
-        assert_rejected_before_outbound_body(
-            &openspp,
-            &oversized_identifier,
-            "violates its selected authored type or bounds",
-        );
-
-        let dhis2 = loaded_project("dhis2-script");
-        let invalid_attribute = json!({
-            "target": {
-                "type": "person",
-                "identifiers": [{
-                    "scheme": "dhis2_tracked_entity",
-                    "value": "A1234567890",
-                }],
-                "attributes": { "include_inactive": "false" },
-            },
-            "variables": { "as_of_date": "2026-01-01" },
-            "claims": ["child-age-band"],
-            "disclosure": "value",
-            "purpose": "programme-enrollment-verification",
-        });
-        assert_rejected_before_outbound_body(
-            &dhis2,
-            &invalid_attribute,
-            "violates its selected authored type or bounds",
-        );
-    }
-
-    #[test]
-    fn governed_live_request_reconstructs_declared_typed_target_and_variables() {
-        let loaded = loaded_project("dhis2-script");
-        let request = json!({
-            "target": {
-                "type": "Person",
-                "identifiers": [{
-                    "scheme": "dhis2_tracked_entity",
-                    "value": "A1234567890",
-                }],
-                "attributes": { "include_inactive": false },
-            },
-            "variables": { "as_of_date": "2026-01-01" },
-            "claims": ["child-age-band"],
-            "disclosure": "value",
-            "format": registry_notary_core::FORMAT_CLAIM_RESULT_JSON,
-            "purpose": "programme-enrollment-verification",
-        });
-
-        let prepared = prepare_governed_live_request(&loaded, &request)
-            .expect("declared typed live request prepares");
-        let outbound =
-            parse_json_strict(&prepared.body).expect("prepared outbound body is strict JSON");
-        assert_eq!(
-            outbound.pointer("/target/identifiers/0/value"),
-            Some(&json!("A1234567890"))
-        );
-        assert_eq!(
-            outbound.pointer("/target/attributes/include_inactive"),
-            Some(&json!(false))
-        );
-        assert_eq!(
-            outbound.pointer("/variables/as_of_date"),
-            Some(&json!("2026-01-01"))
-        );
-        assert!(outbound.get("raw_record").is_none());
-    }
-
-    #[test]
-    fn governed_live_request_rejects_undeclared_variables_and_formats() {
-        let loaded = loaded_project("openspp-exact");
-        let mut variable = openspp_request();
-        variable["variables"] = json!({ "as_of_date": "2026-01-01" });
-        assert_rejected_before_outbound_body(
-            &loaded,
-            &variable,
-            "variable is not declared by a selected project service",
-        );
-
-        let mut format = openspp_request();
-        format["format"] = json!("application/json");
-        assert_rejected_before_outbound_body(&loaded, &format, "governed claim-result media type");
     }
 }
 

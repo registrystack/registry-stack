@@ -1294,7 +1294,6 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
                 &ProjectTestOptions {
                     project_directory: project.clone(),
                     environment: None,
-                    live: false,
                 },
                 &ProjectTestSelection {
                     integration: Some(integration),
@@ -1317,7 +1316,6 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
             let report = test_registry_project(&ProjectTestOptions {
                 project_directory: project.clone(),
                 environment: None,
-                live: false,
             })
             .unwrap_or_else(|error| panic!("{} offline test failed: {error:#}", journey.id));
             assert_eq!(report.status, "passed", "{} test", journey.id);
@@ -1432,7 +1430,6 @@ fn country_variant_and_snapshot_records_keep_their_closed_outcome_sets() {
         let report = test_registry_project(&ProjectTestOptions {
             project_directory: golden(project),
             environment: None,
-            live: false,
         })
         .unwrap_or_else(|error| panic!("{project} outcome journey failed: {error:#}"));
         for (fixture, outcome) in expected {
@@ -1452,7 +1449,6 @@ fn fhir_r4_coverage_active_passes_the_closed_bundle_matrix() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: golden("fhir-r4-coverage-active"),
         environment: None,
-        live: false,
     })
     .expect("FHIR R4 Coverage-active golden passes");
     assert_eq!(report.status, "passed");
@@ -1476,10 +1472,196 @@ fn approved_opencrvs_and_dhis2_claim_sets_execute_offline() {
         let report = test_registry_project(&ProjectTestOptions {
             project_directory: golden(project),
             environment: None,
-            live: false,
         })
         .unwrap_or_else(|error| panic!("{project} approved claims failed: {error:#}"));
         assert!(report.fixtures.iter().all(|fixture| fixture.passed));
+    }
+}
+
+#[test]
+fn synthetic_opencrvs_events_api_executes_the_closed_offline_matrix() {
+    let project = golden("opencrvs-events-api");
+    let report = test_registry_project(&ProjectTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+    })
+    .expect("synthetic OpenCRVS Events API case study passes offline");
+    assert_eq!(report.status, "passed");
+    assert!(report.fixtures.iter().all(|fixture| fixture.passed));
+
+    for (fixture_name, outcome) in [
+        ("birth-event-match", "match"),
+        ("birth-event-no-match", "no_match"),
+        ("birth-event-ambiguous", "ambiguous"),
+    ] {
+        let fixture = report
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture.as_str() == fixture_name)
+            .unwrap_or_else(|| panic!("missing {fixture_name}"));
+        assert_eq!(fixture.outcome.as_deref(), Some(outcome));
+    }
+    for (fixture_name, safe_code) in [
+        ("birth-event-source-malformed", "source.status_rejected"),
+        ("birth-event-source-rejected", "source.status_rejected"),
+        ("birth-event-source-timeout", "source.deadline_exceeded"),
+        ("birth-event-subject-mismatch", "failure.subject_mismatch"),
+        ("oauth-token-expiry-rejected", "source.response_malformed"),
+        (
+            "oauth-token-extra-member-rejected",
+            "source.response_malformed",
+        ),
+        (
+            "oauth-token-media-type-rejected",
+            "source.response_malformed",
+        ),
+        ("oauth-token-redirect-rejected", "source.status_rejected"),
+        ("oauth-token-type-rejected", "source.response_malformed"),
+    ] {
+        let fixture = report
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture.as_str() == fixture_name)
+            .unwrap_or_else(|| panic!("missing {fixture_name}"));
+        assert_eq!(fixture.expected_error.as_deref(), Some(safe_code));
+        assert!(fixture.outputs.is_empty());
+        assert!(fixture.claims.is_empty());
+    }
+
+    let matched = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture.as_str() == "birth-event-match")
+        .expect("exact-selector match fixture");
+    assert_eq!(matched.outputs, ["event_type", "registered"]);
+    assert_eq!(
+        matched.claims,
+        ["birth-event-found", "birth-event-registered"]
+    );
+    assert_eq!(matched.calls.len(), 2);
+
+    for (recipe, safe_code) in [
+        ("malformed_decode", Some("source.response_malformed")),
+        ("byte_ceiling", Some("source.response_too_large")),
+        ("timeout", Some("source.deadline_exceeded")),
+        ("authorization_before_source", Some("authorization.denied")),
+        ("output_minimization", None),
+    ] {
+        let fixture_id = format!("birth-event-match::derived/{recipe}");
+        let fixture = report
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture.as_str() == fixture_id.as_str())
+            .unwrap_or_else(|| panic!("missing {fixture_id}"));
+        assert_eq!(fixture.expected_error.as_deref(), safe_code);
+        assert!(fixture.passed);
+        if recipe == "authorization_before_source" {
+            assert_eq!(fixture.source_access, Some(false));
+            assert!(fixture.calls.is_empty());
+        }
+    }
+
+    let serialized = serde_json::to_string(&report).expect("fixture report serializes");
+    for source_only_value in [
+        "TRK-SYNTH000001",
+        "SYNTHETIC_FIXTURE_TOKEN",
+        "Synthetic Source-Only Name",
+        "synthetic-source-only",
+    ] {
+        assert!(
+            !serialized.contains(source_only_value),
+            "reports must not expose source-only fixture values"
+        );
+    }
+
+    let environment = read_yaml(&project.join("environments/local.yaml"));
+    assert_eq!(
+        environment["development"]["default_integration"].as_str(),
+        Some("birth-event-search")
+    );
+    assert_eq!(
+        environment["development"]["default_fixture"].as_str(),
+        Some("birth-event-match")
+    );
+
+    let integration = read_yaml(&project.join("integrations/birth-event-search/integration.yaml"));
+    assert_eq!(
+        integration["source"]["auth"]["type"].as_str(),
+        Some("oauth2_client_credentials")
+    );
+    assert_eq!(
+        integration["source"]["auth"]["response_profile"].as_str(),
+        Some("oauth2_bearer_no_expiry")
+    );
+    assert_eq!(
+        integration["source"]["allow"][0]["method"].as_str(),
+        Some("POST")
+    );
+    assert_eq!(
+        integration["source"]["allow"][0]["path"].as_str(),
+        Some("/api/events/events/search")
+    );
+    assert_eq!(
+        integration["input"]["tracking_id"]["role"].as_str(),
+        Some("selector")
+    );
+
+    let passing_fixture =
+        read_yaml(&project.join("integrations/birth-event-search/fixtures/match.yaml"));
+    let oauth_response = passing_fixture["interactions"][0]["respond"]["body"]
+        .as_mapping()
+        .expect("OAuth response is a mapping");
+    assert_eq!(
+        oauth_response.len(),
+        2,
+        "no-expiry profile response has exactly two members"
+    );
+    assert_eq!(
+        passing_fixture["interactions"][0]["respond"]["body"]["token_type"].as_str(),
+        Some("Bearer")
+    );
+    assert_eq!(
+        passing_fixture["interactions"][1]["expect"]["path"].as_str(),
+        Some("/api/events/events/search")
+    );
+    assert_eq!(
+        passing_fixture["interactions"][1]["expect"]["body"]["query"]["clauses"][0]["trackingId"]
+            ["type"]
+            .as_str(),
+        Some("exact")
+    );
+    assert_eq!(
+        passing_fixture["interactions"][1]["expect"]["body"]["query"]["clauses"][0]["trackingId"]
+            ["term"]
+            .as_str(),
+        Some("TRK-SYNTH000001")
+    );
+    assert_eq!(
+        passing_fixture["interactions"][1]["expect"]["body"]["limit"].as_i64(),
+        Some(2)
+    );
+
+    let authored = read_yaml(&project.join("registry-stack.yaml"));
+    let service = &authored["services"]["birth-event-verification"];
+    assert_eq!(
+        service["consultations"]
+            .as_mapping()
+            .expect("consultations are a mapping")
+            .len(),
+        1
+    );
+    assert_eq!(
+        service["consultations"]["event"]["input"]["tracking_id"].as_str(),
+        Some("request.target.identifiers.opencrvs_tracking_id")
+    );
+    for claim in ["birth-event-found", "birth-event-registered"] {
+        assert!(
+            service["claims"][claim]["cel"]
+                .as_str()
+                .expect("claim CEL is a string")
+                .contains("event."),
+            "{claim} must derive from the single Relay consultation"
+        );
     }
 }
 
@@ -1489,7 +1671,6 @@ fn dhis2_health_evidence_journey_preserves_distinct_results() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
-        live: false,
     })
     .expect("DHIS2 health evidence journey passes offline");
     assert_eq!(report.status, "passed");
@@ -1630,7 +1811,6 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: golden("custom-system"),
         environment: None,
-        live: false,
     })
     .expect("custom system golden passes");
     let serialized = serde_json::to_string(&report).expect("fixture report serializes");
@@ -1719,7 +1899,6 @@ fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
     let fhir = test_registry_project(&ProjectTestOptions {
         project_directory: golden("fhir-r4-coverage-active"),
         environment: None,
-        live: false,
     })
     .expect("genuinely ambiguous collection source remains covered");
     assert!(fhir
@@ -1778,7 +1957,6 @@ fn ambiguity_not_applicable_requires_a_real_request_fixture() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("missing not-applicable request evidence must fail");
     assert!(format!("{error:#}").contains("references missing fixture"));
@@ -1790,7 +1968,6 @@ fn maintained_script_starter_exercises_explicit_result_fail() {
         &ProjectTestOptions {
             project_directory: golden("dhis2-tracker"),
             environment: None,
-            live: false,
         },
         &ProjectTestSelection {
             integration: Some("health-record".to_string()),
@@ -1823,7 +2000,6 @@ fn maintained_script_starter_rejects_echoed_subject_mismatch() {
         &ProjectTestOptions {
             project_directory: golden("dhis2-tracker"),
             environment: None,
-            live: false,
         },
         &ProjectTestSelection {
             integration: Some("health-record".to_string()),
@@ -1859,7 +2035,6 @@ fn script_subject_comparison_requires_a_mismatch_fixture() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("reviewed subject comparison without a mismatch fixture must fail");
     assert!(
@@ -1880,7 +2055,6 @@ fn subject_mismatch_not_applicable_rejects_comparable_response_evidence() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("a comparable echoed identifier must make mismatch applicable");
     assert!(format!("{error:#}").contains(
@@ -1900,7 +2074,6 @@ fn subject_mismatch_not_applicable_rejects_comparable_output_contract() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("a comparable projected identifier must make mismatch applicable");
     assert!(format!("{error:#}")
@@ -1920,7 +2093,6 @@ fn script_source_byte_budget_rejects_two_call_underprovisioning_before_execution
         &ProjectTestOptions {
             project_directory: project,
             environment: None,
-            live: false,
         },
         &ProjectTestSelection {
             integration: Some("coverage".to_string()),
@@ -1952,7 +2124,6 @@ fn signed_dci_rejects_wrong_jwks_algorithm_and_key_use() {
             &ProjectTestOptions {
                 project_directory: project,
                 environment: None,
-                live: false,
             },
             &ProjectTestSelection {
                 integration: Some("birth-record".to_string()),
@@ -1975,7 +2146,6 @@ fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
     test_registry_project(&ProjectTestOptions {
         project_directory: relay.clone(),
         environment: None,
-        live: false,
     })
     .expect("Relay-only project tests");
     check_registry_project(&ProjectCheckOptions {
@@ -2004,7 +2174,6 @@ fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
     test_registry_project(&ProjectTestOptions {
         project_directory: notary.clone(),
         environment: None,
-        live: false,
     })
     .expect("Notary-only project tests");
     let check = check_registry_project(&ProjectCheckOptions {
@@ -2130,7 +2299,6 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         let test_report = test_registry_project(&ProjectTestOptions {
             project_directory: project_directory.clone(),
             environment: None,
-            live: false,
         })
         .expect("released Rhai contract tests independent of product metadata");
         assert_eq!(test_report.status, "passed");
@@ -2186,7 +2354,6 @@ fn project_authoring_rhai_commands_are_portable_offline() {
     let test_report = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
-        live: false,
     })
     .expect("portable offline Rhai test passes without production activation");
     assert_eq!(test_report.status, "passed");
@@ -2360,7 +2527,6 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
         let tested = test_registry_project(&ProjectTestOptions {
             project_directory: project,
             environment: None,
-            live: false,
         })
         .expect("initialized starter passes offline tests");
         assert_eq!(tested.status, "passed");
@@ -2806,7 +2972,6 @@ fn typed_target_attribute_executes_through_the_offline_notary_journey() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect("typed target attribute passes the offline journey");
     assert_eq!(report.status, "passed");
@@ -3422,7 +3587,6 @@ fn http_trace_marks_the_redacted_dynamic_path_segment() {
         &ProjectTestOptions {
             project_directory: project,
             environment: None,
-            live: false,
         },
         &ProjectTestSelection {
             integration: Some("person-record".to_string()),
@@ -3603,7 +3767,6 @@ fn source_product_is_metadata_not_runtime_dispatch() {
         let report = test_registry_project(&ProjectTestOptions {
             project_directory: case,
             environment: None,
-            live: false,
         })
         .unwrap_or_else(|error| panic!("{name} selected behavior by product id: {error:#}"));
         assert_eq!(report.status, "passed", "{name}");
@@ -3623,7 +3786,6 @@ fn source_product_is_metadata_not_runtime_dispatch() {
     let offline = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
-        live: false,
     })
     .expect("unknown product uses the generic bounded HTTP executor");
     assert_eq!(offline.status, "passed");
@@ -3660,7 +3822,6 @@ fn source_product_is_metadata_not_runtime_dispatch() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: metadata_free,
         environment: None,
-        live: false,
     })
     .expect("product and version metadata are optional for generic HTTP");
     assert_eq!(report.status, "passed");
@@ -3671,7 +3832,6 @@ fn code_owned_rhai_conformance_uses_the_injected_worker_and_is_deterministic() {
     let options = |project_directory| ProjectTestOptions {
         project_directory,
         environment: None,
-        live: false,
     };
     let bounded = test_registry_project(&options(golden("dhis2-tracker")))
         .expect("bounded DHIS2 conformance passes")
@@ -3844,7 +4004,6 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: integration,
         environment: None,
-        live: false,
     })
     .expect_err("integration facts alias must be rejected");
     let rendered = format!("{error:#}");
@@ -3861,7 +4020,6 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: claim,
         environment: None,
-        live: false,
     })
     .expect_err("claim fact alias must be rejected");
     let rendered = format!("{error:#}");
@@ -3875,7 +4033,6 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: fixture,
         environment: None,
-        live: false,
     })
     .expect_err("fixture facts alias must be rejected");
     let rendered = format!("{error:#}");
@@ -3923,7 +4080,6 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: unknown,
         environment: None,
-        live: false,
     })
     .expect_err("unknown field must fail");
     let diagnostic = format!("{error:#}");
@@ -3942,7 +4098,6 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: conformance_escape,
         environment: None,
-        live: false,
     })
     .expect_err("implementation conformance mode must not be authored");
     let diagnostic = format!("{error:#}");
@@ -3969,7 +4124,6 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: traversal,
         environment: None,
-        live: false,
     })
     .expect_err("path traversal must fail");
     assert!(format!("{error:#}").contains("cannot traverse"));
@@ -3985,7 +4139,6 @@ fn fixture_failure_reports_safe_validation_error_without_input_value() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("invalid positive fixture must fail");
     let diagnostic = format!("{error:#}");
@@ -4035,7 +4188,6 @@ fn authored_fixture_symlinks_fail_closed() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("fixture symlink must fail");
     assert!(format!("{error:#}").contains("symlink"));
@@ -4063,19 +4215,6 @@ fn generated_build_refuses_a_symlinked_private_output_ancestor() {
         .expect("outside directory reads")
         .next()
         .is_none());
-}
-
-#[test]
-fn live_testing_requires_an_explicit_environment_before_reading_credentials() {
-    let error = test_registry_project(&ProjectTestOptions {
-        project_directory: golden("custom-system"),
-        environment: None,
-        live: true,
-    })
-    .expect_err("implicit live environment must fail closed");
-    assert!(error
-        .to_string()
-        .contains("explicit non-production --environment"));
 }
 
 #[test]
@@ -5272,7 +5411,6 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: rejected,
         environment: None,
-        live: false,
     })
     .expect_err("selector above the aggregate byte ceiling must be rejected before source access");
     let error = format!("{error:#}");
@@ -5326,7 +5464,6 @@ fn integration_input_names_match_the_wire_grammar() {
         let error = test_registry_project(&ProjectTestOptions {
             project_directory: rejected,
             environment: None,
-            live: false,
         })
         .expect_err("invalid input name must be rejected before source access");
         let error = format!("{error:#}");
@@ -5527,7 +5664,6 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("security-sensitive header must fail");
     assert!(format!("{error:#}").contains("security-sensitive"));
@@ -5543,7 +5679,6 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("query-name collision must fail");
     assert!(format!("{error:#}").contains("collides"));
@@ -5598,7 +5733,6 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
         let error = test_registry_project(&ProjectTestOptions {
             project_directory: project,
             environment: None,
-            live: false,
         })
         .expect_err("invalid DCI exact conjunction must fail");
         assert!(format!("{error:#}").contains(expected), "{error:#}");
@@ -5619,7 +5753,6 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("DCI must bind every authored selector exactly once");
     assert!(format!("{error:#}").contains("bind every selector exactly once"));
@@ -5632,7 +5765,6 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("nonexistent full date must fail before source access");
     assert!(format!("{error:#}").contains("fixture full-date input selector_4 is not canonical"));
@@ -5650,7 +5782,6 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
-        live: false,
     })
     .expect_err("missing composite component must fail before source access");
     assert!(format!("{error:#}").contains("must bind every"));
@@ -5672,7 +5803,6 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
     let journey = test_registry_project(&ProjectTestOptions {
         project_directory: first.clone(),
         environment: None,
-        live: false,
     })
     .expect("composite DCI fixtures execute through the offline production decoder");
     let ambiguous = journey
@@ -5770,7 +5900,6 @@ fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
     test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
-        live: false,
     })
     .expect("strict two-member OAuth fixtures execute");
 
@@ -5826,7 +5955,6 @@ fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: skew_project,
         environment: None,
-        live: false,
     })
     .expect_err("no-expiry profile rejects refresh skew");
     let rendered = format!("{error:#}");
@@ -5876,7 +6004,6 @@ fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
             &ProjectTestOptions {
                 project_directory: project,
                 environment: None,
-                live: false,
             },
             &ProjectTestSelection {
                 integration: Some("birth-record".to_string()),
@@ -7253,7 +7380,6 @@ fn authored_representative_oid4vci_builds_the_exact_status_enabled_policy() {
     let tested = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: Some("local".to_string()),
-        live: false,
     })
     .expect("representative requester fixture passes the offline developer journey");
     assert_eq!(tested.status, "passed");
@@ -7359,7 +7485,6 @@ fn authored_representative_oid4vci_rejects_non_person_requester_fixtures() {
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: Some("local".to_string()),
-        live: false,
     })
     .expect_err("non-person representative requester must be rejected");
     assert!(
@@ -7982,6 +8107,7 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         "dhis2-script",
         "fhir-r4-coverage-active",
         "opencrvs",
+        "opencrvs-events-api",
         "opencrvs-country-variant",
         "openspp-exact",
         "snapshot-exact",

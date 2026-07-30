@@ -235,7 +235,6 @@ fn real_project_command_producers_match_the_strict_v1_contract() {
             &registryctl::ProjectTestOptions {
                 project_directory: project.clone(),
                 environment: None,
-                live: false,
             },
             &execution_context,
         )

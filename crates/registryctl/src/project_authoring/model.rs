@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectStarter {
     Http,
     Spreadsheet,
@@ -59,7 +59,6 @@ pub struct ProjectInitOptions {
 pub struct ProjectTestOptions {
     pub project_directory: PathBuf,
     pub environment: Option<String>,
-    pub live: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2155,7 +2154,7 @@ struct FixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
     #[serde(default)]
-    request: Option<GovernedLiveRequest>,
+    request: Option<GovernedFixtureRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
@@ -2163,18 +2162,15 @@ struct FixtureDocument {
     expect: FixtureExpectation,
 }
 
-/// The closed governed request accepted by both `project test --live` and an
-/// independently authored synthetic fixture witness.
-///
-/// Keeping one internal request type prevents fixture authoring from drifting
-/// into a looser contract than the live Notary boundary.
+/// The closed governed request accepted by an independently authored synthetic
+/// fixture witness.
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveRequest {
+struct GovernedFixtureRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    requester: Option<GovernedLiveTarget>,
-    target: GovernedLiveTarget,
+    requester: Option<GovernedFixtureTarget>,
+    target: GovernedFixtureTarget,
     #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
     #[serde(
         default,
@@ -2189,10 +2185,10 @@ struct GovernedLiveRequest {
     purpose: String,
 }
 
-impl GovernedLiveRequest {
+impl GovernedFixtureRequest {
     fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
         registry_notary_core::EvaluateRequest {
-            requester: self.requester.as_ref().map(governed_live_entity),
+            requester: self.requester.as_ref().map(governed_fixture_entity),
             target: Some(registry_notary_core::EvidenceEntity {
                 entity_type: self.target.entity_type.clone(),
                 id: self.target.id.clone(),
@@ -2222,7 +2218,7 @@ impl GovernedLiveRequest {
     }
 }
 
-fn governed_live_entity(entity: &GovernedLiveTarget) -> registry_notary_core::EvidenceEntity {
+fn governed_fixture_entity(entity: &GovernedFixtureTarget) -> registry_notary_core::EvidenceEntity {
     registry_notary_core::EvidenceEntity {
         entity_type: entity.entity_type.clone(),
         id: entity.id.clone(),
@@ -2245,13 +2241,13 @@ fn governed_live_entity(entity: &GovernedLiveTarget) -> registry_notary_core::Ev
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveTarget {
+struct GovernedFixtureTarget {
     #[serde(rename = "type")]
     entity_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    identifiers: Vec<GovernedLiveIdentifier>,
+    identifiers: Vec<GovernedFixtureIdentifier>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attributes: BTreeMap<String, Value>,
 }
@@ -2259,7 +2255,7 @@ struct GovernedLiveTarget {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveIdentifier {
+struct GovernedFixtureIdentifier {
     scheme: String,
     value: String,
 }

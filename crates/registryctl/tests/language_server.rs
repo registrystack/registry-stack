@@ -47,7 +47,7 @@ fn authoring_language_server_speaks_lsp_without_cli_output() {
     let root_uri = format!("file://{}", project.path().display());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_registryctl"))
-        .args(["authoring", "language-server"])
+        .args(["tooling", "language-server"])
         .current_dir(project.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

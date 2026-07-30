@@ -50,7 +50,6 @@ fn test_project(path: &Path) -> anyhow::Result<registryctl::ProjectCommandReport
         &ProjectTestOptions {
             project_directory: path.to_path_buf(),
             environment: None,
-            live: false,
         },
         &ProjectExecutionContext::new(env!("CARGO_BIN_EXE_registryctl"))
             .expect("Cargo provides registryctl"),

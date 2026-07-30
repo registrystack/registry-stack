@@ -2793,7 +2793,6 @@ fn run_migration_gates(
             &super::ProjectTestOptions {
                 project_directory: candidate_root.to_path_buf(),
                 environment: None,
-                live: false,
             },
             execution_context,
         )

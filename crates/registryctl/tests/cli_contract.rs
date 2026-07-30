@@ -1,0 +1,376 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::process::{Command, Output};
+
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args(args)
+        .env_remove("REGISTRYCTL_ENVIRONMENT")
+        .output()
+        .expect("registryctl runs")
+}
+
+fn stdout(args: &[&str]) -> String {
+    let output = run(args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "registryctl {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+fn command_names(help: &str) -> BTreeSet<String> {
+    let mut in_commands = false;
+    let mut names = BTreeSet::new();
+    for line in help.lines() {
+        if line == "Commands:" {
+            in_commands = true;
+            continue;
+        }
+        if in_commands && line.ends_with(':') && !line.starts_with(' ') {
+            break;
+        }
+        if in_commands {
+            let trimmed = line.trim_start();
+            if line.starts_with("  ") && !line.starts_with("   ") && !trimmed.is_empty() {
+                if let Some(name) = trimmed.split_whitespace().next() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+#[test]
+fn root_help_exposes_only_the_ten_1_0_roots_in_newcomer_order() {
+    let help = stdout(&["--help"]);
+    let expected = BTreeSet::from([
+        "build".to_string(),
+        "check".to_string(),
+        "deploy".to_string(),
+        "dev".to_string(),
+        "doctor".to_string(),
+        "init".to_string(),
+        "review".to_string(),
+        "test".to_string(),
+        "tooling".to_string(),
+        "trust".to_string(),
+    ]);
+    assert_eq!(command_names(&help), expected, "{help}");
+
+    let positions = ["init", "test", "dev", "check", "build", "deploy", "doctor"].map(|name| {
+        help.find(&format!("  {name}"))
+            .unwrap_or_else(|| panic!("missing {name} in {help}"))
+    });
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "ordinary workflow is not newcomer-first: {help}"
+    );
+    assert!(help.contains("Newcomer workflow:"));
+    assert!(help.find("  doctor").unwrap() < help.find("  review").unwrap());
+}
+
+#[test]
+fn advanced_help_exposes_the_closed_nesting() {
+    assert_eq!(
+        command_names(&stdout(&["review", "--help"])),
+        BTreeSet::from(["compare".to_string()])
+    );
+    assert_eq!(
+        command_names(&stdout(&["trust", "--help"])),
+        BTreeSet::from([
+            "anchor".to_string(),
+            "approved-set".to_string(),
+            "bundle".to_string(),
+        ])
+    );
+    assert_eq!(
+        command_names(&stdout(&["trust", "anchor", "--help"])),
+        BTreeSet::from(["create".to_string(), "rotate".to_string()])
+    );
+    assert_eq!(
+        command_names(&stdout(&["trust", "bundle", "--help"])),
+        BTreeSet::from([
+            "inspect".to_string(),
+            "sign".to_string(),
+            "verify".to_string(),
+        ])
+    );
+    assert_eq!(
+        command_names(&stdout(&["trust", "approved-set", "--help"])),
+        BTreeSet::from(["assemble".to_string()])
+    );
+    assert_eq!(
+        command_names(&stdout(&["tooling", "--help"])),
+        BTreeSet::from([
+            "diagnostics".to_string(),
+            "editor".to_string(),
+            "language-server".to_string(),
+            "reference".to_string(),
+            "schema".to_string(),
+        ])
+    );
+    assert_eq!(
+        command_names(&stdout(&["deploy", "--help"])),
+        BTreeSet::from(["generate".to_string(), "verify".to_string()])
+    );
+    assert_eq!(
+        command_names(&stdout(&["dev", "--help"])),
+        BTreeSet::from([
+            "down".to_string(),
+            "logs".to_string(),
+            "smoke".to_string(),
+            "status".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn removed_pre_1_0_roots_and_aliases_are_usage_errors() {
+    for root in [
+        "update-check",
+        "__update-check-refresh",
+        "add",
+        "start",
+        "stop",
+        "restart",
+        "status",
+        "open",
+        "smoke",
+        "logs",
+        "preflight",
+        "capabilities",
+        "compare",
+        "promote",
+        "migrate",
+        "bundle",
+        "anchor",
+        "authoring",
+        "project",
+        "bruno",
+    ] {
+        let output = run(&[root]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "removed root {root} was accepted: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert_eq!(run(&["init", "relay"]).status.code(), Some(2));
+    assert_eq!(run(&["test", "--live"]).status.code(), Some(2));
+}
+
+#[test]
+fn stable_flags_have_strict_values_and_documented_meanings() {
+    let root_help = stdout(&["--help"]);
+    assert!(root_help.contains("-C, --project-dir <DIRECTORY>"));
+
+    let init_help = stdout(&["init", "--help"]);
+    assert!(init_help.contains("<PROJECT_DIRECTORY>"));
+    assert!(init_help.contains("--template <TEMPLATE>"));
+    assert!(init_help.contains("possible values: http, spreadsheet"));
+    for internal_fixture in ["dhis2-tracker", "opencrvs-dci", "fhir-r4", "snapshot"] {
+        assert!(!init_help.contains(internal_fixture), "{init_help}");
+        assert_eq!(
+            run(&["init", "project", "--template", internal_fixture])
+                .status
+                .code(),
+            Some(2)
+        );
+    }
+    assert!(!init_help.contains("--from"));
+
+    let review_help = stdout(&["review", "compare", "--help"]);
+    assert!(review_help.contains("--against <AGAINST>"));
+    assert!(review_help.contains("--fail-on-change"));
+
+    let deploy_help = stdout(&["deploy", "generate", "--help"]);
+    assert!(deploy_help.contains("--approved-set <APPROVED_SET>"));
+    assert!(deploy_help.contains("--output-dir <OUTPUT_DIR>"));
+
+    let anchor_help = stdout(&["trust", "anchor", "create", "--help"]);
+    assert!(anchor_help.contains("--output-file <OUTPUT_FILE>"));
+
+    assert_eq!(run(&["check", "--format", "yaml"]).status.code(), Some(2));
+    assert_eq!(run(&["check", "--format", "jsonl"]).status.code(), Some(2));
+}
+
+#[test]
+fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
+    for (args, next) in [
+        (
+            &["build", "--help"][..],
+            "registryctl trust bundle sign --help",
+        ),
+        (&["review", "compare", "--help"][..], "registryctl build"),
+        (
+            &["trust", "anchor", "create", "--help"][..],
+            "registryctl trust bundle sign --help",
+        ),
+        (
+            &["trust", "anchor", "rotate", "--help"][..],
+            "registryctl trust bundle sign --help",
+        ),
+        (
+            &["trust", "bundle", "inspect", "--help"][..],
+            "registryctl trust bundle verify --bundle-dir <directory> --anchor <file>",
+        ),
+        (
+            &["trust", "bundle", "verify", "--help"][..],
+            "registryctl trust approved-set assemble --help",
+        ),
+        (
+            &["trust", "bundle", "sign", "--help"][..],
+            "registryctl trust bundle verify --bundle-dir <directory> --anchor <file>",
+        ),
+        (
+            &["trust", "approved-set", "assemble", "--help"][..],
+            "registryctl deploy generate --approved-set <file> --output-dir <directory>",
+        ),
+        (
+            &["deploy", "generate", "--help"][..],
+            "registryctl deploy verify --package <directory>",
+        ),
+        (
+            &["deploy", "verify", "--help"][..],
+            "docker compose --env-file generated/compose.empty.env",
+        ),
+    ] {
+        let help = stdout(args);
+        for label in [
+            "Input owner:",
+            "Output owner:",
+            "Mutation:",
+            "Next command:",
+        ] {
+            assert!(
+                help.contains(label),
+                "{args:?} help is missing {label:?}: {help}"
+            );
+        }
+        assert!(
+            help.contains(next),
+            "{args:?} help is missing exact next command {next:?}: {help}"
+        );
+    }
+}
+
+#[test]
+fn project_dir_is_global_before_or_after_the_command() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    fs::write(
+        temporary.path().join("registry-stack.yaml"),
+        "registry: [invalid\n",
+    )
+    .expect("invalid project fixture writes");
+    fs::create_dir(temporary.path().join("environments")).expect("environment directory writes");
+    fs::write(
+        temporary.path().join("environments/local.yaml"),
+        "version: 1\n",
+    )
+    .expect("environment fixture writes");
+    let directory = temporary.path().to_str().expect("temporary path is UTF-8");
+
+    for args in [
+        vec!["-C", directory, "check"],
+        vec!["check", "-C", directory],
+    ] {
+        let output = run(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "global -C was not accepted for {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn trace_and_watch_are_composable_human_test_options() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    fs::write(
+        temporary.path().join("registry-stack.yaml"),
+        "registry: [invalid\n",
+    )
+    .expect("invalid project fixture writes");
+    fs::create_dir(temporary.path().join("environments")).expect("environment directory writes");
+    fs::write(
+        temporary.path().join("environments/local.yaml"),
+        "version: 1\n",
+    )
+    .expect("environment fixture writes");
+
+    let output = run(&[
+        "-C",
+        temporary.path().to_str().expect("temporary path is UTF-8"),
+        "test",
+        "--trace",
+        "--watch",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "trace and watch should reach project validation together: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn shipped_starter_readmes_use_the_1_0_hierarchy_and_runtime_ownership() {
+    let http = include_str!("../assets/project-starters/bounded-http/README.md");
+    let spreadsheet = include_str!("../assets/project-starters/spreadsheet/README.md");
+
+    for readme in [http, spreadsheet] {
+        for obsolete in [
+            "registryctl authoring",
+            "registryctl preflight",
+            "--project-dir .",
+        ] {
+            assert!(
+                !readme.contains(obsolete),
+                "{obsolete:?} remains in {readme}"
+            );
+        }
+        for current in [
+            "registryctl -C . tooling editor",
+            "registryctl -C . test",
+            "registryctl -C . check --environment local --explain",
+            "registryctl -C . build --environment local",
+            "registryctl -C . dev --environment local --detach",
+            "registryctl -C . dev --environment local smoke",
+            "registryctl -C . dev --environment local down",
+            ".registry-stack/dev-artifacts/",
+            ".registry-stack/dev/",
+            "not production",
+        ] {
+            assert!(
+                readme.contains(current),
+                "{current:?} is missing from {readme}"
+            );
+        }
+        assert!(
+            readme.find("registryctl -C . test").unwrap()
+                < readme
+                    .find("registryctl -C . dev --environment local --detach")
+                    .unwrap(),
+            "starter begins dev before offline validation: {readme}"
+        );
+    }
+}
+
+#[test]
+fn bare_deploy_prints_help_without_performing_an_action() {
+    let output = run(&["deploy"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).expect("deploy help is UTF-8");
+    assert!(text.contains("Generate or verify a governed deployment package"));
+    assert!(text.contains("generate"));
+    assert!(text.contains("verify"));
+}

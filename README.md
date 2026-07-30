@@ -14,9 +14,9 @@ audit records, without turning the registry into a shared database.
 This repository is the monorepo source of truth for Registry Stack product code,
 release manifests, and docs.
 
-> **Status:** Registry Stack is a pre-1.0 technical release for evaluation,
-> integration pilots, and public review. APIs and deployment contracts may
-> change before a production-stability release.
+> **Status:** The current source implements the Registry Stack 1.0 command and
+> deployment cutover. Use matching released Registryctl, image-lock, and
+> documentation artifacts for an adopter journey.
 
 ## Start Here
 
@@ -24,8 +24,8 @@ release manifests, and docs.
 |---|---|
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
-| Try it without installing anything | [Hosted Solmara Lab](https://solmara.registrystack.org/) |
-| Run the local demo topology | [Solmara Lab quick start](https://github.com/registrystack/solmara-lab#quick-start) |
+| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/tutorials/author-registry-project/) |
+| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/start/pre-1.0-cutover/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
@@ -45,9 +45,7 @@ Registry Stack is organized around two runtime patterns:
 
 The stack also includes Registry Manifest for portable metadata, Registry
 Platform shared primitives, `registryctl` adopter tooling, and release tooling
-for validating the public source model. The standalone
-[Solmara Lab](https://github.com/registrystack/solmara-lab) provides the adopter
-demo.
+for validating the public source model.
 
 ```mermaid
 flowchart LR

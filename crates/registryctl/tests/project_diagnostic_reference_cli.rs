@@ -51,8 +51,7 @@ fn human_catalogs_are_deterministic_static_and_value_free() {
         assert_eq!(second.stdout, first.stdout);
         assert_eq!(second.stderr, first.stderr);
         let stdout = String::from_utf8(first.stdout).unwrap();
-        assert!(stdout.contains(&format!("Registry Stack {catalog} diagnostic reference.")));
-        assert!(stdout.contains("Evidence limitation:"));
+        assert!(stdout.contains(&format!("Registryctl {catalog} diagnostic catalog:")));
         assert!(!stdout.contains(SENTINEL));
         assert!(!stdout.contains(directory.path().to_str().unwrap()));
     }
@@ -87,7 +86,7 @@ fn run(directory: &std::path::Path, catalog: &str, format: &str) -> Output {
         .env("REGISTRYCTL_UPDATE_ENDPOINT", SENTINEL)
         .env("COUNTRY_SECRET", SENTINEL)
         .args([
-            "project",
+            "tooling",
             "diagnostics",
             "--catalog",
             catalog,

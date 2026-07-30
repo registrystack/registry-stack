@@ -1,7 +1,7 @@
 {
   "schema_version": "registry.project.fixture_coverage.v1",
   "project": "fictional-citizen-registry",
-  "environment": null,
+  "environment": "local",
   "evidence_scope": "offline_synthetic",
   "compatibility_claim": "none",
   "live_compatibility": "not_evaluated",

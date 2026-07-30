@@ -338,6 +338,21 @@
     },
     {
       "schema": "environment",
+      "pointer": "/properties/development/properties/source_mode",
+      "purpose": "Selects whether the disposable local runtime uses the maintained synthetic source or an explicitly operator-bound source integration."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/development/properties/relay_port",
+      "purpose": "Overrides the loopback port exposed by the disposable local Relay runtime without changing a deployment endpoint."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/development/properties/notary_port",
+      "purpose": "Overrides the loopback port exposed by the disposable local Notary runtime without changing a deployment endpoint."
+    },
+    {
+      "schema": "environment",
       "pointer": "/properties/issuance/properties/issuer",
       "purpose": "Binds the operator-approved credential issuer identifier without granting claim or disclosure authority."
     },

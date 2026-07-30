@@ -50,7 +50,6 @@ const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v4";
 const APPROVAL_REVIEW_PATH: &str = "approval/review.json";
 const APPROVAL_STATE_PATH: &str = "approval/project-state.json";
 const MAX_AUTHORED_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_FIXTURES: usize = 128;
 const MAX_ENVIRONMENTS: usize = 64;
 const MAX_OPERATIONS: usize = 16;

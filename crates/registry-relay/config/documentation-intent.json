@@ -2552,7 +2552,7 @@
       "key_path": "consultation.bootstrap",
       "path_kind": "property",
       "profile": "relay_consultation_internal",
-      "purpose_source": "schema_description",
+      "purpose_source": "override",
       "default_source": "reviewed_runtime_default",
       "schema_facts_reviewed": true
     },
@@ -7587,6 +7587,7 @@
       "pointer": "/$defs/ConsultationConfig/properties/bootstrap",
       "key_path": "consultation.bootstrap",
       "path_kind": "property",
+      "purpose": "Binds the product-owned first-install policy carried only by the verified consultation bundle; deployment renderers cannot reproduce it as command arguments.",
       "runtime_default_note": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
     },
     {
