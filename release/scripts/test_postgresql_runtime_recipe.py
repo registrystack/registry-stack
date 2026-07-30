@@ -145,7 +145,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                         "command": recipe["serve"]["command"],
                         "networks": {"registry-private": {}},
                         "depends_on": {
-                            "registry-runtime-stage-secrets": {
+                            "registry-postgresql-stage-secrets": {
                                 "condition": "service_completed_successfully",
                                 "required": True,
                             },
@@ -172,7 +172,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                             "retries": 60,
                         },
                     },
-                    "registry-runtime-stage-secrets": {
+                    "registry-postgresql-stage-secrets": {
                         "image": image,
                         "entrypoint": ["/bin/sh", "-ceu"],
                         "command": ["\n".join(stage_lines) + "\n"],
@@ -226,7 +226,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                                 "condition": "service_healthy",
                                 "required": True,
                             },
-                            "registry-runtime-stage-secrets": {
+                            "registry-postgresql-stage-secrets": {
                                 "condition": "service_completed_successfully",
                                 "required": True,
                             },
@@ -292,7 +292,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                             *compose,
                             "logs",
                             "--no-color",
-                            "registry-runtime-stage-secrets",
+                            "registry-postgresql-stage-secrets",
                         ],
                         cwd=root,
                         capture=True,
@@ -347,7 +347,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                             "inspect",
                             (
                                 f"{project}-"
-                                "registry-runtime-stage-secrets-1"
+                                "registry-postgresql-stage-secrets-1"
                             ),
                         ],
                         cwd=root,
