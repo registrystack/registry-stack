@@ -21,8 +21,8 @@ use registry_platform_config::{
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, bundle_verify_rejection_code, internal_config_hash,
     is_sha256_config_hash, load_unsigned_break_glass_or_pin, posture_safe_runtime_config_hash,
-    resolve_bundle_state_action, BundleStateRequest, ConfigBootError, ConfigProvenance,
-    ConfigSource, UnsignedConfigSelection,
+    resolve_bundle_state_action, BundleStateRequest, BundleVerificationCode, ConfigBootError,
+    ConfigProvenance, ConfigSource, UnsignedConfigSelection,
 };
 pub use registry_platform_ops::{BundleStateAction, PendingBundleAcceptance};
 use serde_json::Value;
@@ -35,6 +35,8 @@ use super::consultation_artifacts::{
 };
 use super::validate;
 use super::{Config, VerifiedConsultationArtifactClosure};
+
+const RELAY_CONFIG_BUNDLE_PRODUCT: &str = "registry-relay";
 
 #[derive(Debug)]
 pub struct LoadedConfig {
@@ -151,6 +153,7 @@ fn load_bundle_config_document(
                 return Err(Error::from(ConfigError::ValidationError));
             }
         };
+    enforce_relay_bundle_product_binding(&verified)?;
     match load_verified_bundle_config_document(config_trust, options, verified) {
         Ok(document) => Ok(document),
         Err(error) => {
@@ -376,6 +379,37 @@ pub fn load_with_metadata_options(
     options: LoadOptions,
 ) -> Result<LoadedConfig, Error> {
     let document = load_config_document(path, options)?;
+    load_document_with_metadata(document)
+}
+
+/// Verify and load a signed configuration bundle directly, without a local
+/// bootstrap configuration document.
+///
+/// This entry point deliberately has no unsigned-config or break-glass
+/// fallback. The explicit bundle, trust anchor, and anti-rollback state inputs
+/// are the complete startup trust boundary for this mode.
+pub fn load_verified_bundle_with_metadata_options(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    antirollback_state_path: &Path,
+    options: LoadOptions,
+) -> Result<LoadedConfig, Error> {
+    let verified = verify_config_bundle(bundle_path, trust_anchor_path).map_err(|error| {
+        log_bundle_verification_error(&error);
+        Error::from(ConfigError::ValidationError)
+    })?;
+    enforce_relay_bundle_product_binding(&verified)?;
+    let config_trust = super::ConfigTrustConfig {
+        trust_anchor_path: trust_anchor_path.to_path_buf(),
+        bundle_path: bundle_path.to_path_buf(),
+        antirollback_state_path: antirollback_state_path.to_path_buf(),
+        break_glass_override_path: None,
+    };
+    let document = load_verified_bundle_config_document(&config_trust, options, verified)?;
+    load_document_with_metadata(document)
+}
+
+fn load_document_with_metadata(document: LoadedConfigDocument) -> Result<LoadedConfig, Error> {
     let (metadata, metadata_source_digest) = load_config_metadata_for_source(
         &document.config_path,
         &document.runtime,
@@ -393,6 +427,7 @@ pub fn load_with_metadata_options(
 }
 
 pub fn validate_verified_bundle_runtime(verified: &VerifiedConfigBundle) -> Result<(), Error> {
+    enforce_relay_bundle_product_binding(verified)?;
     let (runtime, _) =
         parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
     let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(verified)
@@ -411,6 +446,25 @@ pub fn validate_verified_bundle_runtime(verified: &VerifiedConfigBundle) -> Resu
         Some(&signed_bundle_files),
     )?;
     Ok(())
+}
+
+/// Verify the product binding that is owned by the Relay binary rather than
+/// by the supplied trust anchor.
+pub fn verify_relay_bundle_product_binding(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), BundleVerificationCode> {
+    if verified.manifest.product == RELAY_CONFIG_BUNDLE_PRODUCT {
+        Ok(())
+    } else {
+        Err(BundleVerificationCode::REJECTED_BINDING)
+    }
+}
+
+fn enforce_relay_bundle_product_binding(verified: &VerifiedConfigBundle) -> Result<(), Error> {
+    verify_relay_bundle_product_binding(verified).map_err(|code| {
+        emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
+        Error::from(ConfigError::ValidationError)
+    })
 }
 
 pub fn load_config_metadata(

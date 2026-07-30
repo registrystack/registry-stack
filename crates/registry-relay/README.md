@@ -86,6 +86,21 @@ maintained as Registry Stack project-authoring golden workspaces in
 - [Credential issuance migration](docs/provenance.md): notes for removing legacy Relay response-credential issuer config and using Registry Notary as the issuance surface.
 - [Development guide](docs/development.md): local setup, verification commands, project layout, and the OpenAPI release policy.
 
+For governed startup without an unsigned bootstrap document, supply the
+complete signed-bundle input:
+
+```sh
+registry-relay \
+  --bundle-dir /run/registry-relay/bundle \
+  --anchor-path /run/registry-relay/trust-anchor.json \
+  --state-path /var/lib/registry-relay/antirollback.json \
+  --initialize-state
+```
+
+Omit `--initialize-state` after first acceptance. Direct bundle startup does
+not fall back to local configuration or a break-glass override when
+verification or anti-rollback checks fail.
+
 ## Build
 
 Prerequisites: Rust stable toolchain and `just`.

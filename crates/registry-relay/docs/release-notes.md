@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Operators can start Relay directly from a verified Config Bundle using
+  `--bundle-dir`, `--anchor-path`, and `--state-path`. Direct bundle startup
+  has no local-config or break-glass fallback, requires explicit
+  `--initialize-state` for first acceptance, and records protected acceptance
+  before advancing anti-rollback state.
 - Consultation profiles can publish recursive closed object and array outputs.
   Relay compiler validation and runtime projection enforce the declared child
   fields, nested types, item counts, canonical serialized-size limits, and
