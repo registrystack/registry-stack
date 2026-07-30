@@ -8,11 +8,13 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
-    AntiRollbackKey, AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin,
-    FileAntiRollbackStore, BUNDLE_VERIFICATION_CODE_DEFINITIONS,
+    AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackRecord, ConfigOverrideMode,
+    ConfigOverridePin, FileAntiRollbackStore, BUNDLE_VERIFICATION_CODE_DEFINITIONS,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -35,6 +37,26 @@ struct BundleFixture {
     state_path: PathBuf,
     config_path: PathBuf,
     config_hash: String,
+}
+
+fn fixture_antirollback_key() -> AntiRollbackKey {
+    AntiRollbackKey {
+        acceptance_identity: ProductAcceptanceIdentityV1 {
+            trust_domain: ProductTrustDomainV1::Governed,
+            project: "relay-test-project".to_string(),
+            environment: "lab".to_string(),
+            lane: ProductAcceptanceLaneV1::RelayPublic,
+            product: ProductAcceptanceProductV1::RegistryRelay,
+            stream: "relay-test-stream".to_string(),
+            instance: "relay-lab".to_string(),
+        },
+    }
+}
+
+fn fixture_anchor_pin(fixture: &BundleFixture) -> AcceptedAnchorPinV1 {
+    let anchor = registry_platform_config::load_trust_anchor(&fixture.anchor_path)
+        .expect("fixture anchor loads");
+    AcceptedAnchorPinV1::from_trust_anchor(&anchor).expect("fixture anchor pin")
 }
 
 #[test]
@@ -93,19 +115,14 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
     std::fs::write(
         &fixture.state_path,
         serde_json::to_vec_pretty(&AntiRollbackRecord {
-            key: AntiRollbackKey {
-                product: "registry-relay".to_string(),
-                instance_id: "relay-lab".to_string(),
-                environment: "lab".to_string(),
-                stream_id: "relay-test-stream".to_string(),
-            },
+            key: fixture_antirollback_key(),
             last_sequence: 2,
             last_config_hash:
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
-            last_bundle_manifest_hash: None,
-            last_bundle_id: None,
-            root_version: None,
+            last_bundle_manifest_hash: ZERO_HASH.to_string(),
+            last_bundle_id: "previous-bundle".to_string(),
+            accepted_anchor: fixture_anchor_pin(&fixture),
             override_pin: Some(ConfigOverridePin {
                 active: true,
                 mode: ConfigOverrideMode::AcceptRollback,
@@ -198,14 +215,9 @@ fn config_verify_bundle_cli_rejects_missing_instance_binding_value_free() {
         String::from_utf8_lossy(&output.stderr).contains("relay.startup.bundle_binding_rejected")
     );
     let record = FileAntiRollbackStore::new(&fixture.state_path)
-        .load(&AntiRollbackKey {
-            product: "registry-relay".to_string(),
-            instance_id: "relay-lab".to_string(),
-            environment: "lab".to_string(),
-            stream_id: "relay-test-stream".to_string(),
-        })
+        .load(&fixture_antirollback_key())
         .expect("existing instance lane remains readable");
-    assert_eq!(record.last_sequence, 0);
+    assert_eq!(record.last_sequence, 1);
 }
 
 #[test]
@@ -581,12 +593,29 @@ fn write_bundle_fixture_with_extra_files(
     let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
     let public = private.public();
     let kid = public.jkt().expect("thumbprint computes");
+    let (lane, product) = if manifest_product == "registry-relay" {
+        (
+            ProductAcceptanceLaneV1::RelayPublic,
+            ProductAcceptanceProductV1::RegistryRelay,
+        )
+    } else {
+        (
+            ProductAcceptanceLaneV1::Notary,
+            ProductAcceptanceProductV1::RegistryNotary,
+        )
+    };
+    let acceptance_identity = ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "relay-test-project".to_string(),
+        environment: "lab".to_string(),
+        lane,
+        product,
+        stream: "relay-test-stream".to_string(),
+        instance: "relay-lab".to_string(),
+    };
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: manifest_product.to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-test-stream".to_string(),
-        instance_id: Some("relay-lab".to_string()),
+        acceptance_identity: acceptance_identity.clone(),
         bundle_id: "relay-test-bundle".to_string(),
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
@@ -598,15 +627,10 @@ fn write_bundle_fixture_with_extra_files(
 
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-test-stream".to_string(),
-        instance_id: "relay-lab".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
-            kid,
-            jwk: public,
-            enabled: true,
-        }],
+        acceptance_identity,
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
     };
     let anchor_path = temp.path().join("trust_anchor.json");
     std::fs::write(
@@ -616,24 +640,37 @@ fn write_bundle_fixture_with_extra_files(
     .expect("anchor writes");
 
     let state_path = temp.path().join("antirollback.json");
+    let manifest_hash = sha256_uri(
+        &canonicalize_json(&serde_json::to_value(&manifest).expect("manifest value"))
+            .expect("manifest canonicalizes"),
+    );
     FileAntiRollbackStore::new(&state_path)
         .initialize(AntiRollbackRecord {
             key: AntiRollbackKey {
-                product: "registry-relay".to_string(),
-                instance_id: "relay-lab".to_string(),
-                environment: "lab".to_string(),
-                stream_id: "relay-test-stream".to_string(),
+                acceptance_identity: anchor.acceptance_identity.clone(),
             },
-            last_sequence,
+            last_sequence: if last_sequence == 0 {
+                manifest.sequence
+            } else {
+                last_sequence
+            },
             last_config_hash: if last_sequence == 0 {
-                ZERO_HASH.to_string()
+                manifest.config_hash.clone()
             } else {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string()
             },
-            last_bundle_manifest_hash: None,
-            last_bundle_id: None,
-            root_version: None,
+            last_bundle_manifest_hash: if last_sequence == 0 {
+                manifest_hash
+            } else {
+                ZERO_HASH.to_string()
+            },
+            last_bundle_id: if last_sequence == 0 {
+                manifest.bundle_id.clone()
+            } else {
+                "previous-bundle".to_string()
+            },
+            accepted_anchor: AcceptedAnchorPinV1::from_trust_anchor(&anchor).expect("anchor pin"),
             override_pin: None,
             break_glass: Default::default(),
             local_approvals: Default::default(),
@@ -654,7 +691,7 @@ fn rewrite_manifest_instance_id(fixture: &BundleFixture, instance_id: Option<&st
     let mut manifest: ConfigBundleManifest =
         serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
             .expect("manifest parses");
-    manifest.instance_id = instance_id.map(str::to_string);
+    manifest.acceptance_identity.instance = instance_id.unwrap_or_default().to_string();
     let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
     let kid = private.public().jkt().expect("thumbprint computes");
     write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);

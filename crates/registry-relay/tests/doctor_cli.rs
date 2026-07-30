@@ -8,10 +8,13 @@ use registry_config_report::{CONFIG_EXPLANATION_SCHEMA_V1, PRODUCT_DIAGNOSTIC_RE
 use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
-    AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore, AUDIT_ACK_CURSOR_FIXTURE_V1,
+    AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore,
+    AUDIT_ACK_CURSOR_FIXTURE_V1,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -114,12 +117,18 @@ fn write_signed_profile_config(
     let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
     let public = private.public();
     let kid = public.jkt().expect("thumbprint computes");
+    let acceptance_identity = ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "relay-doctor-project".to_string(),
+        environment: "lab".to_string(),
+        lane: ProductAcceptanceLaneV1::RelayPublic,
+        product: ProductAcceptanceProductV1::RegistryRelay,
+        stream: format!("relay-doctor-{fixture_name}"),
+        instance: "relay-lab".to_string(),
+    };
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: format!("relay-doctor-{fixture_name}"),
-        instance_id: Some("relay-lab".to_string()),
+        acceptance_identity: acceptance_identity.clone(),
         bundle_id: format!("relay-doctor-{fixture_name}-bundle"),
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
@@ -134,15 +143,10 @@ fn write_signed_profile_config(
 
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: manifest.stream_id.clone(),
-        instance_id: "relay-lab".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
-            kid,
-            jwk: public,
-            enabled: true,
-        }],
+        acceptance_identity,
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
     };
     let anchor_path = tmp.path().join(format!("trust-anchor-{fixture_name}.json"));
     std::fs::write(
@@ -152,19 +156,20 @@ fn write_signed_profile_config(
     .expect("anchor writes");
 
     let state_path = tmp.path().join(format!("antirollback-{fixture_name}.json"));
+    let manifest_hash = sha256_uri(
+        &canonicalize_json(&serde_json::to_value(&manifest).expect("manifest value"))
+            .expect("manifest canonicalizes"),
+    );
     FileAntiRollbackStore::new(&state_path)
         .initialize(AntiRollbackRecord {
             key: AntiRollbackKey {
-                product: "registry-relay".to_string(),
-                instance_id: "relay-lab".to_string(),
-                environment: "lab".to_string(),
-                stream_id: manifest.stream_id.clone(),
+                acceptance_identity: manifest.acceptance_identity.clone(),
             },
-            last_sequence: 0,
-            last_config_hash: ZERO_HASH.to_string(),
-            last_bundle_manifest_hash: None,
-            last_bundle_id: None,
-            root_version: None,
+            last_sequence: manifest.sequence,
+            last_config_hash: manifest.config_hash.clone(),
+            last_bundle_manifest_hash: manifest_hash,
+            last_bundle_id: manifest.bundle_id.clone(),
+            accepted_anchor: AcceptedAnchorPinV1::from_trust_anchor(&anchor).expect("anchor pin"),
             override_pin: None,
             break_glass: Default::default(),
             local_approvals: Default::default(),

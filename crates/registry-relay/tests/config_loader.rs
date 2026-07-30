@@ -18,6 +18,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::ConfigSource;
@@ -98,12 +100,18 @@ fn write_signed_relay_bundle(tmp: &TempDir) -> SignedBundleFixture {
     let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
     let public = private.public();
     let kid = public.jkt().expect("thumbprint");
+    let acceptance_identity = ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "relay-loader-project".to_string(),
+        environment: "lab".to_string(),
+        lane: ProductAcceptanceLaneV1::RelayPublic,
+        product: ProductAcceptanceProductV1::RegistryRelay,
+        stream: "relay-loader-test".to_string(),
+        instance: "relay-lab".to_string(),
+    };
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-loader-test".to_string(),
-        instance_id: None,
+        acceptance_identity: acceptance_identity.clone(),
         bundle_id: "relay-loader-bundle".to_string(),
         sequence: 1,
         previous_config_hash: None,
@@ -117,15 +125,10 @@ fn write_signed_relay_bundle(tmp: &TempDir) -> SignedBundleFixture {
     write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-loader-test".to_string(),
-        instance_id: "relay-lab".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
-            kid,
-            jwk: public,
-            enabled: true,
-        }],
+        acceptance_identity,
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
     };
     let anchor_path = tmp.path().join("trust_anchor.json");
     std::fs::write(

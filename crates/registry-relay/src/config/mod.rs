@@ -697,6 +697,11 @@ pub struct ConsultationConfig {
     pub authorized_workload: ConsultationWorkloadConfig,
     /// Dedicated PostgreSQL control-plane connection and deployment identity.
     pub state_plane: ConsultationStatePlaneConfig,
+    /// Product-owned first-install policy. Governed product actions accept
+    /// these settings only from the verified consultation bundle; deployment
+    /// renderers cannot reproduce them as command arguments.
+    #[serde(default)]
+    pub bootstrap: Option<ConsultationBootstrapPolicyConfig>,
     pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
     /// Complete restart-only catalog of source credentials referenced by the
     /// compiled consultation plans.
@@ -715,6 +720,36 @@ pub struct ConsultationConfig {
     pub artifacts: Option<ConsultationArtifactClosureConfig>,
 }
 
+/// Signed, bounded policy for preparing and initializing consultation state.
+///
+/// Every string is an environment-reference or database role name, never a
+/// connection URL or credential value. The policy is optional only for the
+/// pre-1.0 local startup path. Governed consultation product actions require
+/// it, while the public Relay lane rejects consultation configuration
+/// entirely.
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultationBootstrapPolicyConfig {
+    pub migration_database_url_env: String,
+    pub owner_role: String,
+    pub keyring_maintenance_database_url_env: String,
+    pub keyring_reader_database_url_env: String,
+    pub active_key_id: String,
+    pub active_write_deadline_unix_ms: i64,
+    pub audit_event_retention_ms: i64,
+}
+
+impl fmt::Debug for ConsultationBootstrapPolicyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConsultationBootstrapPolicyConfig")
+            .field("database_references", &"<configured>")
+            .field("database_roles", &"<configured>")
+            .field("keyring_lifecycle", &"<configured>")
+            .finish()
+    }
+}
+
 impl ConsultationConfig {
     /// Return the complete, sorted set of process-environment references that
     /// operators must provide before consultation activation.
@@ -725,6 +760,11 @@ impl ConsultationConfig {
     pub fn required_environment_references(&self) -> Vec<&str> {
         let mut references = BTreeSet::new();
         references.insert(self.state_plane.database_url_env.as_str());
+        if let Some(bootstrap) = &self.bootstrap {
+            references.insert(bootstrap.migration_database_url_env.as_str());
+            references.insert(bootstrap.keyring_maintenance_database_url_env.as_str());
+            references.insert(bootstrap.keyring_reader_database_url_env.as_str());
+        }
         for material in self.audit_pseudonym_materials.entries() {
             references.insert(material.source.environment_name().as_str());
         }
@@ -2447,6 +2487,61 @@ audit_pseudonym_materials:
                 "invalid or open-ended consultation config must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn consultation_bootstrap_policy_is_closed_and_debug_redacted() {
+        let config: ConsultationConfig = serde_saphyr::from_str(&format!(
+            r#"
+{}
+bootstrap:
+  migration_database_url_env: RELAY_MIGRATION_DATABASE_URL
+  owner_role: relay_state_owner
+  keyring_maintenance_database_url_env: RELAY_KEYRING_MAINTENANCE_DATABASE_URL
+  keyring_reader_database_url_env: RELAY_KEYRING_READER_DATABASE_URL
+  active_key_id: epoch-2026-07
+  active_write_deadline_unix_ms: 1900000000000
+  audit_event_retention_ms: 86400000
+audit_pseudonym_materials:
+  - key_id: epoch-2026-07
+    source:
+      provider: environment
+      name: REGISTRY_RELAY_PSEUDONYM_SOURCE
+"#,
+            consultation_runtime_fields()
+        ))
+        .expect("signed bootstrap policy parses");
+        let debug = format!("{config:?}");
+        for marker in [
+            "RELAY_MIGRATION_DATABASE_URL",
+            "relay_state_owner",
+            "1900000000000",
+        ] {
+            assert!(!debug.contains(marker));
+        }
+        assert!(debug.contains("keyring_lifecycle"));
+
+        let open_policy = format!(
+            r#"
+{}
+bootstrap:
+  migration_database_url_env: RELAY_MIGRATION_DATABASE_URL
+  owner_role: relay_state_owner
+  keyring_maintenance_database_url_env: RELAY_KEYRING_MAINTENANCE_DATABASE_URL
+  keyring_reader_database_url_env: RELAY_KEYRING_READER_DATABASE_URL
+  active_key_id: epoch-2026-07
+  active_write_deadline_unix_ms: 1900000000000
+  audit_event_retention_ms: 86400000
+  database_url: postgresql://sentinel.invalid/state
+audit_pseudonym_materials:
+  - key_id: epoch-2026-07
+    source:
+      provider: environment
+      name: REGISTRY_RELAY_PSEUDONYM_SOURCE
+"#,
+            consultation_runtime_fields()
+        );
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(&open_policy).is_err());
     }
 
     #[test]

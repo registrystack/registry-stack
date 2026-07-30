@@ -234,7 +234,11 @@ pub struct ConfigAuditExt {
     pub action: &'static str,
     pub source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub acceptance_identity: Option<registry_platform_config::ProductAcceptanceIdentityV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_manifest_hash: Option<String>,
     #[serde(rename = "bundle_sequence", skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
     pub signer_kids: Vec<String>,
@@ -244,6 +248,10 @@ pub struct ConfigAuditExt {
     pub previous_hash_matched: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_version: Option<u64>,
     pub product_validation_result: &'static str,
     pub apply_result: &'static str,
     pub posture_result: &'static str,

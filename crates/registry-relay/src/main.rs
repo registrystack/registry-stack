@@ -45,12 +45,17 @@ use registry_config_report::{
 };
 use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
-use registry_platform_config::{expand_config_env_vars, sha256_uri, verify_config_bundle};
+use registry_platform_config::{
+    expand_config_env_vars, load_anchor_transition, load_trust_anchor, sha256_uri,
+    verify_config_bundle,
+};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     internal_config_hash, persist_bundle_acceptance as persist_config_bundle_acceptance,
-    verify_bundle_state_read_only, ApplyReportResult, AuditSinkKind, BundleVerificationCode,
-    ConfigOverrideMode, ConfigSource, DeploymentProfile,
+    verify_bundle_state_read_only, AcceptanceAuditIntentV1, AcceptanceMutationKindV1,
+    AcceptanceStatePlanV1, AcceptedAnchorPinV1, ApplyReportResult, AuditSinkKind,
+    BundleVerificationCode, ConfigOverrideMode, ConfigSource, DeploymentProfile,
+    FileAntiRollbackStore, VerifiedAcceptanceStateV1,
 };
 use registry_relay::audit::{
     AuditPipeline, ConfigAuditExt, FileSink, OperationalAuditEvent, StdoutSink, SyslogSink,
@@ -59,7 +64,7 @@ use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
 use registry_relay::config::{self, AuditSinkConfig, Config, SourceConfig};
 use registry_relay::consultation::operator::{
-    bootstrap_state, BootstrapStateRequest, BootstrapStateResult,
+    initialize_state_from_signed_policy, prepare_state_store_from_signed_policy,
 };
 use registry_relay::consultation::{
     ConsultationService, ConsultationServiceActivationError, ConsultationServiceActivationFailure,
@@ -115,23 +120,26 @@ const SCHEMA_COMMAND: &str = "schema";
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
 
+/// Exact product-owned runtime interface consumed by the signed release lock.
+const PRODUCT_ACTION_COMMAND: &str = "product-action";
+const PREPARE_STATE_STORE_ACTION: &str = "prepare_state_store";
+const INITIALIZE_STATE_ACTION: &str = "initialize_state";
+const VERIFY_STATE_ACTION: &str = "verify_state";
+const SERVE_ACTION: &str = "serve";
+const PRODUCT_BUNDLE_PATH: &str = "/run/registry/bundle";
+const PRODUCT_ANCHOR_PATH: &str = "/run/registry/anchor/anchor.json";
+const PRODUCT_PREVIOUS_ANCHOR_PATH: &str = "/run/registry/anchor/previous-anchor.json";
+const PRODUCT_ANCHOR_TRANSITION_PATH: &str = "/run/registry/anchor/transition.json";
+const PRODUCT_ANTIROLLBACK_STATE_PATH: &str = "/var/lib/registry/state/antirollback.json";
+
 /// Audit operator tooling command and its offline chain-recovery subcommand.
 const AUDIT_COMMAND: &str = "audit";
 const QUARANTINE_SUBCOMMAND: &str = "quarantine";
 const REASON_FLAG: &str = "--reason";
 const OPERATOR_FLAG: &str = "--operator";
 
-/// Offline consultation operator tooling and its bounded bootstrap journey.
+/// Retired raw consultation operator namespace.
 const CONSULTATION_COMMAND: &str = "consultation";
-const BOOTSTRAP_STATE_SUBCOMMAND: &str = "bootstrap-state";
-const MIGRATION_DATABASE_URL_ENV_FLAG: &str = "--migration-database-url-env";
-const OWNER_ROLE_FLAG: &str = "--owner-role";
-const KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG: &str = "--keyring-maintenance-database-url-env";
-const KEYRING_READER_DATABASE_URL_ENV_FLAG: &str = "--keyring-reader-database-url-env";
-const ACTIVE_KEY_ID_FLAG: &str = "--active-key-id";
-const ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG: &str = "--active-write-deadline-unix-ms";
-const AUDIT_EVENT_RETENTION_MS_FLAG: &str = "--audit-event-retention-ms";
-const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// Verifies a signed governed-config target without applying it.
 const VERIFY_BUNDLE_COMMAND: &str = "verify-bundle";
@@ -158,7 +166,6 @@ const STATE_PATH_FLAG: &str = "--state-path";
 const FORMAT_FLAG: &str = "--format";
 const PROFILE_FLAG: &str = "--profile";
 const EXPECTED_CONFIG_DIGEST_FLAG: &str = "--expected-config-digest";
-const INITIALIZE_STATE_FLAG: &str = "--initialize-state";
 const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,8 +175,8 @@ enum CliCommand {
         config_source: ServeConfigSource,
         env_file: Option<PathBuf>,
         bind_override: Option<SocketAddr>,
-        initialize_state: bool,
     },
+    ProductAction(ProductActionCommand),
     Healthcheck {
         url: String,
         timeout: Duration,
@@ -195,7 +202,6 @@ enum CliCommand {
         format: OutputFormat,
     },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
-    ConsultationBootstrapState(ConsultationBootstrapStateCommand),
     AuditQuarantine {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -213,6 +219,7 @@ enum ServeConfigSource {
         bundle_dir: PathBuf,
         anchor_path: PathBuf,
         state_path: PathBuf,
+        expected_lane: Option<config::loader::RelayProductLane>,
     },
 }
 
@@ -231,6 +238,27 @@ impl std_fmt::Debug for ServeConfigSource {
                 .finish(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProductActionCommand {
+    lane: config::loader::RelayProductLane,
+    action: ProductAction,
+}
+
+struct ProductServeAcceptance {
+    store: FileAntiRollbackStore,
+    plan: AcceptanceStatePlanV1,
+    signer_kids: Vec<String>,
+    previous_config_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProductAction {
+    PrepareStateStore,
+    InitializeState,
+    VerifyState,
+    Serve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,32 +309,6 @@ struct ConfigVerifyBundleCommand {
     bundle_dir: PathBuf,
     anchor_path: PathBuf,
     state_path: PathBuf,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct ConsultationBootstrapStateCommand {
-    config_path: PathBuf,
-    env_file: Option<PathBuf>,
-    migration_database_url_env: String,
-    owner_role: String,
-    keyring_maintenance_database_url_env: String,
-    keyring_reader_database_url_env: String,
-    active_key_id: String,
-    active_write_deadline_unix_ms: i64,
-    audit_event_retention_ms: i64,
-}
-
-impl std_fmt::Debug for ConsultationBootstrapStateCommand {
-    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
-        formatter
-            .debug_struct("ConsultationBootstrapStateCommand")
-            .field("config_path", &"<configured>")
-            .field("env_file", &self.env_file.as_ref().map(|_| "<configured>"))
-            .field("database_references", &"<configured>")
-            .field("database_roles", &"<configured>")
-            .field("keyring_lifecycle", &"<configured>")
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,8 +407,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             config_source,
             env_file,
             bind_override,
-            initialize_state,
-        } => run_server(config_source, env_file, bind_override, initialize_state).await,
+        } => run_server(config_source, env_file, bind_override, None).await,
+        CliCommand::ProductAction(command) => run_product_action(command).await,
         CliCommand::Healthcheck { url, timeout } => {
             run_healthcheck(&url, timeout).await?;
             println!("registry-relay healthcheck ok");
@@ -443,9 +445,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } => run_explain_config(config_path, env_file, format).await,
         CliCommand::Schema { format } => run_schema(format).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
-        CliCommand::ConsultationBootstrapState(command) => {
-            run_consultation_bootstrap_state(command).await
-        }
         CliCommand::AuditQuarantine {
             config_path,
             env_file,
@@ -459,7 +458,7 @@ async fn run_server(
     config_source: ServeConfigSource,
     env_file: Option<PathBuf>,
     bind_override: Option<SocketAddr>,
-    initialize_state: bool,
+    product_acceptance: Option<ProductServeAcceptance>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
     if matches!(&config_source, ServeConfigSource::SignedBundle { .. }) && config_path_env_is_set()
@@ -472,7 +471,7 @@ async fn run_server(
         compile_relay_runtime_with_options(
             config_source,
             bind_override,
-            config::LoadOptions { initialize_state },
+            config::LoadOptions::default(),
         )
         .await?,
     ));
@@ -527,6 +526,19 @@ async fn run_server(
     if let Some(acceptance) = runtime.pending_bundle_acceptance.as_ref() {
         write_boot_config_audits(&runtime.audit_sink, acceptance).await?;
         persist_bundle_acceptance(acceptance)?;
+    }
+    if let Some(acceptance) = product_acceptance {
+        write_acceptance_intent_audit(
+            &runtime.audit_sink,
+            acceptance.plan.audit_intent(),
+            &acceptance.signer_kids,
+            acceptance.previous_config_hash.as_deref(),
+        )
+        .await?;
+        acceptance
+            .store
+            .commit_acceptance(acceptance.plan)
+            .map_err(|_| product_acceptance_failure())?;
     }
 
     runtime
@@ -1316,24 +1328,262 @@ fn now_rfc3339() -> String {
         .expect("system clock timestamp formats as RFC3339")
 }
 
-async fn run_consultation_bootstrap_state(
-    command: ConsultationBootstrapStateCommand,
+async fn run_product_action(
+    command: ProductActionCommand,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    load_env_file_arg(command.env_file.as_deref())?;
-    let config = reported_config_load(config::load(&command.config_path))?;
-    let result: BootstrapStateResult = bootstrap_state(BootstrapStateRequest {
-        config: &config,
-        migration_database_url_env: &command.migration_database_url_env,
-        owner_role: &command.owner_role,
-        keyring_maintenance_database_url_env: &command.keyring_maintenance_database_url_env,
-        keyring_reader_database_url_env: &command.keyring_reader_database_url_env,
-        active_key_id: &command.active_key_id,
-        active_write_deadline_unix_ms: command.active_write_deadline_unix_ms,
-        audit_event_retention_ms: command.audit_event_retention_ms,
-    })
-    .await?;
-    println!("{}", serde_json::to_string(&result)?);
+    let bundle_path = std::path::Path::new(PRODUCT_BUNDLE_PATH);
+    let anchor_path = std::path::Path::new(PRODUCT_ANCHOR_PATH);
+    let state_path = std::path::Path::new(PRODUCT_ANTIROLLBACK_STATE_PATH);
+
+    let input = reported_config_load(config::loader::load_verified_product_action_input(
+        bundle_path,
+        anchor_path,
+        command.lane,
+    ))?;
+    verify_product_action_runtime_lane(command.lane, &input.runtime)?;
+
+    match command.action {
+        ProductAction::PrepareStateStore => {
+            let audit_sink = build_product_action_audit_sink(&input.runtime)?;
+            write_signed_product_action_intent_audit(
+                &audit_sink,
+                "prepare_state_store",
+                &input.verified,
+            )
+            .await?;
+            let state_plane = if command.lane == config::loader::RelayProductLane::Consultation {
+                let result = prepare_state_store_from_signed_policy(&input.runtime).await?;
+                serde_json::to_value(result.state_plane)?
+            } else {
+                Value::String("not_required".to_string())
+            };
+            print_json_report(json!({
+                "schema": "registry.relay.product-action-result.v1",
+                "action": PREPARE_STATE_STORE_ACTION,
+                "status": "succeeded",
+                "state_plane": state_plane,
+            }))
+        }
+        ProductAction::InitializeState => {
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
+                .map_err(|_| product_acceptance_failure())?;
+            let store = FileAntiRollbackStore::new(state_path);
+            let plan = store
+                .plan_initialize(&candidate)
+                .map_err(|_| product_acceptance_failure())?;
+            let audit_sink = build_product_action_audit_sink(&input.runtime)?;
+            write_acceptance_intent_audit(
+                &audit_sink,
+                plan.audit_intent(),
+                &input.verified.signer_kids,
+                input.verified.manifest.previous_config_hash.as_deref(),
+            )
+            .await?;
+            if command.lane == config::loader::RelayProductLane::Consultation {
+                initialize_state_from_signed_policy(&input.runtime).await?;
+            }
+            store
+                .commit_acceptance(plan)
+                .map_err(|_| product_acceptance_failure())?;
+            print_json_report(json!({
+                "schema": "registry.relay.product-action-result.v1",
+                "action": INITIALIZE_STATE_ACTION,
+                "status": "succeeded",
+            }))
+        }
+        ProductAction::VerifyState => {
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
+                .map_err(|_| product_acceptance_failure())?;
+            FileAntiRollbackStore::new(state_path)
+                .verify_state(candidate.expectation())
+                .map_err(|_| product_acceptance_failure())?;
+            print_json_report(json!({
+                "schema": "registry.relay.product-action-result.v1",
+                "action": VERIFY_STATE_ACTION,
+                "status": "verified",
+            }))
+        }
+        ProductAction::Serve => {
+            let acceptance = plan_product_serve_acceptance(&input.verified, state_path)?;
+            run_server(
+                ServeConfigSource::SignedBundle {
+                    bundle_dir: bundle_path.to_path_buf(),
+                    anchor_path: anchor_path.to_path_buf(),
+                    state_path: state_path.to_path_buf(),
+                    expected_lane: Some(command.lane),
+                },
+                None,
+                None,
+                acceptance,
+            )
+            .await
+        }
+    }
+}
+
+fn plan_product_serve_acceptance(
+    verified: &registry_platform_config::VerifiedConfigBundle,
+    state_path: &std::path::Path,
+) -> Result<Option<ProductServeAcceptance>, Box<dyn std::error::Error + Send + Sync>> {
+    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(verified)
+        .map_err(|_| product_acceptance_failure())?;
+    let store = FileAntiRollbackStore::new(state_path);
+    match store.verify_state(candidate.expectation()) {
+        Ok(_) => return Ok(None),
+        Err(registry_platform_ops::AntiRollbackStoreError::StateMismatch(_)) => {}
+        Err(_) => return Err(product_acceptance_failure().into()),
+    }
+    let current = store
+        .load(&candidate.key)
+        .map_err(|_| product_acceptance_failure())?;
+    if candidate.sequence != current.last_sequence.checked_add(1).unwrap_or(0) {
+        return Err(product_acceptance_failure().into());
+    }
+    let candidate_anchor = AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
+        .map_err(|_| product_acceptance_failure())?;
+    let plan = if candidate_anchor == current.accepted_anchor {
+        store.plan_acceptance(&candidate, None, None)
+    } else {
+        let current_anchor = load_trust_anchor(std::path::Path::new(PRODUCT_PREVIOUS_ANCHOR_PATH))
+            .map_err(|_| product_acceptance_failure())?;
+        let transition =
+            load_anchor_transition(std::path::Path::new(PRODUCT_ANCHOR_TRANSITION_PATH))
+                .map_err(|_| product_acceptance_failure())?;
+        store.plan_acceptance(&candidate, Some(&current_anchor), Some(&transition))
+    }
+    .map_err(|_| product_acceptance_failure())?;
+    Ok(Some(ProductServeAcceptance {
+        store,
+        plan,
+        signer_kids: verified.signer_kids.clone(),
+        previous_config_hash: verified.manifest.previous_config_hash.clone(),
+    }))
+}
+
+fn product_acceptance_failure() -> ProcessStartupFailure {
+    ProcessStartupFailure::new(ProcessStartupCode::BUNDLE_ROLLBACK_REJECTED)
+}
+
+fn verify_product_action_runtime_lane(
+    lane: config::loader::RelayProductLane,
+    runtime: &Config,
+) -> Result<(), ProcessStartupFailure> {
+    config::loader::verify_relay_runtime_lane_binding(lane, runtime)
+        .map_err(|_| ProcessStartupFailure::new(ProcessStartupCode::BUNDLE_BINDING_REJECTED))
+}
+
+fn build_product_action_audit_sink(
+    config: &Config,
+) -> Result<Arc<AuditPipeline>, Box<dyn std::error::Error + Send + Sync>> {
+    let profile = build_audit_chain_profile(config)
+        .map_err(|_| ProcessStartupFailure::new(ProcessStartupCode::CONFIG_VALIDATION_REJECTED))?;
+    build_audit_sink(config, profile).map_err(Into::into)
+}
+
+async fn write_signed_product_action_intent_audit(
+    audit_sink: &AuditPipeline,
+    action: &'static str,
+    verified: &registry_platform_config::VerifiedConfigBundle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let anchor_digest = registry_platform_config::trust_anchor_digest(&verified.trust_anchor)
+        .map_err(|_| product_acceptance_failure())?;
+    let audit = product_action_config_audit(
+        action,
+        verified.manifest.acceptance_identity.clone(),
+        verified.manifest.bundle_id.clone(),
+        verified.manifest_hash.clone(),
+        verified.manifest.sequence,
+        verified.signer_kids.clone(),
+        verified.manifest.previous_config_hash.clone(),
+        verified.manifest.config_hash.clone(),
+        anchor_digest,
+        verified.trust_anchor.version,
+    );
+    audit_sink
+        .write_operational_event(
+            OperationalAuditEvent::success("product_action.mutation_intent").with_config(audit),
+        )
+        .await?;
     Ok(())
+}
+
+async fn write_acceptance_intent_audit(
+    audit_sink: &AuditPipeline,
+    intent: &AcceptanceAuditIntentV1,
+    signer_kids: &[String],
+    previous_config_hash: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let action = match intent.mutation {
+        AcceptanceMutationKindV1::Initialize => "initialize_state",
+        AcceptanceMutationKindV1::Advance => "accept_update",
+        AcceptanceMutationKindV1::RotateAnchor => "rotate_anchor",
+    };
+    let audit = product_action_config_audit(
+        action,
+        intent.key.acceptance_identity.clone(),
+        intent.bundle_id.clone(),
+        intent.bundle_manifest_hash.clone(),
+        intent.sequence,
+        signer_kids.to_vec(),
+        previous_config_hash.map(ToString::to_string),
+        intent.config_hash.clone(),
+        intent.anchor_digest.clone(),
+        intent.anchor_version,
+    );
+    audit_sink
+        .write_operational_event(
+            OperationalAuditEvent::success("config.acceptance_mutation_intent").with_config(audit),
+        )
+        .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn product_action_config_audit(
+    action: &'static str,
+    acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1,
+    bundle_id: String,
+    bundle_manifest_hash: String,
+    sequence: u64,
+    signer_kids: Vec<String>,
+    previous_config_hash: Option<String>,
+    config_hash: String,
+    anchor_digest: String,
+    anchor_version: u64,
+) -> ConfigAuditExt {
+    ConfigAuditExt {
+        action,
+        source: ConfigSource::SignedBundleFile.as_posture_str(),
+        acceptance_identity: Some(acceptance_identity),
+        bundle_id: Some(bundle_id),
+        bundle_manifest_hash: Some(bundle_manifest_hash),
+        sequence: Some(sequence),
+        signer_kids,
+        previous_config_hash,
+        previous_hash_matched: None,
+        config_hash: Some(config_hash),
+        anchor_digest: Some(anchor_digest),
+        anchor_version: Some(anchor_version),
+        product_validation_result: "accepted",
+        apply_result: "pending",
+        posture_result: "accepted",
+        applied: false,
+        restart_required: false,
+        change_classes: Vec::new(),
+        break_glass: false,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: None,
+        break_glass_reason_hash: None,
+        break_glass_emergency_change_class: None,
+        break_glass_expires_at_unix_seconds: None,
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: None,
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    }
 }
 
 async fn run_config_verify_bundle(
@@ -1412,7 +1662,7 @@ async fn run_config_verify_bundle(
 
     print_json_report(config_verify_bundle_report(
         ApplyReportResult::Verified,
-        Some(verified.manifest.stream_id),
+        Some(verified.manifest.acceptance_identity.stream),
         Some(verified.manifest.bundle_id),
         Some(verified.manifest.sequence),
         verified.manifest.previous_config_hash,
@@ -1560,12 +1810,22 @@ async fn compile_relay_runtime_with_options(
             bundle_dir,
             anchor_path,
             state_path,
-        } => config::loader::load_verified_bundle_with_metadata_options(
-            bundle_dir,
-            anchor_path,
-            state_path,
-            load_options,
-        ),
+            expected_lane,
+        } => match expected_lane {
+            Some(expected_lane) => {
+                config::loader::load_verified_product_bundle_with_metadata_for_lane(
+                    bundle_dir,
+                    anchor_path,
+                    *expected_lane,
+                )
+            }
+            None => config::loader::load_verified_bundle_with_metadata_options(
+                bundle_dir,
+                anchor_path,
+                state_path,
+                load_options,
+            ),
+        },
     })?;
     let config_provenance = loaded.provenance.clone();
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
@@ -1710,12 +1970,16 @@ async fn write_bundle_acceptance_audit(
     let audit = ConfigAuditExt {
         action: "boot",
         source: acceptance.source.as_posture_str(),
+        acceptance_identity: None,
         bundle_id: acceptance.bundle_id.clone(),
+        bundle_manifest_hash: acceptance.bundle_manifest_hash.clone(),
         sequence: acceptance.sequence,
         signer_kids: acceptance.signer_kids.clone(),
         previous_config_hash: acceptance.previous_config_hash.clone(),
         previous_hash_matched: acceptance.previous_hash_matched,
         config_hash: Some(acceptance.config_hash.clone()),
+        anchor_digest: Some(acceptance.accepted_anchor.digest.clone()),
+        anchor_version: Some(acceptance.accepted_anchor.version),
         product_validation_result: "accepted",
         apply_result: "applied",
         posture_result: "accepted",
@@ -1755,12 +2019,16 @@ async fn write_break_glass_used_audit(
     let audit = ConfigAuditExt {
         action: "boot",
         source: acceptance.source.as_posture_str(),
+        acceptance_identity: None,
         bundle_id: acceptance.bundle_id.clone(),
+        bundle_manifest_hash: acceptance.bundle_manifest_hash.clone(),
         sequence: acceptance.sequence,
         signer_kids: acceptance.signer_kids.clone(),
         previous_config_hash: acceptance.previous_config_hash.clone(),
         previous_hash_matched: acceptance.previous_hash_matched,
         config_hash: Some(acceptance.config_hash.clone()),
+        anchor_digest: Some(acceptance.accepted_anchor.digest.clone()),
+        anchor_version: Some(acceptance.accepted_anchor.version),
         product_validation_result: "accepted",
         apply_result: "applied",
         posture_result: "accepted",
@@ -1862,8 +2130,15 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_schema_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
+    } else if rest
+        .first()
+        .is_some_and(|arg| arg == PRODUCT_ACTION_COMMAND)
+    {
+        parse_product_action_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONSULTATION_COMMAND) {
-        parse_consultation_command(&rest[1..])
+        Err(CliError(
+            "consultation bootstrap-state is replaced by signed product-action".to_string(),
+        ))
     } else if rest.first().is_some_and(|arg| arg == AUDIT_COMMAND) {
         parse_audit_command(&rest[1..])
     } else {
@@ -1871,149 +2146,37 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     }
 }
 
-fn parse_consultation_command(args: &[String]) -> Result<CliCommand, CliError> {
-    match args.first().map(String::as_str) {
-        Some(BOOTSTRAP_STATE_SUBCOMMAND) => parse_consultation_bootstrap_state_command(&args[1..]),
-        Some(_) => Err(CliError(
-            "unknown consultation subcommand (expected bootstrap-state)".to_string(),
-        )),
-        None => Err(CliError(
-            "consultation requires a subcommand (expected bootstrap-state)".to_string(),
-        )),
+fn parse_product_action_command(args: &[String]) -> Result<CliCommand, CliError> {
+    if args.len() != 2 {
+        return Err(CliError(
+            "product-action requires one canonical Relay lane and one closed action".to_string(),
+        ));
     }
-}
-
-fn parse_consultation_bootstrap_state_command(args: &[String]) -> Result<CliCommand, CliError> {
-    let mut config_path: Option<PathBuf> = None;
-    let mut env_file: Option<PathBuf> = None;
-    let mut migration_database_url_env: Option<String> = None;
-    let mut owner_role: Option<String> = None;
-    let mut keyring_maintenance_database_url_env: Option<String> = None;
-    let mut keyring_reader_database_url_env: Option<String> = None;
-    let mut active_key_id: Option<String> = None;
-    let mut active_write_deadline_unix_ms: Option<i64> = None;
-    let mut audit_event_retention_ms: Option<i64> = None;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
-            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
-        } else if arg == CONFIG_FLAG {
-            index += 1;
-            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
-        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
-            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
-        } else if arg == ENV_FILE_FLAG {
-            index += 1;
-            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
-        } else if let Some(value) = flag_value(arg, MIGRATION_DATABASE_URL_ENV_FLAG) {
-            migration_database_url_env = Some(parse_environment_reference(
-                MIGRATION_DATABASE_URL_ENV_FLAG,
-                value,
-            )?);
-        } else if arg == MIGRATION_DATABASE_URL_ENV_FLAG {
-            index += 1;
-            migration_database_url_env = Some(parse_environment_reference_arg(
-                args,
-                index,
-                MIGRATION_DATABASE_URL_ENV_FLAG,
-            )?);
-        } else if let Some(value) = flag_value(arg, OWNER_ROLE_FLAG) {
-            owner_role = Some(parse_database_role(OWNER_ROLE_FLAG, value)?);
-        } else if arg == OWNER_ROLE_FLAG {
-            index += 1;
-            owner_role = Some(parse_database_role_arg(args, index, OWNER_ROLE_FLAG)?);
-        } else if let Some(value) = flag_value(arg, KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG) {
-            keyring_maintenance_database_url_env = Some(parse_environment_reference(
-                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
-                value,
-            )?);
-        } else if arg == KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG {
-            index += 1;
-            keyring_maintenance_database_url_env = Some(parse_environment_reference_arg(
-                args,
-                index,
-                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
-            )?);
-        } else if let Some(value) = flag_value(arg, KEYRING_READER_DATABASE_URL_ENV_FLAG) {
-            keyring_reader_database_url_env = Some(parse_environment_reference(
-                KEYRING_READER_DATABASE_URL_ENV_FLAG,
-                value,
-            )?);
-        } else if arg == KEYRING_READER_DATABASE_URL_ENV_FLAG {
-            index += 1;
-            keyring_reader_database_url_env = Some(parse_environment_reference_arg(
-                args,
-                index,
-                KEYRING_READER_DATABASE_URL_ENV_FLAG,
-            )?);
-        } else if let Some(value) = flag_value(arg, ACTIVE_KEY_ID_FLAG) {
-            active_key_id = Some(parse_audit_pseudonym_key_id(value)?);
-        } else if arg == ACTIVE_KEY_ID_FLAG {
-            index += 1;
-            active_key_id = Some(parse_audit_pseudonym_key_id_arg(args, index)?);
-        } else if let Some(value) = flag_value(arg, ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG) {
-            active_write_deadline_unix_ms = Some(parse_bounded_positive_i64(
-                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
-                value,
-            )?);
-        } else if arg == ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG {
-            index += 1;
-            active_write_deadline_unix_ms = Some(parse_bounded_positive_i64_arg(
-                args,
-                index,
-                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
-            )?);
-        } else if let Some(value) = flag_value(arg, AUDIT_EVENT_RETENTION_MS_FLAG) {
-            audit_event_retention_ms = Some(parse_bounded_positive_i64(
-                AUDIT_EVENT_RETENTION_MS_FLAG,
-                value,
-            )?);
-        } else if arg == AUDIT_EVENT_RETENTION_MS_FLAG {
-            index += 1;
-            audit_event_retention_ms = Some(parse_bounded_positive_i64_arg(
-                args,
-                index,
-                AUDIT_EVENT_RETENTION_MS_FLAG,
-            )?);
-        } else {
+    let lane = match args[0].as_str() {
+        "relay-public" => config::loader::RelayProductLane::Public,
+        "relay-consultation" => config::loader::RelayProductLane::Consultation,
+        _ => {
             return Err(CliError(
-                "unknown consultation bootstrap-state argument".to_string(),
+                "product-action lane must be relay-public or relay-consultation".to_string(),
             ));
         }
-        index += 1;
-    }
-    if env_file.is_none() {
-        env_file = default_env_file_from_env();
-    }
-    Ok(CliCommand::ConsultationBootstrapState(
-        ConsultationBootstrapStateCommand {
-            config_path: config_path.unwrap_or_else(default_config_path_from_env),
-            env_file,
-            migration_database_url_env: require_flag(
-                migration_database_url_env,
-                MIGRATION_DATABASE_URL_ENV_FLAG,
-            )?,
-            owner_role: require_flag(owner_role, OWNER_ROLE_FLAG)?,
-            keyring_maintenance_database_url_env: require_flag(
-                keyring_maintenance_database_url_env,
-                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
-            )?,
-            keyring_reader_database_url_env: require_flag(
-                keyring_reader_database_url_env,
-                KEYRING_READER_DATABASE_URL_ENV_FLAG,
-            )?,
-            active_key_id: require_flag(active_key_id, ACTIVE_KEY_ID_FLAG)?,
-            active_write_deadline_unix_ms: require_flag(
-                active_write_deadline_unix_ms,
-                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
-            )?,
-            audit_event_retention_ms: require_flag(
-                audit_event_retention_ms,
-                AUDIT_EVENT_RETENTION_MS_FLAG,
-            )?,
-        },
-    ))
+    };
+    let action = match args[1].as_str() {
+        PREPARE_STATE_STORE_ACTION => ProductAction::PrepareStateStore,
+        INITIALIZE_STATE_ACTION => ProductAction::InitializeState,
+        VERIFY_STATE_ACTION => ProductAction::VerifyState,
+        SERVE_ACTION => ProductAction::Serve,
+        _ => {
+            return Err(CliError(
+                "product-action action must be prepare_state_store, initialize_state, verify_state, or serve"
+                    .to_string(),
+            ));
+        }
+    };
+    Ok(CliCommand::ProductAction(ProductActionCommand {
+        lane,
+        action,
+    }))
 }
 
 fn parse_audit_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -2263,7 +2426,6 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
     let mut state_path: Option<PathBuf> = None;
     let mut env_file: Option<PathBuf> = None;
     let mut bind_override: Option<SocketAddr> = None;
-    let mut initialize_state = false;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -2299,8 +2461,6 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
             bind_override = Some(parse_bind_value(required_string_arg(
                 args, index, BIND_FLAG,
             )?)?);
-        } else if arg == INITIALIZE_STATE_FLAG {
-            initialize_state = true;
         } else {
             return Err(CliError(format!("unknown serve argument: {arg}")));
         }
@@ -2331,6 +2491,7 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
                 bundle_dir,
                 anchor_path,
                 state_path,
+                expected_lane: None,
             }
         }
         (None, None, None, None) => ServeConfigSource::LocalFile {
@@ -2347,7 +2508,6 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
         config_source,
         env_file,
         bind_override,
-        initialize_state,
     })
 }
 
@@ -2456,94 +2616,6 @@ fn required_string_value(flag: &str, value: &str) -> Result<String, CliError> {
         return Err(CliError(format!("{flag} requires a non-empty value")));
     }
     Ok(value.to_string())
-}
-
-fn parse_environment_reference_arg(
-    args: &[String],
-    index: usize,
-    flag: &str,
-) -> Result<String, CliError> {
-    let Some(value) = args.get(index) else {
-        return Err(CliError(format!(
-            "{flag} requires an environment-variable name"
-        )));
-    };
-    parse_environment_reference(flag, value)
-}
-
-fn parse_environment_reference(flag: &str, value: &str) -> Result<String, CliError> {
-    let mut bytes = value.bytes();
-    let valid = bytes
-        .next()
-        .is_some_and(|first| matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_'))
-        && value.len() <= 128
-        && bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'));
-    if !valid {
-        return Err(CliError(format!(
-            "{flag} requires an environment-variable name"
-        )));
-    }
-    Ok(value.to_string())
-}
-
-fn parse_database_role_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
-    let Some(value) = args.get(index) else {
-        return Err(CliError(format!("{flag} requires a database role name")));
-    };
-    parse_database_role(flag, value)
-}
-
-fn parse_database_role(flag: &str, value: &str) -> Result<String, CliError> {
-    let mut chars = value.chars();
-    let valid = chars
-        .next()
-        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
-        && value.len() <= 63
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric());
-    if !valid {
-        return Err(CliError(format!("{flag} requires a database role name")));
-    }
-    Ok(value.to_string())
-}
-
-fn parse_audit_pseudonym_key_id_arg(args: &[String], index: usize) -> Result<String, CliError> {
-    let Some(value) = args.get(index) else {
-        return Err(CliError(format!(
-            "{ACTIVE_KEY_ID_FLAG} requires a canonical key id"
-        )));
-    };
-    parse_audit_pseudonym_key_id(value)
-}
-
-fn parse_audit_pseudonym_key_id(value: &str) -> Result<String, CliError> {
-    registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyId::parse(value.to_string())
-        .map(|key_id| key_id.as_str().to_string())
-        .map_err(|_| CliError(format!("{ACTIVE_KEY_ID_FLAG} requires a canonical key id")))
-}
-
-fn parse_bounded_positive_i64_arg(
-    args: &[String],
-    index: usize,
-    flag: &str,
-) -> Result<i64, CliError> {
-    let Some(value) = args.get(index) else {
-        return Err(CliError(format!(
-            "{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}"
-        )));
-    };
-    parse_bounded_positive_i64(flag, value)
-}
-
-fn parse_bounded_positive_i64(flag: &str, value: &str) -> Result<i64, CliError> {
-    value
-        .parse::<i64>()
-        .ok()
-        .filter(|value| (1..=MAX_EXACT_JSON_INTEGER).contains(value))
-        .ok_or_else(|| {
-            CliError(format!(
-                "{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}"
-            ))
-        })
 }
 
 fn required_api_key_id_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
@@ -2920,13 +2992,14 @@ mod tests {
         consultation_activation_doctor_check, doctor_check_diagnostic, load_env_file_arg,
         parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
         relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
-        required_env_report, run_audit_quarantine, run_consultation_bootstrap_state,
-        run_healthcheck, url_contains_userinfo, CliCommand, ConfigValueClassification,
-        ConsultationBootstrapStateCommand, ConsultationServiceActivationError,
+        required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
+        CliCommand, ConfigValueClassification, ConsultationServiceActivationError,
         ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
         OperatorSafeConsultationActivationFailure, OutputFormat, ProcessStartupCode,
-        ProcessStartupFailure, ReportedConfigLoadFailure, ServeConfigSource,
-        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
+        ProcessStartupFailure, ProductAction, ProductActionCommand, ReportedConfigLoadFailure,
+        ServeConfigSource, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        INITIALIZE_STATE_ACTION, PREPARE_STATE_STORE_ACTION, PRODUCT_ACTION_COMMAND, SERVE_ACTION,
+        VERIFY_STATE_ACTION,
     };
     use axum::routing::get;
     use axum::Router;
@@ -2937,14 +3010,14 @@ mod tests {
     use registry_platform_config::{
         sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
         ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
-        ConfigTrustAnchorSigner,
+        ConfigTrustAnchorSigner, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
+        ProductAcceptanceProductV1, ProductTrustDomainV1,
     };
     use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
     use registry_platform_ops::{
-        antirollback_key_from_verified_bundle, bundle_verify_rejection_code, AntiRollbackKey,
-        AntiRollbackStoreError, BundleStateAction, BundleVerificationCode, ConfigOverrideMode,
-        ConfigOverridePin, ConfigSource, DeploymentProfile, FileAntiRollbackStore,
-        PendingBundleAcceptance,
+        bundle_verify_rejection_code, AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackStoreError,
+        BundleStateAction, BundleVerificationCode, ConfigOverrideMode, ConfigOverridePin,
+        ConfigSource, DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
     };
     use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
     use registry_relay::config::Config;
@@ -3150,12 +3223,18 @@ mod tests {
         let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
         let public = private.public();
         let kid = public.jkt().expect("thumbprint");
+        let acceptance_identity = ProductAcceptanceIdentityV1 {
+            trust_domain: ProductTrustDomainV1::Governed,
+            project: "relay-bind-project".to_string(),
+            environment: "lab".to_string(),
+            lane: ProductAcceptanceLaneV1::RelayPublic,
+            product: ProductAcceptanceProductV1::RegistryRelay,
+            stream: "relay-bind-test".to_string(),
+            instance: "relay-bind-test".to_string(),
+        };
         let manifest = ConfigBundleManifest {
             schema: "registry.platform.config_bundle.v1".to_string(),
-            product: "registry-relay".to_string(),
-            environment: "lab".to_string(),
-            stream_id: "relay-bind-test".to_string(),
-            instance_id: Some("relay-bind-test".to_string()),
+            acceptance_identity: acceptance_identity.clone(),
             bundle_id: "relay-bind-bundle".to_string(),
             sequence: 1,
             previous_config_hash: None,
@@ -3169,15 +3248,10 @@ mod tests {
         write_bundle_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
         let anchor = ConfigTrustAnchor {
             schema: "registry.platform.config_trust_anchor.v1".to_string(),
-            product: "registry-relay".to_string(),
-            environment: "lab".to_string(),
-            stream_id: "relay-bind-test".to_string(),
-            instance_id: "relay-bind-test".to_string(),
-            signers: vec![ConfigTrustAnchorSigner {
-                kid,
-                jwk: public,
-                enabled: true,
-            }],
+            acceptance_identity,
+            version: 1,
+            threshold: 1,
+            enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
         };
         let anchor_path = tmp.path().join("trust_anchor.json");
         std::fs::write(
@@ -3241,7 +3315,7 @@ mod tests {
         let mut manifest: ConfigBundleManifest =
             serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
                 .expect("manifest parses");
-        manifest.instance_id = instance_id.map(str::to_string);
+        manifest.acceptance_identity.instance = instance_id.unwrap_or_default().to_string();
         let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
         let kid = private.public().jkt().expect("thumbprint");
         write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
@@ -3252,7 +3326,7 @@ mod tests {
             &std::fs::read(&fixture.anchor_path).expect("trust anchor reads"),
         )
         .expect("trust anchor parses");
-        anchor.instance_id = instance_id.to_string();
+        anchor.acceptance_identity.instance = instance_id.to_string();
         std::fs::write(
             &fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
@@ -3265,7 +3339,19 @@ mod tests {
         let mut manifest: ConfigBundleManifest =
             serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
                 .expect("manifest parses");
-        manifest.product = product.to_string();
+        let (lane, acceptance_product) = if product == "registry-relay" {
+            (
+                ProductAcceptanceLaneV1::RelayPublic,
+                ProductAcceptanceProductV1::RegistryRelay,
+            )
+        } else {
+            (
+                ProductAcceptanceLaneV1::Notary,
+                ProductAcceptanceProductV1::RegistryNotary,
+            )
+        };
+        manifest.acceptance_identity.lane = lane;
+        manifest.acceptance_identity.product = acceptance_product;
         let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
         let kid = private.public().jkt().expect("thumbprint");
         write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
@@ -3274,7 +3360,39 @@ mod tests {
             &std::fs::read(&fixture.anchor_path).expect("trust anchor reads"),
         )
         .expect("trust anchor parses");
-        anchor.product = product.to_string();
+        anchor.acceptance_identity.lane = lane;
+        anchor.acceptance_identity.product = acceptance_product;
+        std::fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
+        )
+        .expect("trust anchor writes");
+    }
+
+    fn rewrite_signed_bundle_identity(
+        fixture: &SignedRelayBundleFixture,
+        mutate: impl FnOnce(&mut ProductAcceptanceIdentityV1),
+    ) {
+        let manifest_path = fixture.bundle_dir.join("manifest.json");
+        let mut manifest: ConfigBundleManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        mutate(&mut manifest.acceptance_identity);
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let kid = private.public().jkt().expect("thumbprint");
+        write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+    }
+
+    fn rewrite_signed_bundle_and_anchor_identity(
+        fixture: &SignedRelayBundleFixture,
+        mutate: impl Fn(&mut ProductAcceptanceIdentityV1),
+    ) {
+        rewrite_signed_bundle_identity(fixture, |identity| mutate(identity));
+        let mut anchor: ConfigTrustAnchor = serde_json::from_slice(
+            &std::fs::read(&fixture.anchor_path).expect("trust anchor reads"),
+        )
+        .expect("trust anchor parses");
+        mutate(&mut anchor.acceptance_identity);
         std::fs::write(
             &fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
@@ -3302,15 +3420,21 @@ config_trust:
             bundle_dir: fixture.bundle_dir.clone(),
             anchor_path: fixture.anchor_path.clone(),
             state_path: fixture.state_path.clone(),
+            expected_lane: None,
         }
     }
 
     fn test_antirollback_key() -> AntiRollbackKey {
         AntiRollbackKey {
-            product: "registry-relay".to_string(),
-            instance_id: "relay-lab".to_string(),
-            environment: "lab".to_string(),
-            stream_id: "relay-loader-test".to_string(),
+            acceptance_identity: ProductAcceptanceIdentityV1 {
+                trust_domain: ProductTrustDomainV1::Governed,
+                project: "relay-loader-project".to_string(),
+                environment: "lab".to_string(),
+                lane: ProductAcceptanceLaneV1::RelayPublic,
+                product: ProductAcceptanceProductV1::RegistryRelay,
+                stream: "relay-loader-test".to_string(),
+                instance: "relay-lab".to_string(),
+            },
         }
     }
 
@@ -3338,6 +3462,13 @@ config_trust:
         PendingBundleAcceptance {
             state_path,
             key: test_antirollback_key(),
+            accepted_anchor: AcceptedAnchorPinV1 {
+                digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                    .to_string(),
+                version: 1,
+                threshold: 1,
+                enabled_signers: vec!["kid-1".to_string()],
+            },
             source,
             bundle_id: signed_source.then(|| "relay-loader-bundle".to_string()),
             bundle_manifest_hash: signed_source.then(|| {
@@ -3530,12 +3661,24 @@ config_trust:
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn boot_listener_bind_failure_aborts_before_antirollback_persist() {
+    async fn boot_listener_bind_failure_preserves_exact_antirollback_state() {
         let _guard = env_lock();
         let env_name = "REGISTRY_RELAY_BIND_FAILURE_AUDIT_HASH_SECRET";
         std::env::set_var(env_name, "registry-relay-bind-failure-secret-32-bytes");
         let dir = tempdir().expect("tempdir");
         let fixture = write_signed_relay_bundle(&dir, env_name);
+        let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("bundle verifies");
+        let candidate =
+            registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+                .expect("acceptance candidate");
+        let store = FileAntiRollbackStore::new(&fixture.state_path);
+        let plan = store
+            .plan_initialize(&candidate)
+            .expect("initial state plan");
+        store
+            .commit_acceptance(plan)
+            .expect("test state initializes");
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("held listener binds");
@@ -3545,7 +3688,7 @@ config_trust:
             signed_bundle_source(&fixture),
             None,
             Some(occupied_addr),
-            true,
+            None,
         )
         .await
         .expect_err("occupied listener rejects startup");
@@ -3556,16 +3699,9 @@ config_trust:
                 .contains("relay.startup.data_listener_address_in_use"),
             "unexpected error: {error}"
         );
-        let key = AntiRollbackKey {
-            product: "registry-relay".to_string(),
-            instance_id: "relay-bind-test".to_string(),
-            environment: "lab".to_string(),
-            stream_id: "relay-bind-test".to_string(),
-        };
-        let err = FileAntiRollbackStore::new(&fixture.state_path)
-            .load(&key)
-            .expect_err("state remains absent");
-        assert_eq!(err, AntiRollbackStoreError::MissingState);
+        store
+            .verify_state(candidate.expectation())
+            .expect("listener failure does not change exact state");
 
         drop(listener);
         std::env::remove_var(env_name);
@@ -3609,43 +3745,95 @@ config_trust:
         std::env::remove_var(env_name);
     }
 
-    #[tokio::test]
-    async fn direct_bundle_without_instance_id_cannot_initialize_or_start() {
+    #[test]
+    fn direct_bundle_without_instance_id_cannot_initialize_or_start() {
         let dir = tempdir().expect("tempdir");
         let fixture = write_signed_relay_bundle(&dir, "UNUSED_MISSING_INSTANCE_AUDIT_HASH_SECRET");
         rewrite_signed_bundle_instance_id(&fixture, None);
-        let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
-            .expect("shared bundle verification permits a fleet-wide bundle");
-        assert_eq!(
-            registry_relay::config::loader::verify_relay_direct_bundle_binding(&verified),
-            Err(BundleVerificationCode::REJECTED_BINDING)
-        );
-        assert_eq!(
-            ProcessStartupCode::from_bundle_verification(BundleVerificationCode::REJECTED_BINDING),
-            ProcessStartupCode::BUNDLE_BINDING_REJECTED
-        );
+        verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("incomplete acceptance identity fails bundle verification");
+        assert!(!fixture.state_path.exists());
+    }
 
-        let initialize_error =
-            registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+    #[test]
+    fn product_action_rejects_every_acceptance_identity_mismatch_before_state_access() {
+        for dimension in [
+            "trust_domain",
+            "project",
+            "environment",
+            "lane",
+            "product",
+            "stream",
+            "instance",
+        ] {
+            let dir = tempdir().expect("tempdir");
+            let fixture = write_signed_relay_bundle(&dir, "UNUSED_IDENTITY_MISMATCH_AUDIT_SECRET");
+            rewrite_signed_bundle_identity(&fixture, |identity| match dimension {
+                "trust_domain" => identity.trust_domain = ProductTrustDomainV1::Development,
+                "project" => identity.project = "other-project".to_string(),
+                "environment" => identity.environment = "other-environment".to_string(),
+                "lane" => identity.lane = ProductAcceptanceLaneV1::RelayConsultation,
+                "product" => {
+                    identity.lane = ProductAcceptanceLaneV1::Notary;
+                    identity.product = ProductAcceptanceProductV1::RegistryNotary;
+                }
+                "stream" => identity.stream = "other-stream".to_string(),
+                "instance" => identity.instance = "other-instance".to_string(),
+                _ => unreachable!(),
+            });
+
+            registry_relay::config::loader::load_verified_bundle_with_metadata_for_lane_options(
                 &fixture.bundle_dir,
                 &fixture.anchor_path,
                 &fixture.state_path,
+                registry_relay::config::loader::RelayProductLane::Public,
                 registry_relay::config::LoadOptions {
                     initialize_state: true,
                 },
             )
-            .expect_err("missing instance binding cannot initialize direct startup");
-        assert_eq!(initialize_error.to_string(), "config validation error");
-        assert!(!fixture.state_path.exists());
+            .expect_err("identity mismatch fails");
+            assert!(
+                !fixture.state_path.exists(),
+                "{dimension} mismatch accessed state"
+            );
+        }
+    }
 
-        let start_error = super::run_server(signed_bundle_source(&fixture), None, None, true)
-            .await
-            .expect_err("missing instance binding cannot start Relay");
-        assert_eq!(
-            start_error.to_string(),
-            "configuration load failure was already reported"
+    #[test]
+    fn product_action_rejects_swapped_canonical_lane_inputs_before_state_access() {
+        let public_dir = tempdir().expect("tempdir");
+        let public = write_signed_relay_bundle(&public_dir, "UNUSED_PUBLIC_LANE_SWAP_AUDIT_SECRET");
+        registry_relay::config::loader::load_verified_bundle_with_metadata_for_lane_options(
+            &public.bundle_dir,
+            &public.anchor_path,
+            &public.state_path,
+            registry_relay::config::loader::RelayProductLane::Consultation,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .expect_err("public input cannot occupy consultation lane");
+        assert!(!public.state_path.exists());
+
+        let consultation_dir = tempdir().expect("tempdir");
+        let consultation = write_signed_relay_bundle(
+            &consultation_dir,
+            "UNUSED_CONSULTATION_LANE_SWAP_AUDIT_SECRET",
         );
-        assert!(!fixture.state_path.exists());
+        rewrite_signed_bundle_and_anchor_identity(&consultation, |identity| {
+            identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+        });
+        registry_relay::config::loader::load_verified_bundle_with_metadata_for_lane_options(
+            &consultation.bundle_dir,
+            &consultation.anchor_path,
+            &consultation.state_path,
+            registry_relay::config::loader::RelayProductLane::Public,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .expect_err("consultation input cannot occupy public lane");
+        assert!(!consultation.state_path.exists());
     }
 
     #[test]
@@ -3657,22 +3845,8 @@ config_trust:
 
         for instance_id in ["relay-instance-one", "relay-instance-two"] {
             rewrite_anchor_instance_id(&fixture, instance_id);
-            let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
-                .expect("fleet-wide bundle verifies against either instance anchor");
-            assert_eq!(
-                antirollback_key_from_verified_bundle(&verified).instance_id,
-                ""
-            );
-            let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
-                &fixture.bundle_dir,
-                &fixture.anchor_path,
-                &fixture.state_path,
-                registry_relay::config::LoadOptions {
-                    initialize_state: true,
-                },
-            )
-            .expect_err("direct startup rejects the fleet-wide anti-rollback lane");
-            assert_eq!(error.to_string(), "config validation error");
+            verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+                .expect_err("incomplete acceptance identity cannot bind to an instance anchor");
             assert!(!fixture.state_path.exists());
         }
     }
@@ -3721,7 +3895,7 @@ config_trust:
             &std::fs::read(&binding_fixture.anchor_path).expect("trust anchor reads"),
         )
         .expect("trust anchor parses");
-        anchor.instance_id = "sentinel-private-instance".to_string();
+        anchor.acceptance_identity.instance = "sentinel-private-instance".to_string();
         std::fs::write(
             &binding_fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
@@ -4302,47 +4476,7 @@ audit:
     }
 
     #[test]
-    fn consultation_bootstrap_state_cli_parses_closed_inputs() {
-        let command = parse_cli_command_from(command_args(&[
-            "registry-relay",
-            "consultation",
-            "bootstrap-state",
-            "--config=/etc/registry-relay/config.yaml",
-            "--env-file",
-            "/etc/registry-relay/bootstrap.env",
-            "--migration-database-url-env",
-            "RELAY_STATE_MIGRATION_URL",
-            "--owner-role=relay_state_owner",
-            "--keyring-maintenance-database-url-env",
-            "RELAY_STATE_KEYRING_MAINTENANCE_URL",
-            "--keyring-reader-database-url-env=RELAY_STATE_KEYRING_READER_URL",
-            "--active-key-id",
-            "epoch-1",
-            "--active-write-deadline-unix-ms=1900000000000",
-            "--audit-event-retention-ms",
-            "31536000000",
-        ]))
-        .expect("bootstrap command parses");
-
-        assert_eq!(
-            command,
-            CliCommand::ConsultationBootstrapState(ConsultationBootstrapStateCommand {
-                config_path: PathBuf::from("/etc/registry-relay/config.yaml"),
-                env_file: Some(PathBuf::from("/etc/registry-relay/bootstrap.env")),
-                migration_database_url_env: "RELAY_STATE_MIGRATION_URL".to_string(),
-                owner_role: "relay_state_owner".to_string(),
-                keyring_maintenance_database_url_env: "RELAY_STATE_KEYRING_MAINTENANCE_URL"
-                    .to_string(),
-                keyring_reader_database_url_env: "RELAY_STATE_KEYRING_READER_URL".to_string(),
-                active_key_id: "epoch-1".to_string(),
-                active_write_deadline_unix_ms: 1_900_000_000_000,
-                audit_event_retention_ms: 31_536_000_000,
-            })
-        );
-    }
-
-    #[test]
-    fn consultation_bootstrap_state_cli_rejects_url_values_without_echoing_them() {
+    fn consultation_bootstrap_state_cli_is_tombstoned_without_echoing_values() {
         let error = parse_cli_command_from(command_args(&[
             "registry-relay",
             "consultation",
@@ -4350,97 +4484,14 @@ audit:
             "--migration-database-url-env",
             "postgresql://sentinel-user:sentinel-secret@example.test/state",
         ]))
-        .expect_err("URL values are never CLI inputs");
+        .expect_err("raw bootstrap inputs are never accepted");
         let rendered = error.to_string();
         assert_eq!(
             rendered,
-            "--migration-database-url-env requires an environment-variable name"
+            "consultation bootstrap-state is replaced by signed product-action"
         );
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains("postgresql://"));
-
-        let unknown = parse_cli_command_from(command_args(&[
-            "registry-relay",
-            "consultation",
-            "bootstrap-state",
-            "postgresql://sentinel-user:sentinel-secret@example.test/state",
-        ]))
-        .expect_err("unknown values are rejected");
-        assert_eq!(
-            unknown.to_string(),
-            "unknown consultation bootstrap-state argument"
-        );
-    }
-
-    #[test]
-    fn consultation_bootstrap_state_cli_bounds_lifecycle_integers() {
-        for (flag, invalid) in [
-            ("--active-write-deadline-unix-ms", "0"),
-            ("--audit-event-retention-ms", "9007199254740992"),
-        ] {
-            let error = parse_cli_command_from(command_args(&[
-                "registry-relay",
-                "consultation",
-                "bootstrap-state",
-                flag,
-                invalid,
-            ]))
-            .expect_err("out-of-bound lifecycle is rejected");
-            assert_eq!(
-                error.to_string(),
-                format!("{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}")
-            );
-        }
-    }
-
-    #[test]
-    fn consultation_bootstrap_state_command_debug_is_value_free() {
-        let command = ConsultationBootstrapStateCommand {
-            config_path: PathBuf::from("/sentinel/config.yaml"),
-            env_file: Some(PathBuf::from("/sentinel/secrets.env")),
-            migration_database_url_env: "SENTINEL_MIGRATION".to_string(),
-            owner_role: "sentinel_owner".to_string(),
-            keyring_maintenance_database_url_env: "SENTINEL_MAINTENANCE".to_string(),
-            keyring_reader_database_url_env: "SENTINEL_READER".to_string(),
-            active_key_id: "sentinel-key".to_string(),
-            active_write_deadline_unix_ms: 1_900_000_000_000,
-            audit_event_retention_ms: 31_536_000_000,
-        };
-        let rendered = format!("{command:?}");
-        assert!(!rendered.contains("sentinel"));
-        assert!(!rendered.contains("1900000000000"));
-        assert!(!rendered.contains("31536000000"));
-    }
-
-    #[tokio::test]
-    async fn consultation_bootstrap_state_preserves_loader_owned_failure_category() {
-        let dir = tempdir().expect("tempdir");
-        let config_path = dir.path().join("relay.yaml");
-        std::fs::write(&config_path, "{}\n").expect("invalid config writes");
-        let command = ConsultationBootstrapStateCommand {
-            config_path,
-            env_file: None,
-            migration_database_url_env: "SENTINEL_MIGRATION".to_string(),
-            owner_role: "sentinel_owner".to_string(),
-            keyring_maintenance_database_url_env: "SENTINEL_MAINTENANCE".to_string(),
-            keyring_reader_database_url_env: "SENTINEL_READER".to_string(),
-            active_key_id: "sentinel-key".to_string(),
-            active_write_deadline_unix_ms: 1_900_000_000_000,
-            audit_event_retention_ms: 31_536_000_000,
-        };
-
-        let error = run_consultation_bootstrap_state(command)
-            .await
-            .expect_err("invalid config must fail before bootstrap");
-
-        assert!(
-            error.downcast_ref::<ReportedConfigLoadFailure>().is_some(),
-            "unexpected error: {error}"
-        );
-        assert_eq!(
-            error.to_string(),
-            "configuration load failure was already reported"
-        );
     }
 
     #[test]
@@ -4480,11 +4531,11 @@ audit:
     }
 
     #[test]
-    fn serve_cli_accepts_complete_verified_bundle_source() {
+    fn ordinary_serve_cli_rejects_initialize_flag() {
         let _guard = env_lock();
         let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
         std::env::remove_var("REGISTRY_RELAY_CONFIG");
-        let command = parse_cli_command_from(command_args(&[
+        let error = parse_cli_command_from(command_args(&[
             "registry-relay",
             "--bundle-dir",
             "/etc/registry-relay/bundle",
@@ -4493,29 +4544,115 @@ audit:
             "/var/lib/registry-relay/antirollback.json",
             "--initialize-state",
         ]))
-        .expect("complete signed-bundle source parses");
-
-        let CliCommand::Serve {
-            config_source,
-            initialize_state,
-            ..
-        } = command
-        else {
-            panic!("expected serve command");
-        };
-        assert_eq!(
-            config_source,
-            ServeConfigSource::SignedBundle {
-                bundle_dir: PathBuf::from("/etc/registry-relay/bundle"),
-                anchor_path: PathBuf::from("/etc/registry-relay/trust-anchor.json"),
-                state_path: PathBuf::from("/var/lib/registry-relay/antirollback.json"),
-            }
-        );
-        assert!(initialize_state);
+        .expect_err("ordinary serve has no initialization authority");
+        assert!(error.to_string().contains("unknown serve argument"));
 
         if let Some(value) = previous_config {
             std::env::set_var("REGISTRY_RELAY_CONFIG", value);
         }
+    }
+
+    #[test]
+    fn product_action_cli_accepts_only_closed_lane_action_pairs() {
+        for (lane, expected_lane) in [
+            (
+                "relay-public",
+                registry_relay::config::loader::RelayProductLane::Public,
+            ),
+            (
+                "relay-consultation",
+                registry_relay::config::loader::RelayProductLane::Consultation,
+            ),
+        ] {
+            for (action, expected_action) in [
+                (PREPARE_STATE_STORE_ACTION, ProductAction::PrepareStateStore),
+                (INITIALIZE_STATE_ACTION, ProductAction::InitializeState),
+                (VERIFY_STATE_ACTION, ProductAction::VerifyState),
+                (SERVE_ACTION, ProductAction::Serve),
+            ] {
+                assert_eq!(
+                    parse_cli_command_from(command_args(&[
+                        "registry-relay",
+                        PRODUCT_ACTION_COMMAND,
+                        lane,
+                        action,
+                    ]))
+                    .expect("closed product action parses"),
+                    CliCommand::ProductAction(ProductActionCommand {
+                        lane: expected_lane,
+                        action: expected_action,
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn product_action_cli_rejects_lane_swaps_and_raw_argument_escape_hatches() {
+        for args in [
+            vec![
+                "registry-relay",
+                PRODUCT_ACTION_COMMAND,
+                "registry-relay",
+                SERVE_ACTION,
+            ],
+            vec![
+                "registry-relay",
+                PRODUCT_ACTION_COMMAND,
+                "relay-public",
+                "initialize-state",
+            ],
+            vec![
+                "registry-relay",
+                PRODUCT_ACTION_COMMAND,
+                "relay-public",
+                SERVE_ACTION,
+                "--bundle-dir",
+                "/sentinel/private/bundle",
+            ],
+        ] {
+            let error = parse_cli_command_from(command_args(&args))
+                .expect_err("non-canonical product action fails");
+            let rendered = error.to_string();
+            assert!(!rendered.contains("sentinel"));
+            assert!(!rendered.contains("/private/"));
+        }
+    }
+
+    #[test]
+    fn public_lane_cannot_consume_signed_consultation_bootstrap_policy() {
+        let mut config: Config = serde_saphyr::from_str(include_str!(
+            "../profiles/synthetic-snapshot-exact-person-status/relay-config.example.yaml"
+        ))
+        .expect("consultation profile config parses");
+        config
+            .consultation
+            .as_mut()
+            .expect("profile enables consultation")
+            .bootstrap = Some(registry_relay::config::ConsultationBootstrapPolicyConfig {
+            migration_database_url_env: "RELAY_MIGRATION_DATABASE_URL".to_string(),
+            owner_role: "relay_state_owner".to_string(),
+            keyring_maintenance_database_url_env: "RELAY_KEYRING_MAINTENANCE_DATABASE_URL"
+                .to_string(),
+            keyring_reader_database_url_env: "RELAY_KEYRING_READER_DATABASE_URL".to_string(),
+            active_key_id: "epoch-1".to_string(),
+            active_write_deadline_unix_ms: 1_900_000_000_000,
+            audit_event_retention_ms: 86_400_000,
+        });
+        assert_eq!(
+            registry_relay::config::loader::verify_relay_runtime_lane_binding(
+                registry_relay::config::loader::RelayProductLane::Public,
+                &config,
+            ),
+            Err(BundleVerificationCode::REJECTED_BINDING)
+        );
+        assert_eq!(
+            registry_relay::config::loader::verify_relay_runtime_lane_binding(
+                registry_relay::config::loader::RelayProductLane::Consultation,
+                &config,
+            ),
+            Ok(())
+        );
     }
 
     #[test]
@@ -4686,10 +4823,11 @@ audit:
                 bundle_dir: PathBuf::from("/sentinel/private/bundle"),
                 anchor_path: PathBuf::from("/sentinel/private/anchor.json"),
                 state_path: PathBuf::from("/sentinel/private/state.json"),
+                expected_lane: None,
             },
             Some(env_file),
             None,
-            false,
+            None,
         )
         .await
         .expect_err("env-file local config conflicts with direct bundle");
@@ -4715,6 +4853,7 @@ audit:
             bundle_dir: PathBuf::from("/sentinel/private/bundle"),
             anchor_path: PathBuf::from("/sentinel/private/anchor.json"),
             state_path: PathBuf::from("/sentinel/private/state.json"),
+            expected_lane: None,
         };
 
         let rendered = format!("{source:?}");
@@ -5311,6 +5450,28 @@ consultation:
             !compile_body.contains("spawn_refresh_tasks"),
             "compile boundary must not start background refresh tasks"
         );
+    }
+
+    #[test]
+    fn one_shot_product_actions_do_not_construct_runtime_credentials_or_sources() {
+        let source = include_str!("main.rs");
+        let one_shots = source
+            .split("async fn run_product_action")
+            .nth(1)
+            .and_then(|tail| tail.split("async fn run_config_verify_bundle").next())
+            .expect("product-action implementation remains inspectable");
+        for forbidden in [
+            "build_auth(",
+            "IngestRegistry::from_config",
+            "run_initial_ingest",
+            "spawn_refresh_tasks",
+            "ConsultationService::activate",
+        ] {
+            assert!(
+                !one_shots.contains(forbidden),
+                "one-shot action constructed forbidden runtime capability: {forbidden}"
+            );
+        }
     }
 
     #[test]

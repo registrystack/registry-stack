@@ -16,13 +16,14 @@ use registry_manifest_core::{
 };
 use registry_platform_config::{
     expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
-    ConfigBundleError, DeprecatedConfigField, VerifiedConfigBundle,
+    ConfigBundleError, DeprecatedConfigField, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1, VerifiedConfigBundle,
 };
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, bundle_verify_rejection_code, internal_config_hash,
     is_sha256_config_hash, load_unsigned_break_glass_or_pin, posture_safe_runtime_config_hash,
-    resolve_bundle_state_action, BundleStateRequest, BundleVerificationCode, ConfigBootError,
-    ConfigProvenance, ConfigSource, UnsignedConfigSelection,
+    resolve_bundle_state_action, AcceptedAnchorPinV1, BundleStateRequest, BundleVerificationCode,
+    ConfigBootError, ConfigProvenance, ConfigSource, UnsignedConfigSelection,
 };
 pub use registry_platform_ops::{BundleStateAction, PendingBundleAcceptance};
 use serde_json::Value;
@@ -36,7 +37,22 @@ use super::consultation_artifacts::{
 use super::validate;
 use super::{Config, VerifiedConsultationArtifactClosure};
 
-const RELAY_CONFIG_BUNDLE_PRODUCT: &str = "registry-relay";
+/// Canonical, closed Registry Relay product lanes.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RelayProductLane {
+    Public,
+    Consultation,
+}
+
+impl RelayProductLane {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "relay-public",
+            Self::Consultation => "relay-consultation",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct LoadedConfig {
@@ -218,6 +234,8 @@ fn load_verified_bundle_config_document(
         pending_bundle_acceptance: Some(PendingBundleAcceptance {
             state_path: config_trust.antirollback_state_path.clone(),
             key,
+            accepted_anchor: AcceptedAnchorPinV1::from_trust_anchor(&verified.trust_anchor)
+                .map_err(|_| Error::from(ConfigError::ValidationError))?,
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some(verified.manifest.bundle_id),
             bundle_manifest_hash: Some(verified.manifest_hash),
@@ -279,7 +297,7 @@ fn load_unsigned_pin_config_document(
             internal_config_hash: selection.pin.config_hash.clone(),
             posture_config_hash: posture_safe_runtime_config_hash(&config_value),
             dynamic_reload_supported: false,
-            last_bundle_id: selection.record.last_bundle_id,
+            last_bundle_id: Some(selection.record.last_bundle_id),
             last_bundle_sequence: Some(selection.record.last_sequence),
             last_bundle_signer_kids: Vec::new(),
             override_pin: override_pin.clone(),
@@ -290,6 +308,7 @@ fn load_unsigned_pin_config_document(
         pending_bundle_acceptance: Some(PendingBundleAcceptance {
             state_path: config_trust.antirollback_state_path.clone(),
             key: selection.key,
+            accepted_anchor: selection.record.accepted_anchor,
             source: ConfigSource::LocalFile,
             bundle_id: None,
             bundle_manifest_hash: None,
@@ -315,6 +334,18 @@ fn parse_config_bytes_for_bundle(
     bytes: &[u8],
     source: ConfigSource,
 ) -> Result<(Config, Value), Error> {
+    parse_config_bytes_for_bundle_mode(bytes, source, true)
+}
+
+fn parse_config_bytes_for_product_action(bytes: &[u8]) -> Result<(Config, Value), Error> {
+    parse_config_bytes_for_bundle_mode(bytes, ConfigSource::SignedBundleFile, false)
+}
+
+fn parse_config_bytes_for_bundle_mode(
+    bytes: &[u8],
+    source: ConfigSource,
+    resolve_runtime_credentials: bool,
+) -> Result<(Config, Value), Error> {
     let config_text = std::str::from_utf8(bytes).map_err(|_| {
         emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
@@ -335,11 +366,16 @@ fn parse_config_bytes_for_bundle(
         emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
     })?;
-    suppress_source_diagnostics(|| validate::run_with_source(&config, source)).inspect_err(
-        |_| {
-            emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
-        },
-    )?;
+    suppress_source_diagnostics(|| {
+        if resolve_runtime_credentials {
+            validate::run_with_source(&config, source)
+        } else {
+            validate::run_product_action(&config)
+        }
+    })
+    .inspect_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
+    })?;
     Ok((config, config_value))
 }
 
@@ -411,6 +447,160 @@ pub fn load_verified_bundle_with_metadata_options(
     load_document_with_metadata(document)
 }
 
+/// Direct signed startup with an explicit, closed Relay lane expectation.
+///
+/// The lane-to-runtime binding is checked after signature verification but
+/// before anti-rollback state access. Complete acceptance-identity matching is
+/// owned by the platform bundle verifier; this product check prevents the
+/// public lane from consuming consultation bootstrap policy and prevents the
+/// consultation lane from starting without it.
+pub fn load_verified_bundle_with_metadata_for_lane_options(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    antirollback_state_path: &Path,
+    expected_lane: RelayProductLane,
+    options: LoadOptions,
+) -> Result<LoadedConfig, Error> {
+    let verified = verify_config_bundle(bundle_path, trust_anchor_path).map_err(|error| {
+        log_bundle_verification_error(&error);
+        Error::from(ConfigError::ValidationError)
+    })?;
+    enforce_relay_direct_bundle_binding(&verified)?;
+    enforce_relay_product_action_identity(&verified, expected_lane)?;
+    let (runtime, _) = parse_config_bytes_for_product_action(&verified.config_bytes)?;
+    verify_relay_runtime_lane_binding(expected_lane, &runtime).map_err(|code| {
+        emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
+        Error::from(ConfigError::ValidationError)
+    })?;
+    let config_trust = super::ConfigTrustConfig {
+        trust_anchor_path: trust_anchor_path.to_path_buf(),
+        bundle_path: bundle_path.to_path_buf(),
+        antirollback_state_path: antirollback_state_path.to_path_buf(),
+        break_glass_override_path: None,
+    };
+    let document = load_verified_bundle_config_document(&config_trust, options, verified)?;
+    load_document_with_metadata(document)
+}
+
+/// Compile a verified product-action bundle after the caller has independently
+/// selected its exact acceptance-state action.
+///
+/// This path intentionally performs no anti-rollback read or write. The
+/// product-action entry point owns the opaque plan, audited mutation, and
+/// commit sequence. Keeping the state decision out of runtime compilation
+/// prevents the compatibility startup path from performing a second,
+/// differently governed acceptance.
+pub fn load_verified_product_bundle_with_metadata_for_lane(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    expected_lane: RelayProductLane,
+) -> Result<LoadedConfig, Error> {
+    let verified = verify_config_bundle(bundle_path, trust_anchor_path).map_err(|error| {
+        log_bundle_verification_error(&error);
+        Error::from(ConfigError::ValidationError)
+    })?;
+    enforce_relay_direct_bundle_binding(&verified)?;
+    enforce_relay_product_action_identity(&verified, expected_lane)?;
+    let (runtime, config_value) =
+        parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
+    verify_relay_runtime_lane_binding(expected_lane, &runtime).map_err(|code| {
+        emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
+        Error::from(ConfigError::ValidationError)
+    })?;
+    let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(&verified)
+        .map_err(map_consultation_artifact_error)?;
+    let consultation_artifacts = suppress_source_diagnostics(|| {
+        load_consultation_artifacts(
+            &verified.config_path,
+            &runtime,
+            ConfigSource::SignedBundleFile,
+            Some(&signed_bundle_files),
+        )
+    })
+    .map_err(map_consultation_artifact_error)?;
+    let document = LoadedConfigDocument {
+        config_path: verified.config_path,
+        runtime,
+        provenance: ConfigProvenance {
+            source: ConfigSource::SignedBundleFile,
+            internal_config_hash: verified.manifest.config_hash.clone(),
+            posture_config_hash: posture_safe_runtime_config_hash(&config_value),
+            dynamic_reload_supported: false,
+            last_bundle_id: Some(verified.manifest.bundle_id),
+            last_bundle_sequence: Some(verified.manifest.sequence),
+            last_bundle_signer_kids: verified.signer_kids,
+            override_pin: None,
+            last_apply_result: None,
+            last_apply_at: None,
+            restart_required: false,
+        },
+        pending_bundle_acceptance: None,
+        signed_bundle_files: Some(signed_bundle_files),
+        consultation_artifacts,
+    };
+    load_document_with_metadata(document)
+}
+
+/// Verified and structurally compiled signed input for a bounded product
+/// action.
+///
+/// This representation deliberately contains no anti-rollback decision and
+/// resolves no API, OAuth, or source credential. Callers must select their
+/// state action only after the complete identity and lane binding succeeds.
+#[derive(Debug)]
+pub struct VerifiedProductActionInput {
+    pub verified: VerifiedConfigBundle,
+    pub runtime: Config,
+}
+
+pub fn verify_relay_runtime_lane_binding(
+    lane: RelayProductLane,
+    runtime: &Config,
+) -> Result<(), BundleVerificationCode> {
+    let accepted = match lane {
+        RelayProductLane::Public => runtime.consultation.is_none(),
+        RelayProductLane::Consultation => runtime
+            .consultation
+            .as_ref()
+            .is_some_and(|consultation| consultation.bootstrap.is_some()),
+    };
+    accepted
+        .then_some(())
+        .ok_or(BundleVerificationCode::REJECTED_BINDING)
+}
+
+/// Verify and compile the complete signed Relay closure without accessing
+/// anti-rollback state or constructing runtime credentials and sources.
+pub fn load_verified_product_action_input(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    expected_lane: RelayProductLane,
+) -> Result<VerifiedProductActionInput, Error> {
+    let verified = verify_config_bundle(bundle_path, trust_anchor_path).map_err(|error| {
+        log_bundle_verification_error(&error);
+        Error::from(ConfigError::ValidationError)
+    })?;
+    enforce_relay_direct_bundle_binding(&verified)?;
+    enforce_relay_product_action_identity(&verified, expected_lane)?;
+    let (runtime, _) = parse_config_bytes_for_product_action(&verified.config_bytes)?;
+    let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(&verified)
+        .map_err(map_consultation_artifact_error)?;
+    load_consultation_artifacts(
+        &verified.config_path,
+        &runtime,
+        ConfigSource::SignedBundleFile,
+        Some(&signed_bundle_files),
+    )
+    .map_err(map_consultation_artifact_error)?;
+    load_config_metadata_for_source(
+        &verified.config_path,
+        &runtime,
+        ConfigSource::SignedBundleFile,
+        Some(&signed_bundle_files),
+    )?;
+    Ok(VerifiedProductActionInput { verified, runtime })
+}
+
 fn load_document_with_metadata(document: LoadedConfigDocument) -> Result<LoadedConfig, Error> {
     let (metadata, metadata_source_digest) = load_config_metadata_for_source(
         &document.config_path,
@@ -455,7 +645,7 @@ pub fn validate_verified_bundle_runtime(verified: &VerifiedConfigBundle) -> Resu
 pub fn verify_relay_bundle_product_binding(
     verified: &VerifiedConfigBundle,
 ) -> Result<(), BundleVerificationCode> {
-    if verified.manifest.product == RELAY_CONFIG_BUNDLE_PRODUCT {
+    if verified.manifest.acceptance_identity.product == ProductAcceptanceProductV1::RegistryRelay {
         Ok(())
     } else {
         Err(BundleVerificationCode::REJECTED_BINDING)
@@ -471,8 +661,23 @@ pub fn verify_relay_bundle_product_binding(
 pub fn verify_relay_direct_bundle_binding(
     verified: &VerifiedConfigBundle,
 ) -> Result<(), BundleVerificationCode> {
-    verify_relay_bundle_product_binding(verified)?;
-    if verified.manifest.instance_id.is_some() {
+    verify_relay_bundle_product_binding(verified)
+}
+
+pub fn verify_relay_product_action_identity(
+    verified: &VerifiedConfigBundle,
+    expected_lane: RelayProductLane,
+) -> Result<(), BundleVerificationCode> {
+    verify_relay_direct_bundle_binding(verified)?;
+    let expected_lane = match expected_lane {
+        RelayProductLane::Public => ProductAcceptanceLaneV1::RelayPublic,
+        RelayProductLane::Consultation => ProductAcceptanceLaneV1::RelayConsultation,
+    };
+    let identity = &verified.manifest.acceptance_identity;
+    if identity.trust_domain == ProductTrustDomainV1::Governed
+        && identity.product == ProductAcceptanceProductV1::RegistryRelay
+        && identity.lane == expected_lane
+    {
         Ok(())
     } else {
         Err(BundleVerificationCode::REJECTED_BINDING)
@@ -488,6 +693,16 @@ fn enforce_relay_bundle_product_binding(verified: &VerifiedConfigBundle) -> Resu
 
 fn enforce_relay_direct_bundle_binding(verified: &VerifiedConfigBundle) -> Result<(), Error> {
     verify_relay_direct_bundle_binding(verified).map_err(|code| {
+        emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
+        Error::from(ConfigError::ValidationError)
+    })
+}
+
+fn enforce_relay_product_action_identity(
+    verified: &VerifiedConfigBundle,
+    expected_lane: RelayProductLane,
+) -> Result<(), Error> {
+    verify_relay_product_action_identity(verified, expected_lane).map_err(|code| {
         emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
         Error::from(ConfigError::ValidationError)
     })
