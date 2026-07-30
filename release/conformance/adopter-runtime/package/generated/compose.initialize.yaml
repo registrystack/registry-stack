@@ -1,0 +1,60 @@
+services:
+  registry-relay-public-prepare-state:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    networks: [registry-edge]
+
+  registry-relay-consultation-prepare-state:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+
+  registry-notary-prepare-state:
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+
+  registry-relay-public-initialize:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    networks: [registry-edge]
+
+  registry-relay-consultation-initialize:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+
+  registry-notary-initialize:
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
