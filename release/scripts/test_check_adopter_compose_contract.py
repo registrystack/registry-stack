@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -125,6 +126,32 @@ class AdopterComposeContractTests(unittest.TestCase):
         CHECKER.validate_plan(
             CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json"
         )
+
+    def test_plan_probe_rejects_changed_recovery_action(self) -> None:
+        plan = json.loads(
+            (
+                CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        plan["workloads"][0]["reactivation_action"] = "arbitrary"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.ContractError, "reactivation_action"):
+                CHECKER.validate_plan(path)
+
+    def test_plan_probe_rejects_compose_volume_syntax(self) -> None:
+        plan = json.loads(
+            (
+                CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        plan["workloads"][0]["volumes"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.ContractError, "volumes"):
+                CHECKER.validate_plan(path)
 
     def test_minimum_compose_download_is_checksum_pinned(self) -> None:
         wrapper = SCRIPT.with_suffix(".sh").read_text(encoding="utf-8")

@@ -66,12 +66,44 @@ COMPOSE_SECRET_FOR_CONSUMER = {
     "postgresql-tls": "registry-postgres-tls",
     "postgresql-credentials": "registry-postgres-credentials",
 }
+COMPOSE_STATE_FOR_ROLE = {
+    "relay-public-anti-rollback": (
+        "registry-relay-public-state",
+        "/var/lib/registry/state",
+    ),
+    "relay-public-audit": (
+        "registry-relay-public-audit",
+        "/var/lib/registry/audit",
+    ),
+    "relay-consultation-anti-rollback": (
+        "registry-relay-consultation-state",
+        "/var/lib/registry/state",
+    ),
+    "relay-consultation-audit": (
+        "registry-relay-consultation-audit",
+        "/var/lib/registry/audit",
+    ),
+    "notary-anti-rollback": (
+        "registry-notary-state",
+        "/var/lib/registry/state",
+    ),
+    "notary-audit": (
+        "registry-notary-audit",
+        "/var/lib/registry/audit",
+    ),
+    "postgresql-data": (
+        "registry-postgres-data",
+        "/var/lib/postgresql/data",
+    ),
+}
 EXPECTED_PLAN_WORKLOADS = {
     "relay-public": {
         "kind": "product",
         "product_lane": "relay-public",
         "action": "serve",
         "dependencies": [],
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
     },
     "relay-consultation": {
         "kind": "product",
@@ -81,6 +113,8 @@ EXPECTED_PLAN_WORKLOADS = {
             "postgresql-state-plane",
             "private-namespace-holder",
         ],
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
     },
     "notary": {
         "kind": "product",
@@ -91,16 +125,22 @@ EXPECTED_PLAN_WORKLOADS = {
             "postgresql-state-plane",
             "private-namespace-holder",
         ],
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
     },
     "postgresql-state-plane": {
         "kind": "supporting",
         "recipe": "postgresql_state_plane",
         "dependencies": ["private-namespace-holder"],
+        "restart_action": "restart",
+        "reactivation_action": "restore_consistency_group",
     },
     "private-namespace-holder": {
         "kind": "supporting",
         "recipe": "private_namespace_holder",
         "dependencies": [],
+        "restart_action": "restart",
+        "reactivation_action": "restart_consistency_group",
     },
 }
 EXPECTED_INITIALIZATION_ACTIONS = (
@@ -199,6 +239,7 @@ def assert_ordinary_model(
     model: dict[str, Any],
     expected_images: dict[str, str] | None = None,
     expected_secrets: dict[str, set[str]] | None = None,
+    expected_state_mounts: dict[str, set[tuple[str, str]]] | None = None,
     expected_generated_dir: Path | None = None,
 ) -> None:
     services = _services(model)
@@ -222,21 +263,40 @@ def assert_ordinary_model(
             "/conformance-only-healthcheck",
         ]:
             raise ContractError(f"{name} lost its conformance health shape")
+        service = services[name]
+        if (
+            service.get("read_only") is not True
+            or service.get("user") != "65532:65532"
+            or service.get("cap_drop") != ["ALL"]
+            or service.get("security_opt") != ["no-new-privileges:true"]
+            or service.get("tmpfs") != ["/tmp"]
+        ):
+            raise ContractError(f"{name} does not use the product hardening profile")
         if (
             expected_images is not None
-            and services[name].get("image") != expected_images[name]
+            and service.get("image") != expected_images[name]
         ):
             raise ContractError(f"{name} does not use its plan image identity")
         if expected_secrets is not None:
             actual_secrets = {
                 secret.get("source")
-                for secret in services[name].get("secrets", [])
+                for secret in service.get("secrets", [])
                 if isinstance(secret, dict)
             }
             if actual_secrets != expected_secrets[name]:
                 raise ContractError(
                     f"{name} does not use its plan secret consumers"
                 )
+        if expected_state_mounts is not None:
+            actual_state_mounts = {
+                (mount.get("source"), mount.get("target"))
+                for mount in service.get("volumes", [])
+                if isinstance(mount, dict)
+                and mount.get("type") == "volume"
+                and mount.get("read_only") is not True
+            }
+            if actual_state_mounts != expected_state_mounts[name]:
+                raise ContractError(f"{name} does not use its plan state roles")
 
     expected_dependencies = {
         "registry-private-namespace": set(),
@@ -299,6 +359,8 @@ def assert_ordinary_model(
         raise ContractError("public Relay has the wrong network")
 
     if expected_generated_dir is not None:
+        if expected_secrets is None or expected_state_mounts is None:
+            raise ContractError("ordinary model plan projections are incomplete")
         expected_inputs = {
             "registry-relay-public": "relay-public",
             "registry-relay-consultation": "relay-consultation",
@@ -348,6 +410,19 @@ def assert_ordinary_model(
         ):
             raise ContractError(
                 "ordinary model secret definitions do not match the plan"
+            )
+        declared_volumes = model.get("volumes")
+        expected_volume_names = {
+            source
+            for service_mounts in expected_state_mounts.values()
+            for source, _target in service_mounts
+        }
+        if (
+            not isinstance(declared_volumes, dict)
+            or set(declared_volumes) != expected_volume_names
+        ):
+            raise ContractError(
+                "ordinary model volume definitions do not match the plan"
             )
 
 
@@ -560,7 +635,11 @@ def assert_negative_boundary(
 
 def validate_plan(
     plan_path: Path,
-) -> tuple[dict[str, str], dict[str, set[str]]]:
+) -> tuple[
+    dict[str, str],
+    dict[str, set[str]],
+    dict[str, set[tuple[str, str]]],
+]:
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -744,6 +823,7 @@ def validate_plan(
         "networks",
         "ports",
         "secrets",
+        "volumes",
     }
 
     def walk(value: Any) -> None:
@@ -772,11 +852,18 @@ def validate_plan(
         }
         for workload_id, workload in workload_by_id.items()
     }
-    return expected_images, expected_secrets
+    expected_state_mounts = {
+        COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: {
+            COMPOSE_STATE_FOR_ROLE[role]
+            for role in workload.get("state_roles", [])
+        }
+        for workload_id, workload in workload_by_id.items()
+    }
+    return expected_images, expected_secrets, expected_state_mounts
 
 
 def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
-    expected_images, expected_secrets = validate_plan(
+    expected_images, expected_secrets, expected_state_mounts = validate_plan(
         fixture_root / "deployment-plan.probe.v1.json"
     )
     empty_env = fixture_root / "package/generated/compose.empty.env"
@@ -789,6 +876,7 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         baseline,
         expected_images,
         expected_secrets,
+        expected_state_mounts,
         (fixture_root / "package/generated").resolve(),
     )
 
