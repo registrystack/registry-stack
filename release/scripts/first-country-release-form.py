@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -165,6 +166,28 @@ PUBLIC_MATERIAL_FILENAMES = {
 HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
 OAUTH_MINIMIZED_CLAIMS = ["birth-event-found", "birth-event-registered"]
 GOVERNED_LANES = ("relay-public", "relay-consultation", "notary")
+ROLLBACK_AFFECTED_LANES = ("relay-consultation", "notary")
+ROLLBACK_SAFE_MESSAGE = (
+    "The bundle or override does not satisfy local anti-rollback requirements. "
+    "Use a monotonic bundle or an authorized break-glass selection."
+)
+GOVERNED_DURABLE_VOLUME_SUFFIXES = {
+    "registry-postgres": {
+        "/var/lib/postgresql/data": "postgresql-data",
+    },
+    "registry-relay-public": {
+        "/var/lib/registry/state": "relay-public-state",
+        "/var/lib/registry/audit": "relay-public-audit",
+    },
+    "registry-relay-consultation": {
+        "/var/lib/registry/state": "relay-consultation-state",
+        "/var/lib/registry/audit": "relay-consultation-audit",
+    },
+    "registry-notary": {
+        "/var/lib/registry/state": "notary-state",
+        "/var/lib/registry/audit": "notary-audit",
+    },
+}
 GOVERNED_OPERATOR_SOURCES = {
     "relay-public-environment": (
         "relay-public-prepare.env",
@@ -389,6 +412,51 @@ def sealed_release_environment(source: dict[str, str]) -> dict[str, str]:
         for name, value in source.items()
         if not name.startswith(("REGISTRYCTL_", "COMPOSE_"))
     }
+
+
+def bind_release_form_project_identity(project_file: Path, project_id: str) -> None:
+    if re.fullmatch(r"first-country-release-form-[0-9a-f]{16}", project_id) is None:
+        raise ReleaseFormError("release-form project identity is invalid")
+    require_regular(project_file, max_bytes=4 * 1024 * 1024)
+    try:
+        source = project_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseFormError("release-form project is not valid UTF-8") from error
+    registry_id = re.compile(
+        r"(?m)^(registry:\n  id: )[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    if len(registry_id.findall(source)) != 1:
+        raise ReleaseFormError(
+            "release-form project has no single closed registry identity"
+        )
+    project_file.write_text(
+        registry_id.sub(rf"\g<1>{project_id}", source),
+        encoding="utf-8",
+    )
+
+
+def available_governed_loopback_ports() -> tuple[int, int]:
+    reservations: list[socket.socket] = []
+    try:
+        for _ in range(2):
+            reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            reservation.bind(("127.0.0.1", 0))
+            reservations.append(reservation)
+        ports = tuple(
+            int(reservation.getsockname()[1]) for reservation in reservations
+        )
+    except OSError as error:
+        raise ReleaseFormError(
+            "cannot allocate proof-specific governed loopback ports"
+        ) from error
+    finally:
+        for reservation in reservations:
+            reservation.close()
+    if len(ports) != 2 or ports[0] == ports[1] or any(port == 0 for port in ports):
+        raise ReleaseFormError(
+            "proof-specific governed loopback ports are unavailable"
+        )
+    return ports
 
 
 def require_regular(path: Path, *, max_bytes: int = MAX_FILE_BYTES) -> None:
@@ -1764,7 +1832,20 @@ def require_private_evidence_tree(root: Path) -> None:
 def governed_deployment_binding(
     bundle: Path,
     destination: Path,
+    *,
+    expected_project: str,
+    ports: tuple[int, int],
 ) -> tuple[str, str]:
+    if (
+        re.fullmatch(
+            r"first-country-release-form-[0-9a-f]{16}", expected_project
+        )
+        is None
+        or len(ports) != 2
+        or ports[0] == ports[1]
+        or any(type(port) is not int or port <= 0 or port > 65535 for port in ports)
+    ):
+        raise ReleaseFormError("proof-specific governed binding is invalid")
     manifest = read_closed_json(
         bundle / "bundle/manifest.json", "signed Relay public manifest"
     )
@@ -1784,8 +1865,10 @@ def governed_deployment_binding(
         or identity.get("trust_domain") != "governed"
         or identity.get("lane") != "relay-public"
         or identity.get("product") != "registry-relay"
-        or not isinstance(identity.get("project"), str)
-        or not isinstance(identity.get("environment"), str)
+        or identity.get("project") != expected_project
+        or identity.get("environment") != "local"
+        or identity.get("stream") != expected_project
+        or identity.get("instance") != "relay-public"
     ):
         raise ReleaseFormError("signed deployment identity is not the expected closed value")
     identity_bytes = json.dumps(
@@ -1797,14 +1880,14 @@ def governed_deployment_binding(
         separators=(",", ":"),
     ).encode()
     package_id = f"registry-{hashlib.sha256(identity_bytes).hexdigest()[:24]}"
-    volume_prefix = f"registry-release-form-{os.getpid()}-{os.urandom(8).hex()}"
+    volume_prefix = expected_project
     binding = {
         "schema_id": "io.registrystack.deployment_binding",
         "schema_version": "1.0",
         "package_id": package_id,
         "environment": identity["environment"],
         "loopback_address": "127.0.0.1",
-        "ports": {"relay_public": 4242, "notary": 4255},
+        "ports": {"relay_public": ports[0], "notary": ports[1]},
         "secret_files": {
             name: f"operator/secrets/{name}"
             for name in sorted(GOVERNED_OPERATOR_SOURCES)
@@ -2373,6 +2456,87 @@ def run_failed_activation(
     )
 
 
+def require_value_free_rollback_report(output: str, lane: str) -> None:
+    expected_components = {
+        "relay-consultation": ("registry-relay", None),
+        "notary": ("registry-notary", "unknown"),
+    }
+    if lane not in expected_components:
+        raise ReleaseFormError("rollback lane is outside the affected closed set")
+    decoder = json.JSONDecoder(object_pairs_hook=reject_duplicate_json_keys)
+    report: Any = None
+    for match in re.finditer(r"(?m)^[ \t]*\{", output):
+        try:
+            candidate, _end = decoder.raw_decode(output, match.end() - 1)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("schema")
+            == "registry.platform.config_apply_report.v1"
+        ):
+            report = candidate
+            break
+    component, redacted_stream = expected_components[lane]
+    expected_keys = {
+        "schema",
+        "attempt_id",
+        "component",
+        "stream_id",
+        "source",
+        "bundle_id",
+        "bundle_sequence",
+        "previous_config_hash",
+        "config_hash",
+        "result",
+        "restart_required",
+        "change_classes",
+        "affected_components",
+        "warnings",
+        "errors",
+    }
+    if (
+        not isinstance(report, dict)
+        or set(report) != expected_keys
+        or re.fullmatch(
+            r"[0-9A-HJKMNP-TV-Z]{26}", str(report.get("attempt_id"))
+        )
+        is None
+        or report.get("component") != component
+        or report.get("stream_id") != redacted_stream
+        or report.get("source") != "signed_bundle_file"
+        or any(
+            report.get(name) is not None
+            for name in (
+                "bundle_id",
+                "bundle_sequence",
+                "previous_config_hash",
+                "config_hash",
+            )
+        )
+        or report.get("result") != "rejected_rollback"
+        or report.get("restart_required") is not False
+        or any(
+            report.get(name) != []
+            for name in (
+                "change_classes",
+                "affected_components",
+                "warnings",
+            )
+        )
+        or report.get("errors")
+        != [
+            {
+                "code": "rejected_rollback",
+                "message": ROLLBACK_SAFE_MESSAGE,
+            }
+        ]
+    ):
+        raise ReleaseFormError(
+            f"{lane} did not report a typed, value-free rejected_rollback"
+        )
+
+
 def run_expected_rollbacks(
     name: str,
     lane_commands: list[tuple[str, list[str]]],
@@ -2381,6 +2545,8 @@ def run_expected_rollbacks(
     env: dict[str, str],
     logs: Path,
 ) -> dict[str, Any]:
+    if tuple(lane for lane, _command in lane_commands) != ROLLBACK_AFFECTED_LANES:
+        raise ReleaseFormError("rollback proof does not cover every affected lane")
     observed: list[str] = []
     for lane, command in lane_commands:
         result = subprocess.run(
@@ -2393,31 +2559,11 @@ def run_expected_rollbacks(
             timeout=180,
             check=False,
         )
-        report: Any = None
-        for line in reversed(result.stdout.splitlines()):
-            try:
-                candidate = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict):
-                report = candidate
-                break
-        errors = report.get("errors") if isinstance(report, dict) else None
-        if (
-            result.returncode == 0
-            or not isinstance(report, dict)
-            or report.get("result") != "rejected_rollback"
-            or not isinstance(errors, list)
-            or not errors
-            or any(
-                not isinstance(error, dict)
-                or error.get("code") != "rejected_rollback"
-                for error in errors
-            )
-        ):
+        if result.returncode == 0:
             raise ReleaseFormError(
-                f"{lane} did not report a typed rejected_rollback"
+                f"{lane} unexpectedly accepted a rollback"
             )
+        require_value_free_rollback_report(result.stdout, lane)
         observed.append(lane)
     write_json_log(
         logs,
@@ -2861,42 +3007,30 @@ def backup_and_restore_governed_volumes(
         raise ReleaseFormError("governed Compose project identity is unavailable")
     services = document.get("services") if isinstance(document, dict) else None
     declared_volumes = document.get("volumes") if isinstance(document, dict) else None
-    durable_targets = {
-        "registry-postgres": {"/var/lib/postgresql/data"},
-        "registry-relay-public": {
-            "/var/lib/registry/state",
-            "/var/lib/registry/audit",
-        },
-        "registry-relay-consultation": {
-            "/var/lib/registry/state",
-            "/var/lib/registry/audit",
-        },
-        "registry-notary": {
-            "/var/lib/registry/state",
-            "/var/lib/registry/audit",
-        },
-    }
     if not isinstance(services, dict) or not isinstance(declared_volumes, dict):
         raise ReleaseFormError("governed Compose volume model is invalid")
     selected_sources: set[str] = set()
-    for service_name, expected_targets in durable_targets.items():
+    for service_name, suffixes_by_target in GOVERNED_DURABLE_VOLUME_SUFFIXES.items():
         service = services.get(service_name)
         mounts = service.get("volumes") if isinstance(service, dict) else None
         if not isinstance(mounts, list):
             raise ReleaseFormError("governed durable volume selection is incomplete")
-        selected = {
+        observed = [
             (mount.get("source"), mount.get("target"))
             for mount in mounts
             if isinstance(mount, dict)
             and mount.get("type") == "volume"
-            and mount.get("target") in expected_targets
+            and mount.get("target") in suffixes_by_target
+        ]
+        expected = {
+            (f"{volume_prefix}-{suffix}", target)
+            for target, suffix in suffixes_by_target.items()
         }
-        if (
-            {target for _source, target in selected} != expected_targets
-            or any(not isinstance(source, str) for source, _target in selected)
-        ):
-            raise ReleaseFormError("governed durable volume selection is incomplete")
-        selected_sources.update(source for source, _target in selected)
+        if len(observed) != len(expected) or set(observed) != expected:
+            raise ReleaseFormError(
+                "governed durable volume identity is incomplete or unexpected"
+            )
+        selected_sources.update(source for source, _target in expected)
     if len(selected_sources) != 7:
         raise ReleaseFormError("governed backup must select exactly seven durable volumes")
     observed_stagers = {name for name in services if name.endswith("-stage-secrets")}
@@ -2936,16 +3070,18 @@ def backup_and_restore_governed_volumes(
     unexpected = set(declared_volumes).difference(selected_sources)
     if selected_sources.intersection(staged_sources) or unexpected != staged_sources:
         raise ReleaseFormError("governed backup found an unexpected durable volume")
+    expected_volume_names = {
+        source: f"{project_name}_{source}"
+        for source in selected_sources | staged_sources
+    }
+    if any(
+        not isinstance(declared_volumes[source], dict)
+        or declared_volumes[source].get("name") != expected_volume_names[source]
+        for source in expected_volume_names
+    ):
+        raise ReleaseFormError("governed durable volume identity is unexpected")
     volumes = sorted(
-        (
-            source,
-            (
-                declared_volumes[source].get("name")
-                if isinstance(declared_volumes[source], dict)
-                else None
-            )
-            or source,
-        )
+        (source, expected_volume_names[source])
         for source in selected_sources
     )
     listed = subprocess.run(
@@ -2967,10 +3103,11 @@ def backup_and_restore_governed_volumes(
         check=False,
     )
     observed_volumes = set(filter(None, listed.stdout.splitlines()))
-    if listed.returncode != 0 or not {
-        volume for _source, volume in volumes
-    }.issubset(observed_volumes):
-        raise ReleaseFormError("governed durable volume set is unavailable")
+    expected_project_volumes = set(expected_volume_names.values())
+    if listed.returncode != 0 or observed_volumes != expected_project_volumes:
+        raise ReleaseFormError(
+            "governed Docker project volume identity is unavailable or unexpected"
+        )
     backup_root.mkdir(mode=0o700)
     for index, (_source, volume) in enumerate(volumes):
         archive = backup_root / f"{index:02}.tar"
@@ -3190,6 +3327,8 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         prefix="registry-first-country-release-form-"
     ) as temporary:
         root = Path(temporary)
+        run_nonce = os.urandom(8).hex()
+        proof_project_id = f"first-country-release-form-{run_nonce}"
         install_dir = root / "install"
         project = root / "reader-http-project"
         oauth_project = root / "reader-opencrvs-project"
@@ -3291,6 +3430,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             )
             protect_evidence_tree(reader_evidence)
             reader_summary["evidence_sha256"] = closed_tree_digests(reader_evidence)
+            bind_release_form_project_identity(
+                project / "registry-stack.yaml",
+                proof_project_id,
+            )
             for name, image in (
                 ("pull_relay", verified["relay_image"]),
                 ("pull_notary", verified["notary_image"]),
@@ -3539,7 +3682,6 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             governed_private.mkdir(mode=0o700)
             handoff = root / "operator-handoff"
             handoff.mkdir()
-            run_nonce = os.urandom(8).hex()
             package = root / f"registry-stack-release-form-{os.getpid()}-{run_nonce}"
             rollback_package = (
                 root / f"registry-stack-release-form-{os.getpid()}-{run_nonce}-rollback"
@@ -3656,8 +3798,12 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 )
             )
             binding_file = governed_private / "binding.json"
+            governed_ports = available_governed_loopback_ports()
             package_id, volume_prefix = governed_deployment_binding(
-                bundles["relay-public"], binding_file
+                bundles["relay-public"],
+                binding_file,
+                expected_project=proof_project_id,
+                ports=governed_ports,
             )
             assert_governed_resources_absent(
                 package_id,
@@ -4411,6 +4557,14 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 "isolated_teardown": "passed",
             }
         finally:
+            # Capture partially generated development credentials before teardown
+            # can remove them, so failure logs retain the same redaction boundary
+            # as a completed proof.
+            for dev_project in (project, oauth_project):
+                dev_root = dev_project / ".registry-stack/dev/local"
+                if dev_root.is_dir() and not dev_root.is_symlink():
+                    for credential_root in dev_root.glob("*/credentials"):
+                        secrets.extend(available_secret_values(credential_root))
             if package is not None and package.exists():
                 subprocess.run(
                     [*compose_base(package), "down", "--volumes", "--remove-orphans"],

@@ -796,6 +796,11 @@ class FirstCountryReleaseFormTest(TestCase):
         )
         self.assertNotIn("git clone", stable_source)
         self.assertNotIn('"spreadsheet"', stable_source)
+        cleanup_source = stable_source.split("        finally:", 1)[1]
+        self.assertLess(
+            cleanup_source.index("available_secret_values"),
+            cleanup_source.index("if package is not None"),
+        )
 
     def test_expected_failure_requires_its_value_free_classification(self) -> None:
         logs = self.root / "logs"
@@ -1777,6 +1782,34 @@ class FirstCountryReleaseFormTest(TestCase):
         )
         self.assertEqual(observed, {"PATH": "/usr/bin", "CI": "1"})
 
+    def test_release_form_project_identity_is_unique_and_closed(self) -> None:
+        project_file = self.root / "registry-stack.yaml"
+        project_file.write_text(
+            "version: 1\nregistry:\n  id: fictional-citizen-registry\n",
+            encoding="utf-8",
+        )
+        project_id = "first-country-release-form-0123456789abcdef"
+
+        self.module.bind_release_form_project_identity(project_file, project_id)
+
+        self.assertEqual(
+            project_file.read_text(encoding="utf-8"),
+            f"version: 1\nregistry:\n  id: {project_id}\n",
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "project identity is invalid"
+        ):
+            self.module.bind_release_form_project_identity(
+                project_file, "fictional-citizen-registry"
+            )
+
+    def test_governed_loopback_ports_are_nonzero_and_distinct(self) -> None:
+        relay_port, notary_port = self.module.available_governed_loopback_ports()
+
+        self.assertNotEqual(relay_port, notary_port)
+        for port in (relay_port, notary_port):
+            self.assertGreater(port, 0)
+
     def test_dev_status_and_logs_require_exact_current_schemas(self) -> None:
         status = {
             "schema_version": "registryctl.dev_status.v1",
@@ -1829,16 +1862,17 @@ class FirstCountryReleaseFormTest(TestCase):
     def test_governed_binding_uses_signed_identity_and_unique_volume_prefix(
         self,
     ) -> None:
+        project_id = "first-country-release-form-0123456789abcdef"
         bundle = self.root / "relay-public"
         (bundle / "bundle").mkdir(parents=True)
         manifest = {
             "acceptance_identity": {
                 "trust_domain": "governed",
-                "project": "my-registry",
+                "project": project_id,
                 "environment": "local",
                 "lane": "relay-public",
                 "product": "registry-relay",
-                "stream": "local",
+                "stream": project_id,
                 "instance": "relay-public",
             }
         }
@@ -1848,25 +1882,48 @@ class FirstCountryReleaseFormTest(TestCase):
         destination = self.root / "private/binding.json"
 
         package_id, volume_prefix = self.module.governed_deployment_binding(
-            bundle, destination
+            bundle,
+            destination,
+            expected_project=project_id,
+            ports=(43421, 43422),
         )
         binding = json.loads(destination.read_text(encoding="utf-8"))
 
-        identity_bytes = b'{"environment":"local","project":"my-registry"}'
+        identity_bytes = (
+            b'{"environment":"local","project":'
+            b'"first-country-release-form-0123456789abcdef"}'
+        )
         self.assertEqual(
             package_id,
             "registry-" + hashlib.sha256(identity_bytes).hexdigest()[:24],
         )
         self.assertEqual(binding["package_id"], package_id)
+        self.assertEqual(volume_prefix, project_id)
         self.assertEqual(binding["durable_volume_prefix"], volume_prefix)
         self.assertEqual(
             set(binding["secret_files"]),
             set(self.module.GOVERNED_OPERATOR_SOURCES),
         )
-        self.assertEqual(binding["ports"], {"relay_public": 4242, "notary": 4255})
+        self.assertEqual(
+            binding["ports"], {"relay_public": 43421, "notary": 43422}
+        )
         self.assertNotIn("edge_network_name", binding)
         if os.name == "posix":
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+        manifest["acceptance_identity"]["stream"] = "shared-stream"
+        (bundle / "bundle/manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "expected closed value"
+        ):
+            self.module.governed_deployment_binding(
+                bundle,
+                destination,
+                expected_project=project_id,
+                ports=(43421, 43422),
+            )
 
     def test_governed_binding_rejects_preexisting_docker_resources(self) -> None:
         empty = subprocess.CompletedProcess([], 0, "", "")
@@ -1915,18 +1972,41 @@ class FirstCountryReleaseFormTest(TestCase):
     ) -> None:
         logs = self.root / "logs"
         logs.mkdir(mode=0o700)
-        typed = json.dumps(
-            {
-                "result": "rejected_rollback",
-                "errors": [{"code": "rejected_rollback"}],
-            }
-        )
+        def typed(component, stream_id):
+            return json.dumps(
+                {
+                    "schema": "registry.platform.config_apply_report.v1",
+                    "attempt_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "component": component,
+                    "stream_id": stream_id,
+                    "source": "signed_bundle_file",
+                    "bundle_id": None,
+                    "bundle_sequence": None,
+                    "previous_config_hash": None,
+                    "config_hash": None,
+                    "result": "rejected_rollback",
+                    "restart_required": False,
+                    "change_classes": [],
+                    "affected_components": [],
+                    "warnings": [],
+                    "errors": [
+                        {
+                            "code": "rejected_rollback",
+                            "message": self.module.ROLLBACK_SAFE_MESSAGE,
+                        }
+                    ],
+                },
+                indent=2,
+            )
+
+        relay_typed = typed("registry-relay", None)
+        notary_typed = typed("registry-notary", "unknown")
         with mock.patch.object(
             self.module.subprocess,
             "run",
             side_effect=[
-                subprocess.CompletedProcess([], 1, typed),
-                subprocess.CompletedProcess([], 1, typed),
+                subprocess.CompletedProcess([], 1, relay_typed),
+                subprocess.CompletedProcess([], 1, notary_typed),
             ],
         ):
             self.module.run_expected_rollbacks(
@@ -1949,23 +2029,35 @@ class FirstCountryReleaseFormTest(TestCase):
             mock.patch.object(
                 self.module.subprocess,
                 "run",
-                return_value=subprocess.CompletedProcess(
-                    [],
-                    1,
-                    json.dumps(
-                        {
-                            "result": "rejected",
-                            "errors": [{"code": "state_error"}],
-                        }
+                side_effect=[
+                    subprocess.CompletedProcess([], 1, relay_typed),
+                    subprocess.CompletedProcess(
+                        [],
+                        1,
+                        notary_typed.replace(
+                            '"stream_id": "unknown"',
+                            '"stream_id": "country-sensitive-stream"',
+                        ),
                     ),
-                ),
+                ],
             ),
             self.assertRaisesRegex(
-                self.module.ReleaseFormError, "typed rejected_rollback"
+                self.module.ReleaseFormError, "value-free rejected_rollback"
             ),
         ):
             self.module.run_expected_rollbacks(
                 "invalid-rollback",
+                [("relay-consultation", ["relay"]), ("notary", ["notary"])],
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "every affected lane"
+        ):
+            self.module.run_expected_rollbacks(
+                "incomplete-rollback",
                 [("relay-consultation", ["relay"])],
                 cwd=self.root,
                 env={},
@@ -2021,12 +2113,17 @@ class FirstCountryReleaseFormTest(TestCase):
             for stager_name in self.module.SECRET_STAGER_CONTRACT
             for mount in services[stager_name]["volumes"]
         }
+        project_name = "governed-fixture"
+        volume_names = {
+            source: f"{project_name}_{source}"
+            for source in sources | staged_sources
+        }
         document = {
-            "name": "governed-fixture",
+            "name": project_name,
             "services": services,
             "volumes": {
-                **{source: {"name": source} for source in sources},
-                **{source: {} for source in staged_sources},
+                source: {"name": volume_names[source]}
+                for source in sources | staged_sources
             },
         }
 
@@ -2037,7 +2134,10 @@ class FirstCountryReleaseFormTest(TestCase):
                 )
             if command[:3] == ["docker", "volume", "ls"]:
                 return subprocess.CompletedProcess(
-                    command, 0, "\n".join(sorted(sources)) + "\n", ""
+                    command,
+                    0,
+                    "\n".join(sorted(volume_names.values())) + "\n",
+                    "",
                 )
             return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -2045,7 +2145,7 @@ class FirstCountryReleaseFormTest(TestCase):
         logs.mkdir(mode=0o700)
         with mock.patch.object(
             self.module.subprocess, "run", side_effect=completed
-        ):
+        ) as run:
             self.module.backup_and_restore_governed_volumes(
                 package,
                 postgresql_image=self.postgresql,
@@ -2054,6 +2154,31 @@ class FirstCountryReleaseFormTest(TestCase):
                 env={},
                 logs=logs,
             )
+        backup_commands = [
+            call.args[0]
+            for call in run.call_args_list
+            if call.args[0][:2] == ["docker", "run"]
+            and "-cf" in call.args[0]
+        ]
+        self.assertEqual(len(backup_commands), 7)
+        self.assertTrue(
+            all(
+                any(
+                    argument == f"{volume_names[source]}:/source:ro"
+                    for source in sources
+                    for argument in command
+                )
+                for command in backup_commands
+            )
+        )
+        self.assertFalse(
+            any(
+                volume_names[staged_source] in argument
+                for command in backup_commands
+                for argument in command
+                for staged_source in staged_sources
+            )
+        )
         self.assertEqual(
             json.loads((logs / "backup_restore.log").read_text(encoding="utf-8"))[
                 "consistency_group_volumes"
@@ -2083,6 +2208,49 @@ class FirstCountryReleaseFormTest(TestCase):
         public_stage["volumes"][0]["source"] = (
             f"{volume_prefix}-operator-files-relay-public-serve"
         )
+
+        postgresql_source = "release-postgresql-data"
+        document["volumes"][postgresql_source] = {
+            "name": "country-shared-postgresql-data"
+        }
+        with (
+            mock.patch.object(self.module.subprocess, "run", side_effect=completed),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "durable volume identity is unexpected",
+            ),
+        ):
+            self.module.backup_and_restore_governed_volumes(
+                package,
+                postgresql_image=self.postgresql,
+                volume_prefix=volume_prefix,
+                backup_root=self.root / "aliased-backup",
+                env={},
+                logs=logs,
+            )
+        document["volumes"][postgresql_source] = {
+            "name": volume_names[postgresql_source]
+        }
+
+        services["registry-postgres"]["volumes"][0]["source"] = (
+            "country-shared-postgresql-data"
+        )
+        with (
+            mock.patch.object(self.module.subprocess, "run", side_effect=completed),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "identity is incomplete or unexpected",
+            ),
+        ):
+            self.module.backup_and_restore_governed_volumes(
+                package,
+                postgresql_image=self.postgresql,
+                volume_prefix=volume_prefix,
+                backup_root=self.root / "wrong-source-backup",
+                env={},
+                logs=logs,
+            )
+        services["registry-postgres"]["volumes"][0]["source"] = postgresql_source
 
         document["volumes"]["unexpected-durable"] = {}
         with (
