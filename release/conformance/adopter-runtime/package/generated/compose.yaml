@@ -34,6 +34,9 @@ services:
         condition: service_healthy
     volumes:
       - registry-postgres-data:/var/lib/postgresql/data
+    secrets:
+      - registry-postgres-tls
+      - registry-postgres-credentials
 
   registry-relay-public:
     <<: *product-hardening
@@ -138,6 +141,10 @@ volumes:
   registry-notary-audit:
 
 secrets:
+  registry-postgres-tls:
+    file: ../operator/secrets/postgresql-tls
+  registry-postgres-credentials:
+    file: ../operator/secrets/postgresql-credentials
   registry-relay-public-tls:
     file: ../operator/secrets/relay-public-tls
   registry-relay-consultation-tls:

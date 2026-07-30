@@ -58,6 +58,14 @@ COMPOSE_SERVICE_FOR_WORKLOAD = {
     "postgresql-state-plane": "registry-postgres",
     "private-namespace-holder": "registry-private-namespace",
 }
+COMPOSE_SECRET_FOR_CONSUMER = {
+    "relay-public-tls": "registry-relay-public-tls",
+    "relay-consultation-tls": "registry-relay-consultation-tls",
+    "notary-tls": "registry-notary-tls",
+    "notary-signing-key": "registry-notary-signing-key",
+    "postgresql-tls": "registry-postgres-tls",
+    "postgresql-credentials": "registry-postgres-credentials",
+}
 EXPECTED_PLAN_WORKLOADS = {
     "relay-public": {
         "kind": "product",
@@ -190,6 +198,8 @@ def _labels(service: dict[str, Any]) -> dict[str, str]:
 def assert_ordinary_model(
     model: dict[str, Any],
     expected_images: dict[str, str] | None = None,
+    expected_secrets: dict[str, set[str]] | None = None,
+    expected_generated_dir: Path | None = None,
 ) -> None:
     services = _services(model)
     if set(services) != PRODUCT_SERVICES:
@@ -217,6 +227,16 @@ def assert_ordinary_model(
             and services[name].get("image") != expected_images[name]
         ):
             raise ContractError(f"{name} does not use its plan image identity")
+        if expected_secrets is not None:
+            actual_secrets = {
+                secret.get("source")
+                for secret in services[name].get("secrets", [])
+                if isinstance(secret, dict)
+            }
+            if actual_secrets != expected_secrets[name]:
+                raise ContractError(
+                    f"{name} does not use its plan secret consumers"
+                )
 
     expected_dependencies = {
         "registry-private-namespace": set(),
@@ -241,6 +261,94 @@ def assert_ordinary_model(
             for dependency in dependencies.values()
         ):
             raise ContractError(f"{name} has a non-health dependency")
+
+    networks = model.get("networks")
+    if not isinstance(networks, dict):
+        raise ContractError("ordinary model has no networks object")
+    private_network = networks.get(PRIVATE_NETWORK)
+    if (
+        not isinstance(private_network, dict)
+        or private_network.get("internal") is not True
+    ):
+        raise ContractError("registry-private must remain an internal network")
+    if private_network.get("name") != "registry-adopter-probe-private":
+        raise ContractError("registry-private has the wrong stable name")
+    edge_network = networks.get("registry-edge")
+    if (
+        not isinstance(edge_network, dict)
+        or edge_network.get("name") != "registry-adopter-probe-edge"
+        or edge_network.get("internal") is True
+    ):
+        raise ContractError("registry-edge has the wrong exposure contract")
+
+    expected_network_modes = {
+        "registry-postgres": PRIVATE_NAMESPACE,
+        "registry-relay-consultation": PRIVATE_NAMESPACE,
+        "registry-notary": PRIVATE_NAMESPACE,
+    }
+    for service_name, expected_mode in expected_network_modes.items():
+        if services[service_name].get("network_mode") != expected_mode:
+            raise ContractError(
+                f"{service_name} left the private product namespace"
+            )
+    holder_networks = services["registry-private-namespace"].get("networks", {})
+    if set(holder_networks) != {PRIVATE_NETWORK}:
+        raise ContractError("private namespace holder has the wrong network")
+    public_networks = services["registry-relay-public"].get("networks", {})
+    if set(public_networks) != {"registry-edge"}:
+        raise ContractError("public Relay has the wrong network")
+
+    if expected_generated_dir is not None:
+        expected_inputs = {
+            "registry-relay-public": "relay-public",
+            "registry-relay-consultation": "relay-consultation",
+            "registry-notary": "notary",
+        }
+        for service_name, lane in expected_inputs.items():
+            input_mounts = {
+                mount.get("target"): mount
+                for mount in services[service_name].get("volumes", [])
+                if isinstance(mount, dict)
+                and mount.get("target")
+                in {"/run/registry/bundle", "/run/registry/anchor"}
+            }
+            expected_mounts = {
+                "/run/registry/bundle": expected_generated_dir
+                / "bundles"
+                / lane,
+                "/run/registry/anchor": expected_generated_dir
+                / "anchors"
+                / lane,
+            }
+            if set(input_mounts) != set(expected_mounts):
+                raise ContractError(
+                    f"{service_name} has the wrong immutable input mounts"
+                )
+            for target, expected_source in expected_mounts.items():
+                mount = input_mounts[target]
+                if (
+                    mount.get("type") != "bind"
+                    or mount.get("source") != str(expected_source)
+                    or mount.get("read_only") is not True
+                    or mount.get("bind", {}).get("create_host_path") is not False
+                ):
+                    raise ContractError(
+                        f"{service_name} has an unsafe {target} mount"
+                    )
+
+        declared_secrets = model.get("secrets")
+        expected_secret_names = {
+            secret_name
+            for service_secrets in expected_secrets.values()
+            for secret_name in service_secrets
+        }
+        if (
+            not isinstance(declared_secrets, dict)
+            or set(declared_secrets) != expected_secret_names
+        ):
+            raise ContractError(
+                "ordinary model secret definitions do not match the plan"
+            )
 
 
 def assert_initialization_model(
@@ -267,6 +375,8 @@ def assert_initialization_model(
             raise ContractError(
                 f"{service_name} does not use its plan image identity"
             )
+        if services[service_name].get("restart") != "no":
+            raise ContractError(f"{service_name} is not a one-shot service")
     initialization_dependencies = {
         "registry-relay-public-prepare-state": {},
         "registry-relay-consultation-prepare-state": {
@@ -448,7 +558,9 @@ def assert_negative_boundary(
     raise ContractError(f"negative fixture was accepted: {expected_reason}")
 
 
-def validate_plan(plan_path: Path) -> dict[str, str]:
+def validate_plan(
+    plan_path: Path,
+) -> tuple[dict[str, str], dict[str, set[str]]]:
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -611,15 +723,18 @@ def validate_plan(plan_path: Path) -> dict[str, str]:
     ]:
         raise ContractError("deployment-plan probe recovery groups are incomplete")
     exposure_requirements = plan.get("exposure_requirements")
+    expected_exposure_requirements = {
+        "public-application": "operator-bound",
+        "private-application": "private-namespace-only",
+        "administration": "loopback-only",
+        "metrics": "loopback-only",
+        "posture": "loopback-only",
+    }
     if not isinstance(exposure_requirements, list) or {
-        item.get("endpoint_class") for item in exposure_requirements
-    } != {
-        "public-application",
-        "private-application",
-        "administration",
-        "metrics",
-        "posture",
-    }:
+        item.get("endpoint_class"): item.get("exposure")
+        for item in exposure_requirements
+        if isinstance(item, dict)
+    } != expected_exposure_requirements:
         raise ContractError("deployment-plan probe endpoint inventory is incomplete")
     forbidden_keys = {
         "command",
@@ -646,14 +761,22 @@ def validate_plan(plan_path: Path) -> dict[str, str]:
                 walk(child)
 
     walk(plan)
-    return {
+    expected_images = {
         COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: workload["image_identity"]
         for workload_id, workload in workload_by_id.items()
     }
+    expected_secrets = {
+        COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: {
+            COMPOSE_SECRET_FOR_CONSUMER[consumer]
+            for consumer in workload.get("secret_consumers", [])
+        }
+        for workload_id, workload in workload_by_id.items()
+    }
+    return expected_images, expected_secrets
 
 
 def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
-    expected_images = validate_plan(
+    expected_images, expected_secrets = validate_plan(
         fixture_root / "deployment-plan.probe.v1.json"
     )
     empty_env = fixture_root / "package/generated/compose.empty.env"
@@ -662,7 +785,12 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
     baseline = _compose_config(
         compose_command, fixture_root, "package/generated/compose.yaml"
     )
-    assert_ordinary_model(baseline, expected_images)
+    assert_ordinary_model(
+        baseline,
+        expected_images,
+        expected_secrets,
+        (fixture_root / "package/generated").resolve(),
+    )
 
     initialized = _compose_config(
         compose_command,
