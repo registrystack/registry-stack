@@ -2206,6 +2206,45 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_manifest_signature_cannot_satisfy_anchor_threshold() {
+        let fixture = fixture();
+        let mut anchor: ConfigTrustAnchor =
+            serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor"))
+                .expect("anchor");
+        let rotated = PrivateJwk::parse(ED25519_ROTATED_PRIVATE_JWK).expect("rotated private");
+        let rotated_public = rotated.public();
+        anchor.enabled_signers.push(ConfigTrustAnchorSigner {
+            kid: rotated_public.jkt().expect("rotated kid"),
+            jwk: rotated_public,
+        });
+        anchor
+            .enabled_signers
+            .sort_by(|left, right| left.kid.cmp(&right.kid));
+        anchor.threshold = 2;
+        fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor json"),
+        )
+        .expect("anchor");
+
+        let signature_path = fixture.bundle_dir.join(SIGNATURE_FILE);
+        let mut envelope: ConfigBundleSignatureEnvelope =
+            serde_json::from_slice(&fs::read(&signature_path).expect("signature envelope"))
+                .expect("signature envelope");
+        envelope.signatures.push(envelope.signatures[0].clone());
+        fs::write(
+            signature_path,
+            serde_json::to_vec_pretty(&envelope).expect("signature envelope json"),
+        )
+        .expect("signature envelope");
+
+        let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("duplicate signature does not increase quorum");
+
+        assert_eq!(err, ConfigBundleError::SignatureRejected);
+    }
+
+    #[test]
     fn rejects_anchor_kid_jwk_mismatch() {
         let fixture = fixture();
         let mut anchor: ConfigTrustAnchor =
