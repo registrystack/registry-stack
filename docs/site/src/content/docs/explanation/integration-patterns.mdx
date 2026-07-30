@@ -49,15 +49,17 @@ capabilities. In a combined project, Relay keeps source credentials and returns 
 reviewed typed consultation outputs for Notary to turn into configured claims. Consuming systems
 such as a social-protection management information system do not become raw-record readers.
 
-The supported local first-run combined path extends the canonical spreadsheet sample in place with
-Notary and a private consultation Relay, then runs them as one local project. The snapshot starter
-is a separate offline authoring path. Its synthetic fixture results do not establish that Relay or
-Notary is running.
+The supported local first run starts from the public HTTP template.
+The project declares the public Relay, consultation Relay, and Notary path
+before Registryctl creates a disposable development environment.
+Spreadsheet uses that same development plan as an ordinary source provider.
+Snapshot remains an authored integration capability, not a public template or
+separate runtime architecture.
 
 {/* Evidence: crates/registryctl/tests/project_authoring.rs,
     project_authoring_schemas_reject_incoherent_product_topologies and
     relay_only_and_notary_only_projects_emit_only_selected_products; and
-    crates/registryctl/src/lib.rs, add_notary_to_canonical_project. */}
+    crates/registryctl/tests/dev_runtime_core.rs. */}
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
 <figure>
@@ -78,7 +80,9 @@ atomic evidence claims plus evidence authorization and disclosure policy. The ev
 determines how the evidence is used, and the decision owner remains accountable for requirements,
 decisions, workflow, and action.
 
-The DHIS2 health-evidence starter makes that boundary visible. DHIS2 remains the system of record.
+The maintained DHIS2 health-evidence conformance workspace makes that boundary
+visible.
+DHIS2 remains the system of record.
 Relay uses its product-neutral script capability to perform bounded, same-origin acquisition and
 normalize the existing health outputs plus `bcg_birth_dose_recorded`,
 `opv_birth_dose_recorded`, and `measles_dose_recorded`. Notary exposes those facts as reusable
@@ -88,8 +92,11 @@ decision into Relay or Notary.
 
 The reviewed contract keeps `true`, `false`, `null`, no-match, ambiguity, and source failure
 distinct. Missing evidence is not a negative fact. Offline synthetic fixtures are the deterministic
-acceptance path; a governed live check against a reachable DHIS2 instance is optional compatibility
-evidence.
+acceptance path.
+Registryctl does not provide a live-test mode or external deployed-system
+compatibility runner.
+An operator can exercise a deployed API with a standard HTTP client and
+owner-maintained credentials as separate interoperability evidence.
 
 Registry Notary may attest a decision that DHIS2 or another authoritative source already made only
 when the claim identifier and its review documentation identify it as a source-owned decision.

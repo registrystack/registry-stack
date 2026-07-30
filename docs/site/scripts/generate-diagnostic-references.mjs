@@ -335,7 +335,7 @@ export async function generateDiagnosticReferences(
   const counts = [];
   for (const [catalog, contract] of Object.entries(diagnosticCatalogs)) {
     const args = [
-      'project',
+      'tooling',
       'diagnostics',
       '--catalog',
       catalog,

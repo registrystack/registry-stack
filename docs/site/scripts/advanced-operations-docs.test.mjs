@@ -70,7 +70,7 @@ test('advanced operations cover every FC3-E recoverable operator task', async ()
     /restore/i,
     /restart/i,
     /upgrade/i,
-    /registryctl migrate/,
+    /pre-1\.0 cutover/i,
     /roll back/i,
     /redacted posture/i,
     /audit/i,
@@ -122,15 +122,15 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
 
   assert.match(
     source,
-    /registryctl project diagnostics --catalog operator --format json/,
+    /registryctl tooling diagnostics --catalog operator --format json/,
   );
   assert.match(
     source,
-    /registryctl project diagnostics --catalog fixture --format json/,
+    /registryctl tooling diagnostics --catalog fixture --format json/,
   );
   assert.match(
     source,
-    /registryctl project diagnostics --catalog authoring --format json/,
+    /registryctl tooling diagnostics --catalog authoring --format json/,
   );
 });
 
@@ -159,7 +159,7 @@ test('bundle verification separates stateless closure from product rollback elig
 
   assert.match(
     source,
-    /SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-bundle[\s\S]*?PRODUCT_TRUST_ANCHOR=operator-inputs\/relay-trust-anchor\.json[\s\S]*?registryctl bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor-path "\$PRODUCT_TRUST_ANCHOR"/,
+    /SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-bundle[\s\S]*?PRODUCT_TRUST_ANCHOR=operator-inputs\/relay-trust-anchor\.json[\s\S]*?registryctl trust bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor "\$PRODUCT_TRUST_ANCHOR"/,
   );
   assert.match(
     source,
@@ -237,10 +237,7 @@ test('materialization recovery documents the exact fail-closed and recovery boun
   const retention = await readSitePage(
     'operate/retention-and-persistent-state.mdx',
   );
-  const tutorial = await readSitePage(
-    'tutorials/configure-project-snapshot-materialization.mdx',
-  );
-  const source = [refresh, backup, retention, tutorial].join('\n');
+  const source = [refresh, backup, retention].join('\n');
 
   assert.match(refresh, /any audited SnapshotExact plan/i);
   assert.match(refresh, /rejects the complete reload-all request/i);

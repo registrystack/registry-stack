@@ -1,31 +1,23 @@
-// Guards the adopter-first documentation IA. The site keeps the
-// existing public page URLs, so this test checks both the sidebar discovery
-// path and the redirects that preserve older entry points.
+// Guards the single Registry Stack 1.0 adopter path and its stable entry points.
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const siteRoot = resolve(here, '..');
+const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
-const registryBannerSource = readFileSync(
-  resolve(siteRoot, 'src/components/RegistryBanner.astro'),
-  'utf8',
-);
-const firstApiSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
-  'utf8',
-);
-const firstClaimSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/tutorials/verify-claim-registry-api.mdx'),
+const quickstartSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/start/quickstart.mdx'),
   'utf8',
 );
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
+  'utf8',
+);
+const cutoverSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/start/pre-1.0-cutover.mdx'),
   'utf8',
 );
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
@@ -52,10 +44,6 @@ function hasDocForSlug(slug) {
   ].some((path) => existsSync(path) && !/^draft: true$/m.test(readFileSync(path, 'utf8')));
 }
 
-function assertReleasedTaskRoute(source) {
-  assert.doesNotMatch(source, /\]\([^)]*start\/test-current-source-revision/);
-}
-
 function assertOrdered(source, expectations, label) {
   let position = -1;
   for (const expectation of expectations) {
@@ -63,71 +51,6 @@ function assertOrdered(source, expectations, label) {
     assert.ok(next > position, `missing or misplaced ${label}: ${expectation}`);
     position = next;
   }
-}
-
-function assertLiveClaimTutorial(source) {
-  assertOrdered(
-    source,
-    [
-      'my-first-api',
-      'registryctl add notary',
-      '## Start Relay and Notary',
-      'registryctl start',
-      'HTTP 403',
-      '## Evaluate the active project',
-      '## Evaluate the planned project',
-      '## Check an absent record',
-      '## Change the status policy',
-      'registryctl restart',
-      '"value": true',
-      'registryctl stop',
-    ],
-    'live first-claim step',
-  );
-  for (const expected of [
-    /project-record-exists/,
-    /project-status-accepted/,
-    /"value": "pw_001"/,
-    /"value": "PW-002"/,
-    /"value": "pw_999"/,
-    /public-works-case-management/,
-    /evidence:projects:read/,
-    /http:\/\/127\.0\.0\.1:4255\/v1\/evaluations/,
-    /You\s+do not edit `?\.registry-stack\//,
-  ]) {
-    assert.match(source, expected);
-  }
-  assert.doesNotMatch(
-    source,
-    /registryctl init --from snapshot|git clone|git switch|cargo build|registryctl build/,
-  );
-  assert.doesNotMatch(source, /Unreleased Main-source tutorial|current-source test procedure/);
-}
-
-function assertReleaseFormFirstApiSequence(source) {
-  const headings = [
-    '## Install Registryctl',
-    '## Create the sample project',
-    '## Check your computer and project',
-    '## Start the API',
-    '## Check the API',
-    '## Make one denied request',
-    '## Make one allowed request',
-    '## See what you can edit',
-    '## Stop and clean up',
-  ];
-  let position = -1;
-  for (const heading of headings) {
-    const next = source.indexOf(heading);
-    assert.ok(next > position, `missing or misplaced required first-API step: ${heading}`);
-    position = next;
-  }
-  assert.doesNotMatch(
-    source,
-    /Main source|test-current-source-revision|cargo install|git clone|Podman|OrbStack|Colima/,
-  );
-  assert.match(source, /Linux amd64/);
-  assert.match(source, /Docker Engine with Compose v2/);
 }
 
 test('uses the adopter-first top-level flow in its published order', () => {
@@ -140,7 +63,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
   ]);
 });
 
-test('publishes one stable overview route for every task-flow section', () => {
+test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
     ['Connect your data', "slug: 'configure'"],
@@ -154,54 +77,58 @@ test('publishes one stable overview route for every task-flow section', () => {
   }
 });
 
-test('puts released first-result tasks directly in Start', () => {
+test('publishes one HTTP first run and one pre-1.0 cutover route', () => {
   const start = topLevelSection(sidebarSource, 'Start');
-  assert.ok(start, 'could not isolate Start');
   assert.match(
     start,
-    /label: 'Run your first registry API', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
+    /label: 'Build an HTTP project', slug: 'tutorials\/author-registry-project'/,
   );
   assert.match(
     start,
-    /label: 'Verify a live claim', slug: 'tutorials\/verify-claim-registry-api'/,
+    /label: 'Pre-1.0 cutover', slug: 'start\/pre-1\.0-cutover'/,
   );
-  assert.doesNotMatch(start, /start\/test-current-source-revision/);
+  assert.match(
+    homepageSource,
+    /\]\(tutorials\/author-registry-project\/\)/,
+  );
+  assert.match(
+    quickstartSource,
+    /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/,
+  );
+  assert.match(homepageSource, /\]\(start\/pre-1\.0-cutover\/\)/);
 });
 
-test('does not expose source-assurance material as an adopter journey', () => {
-  assert.doesNotMatch(sidebarSource, /label: 'Journeys'|label: 'Source assurance'/);
-  assert.doesNotMatch(sidebarSource, /slug: 'journeys/);
-  assert.match(configSource, /'\/journeys\/': internalRedirect\('\/'\)/);
-});
-
-test('archived pages send readers to the canonical latest release', () => {
-  assert.match(registryBannerSource, /<a href="\/">Latest release<\/a>/);
-  assert.doesNotMatch(registryBannerSource, /href="\/preview\//);
-});
-
-test('keeps detailed product navigation under collapsed Reference', () => {
-  const reference = topLevelSection(sidebarSource, 'Reference');
-  assert.ok(reference, 'could not isolate Reference');
-  assert.match(reference, /label: 'Registry Relay',[\s\S]*?generatedProduct\('Relay'\)\.items/);
-  assert.match(reference, /label: 'Registry Notary',[\s\S]*?generatedProduct\('Notary'\)\.items/);
-  assert.match(reference, /label: 'Registry Manifest',[\s\S]*?generatedProduct\('Manifest'\)\.items/);
-  assert.match(reference, /label: 'Specifications',[\s\S]*?slug: 'spec'/);
-});
-
-test('keeps validation and generated-file help available without making new rails', () => {
-  const reference = topLevelSection(sidebarSource, 'Reference');
-  assert.match(reference, /label: 'Validate a project', slug: 'verify'/);
-  assert.match(reference, /label: 'Generated files and ownership', slug: 'generated-artifacts'/);
-});
-
-test('documents safe recovery inspection after an authored input changes', () => {
+test('keeps validation on offline test and nested development commands', () => {
   assertOrdered(
     validationSource,
-    ['registryctl status', 'registryctl logs', 'registryctl open', 'registryctl start'],
-    'recovery command',
+    [
+      'registryctl test',
+      'registryctl check',
+      'registryctl review compare',
+      'registryctl build',
+      'registryctl doctor',
+      'registryctl dev --detach',
+      'registryctl dev status',
+      'registryctl dev smoke',
+      'registryctl dev logs',
+      'registryctl dev down',
+    ],
+    'Registryctl 1.0 validation command',
   );
-  assert.match(validationSource, /do not rebuild, start, or trust the changed authored input/);
-  assert.match(validationSource, /\]\(\.\.\/reference\/diagnostics\/operator\/\)/);
+  assert.match(validationSource, /without contacting a live source/);
+  assert.doesNotMatch(
+    validationSource,
+    /registryctl (?:start|stop|restart|status|open|smoke|logs|preflight|capabilities)\b/,
+  );
+});
+
+test('keeps removed command mappings on the cutover page only', () => {
+  assert.match(cutoverSource, /Pre-1\.0 commands have no aliases/);
+  assert.match(cutoverSource, /no automated migration path/);
+  assert.match(cutoverSource, /`registryctl start`/);
+  assert.match(cutoverSource, /`registryctl dev`/);
+  assert.match(cutoverSource, /Bruno generation/);
+  assert.match(cutoverSource, /The only public 1\.0 templates are `http` and `spreadsheet`/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -211,7 +138,7 @@ test('every hand-authored sidebar slug resolves to a published documentation pag
   assert.deepEqual(missing, []);
 });
 
-test('legacy entry points redirect to released task pages', () => {
+test('legacy first-run entry points redirect to the 1.0 HTTP path', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
@@ -219,7 +146,7 @@ test('legacy entry points redirect to released task pages', () => {
   );
   assert.match(
     configSource,
-    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
+    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/author-registry-project\/'\)/,
   );
   assert.match(
     configSource,
@@ -227,36 +154,8 @@ test('legacy entry points redirect to released task pages', () => {
   );
 });
 
-test('homepage and first-result tasks stay on the release-form beginner rail', () => {
-  assert.match(homepageSource, /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/);
-  assert.match(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
-  assert.doesNotMatch(homepageSource, /\]\(journeys\//);
-  assertReleasedTaskRoute(firstApiSource);
-  assertReleasedTaskRoute(firstClaimSource);
-  assertReleaseFormFirstApiSequence(firstApiSource);
-  assertLiveClaimTutorial(firstClaimSource);
-  assert.ok(hasDocForSlug('tutorials/publish-spreadsheet-secured-registry-api'));
-  assert.ok(hasDocForSlug('tutorials/verify-claim-registry-api'));
-});
-
-test('beginner tasks link to useful next tasks, not assurance pages', () => {
-  assert.doesNotMatch(firstApiSource, /journeys\//);
-  assert.doesNotMatch(firstClaimSource, /journeys\//);
-  assert.match(firstApiSource, /\]\(\.\.\/use-your-spreadsheet\/\)/);
-  assert.match(firstClaimSource, /\]\(\.\.\/\.\.\/configure\/\)/);
-});
-
-test('beginner-rail control rejects a planted Main-source route', () => {
-  assert.throws(
-    () => assertReleasedTaskRoute('[source test](../../start/test-current-source-revision/)'),
-    /test-current-source-revision/,
-  );
-  assert.throws(
-    () => assertLiveClaimTutorial('registryctl add notary'),
-    /my-first-api/,
-  );
-  assert.throws(
-    () => assertReleaseFormFirstApiSequence('## Install Registryctl\n## Start the API'),
-    /Create the sample project/,
-  );
+test('keeps source-assurance artifacts out of the adopter navigation', () => {
+  assert.doesNotMatch(sidebarSource, /label: 'Journeys'|label: 'Source assurance'/);
+  assert.doesNotMatch(sidebarSource, /slug: 'journeys/);
+  assert.match(configSource, /'\/journeys\/': internalRedirect\('\/'\)/);
 });

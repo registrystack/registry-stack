@@ -1,6 +1,6 @@
 ---
-title: Recover, restart, upgrade, migrate, and roll back
-description: Choose the correct recovery path for configuration restart, project migration, product state, software upgrade, and rollback.
+title: Recover, restart, upgrade, and roll back
+description: Choose the correct recovery path for configuration restart, pre-1.0 project cutover, product state, software upgrade, and rollback.
 status: current
 owner: registry-docs
 source_repos:
@@ -35,20 +35,22 @@ The products do not share schemas, runtime roles, keyrings, trust anchors, bundl
 anti-rollback files.
 
 The deployment operator owns coordinated recovery points and traffic admission.
-`registryctl migrate` owns reviewed project-authoring compatibility only.
-It does not migrate Relay or Notary runtime databases.
+Registry Stack 1.0 does not automate migration from a pre-1.0 project.
+Later 1.x authored-contract changes must follow the release-specific guidance published after 1.0.
+Neither path migrates Relay or Notary runtime databases.
 
 {/* Evidence: docs/site/src/content/docs/operate/backup-and-restore.mdx,
     docs/site/src/content/docs/operate/upgrade-and-rollback.mdx,
     crates/registry-relay/docs/ops.md,
-    products/notary/docs/postgresql-state-operations.md, and
-    crates/registryctl/src/project_authoring/migration.rs. */}
+    products/notary/docs/postgresql-state-operations.md. */}
 
 ## Choose the operation
 
 - Use a restart when secret-plane material changed but the configured references and software
   contract remain valid.
-- Use `registryctl migrate` when a project contains a catalogued authored-contract transition.
+- Use the [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) to carry reviewed authored
+  intent into a separate 1.0 project.
+- Use release-specific 1.x guidance for authored-contract changes after 1.0.
 - Use the Notary state installer and doctor for the exact released Notary schema path.
 - Use Relay `consultation bootstrap-state` to install or attest its exact compiled consultation
   schema.
@@ -72,36 +74,34 @@ Preserve:
 
 Do not print secret values while recording hashes, owners, modes, and versions.
 
-## Check a project-authoring migration
+## Cut over pre-1.0 authored intent
 
-Inspect the same-v1 compatibility catalog without changing the source project:
-
-```sh
-registryctl migrate \
-  --project-dir <project> \
-  --target-version 1 \
-  --format json
-```
-
-When the report permits candidate emission, write to a new absent directory:
+Keep the pre-1.0 source project unchanged.
+Create a separate 1.0 project with one of the two public templates:
 
 ```sh
-registryctl migrate \
-  --project-dir <project> \
-  --target-version 1 \
-  --output <absent-candidate-directory> \
-  --write-candidate \
-  --format json
+registryctl init <candidate-directory> --template http
+# or
+registryctl init <candidate-directory> --template spreadsheet
 ```
 
-Review the candidate, disposition, reviews, blocking reasons, and rerun gates.
-The command preserves the source project and does not approve or activate the candidate.
-Use the [registryctl CLI reference](../../../reference/registryctl/) for the current catalogued
-transition.
+Copy only reviewed authored intent into the candidate.
+Do not copy generated output, compatibility shims, or removed command assumptions.
+Then validate the 1.0 project:
+
+```sh
+registryctl -C <candidate-directory> test
+registryctl -C <candidate-directory> check --explain
+registryctl -C <candidate-directory> build
+```
+
+Registry Stack 1.0 provides no automated pre-1.0 migration command or removed-command aliases.
+Follow the [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) for the complete review and
+evidence procedure.
 
 ## Stage a restart or upgrade
 
-1. Run offline fixture, check, preflight, product doctor, and product bundle-verification gates
+1. Run offline project tests, check, build, product doctor, and product bundle-verification gates
    with the target binaries.
 2. Quiesce writers and prevent another product instance from acquiring the active fence.
 3. For Relay consultation state, run the target release's documented
@@ -127,7 +127,7 @@ Retain:
 
 - Verified current and target software identities.
 - The complete recovery-set inventory and checksums.
-- Project migration report and candidate review when applicable.
+- The pre-1.0 source-to-candidate review and 1.0 validation results when applicable.
 - Relay bootstrap or Notary state-install and doctor results.
 - Separate product bundle verification and anti-rollback sequences.
 - Health, readiness, audit, posture, and canary results before traffic admission.
@@ -135,7 +135,8 @@ Retain:
 
 ## What this proves
 
-Project migration gates prove the catalogued authoring transition and generated candidate.
+The pre-1.0 cutover record proves which reviewed authored intent moved into the separate 1.0
+candidate, while test, check, and build prove that candidate against the 1.0 authoring contract.
 Database attestation proves the exact schema, role, and capability boundary checked by the product.
 Bundle verification proves the product configuration closure.
 Staged runtime checks prove the tested target process and dependency path.

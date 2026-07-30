@@ -85,9 +85,9 @@ Data-backed reference tables are generated from:
 - `src/data/contracts.yaml`
 - `src/data/standards.yaml`
 - `src/data/openapi-sources.yaml`
-- `registryctl authoring reference` for the five project-authoring schemas and the generated Relay
-  and Notary runtime schemas
-- `registryctl authoring reference --coverage` for reviewed field-intent coverage
+- `registryctl tooling reference configuration` for the five project-authoring schemas and the
+  generated Relay and Notary runtime schemas
+- `registryctl tooling reference configuration --coverage` for reviewed field-intent coverage
 
 Run `npm run generate` after editing these files.
 Generation refuses to publish the authoring reference when any reachable schema path lacks reviewed

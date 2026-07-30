@@ -143,8 +143,11 @@ test('published reference page identifies generated sources and the no-country-v
     readJson('package.json'),
   ]);
 
-  assert.match(page, /Generator: `registryctl authoring reference`/);
-  assert.match(page, /Coverage gate: `registryctl authoring reference --coverage`/);
+  assert.match(page, /Generator: `registryctl tooling reference configuration`/);
+  assert.match(
+    page,
+    /Coverage gate: `registryctl tooling reference configuration --coverage`/,
+  );
   assert.match(page, /Country workspace or runtime configuration reads: none/);
   assert.match(page, /Relay and Notary runtime schemas/);
   assert.match(page, /does not inspect a project, live runtime configuration, environment variables/);
@@ -176,7 +179,17 @@ test('committed reference and coverage are byte-exact to the CLI', async () => {
   ] = await Promise.all([
     execFileAsync(
       'cargo',
-      ['run', '--locked', '--quiet', '-p', 'registryctl', '--', 'authoring', 'reference'],
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'tooling',
+        'reference',
+        'configuration',
+      ],
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -192,8 +205,9 @@ test('committed reference and coverage are byte-exact to the CLI', async () => {
         '-p',
         'registryctl',
         '--',
-        'authoring',
+        'tooling',
         'reference',
+        'configuration',
         '--coverage',
       ],
       {

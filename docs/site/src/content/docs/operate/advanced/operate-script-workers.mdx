@@ -39,7 +39,6 @@ They do not add an origin, credential, method, path, or output.
 Source product and version labels remain review evidence and do not enable a helper.
 
 {/* Evidence: docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx,
-    docs/site/src/content/docs/tutorials/configure-project-fhir-r4.mdx,
     crates/registry-relay/src/rhai_worker.rs, and
     crates/registryctl/src/project_authoring/authoring_contract.rs. */}
 
@@ -63,7 +62,7 @@ host API, defaults, hard ceilings, modules, and fixture shape.
 Print the exact generated `xw.v1` callable reference from the installed CLI:
 
 ```sh
-registryctl authoring xw --format reference
+registryctl tooling reference xw --format reference
 ```
 
 `xw.v1` provides deterministic bounded text, date, identifier, JSON, email, and redaction helpers.
@@ -84,38 +83,32 @@ A generic Script source POST cannot substitute for that helper.
 
 ## Verify and stage the worker
 
-Run the focused trace, complete fixture set, semantic explanation, preflight, and capability
-inventory:
+Run the focused trace, complete fixture set, semantic explanation, host diagnosis, and build:
 
 ```sh
 PROJECT_DIR=registry-project
 ENVIRONMENT=local
 INTEGRATION_ID=person-record
 FIXTURE_ID=active-person
-registryctl test \
-  --project-dir "$PROJECT_DIR" \
+registryctl -C "$PROJECT_DIR" test \
   --integration "$INTEGRATION_ID" \
   --fixture "$FIXTURE_ID" \
   --trace
-registryctl test --project-dir "$PROJECT_DIR"
-registryctl check \
-  --project-dir "$PROJECT_DIR" \
+registryctl -C "$PROJECT_DIR" test
+registryctl -C "$PROJECT_DIR" check \
   --environment "$ENVIRONMENT" \
   --explain
-registryctl preflight \
-  --project-dir "$PROJECT_DIR" \
+registryctl -C "$PROJECT_DIR" doctor \
   --environment "$ENVIRONMENT" \
   --format json
-registryctl capabilities \
-  --project-dir "$PROJECT_DIR" \
-  --environment "$ENVIRONMENT" \
-  --format json
+registryctl -C "$PROJECT_DIR" build \
+  --environment "$ENVIRONMENT"
 ```
 
 Confirm fixture traces contain only reviewed canonical requests in the expected order.
 Confirm generated artifacts hash every Script entrypoint and module.
-Confirm the capability inventory distinguishes compiled, declared, enabled, used, available,
-missing, and inactive without claiming activation.
+Confirm the explained plan and generated closure contain only the reviewed Script, modules, source
+authority, output types, and bounds.
 
 Build and verify the Relay product bundle, then stage Relay without traffic.
 Require the code-owned worker, health, readiness, audit, and redacted posture to pass before a
@@ -131,19 +124,20 @@ Retain:
 - Derived authorization-before-source, malformed-response, timeout, byte, call, and output
   minimization results.
 - Script and module hashes in the generated artifact closure.
-- The capability inventory and staged worker readiness.
+- The explained plan, generated closure, and staged worker readiness.
 - An authorized bounded canary when separate source authority permits one.
 
 ## What this proves
 
 Offline fixtures prove deterministic Script and helper behavior against synthetic observations.
 The generated closure proves which reviewed Script and module bytes enter the Relay input.
-Preflight proves required local bindings and non-widening without source contact.
+`check` proves authored consistency and non-widening without source contact.
+`doctor` reports local host and released-artifact readiness without changing the project.
 Staged readiness proves that the code-owned worker is available to that Relay process.
 
 These checks do not prove live source interoperability, source-owner approval, every production
 response shape, legal suitability, or country acceptance.
-A product or version label does not prove helper compatibility.
+A source product or version label does not prove helper compatibility.
 
 ## Roll back or recover
 
@@ -167,4 +161,4 @@ bypass authorization-before-source, or reach an ambient host capability.
 
 - [Compare and reapprove a source change](../compare-and-reapprove-source-change/)
 - [Inspect and diagnose the deployment](../inspect-and-diagnose/)
-- [Configure a FHIR R4 integration](../../../tutorials/configure-project-fhir-r4/)
+- [Review advanced integration patterns](../../../explanation/integration-patterns/)

@@ -1,6 +1,6 @@
 ---
-title: Choose the v0.15 local first run
-description: Choose the supported local Registry Stack beginner path for a protected API or live claim.
+title: Start with Registry Stack 1.0
+description: Choose the maintained Registry Stack 1.0 first run and the next source adaptation.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,31 +13,37 @@ locale: en
 standards_referenced: []
 ---
 
-Use the two local tutorials for the Registry Stack v0.15 beginner path. Start
-with Registry Relay, then continue to a live Registry Notary claim.
+Start with the maintained HTTP project.
+It provides the shortest complete path from authored fixtures to the real
+Registry Relay and Registry Notary development runtime.
 
-## Run your first registry API
+## Complete the first run
 
-[Run your first registry API](../../tutorials/publish-spreadsheet-secured-registry-api/)
-installs Registryctl from release assets, starts Registry Relay over maintained
-synthetic data, and checks denied and allowed requests.
+[Build and run an HTTP registry project](../../tutorials/author-registry-project/)
+creates a project from the released `http` template, executes its fixtures
+offline, runs a disposable local environment, and builds unsigned inputs for
+review.
 
-## Verify a live claim
+The first run uses one terminal and synthetic data.
+You do not need a source checkout, production keys, or a deployment package.
 
-[Verify a live registry-backed claim](../../tutorials/verify-claim-registry-api/)
-continues from the first API to a running Registry Notary service and checks
-match, no-match, and denied requests.
+## Adapt the working project
 
-## Connect your data
+After the first run:
 
-[Use your own spreadsheet](../../tutorials/use-your-spreadsheet/) replaces the
-sample workbook with one reviewed non-personal workbook after the local first
-run works.
+- [Add an OAuth-backed Rhai adapter](../../tutorials/configure-project-script-adapter/)
+  when one bounded consultation needs several same-origin HTTP calls
+- [Connect your data](../../configure/) when you are ready to replace the
+  synthetic source with reviewed institution-owned input
+- [Validate your project](../../verify/) after each authored change
 
-## About older quickstart links
+The only other public initialization template is `spreadsheet`.
+Spreadsheet uses the same project, fixture, build, and development contracts
+as HTTP.
 
-The former hosted quickstart and Solmara Lab tutorials used different
-deployment topologies. They are not the supported v0.15 beginner path, and the
-local tutorials are not equivalent replacements for those retired flows. Old
-links land on this chooser so you can select a current local task without
-mistaking it for hosted onboarding.
+## Move an older project
+
+Pre-1.0 commands and generated runtime files do not have compatibility aliases
+or an automated migration path.
+Use the [pre-1.0 cutover guide](../pre-1.0-cutover/) to preserve reviewed
+authored intent and recreate generated material.

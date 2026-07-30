@@ -1,13 +1,13 @@
 [
   {
     "id": "http",
-    "label": "Custom HTTP",
+    "label": "HTTP",
     "summary": "One fixed bounded HTTP request with a closed response projection.",
     "source": "crates/registryctl/assets/project-starters/bounded-http",
     "classification": "maintained",
     "topology": "combined",
     "starter": "http",
-    "project_dir": "registry-project",
+    "project_dir": "http-project",
     "capabilities": [
       "init",
       "editor",
@@ -16,20 +16,27 @@
       "test",
       "check",
       "compare",
-      "build"
+      "build",
+      "dev"
     ],
     "integration": "person-record",
     "fixture": "active-person",
     "commands": [
-      "registryctl init --from http --project-dir registry-project",
-      "registryctl authoring editor --project-dir registry-project",
-      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --trace",
-      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --watch",
-      "registryctl test --project-dir registry-project",
-      "registryctl check --project-dir registry-project --environment local --explain",
-      "registryctl compare --project-dir registry-project --environment local --from-starter",
-      "registryctl build --project-dir registry-project --environment local"
-    ]
+      "registryctl init http-project --template http",
+      "registryctl -C http-project tooling editor",
+      "registryctl -C http-project test --integration person-record --fixture active-person --trace",
+      "registryctl -C http-project test --integration person-record --fixture active-person --watch",
+      "registryctl -C http-project test",
+      "registryctl -C http-project check --environment local --explain",
+      "registryctl -C http-project review compare --environment local",
+      "registryctl -C http-project build --environment local",
+      "registryctl -C http-project dev --detach",
+      "registryctl -C http-project dev smoke",
+      "registryctl -C http-project dev down"
+    ],
+    "focused_fixture_file": "active.yaml",
+    "environment": "local",
+    "check_explain": true
   },
   {
     "id": "custom-system",
@@ -49,11 +56,11 @@
     "integration": "eligibility",
     "fixture": "source-approved-household",
     "commands": [
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --integration eligibility --fixture source-approved-household --trace",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --integration eligibility --fixture source-approved-household --watch",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system",
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/custom-system test --integration eligibility --fixture source-approved-household --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/custom-system test --integration eligibility --fixture source-approved-household --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/custom-system test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/custom-system check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/custom-system build --environment local"
     ]
   },
   {
@@ -70,9 +77,9 @@
       "build"
     ],
     "commands": [
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-script test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-script check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-script build --environment local"
     ]
   },
   {
@@ -82,10 +89,8 @@
     "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
     "classification": "maintained",
     "topology": "combined",
-    "starter": "dhis2-tracker",
-    "project_dir": "dhis2-project",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
     "capabilities": [
-      "init",
       "editor",
       "trace",
       "watch",
@@ -97,14 +102,13 @@
     "integration": "health-record",
     "fixture": "complete-child-health-evidence",
     "commands": [
-      "registryctl init --from dhis2-tracker --project-dir dhis2-project",
-      "registryctl authoring editor --project-dir dhis2-project",
-      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-child-health-evidence --trace",
-      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-child-health-evidence --watch",
-      "registryctl test --project-dir dhis2-project",
-      "registryctl check --project-dir dhis2-project --environment local --explain",
-      "registryctl compare --project-dir dhis2-project --environment local --from-starter",
-      "registryctl build --project-dir dhis2-project --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker tooling editor",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker test --integration health-record --fixture complete-child-health-evidence --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker test --integration health-record --fixture complete-child-health-evidence --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker review compare --environment local",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker build --environment local"
     ]
   },
   {
@@ -114,10 +118,8 @@
     "source": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
     "classification": "maintained",
     "topology": "combined",
-    "starter": "fhir-r4",
-    "project_dir": "fhir-project",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
     "capabilities": [
-      "init",
       "editor",
       "trace",
       "watch",
@@ -129,14 +131,13 @@
     "integration": "coverage",
     "fixture": "coverage-active",
     "commands": [
-      "registryctl init --from fhir-r4 --project-dir fhir-project",
-      "registryctl authoring editor --project-dir fhir-project",
-      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --trace",
-      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
-      "registryctl test --project-dir fhir-project",
-      "registryctl check --project-dir fhir-project --environment local --explain",
-      "registryctl compare --project-dir fhir-project --environment local --from-starter",
-      "registryctl build --project-dir fhir-project --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active tooling editor",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active test --integration coverage --fixture coverage-active --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active test --integration coverage --fixture coverage-active --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active review compare --environment local",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active build --environment local"
     ]
   },
   {
@@ -149,12 +150,10 @@
     "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
     "capabilities": [
-      "check",
-      "build"
+      "check"
     ],
     "commands": [
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release check --environment local --explain"
     ]
   },
   {
@@ -164,10 +163,8 @@
     "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
     "classification": "maintained",
     "topology": "combined",
-    "starter": "opencrvs-dci",
-    "project_dir": "opencrvs-project",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
     "capabilities": [
-      "init",
       "editor",
       "trace",
       "watch",
@@ -179,14 +176,13 @@
     "integration": "birth-record",
     "fixture": "birth-record-match",
     "commands": [
-      "registryctl init --from opencrvs-dci --project-dir opencrvs-project",
-      "registryctl authoring editor --project-dir opencrvs-project",
-      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --trace",
-      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
-      "registryctl test --project-dir opencrvs-project",
-      "registryctl check --project-dir opencrvs-project --environment local --explain",
-      "registryctl compare --project-dir opencrvs-project --environment local --from-starter",
-      "registryctl build --project-dir opencrvs-project --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs tooling editor",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs test --integration birth-record --fixture birth-record-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs test --integration birth-record --fixture birth-record-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs review compare --environment local",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs build --environment local"
     ]
   },
   {
@@ -207,11 +203,11 @@
     "integration": "birth-record",
     "fixture": "provincial-birth-match",
     "commands": [
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --integration birth-record --fixture provincial-birth-match --trace",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --integration birth-record --fixture provincial-birth-match --watch",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant test --integration birth-record --fixture provincial-birth-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant test --integration birth-record --fixture provincial-birth-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant build --environment local"
     ]
   },
   {
@@ -233,11 +229,11 @@
     "integration": "individual",
     "fixture": "social-registry-match",
     "commands": [
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --integration individual --fixture social-registry-match --trace",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --integration individual --fixture social-registry-match --watch",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/openspp-exact test --integration individual --fixture social-registry-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/openspp-exact test --integration individual --fixture social-registry-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/openspp-exact test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/openspp-exact check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/openspp-exact build --environment local"
     ]
   },
   {
@@ -249,12 +245,12 @@
     "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization",
     "capabilities": [
-      "check",
-      "build"
+      "test",
+      "check"
     ],
     "commands": [
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization check --environment local --explain"
     ]
   },
   {
@@ -266,12 +262,12 @@
     "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-records",
     "capabilities": [
-      "check",
-      "build"
+      "test",
+      "check"
     ],
     "commands": [
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-records --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-records --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records check --environment local --explain"
     ]
   },
   {
@@ -281,10 +277,8 @@
     "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
     "classification": "maintained",
     "topology": "combined",
-    "starter": "snapshot",
-    "project_dir": "snapshot-project",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
     "capabilities": [
-      "init",
       "editor",
       "trace",
       "watch",
@@ -296,14 +290,13 @@
     "integration": "person-snapshot",
     "fixture": "snapshot-match",
     "commands": [
-      "registryctl init --from snapshot --project-dir snapshot-project",
-      "registryctl authoring editor --project-dir snapshot-project",
-      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
-      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
-      "registryctl test --project-dir snapshot-project",
-      "registryctl check --project-dir snapshot-project --environment local --explain",
-      "registryctl compare --project-dir snapshot-project --environment local --from-starter",
-      "registryctl build --project-dir snapshot-project --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact tooling editor",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact test --integration person-snapshot --fixture snapshot-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact test --integration person-snapshot --fixture snapshot-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact review compare --environment local",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-exact build --environment local"
     ]
   },
   {
@@ -324,11 +317,50 @@
     "integration": "person-snapshot",
     "fixture": "snapshot-match",
     "commands": [
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --integration person-snapshot --fixture snapshot-match --trace",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --integration person-snapshot --fixture snapshot-match --watch",
-      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
-      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local --explain",
-      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records test --integration person-snapshot --fixture snapshot-match --trace",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records test --integration person-snapshot --fixture snapshot-match --watch",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records test",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records build --environment local"
+    ]
+  },
+  {
+    "id": "spreadsheet",
+    "label": "Spreadsheet",
+    "summary": "One reviewed workbook with a strict entity and minimized evidence projection.",
+    "source": "crates/registryctl/assets/project-starters/spreadsheet",
+    "project_dir": "spreadsheet-project",
+    "focused_fixture_file": "match.yaml",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "spreadsheet",
+    "environment": "local",
+    "check_explain": true,
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "compare",
+      "build",
+      "dev"
+    ],
+    "integration": "project-record-snapshot",
+    "fixture": "match",
+    "commands": [
+      "registryctl init spreadsheet-project --template spreadsheet",
+      "registryctl -C spreadsheet-project tooling editor",
+      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --trace",
+      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --watch",
+      "registryctl -C spreadsheet-project test",
+      "registryctl -C spreadsheet-project check --environment local --explain",
+      "registryctl -C spreadsheet-project review compare --environment local",
+      "registryctl -C spreadsheet-project build --environment local",
+      "registryctl -C spreadsheet-project dev --detach",
+      "registryctl -C spreadsheet-project dev smoke",
+      "registryctl -C spreadsheet-project dev down"
     ]
   }
 ]

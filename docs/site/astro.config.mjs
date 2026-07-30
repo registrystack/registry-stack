@@ -129,13 +129,13 @@ export default defineConfig({
     '/journeys/': internalRedirect('/'),
     '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
-    '/journeys/bounded-http/': internalRedirect('/configure/'),
-    '/journeys/bounded-multi-call-script/': internalRedirect('/configure/'),
+    '/journeys/bounded-http/': internalRedirect('/tutorials/author-registry-project/'),
+    '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/configure-project-script-adapter/'),
     '/journeys/exact-snapshot/': internalRedirect('/configure/'),
     '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
-    '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/start/your-first-call/': internalRedirect('/tutorials/author-registry-project/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
     // Retired hosted and Solmara Lab tutorials now land on a chooser that
     // distinguishes those flows from the supported local beginner path.
@@ -148,18 +148,15 @@ export default defineConfig({
     // reference entry points.
     '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
-    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/author-registry-project/': internalRedirect('/configure/'),
+    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/tutorials/configure-project-api-key-authentication/': internalRedirect('/configure/'),
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/configure-project-script-adapter/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
     '/tutorials/deploy-standalone-with-own-data/': internalRedirect('/operate/'),
     '/tutorials/move-notary-to-production-signing/': internalRedirect('/operate/'),
-    '/tutorials/verify-opencrvs-claims/': internalRedirect('/explanation/integration-patterns/'),
     '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/explanation/integration-patterns/'),
-    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/explanation/integration-patterns/'),
-    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/explanation/integration-patterns/'),
+    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -296,9 +293,11 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
+            { label: 'Build an HTTP project', slug: 'tutorials/author-registry-project' },
             { label: 'Run your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Verify a live claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
+            { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
           ],
         },
         {
@@ -306,6 +305,9 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'configure' },
             { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
+            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
+            { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
             { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
@@ -315,6 +317,14 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'operate' },
+            { label: 'Run generated Compose', slug: 'operate/single-node-compose-behind-proxy' },
+            {
+              label: 'Advanced',
+              collapsed: true,
+              items: [
+                { label: 'Approve an evidence change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
+              ],
+            },
           ],
         },
         {

@@ -17,11 +17,11 @@ wide: true
 
 import DiagnosticReference from '../../../../components/DiagnosticReference.astro';
 
-Use this catalog for Registryctl preflight, shared bundle verification, Relay activation, and
-Notary activation codes. Each product owns its closed code definitions and static guidance.
+Use this catalog for Registryctl readiness, bundle verification, Relay activation, and Notary
+activation codes. Each product owns its closed code definitions and static guidance.
 The generated reference aggregates those definitions without copying runtime errors or values.
 
-Run `registryctl project diagnostics --catalog operator --format json` for the exact
+Run `registryctl tooling diagnostics --catalog operator --format json` for the exact
 workspace-independent machine catalog. Operator codes classify a boundary and provide safe next
 actions. They do not disclose the received configuration, path, hash, identity, credential, source
 response, or country value that caused a failure.

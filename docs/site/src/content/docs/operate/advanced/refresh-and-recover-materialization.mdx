@@ -118,8 +118,9 @@ classifications.
 
 Relay's ingest cache can contain complete normalized source rows.
 Protect the cache with the same data classification as the source.
-For audited SnapshotExact, the entity's authored `retain_generations` value keeps from `1` through
-`16` completed cache generations, including the active generation, after successful publication.
+For audited SnapshotExact, authored `retain_generations` ranges from `1` through `16`.
+That value counts completed cache generations, including the active generation, after successful
+publication.
 Ordinary resources keep the built-in current and immediately previous snapshot. Relay removes
 older cache files on a best-effort basis.
 There is no time-to-live for the ingest cache.

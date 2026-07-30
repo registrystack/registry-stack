@@ -299,14 +299,23 @@ async function readAuthoringReference(
   repoRoot = defaultRepoRoot,
   execute = executeRegistryctl,
 ) {
-  const coverageText = await execute(repoRoot, ['authoring', 'reference', '--coverage']);
+  const coverageText = await execute(
+    repoRoot,
+    ['tooling', 'reference', 'configuration', '--coverage'],
+  );
   const coverage = parseJson(
     coverageText,
-    'registryctl authoring reference --coverage',
+    'registryctl tooling reference configuration --coverage',
   );
   validateAuthoringReferenceCoverage(coverage);
-  const referenceText = await execute(repoRoot, ['authoring', 'reference']);
-  const reference = parseJson(referenceText, 'registryctl authoring reference');
+  const referenceText = await execute(
+    repoRoot,
+    ['tooling', 'reference', 'configuration'],
+  );
+  const reference = parseJson(
+    referenceText,
+    'registryctl tooling reference configuration',
+  );
   validateAuthoringReference(reference, coverage);
   return { reference, coverage, referenceText, coverageText };
 }
