@@ -147,7 +147,10 @@ Run the complete first-installation block from `generated/RUNBOOK.md` exactly on
 
 ```sh
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state
@@ -159,7 +162,8 @@ docker compose --env-file generated/compose.empty.env -f generated/compose.yaml 
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
-The secret stager checks and copies the operator files consumed at runtime.
+The four secret stagers check and copy only the operator files owned by their product lane or the
+PostgreSQL state plane.
 The PostgreSQL bootstrap runs before product state preparation.
 Preparation creates or migrates only the owning product's database schema and roles.
 Initialization verifies the bundle and anchor, records acceptance audit, and creates only the
@@ -174,7 +178,10 @@ Run the ordinary start-and-stop block from `generated/RUNBOOK.md`:
 
 ```sh
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public 'product-action' 'relay-public' 'verify_state'
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation 'product-action' 'relay-consultation' 'verify_state'
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary 'product-action' 'verify_state'

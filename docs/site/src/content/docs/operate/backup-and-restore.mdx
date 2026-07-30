@@ -183,14 +183,26 @@ docker compose \
 Compare the reported closure digest with the external recovery record. Any mismatch is
 a manual abort.
 
-Stage operator secrets, then run all three read-only state checks required by the
-generated runbook:
+Stage the public Relay, consultation Relay, Notary, and PostgreSQL operator files through
+separate stagers. Then run all three read-only state checks required by the generated runbook:
 
 ```sh
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \
-  run --rm --no-deps registry-runtime-stage-secrets
+  run --rm --no-deps registry-relay-public-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-notary-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-postgresql-stage-secrets
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \

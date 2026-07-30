@@ -108,7 +108,7 @@ mutable image tags, or combine a binding change with this product or evidence up
 ## Verify current state before shutdown
 
 From the current package root, follow its `generated/RUNBOOK.md`. Verify the effective
-Compose model, stage its operator secrets, and run all three read-only state checks:
+Compose model, run the four owner-isolated stagers, and run all three read-only state checks:
 
 ```sh
 docker compose \
@@ -118,7 +118,19 @@ docker compose \
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \
-  run --rm --no-deps registry-runtime-stage-secrets
+  run --rm --no-deps registry-relay-public-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-notary-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-postgresql-stage-secrets
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \
@@ -159,14 +171,26 @@ pre-update recovery record is closed.
 
 ## Verify and start the candidate
 
-From the candidate package root, stage its operator files and run all three read-only
+From the candidate package root, run the four owner-isolated stagers and all three read-only
 state checks before ordinary startup:
 
 ```sh
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \
-  run --rm --no-deps registry-runtime-stage-secrets
+  run --rm --no-deps registry-relay-public-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-notary-stage-secrets
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  run --rm --no-deps registry-postgresql-stage-secrets
 docker compose \
   --env-file generated/compose.empty.env \
   -f generated/compose.yaml \

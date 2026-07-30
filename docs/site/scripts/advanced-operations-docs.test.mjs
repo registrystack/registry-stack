@@ -286,8 +286,27 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
   assert.match(update, /`generated\.previous\/`/);
   assert.match(update, /rollback is unsupported/i);
   assert.match(update, /Do not configure an automated rollback/i);
+  assert.doesNotMatch(source, /registry-runtime-stage-secrets/);
 
+  const orderedStagers = new RegExp(
+    [
+      'registry-relay-public-stage-secrets',
+      'registry-relay-consultation-stage-secrets',
+      'registry-notary-stage-secrets',
+      'registry-postgresql-stage-secrets',
+      "'verify_state'",
+    ].join('[\\s\\S]*'),
+  );
   for (const page of [backup, update]) {
+    assert.match(page, orderedStagers);
+    for (const stager of [
+      'registry-relay-public-stage-secrets',
+      'registry-relay-consultation-stage-secrets',
+      'registry-notary-stage-secrets',
+      'registry-postgresql-stage-secrets',
+    ]) {
+      assert.match(page, new RegExp(`run --rm --no-deps ${stager}`));
+    }
     assert.match(page, /generated\/compose\.empty\.env/);
     assert.match(page, /generated\/compose\.yaml/);
     assert.match(page, /'verify_state'/);

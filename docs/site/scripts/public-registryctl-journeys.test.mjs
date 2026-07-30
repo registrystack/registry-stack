@@ -66,7 +66,10 @@ function assertOverlayChecksum(relativePath) {
 
 const firstInstallation = [
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet',
-  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets',
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap',
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state',
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state',
@@ -80,7 +83,10 @@ const firstInstallation = [
 
 const ordinaryStartAndStop = [
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet',
-  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets',
   "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public 'product-action' 'relay-public' 'verify_state'",
   "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation 'product-action' 'relay-consultation' 'verify_state'",
   "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary 'product-action' 'verify_state'",
@@ -209,6 +215,7 @@ test('Compose command blocks exactly reproduce the generated runbook sequence', 
   const page = read('src/content/docs/operate/single-node-compose-behind-proxy.mdx');
   assert.equal(fence(page, 'Initialize each product once', 'sh', 2), firstInstallation);
   assert.equal(fence(page, 'Run the package standalone', 'sh'), ordinaryStartAndStop);
+  assert.doesNotMatch(page, /registry-runtime-stage-secrets/);
 });
 
 test('Compose include remains operator-owned and outside package verification', () => {
