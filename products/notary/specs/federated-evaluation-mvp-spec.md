@@ -534,7 +534,10 @@ until every applicable item below is satisfied and reviewed.
 - Registry Notary rejects startup config when `node_id` and `issuer` do not
   satisfy the MVP binding rule.
 - Registry Notary rejects startup config when a federation evaluation profile
-  references a `registry_backed` claim.
+  does not reference a `registry_backed` claim.
+- Registry Notary rejects startup config when a peer's `evaluation_scopes`
+  omit a `required_scopes` entry from an allowed profile's selected claim or
+  dependency closure.
 - `POST /federation/v1/evaluations` is not mounted unless federation is enabled.
 - Request bodies over `inbound_body_limit_bytes` are rejected before full body
   buffering and before JWT parsing.
