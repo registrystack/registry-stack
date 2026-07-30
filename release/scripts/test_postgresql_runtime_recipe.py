@@ -408,6 +408,24 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                     [*compose, "run", "--rm", "registry-postgres-bootstrap"],
                     cwd=root,
                 )
+                second_bootstrap = subprocess.run(
+                    [
+                        *compose,
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "registry-postgres-bootstrap",
+                    ],
+                    cwd=root,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(second_bootstrap.returncode, 0)
+                self.assertIn(
+                    "registry_stack_bootstrap_marker",
+                    second_bootstrap.stdout + second_bootstrap.stderr,
+                )
                 query_script = (
                     'export PGPASSWORD="$(cat '
                     '/run/secrets/postgresql-admin-password)"; '

@@ -74,6 +74,8 @@ STABLE_COMMAND_ORDER = (
     "initialize_relay_public",
     "initialize_relay_consultation",
     "initialize_notary",
+    "reject_postgresql_data_reinitialization",
+    "reject_postgresql_bootstrap_reinitialization",
     "governed_start",
     "governed_restart",
     "governed_stop_for_backup",
@@ -2106,6 +2108,8 @@ def run_expected_failure(
     cwd: Path,
     env: dict[str, str],
     logs: Path,
+    expected_output_fragment: str | None = None,
+    observed_exit_class: str = "nonzero",
 ) -> dict[str, Any]:
     result = subprocess.run(
         command,
@@ -2119,10 +2123,18 @@ def run_expected_failure(
     )
     if result.returncode == 0:
         raise ReleaseFormError(f"{name} unexpectedly succeeded")
+    if (
+        expected_output_fragment is not None
+        and expected_output_fragment not in result.stdout
+    ):
+        raise ReleaseFormError(f"{name} failed without the expected classification")
     write_json_log(
         logs,
         name,
-        {"outcome": "rejected", "observed_exit_class": "nonzero"},
+        {
+            "outcome": "rejected",
+            "observed_exit_class": observed_exit_class,
+        },
     )
     return {
         "name": name,
@@ -3639,6 +3651,43 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                         logs=logs,
                     )
                 )
+            commands.append(
+                run_expected_failure(
+                    "reject_postgresql_data_reinitialization",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "registry-postgres",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                    expected_output_fragment=(
+                        "PostgreSQL data directory is not empty; "
+                        "refusing explicit initialization"
+                    ),
+                    observed_exit_class="postgresql_data_not_empty",
+                )
+            )
+            commands.append(
+                run_expected_failure(
+                    "reject_postgresql_bootstrap_reinitialization",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "registry-postgres-bootstrap",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                    expected_output_fragment="registry_stack_bootstrap_marker",
+                    observed_exit_class="postgresql_bootstrap_marker_exists",
+                )
+            )
             commands.append(
                 run_compose_group(
                     "governed_start",

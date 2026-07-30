@@ -546,6 +546,8 @@ class FirstCountryReleaseFormTest(TestCase):
             "initialize_relay_public",
             "initialize_relay_consultation",
             "initialize_notary",
+            "reject_postgresql_data_reinitialization",
+            "reject_postgresql_bootstrap_reinitialization",
             "governed_restart",
             "backup_restore",
             "rotate_relay_consultation",
@@ -577,6 +579,65 @@ class FirstCountryReleaseFormTest(TestCase):
             "check-registryctl-public-source-live.sh", stable_source
         )
         self.assertNotIn('"spreadsheet"', stable_source)
+
+    def test_expected_failure_requires_its_value_free_classification(self) -> None:
+        logs = self.root / "logs"
+        logs.mkdir(mode=0o700)
+        rejected = subprocess.CompletedProcess(
+            ["fixture"],
+            1,
+            "registry_stack_bootstrap_marker already exists",
+            "",
+        )
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            return_value=rejected,
+        ):
+            self.module.run_expected_failure(
+                "bootstrap_rejected",
+                ["fixture"],
+                cwd=self.root,
+                env={},
+                logs=logs,
+                expected_output_fragment="registry_stack_bootstrap_marker",
+                observed_exit_class="postgresql_bootstrap_marker_exists",
+            )
+        recorded = json.loads(
+            (logs / "bootstrap_rejected.log").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            recorded,
+            {
+                "observed_exit_class": "postgresql_bootstrap_marker_exists",
+                "outcome": "rejected",
+            },
+        )
+
+        with (
+            mock.patch.object(
+                self.module.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["fixture"],
+                    1,
+                    "unclassified failure",
+                    "",
+                ),
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "without the expected classification",
+            ),
+        ):
+            self.module.run_expected_failure(
+                "bootstrap_unclassified",
+                ["fixture"],
+                cwd=self.root,
+                env={},
+                logs=logs,
+                expected_output_fragment="registry_stack_bootstrap_marker",
+            )
 
     def test_secret_stage_commands_precede_each_consumer_sequence(self) -> None:
         package = self.root / "package"
