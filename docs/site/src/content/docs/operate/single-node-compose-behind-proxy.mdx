@@ -108,8 +108,7 @@ Use owner-only file modes.
 
 Edit `binding.yaml` only when the visible generated defaults need to change.
 The binding can select loopback ports, package-relative secret and certificate locators, durable
-state locations, an existing edge network, resource limits, restart policy, and value-free logging
-policy.
+state locations, restart policy, and value-free logging policy.
 
 Do not edit files under `generated/`.
 Do not edit generated Relay or Notary configuration.
@@ -207,6 +206,7 @@ include:
 Verify the generated package before composing it into the application:
 
 ```sh
+cd ..
 registryctl deploy verify --package ./registry-stack
 docker compose --env-file ./registry-stack/generated/compose.empty.env -f ./compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```

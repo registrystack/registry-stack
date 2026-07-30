@@ -216,17 +216,49 @@ From the parent of `my-registry`, create the separate demonstration project:
 ```sh
 registryctl init public-json-live-demo --template http
 cd public-json-live-demo
-rm -r integrations/person-record
-curl -fsS \
-  https://docs.registrystack.org/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh \
-  -o jsonplaceholder-todo-live-overlay-v1.sh
-sh jsonplaceholder-todo-live-overlay-v1.sh
-rm jsonplaceholder-todo-live-overlay-v1.sh
+(
+  set -eu
+  REGISTRYCTL_VERSION=$(registryctl --version)
+  REGISTRYCTL_VERSION=${REGISTRYCTL_VERSION#registryctl }
+  case "$REGISTRYCTL_VERSION" in
+    ''|*[!0-9A-Za-z.-]*|[!0-9]*)
+      printf '%s\n' "unexpected Registryctl version: $REGISTRYCTL_VERSION" >&2
+      exit 1
+      ;;
+  esac
+  OVERLAY=jsonplaceholder-todo-live-overlay-v1.sh
+  OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"
+  curl -fsS "$OVERLAY_URL" -o "$OVERLAY"
+  curl -fsS "$OVERLAY_URL.sha256" -o "$OVERLAY.sha256"
+  python3 - "$OVERLAY" "$OVERLAY.sha256" <<'PY'
+import hashlib
+import hmac
+import sys
+from pathlib import Path
+
+overlay = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="ascii").splitlines()
+if len(lines) != 1:
+    raise SystemExit("overlay checksum file must contain exactly one line")
+expected, separator, filename = lines[0].partition("  ")
+if separator != "  " or filename != overlay.name:
+    raise SystemExit("overlay checksum file names the wrong asset")
+actual = hashlib.sha256(overlay.read_bytes()).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("overlay checksum mismatch")
+PY
+  sh "$OVERLAY"
+  rm "$OVERLAY" "$OVERLAY.sha256"
+)
 registryctl test --environment local
 registryctl check --environment public-demo --explain
 registryctl check --environment public-demo-missing --explain
 ```
 
+The overlay first verifies that the complete authored closure still matches the pristine HTTP
+starter embedded in that Registryctl release.
+It stops before replacing any file when the starter is missing, changed, or contains another
+authored file.
 `registryctl test --environment local` remains offline.
 Its completed, missing, ambiguous, authorization, and minimization cases are wholly synthetic
 and remain the authoritative project-contract evidence.

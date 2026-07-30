@@ -145,9 +145,12 @@ Bare `registryctl deploy` prints help and performs no action.
 ```text
 registryctl deploy generate \
   --approved-set <file> \
+  --binding <file> \
   --output-dir <directory>
 registryctl deploy verify \
-  --package <directory>
+  --package <directory> \
+  --expected-closure-sha256 <sha256> \
+  --check-operator-files
 registryctl deploy verify \
   --package <directory> \
   --approved-set <file>
@@ -155,11 +158,17 @@ registryctl deploy verify \
 
 Generation consumes one verified three-lane approved set and the signed release lock installed
 with Registryctl.
+`--binding` selects a closed deployment binding.
+Omit it to generate safe loopback defaults into the package.
 It does not sign bundles, create production secrets, initialize product state, or activate a
 deployment.
 
 Verification reports package ownership, freshness, closure integrity, and whether in-place
 regeneration is safe.
+`--expected-closure-sha256` compares the generated closure with a digest recorded outside the
+package.
+`--check-operator-files` checks each operator file's existence, isolation, mode, and owner without
+reading its value.
 It verifies the generated package only.
 An operator-owned Compose application or include graph remains outside that result.
 Generation and verification are offline.
@@ -280,6 +289,9 @@ The namespace does not need Docker, source access, a secret, or a deployed produ
 | `--template` | Select an embedded initialization template |
 | `--against` | Select the current approved set for comparison or update |
 | `--approved-set` | Select an approved set for deployment generation or verification |
+| `--binding` | Select a closed deployment binding instead of safe loopback defaults |
+| `--expected-closure-sha256` | Compare a package with its externally recorded generated closure digest |
+| `--check-operator-files` | Check operator-file existence, isolation, mode, and owner without reading values |
 | `--output-dir` | Select one directory |
 | `--output-file` | Select one file |
 | `--environment` | Select a declared project environment |

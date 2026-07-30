@@ -17,7 +17,7 @@ case "${REGISTRYCTL_BIN:-}" in
     ;;
 esac
 
-for command in curl docker; do
+for command in curl docker python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf '%s\n' "$command is required for the public-source live gate" >&2
     exit 1
@@ -67,9 +67,26 @@ if [ -n "${REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR:-}" ]; then
 fi
 mkdir -p "$EVIDENCE_ROOT"
 
+python3 - "$OVERLAY" "$OVERLAY.sha256" <<'PY'
+import hashlib
+import hmac
+import sys
+from pathlib import Path
+
+overlay = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="ascii").splitlines()
+if len(lines) != 1:
+    raise SystemExit("overlay checksum file must contain exactly one line")
+expected, separator, filename = lines[0].partition("  ")
+if separator != "  " or filename != overlay.name:
+    raise SystemExit("overlay checksum file names the wrong asset")
+actual = hashlib.sha256(overlay.read_bytes()).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("overlay checksum mismatch")
+PY
+
 run_report "$EVIDENCE_ROOT/init.txt" \
   "$REGISTRYCTL_BIN" init "$PROJECT" --template http
-rm -r "$PROJECT/integrations/person-record"
 (
   cd "$PROJECT"
   sh "$OVERLAY"

@@ -112,6 +112,23 @@ export function writeShellBlocks(markdownPath, outputDirectory) {
   return blocks;
 }
 
+export function writeFence(
+  markdownPath,
+  heading,
+  language,
+  occurrence,
+  outputPath,
+) {
+  const block = findFence(
+    readFileSync(markdownPath, 'utf8'),
+    heading,
+    language,
+    occurrence,
+  );
+  writeFileSync(outputPath, `${block.content}\n`, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(outputPath, 0o600);
+}
+
 export function assertOutputContainsLines(output, expected, label = 'command output') {
   const missing = normalizedLines(expected).filter((line) => line !== '' && !output.includes(line));
   invariant(missing.length === 0, `${label} is missing documented lines:\n${missing.join('\n')}`);
@@ -306,6 +323,17 @@ export function writeEvidenceManifest(
         covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
         reports: ['opencrvs/test.json', 'opencrvs/check.json', 'opencrvs/build.json'],
       },
+      {
+        id: 'initial-local-approval',
+        source: 'maintained-http-template',
+        covers: ['independent-lane-keys', 'anchors', 'bundles', 'approved-set'],
+        reports: [
+          'initial-approval/relay-public-verify.txt',
+          'initial-approval/relay-consultation-verify.txt',
+          'initial-approval/notary-verify.txt',
+          'initial-approval/approved-set.txt',
+        ],
+      },
     ],
     release_boundary:
       'Installer, release lock, doctor, and disposable development runtime evidence are separate.',
@@ -328,6 +356,14 @@ async function main([command, ...args]) {
     case 'extract-shell': {
       invariant(args.length === 2, 'usage: extract-shell <tutorial> <output-directory>');
       writeShellBlocks(args[0], args[1]);
+      return;
+    }
+    case 'extract-fence': {
+      invariant(
+        args.length === 5,
+        'usage: extract-fence <tutorial> <heading> <language> <occurrence> <output-file>',
+      );
+      writeFence(args[0], args[1], args[2], Number(args[3]), args[4]);
       return;
     }
     case 'assert-layout': {

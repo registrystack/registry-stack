@@ -13,6 +13,7 @@ SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
 HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
+APPROVAL_TUTORIAL="$SITE_ROOT/src/content/docs/operate/approve-initial-baseline.mdx"
 OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
 OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
 OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
@@ -43,7 +44,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-for tool in node grep; do
+for tool in node grep python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
@@ -54,8 +55,20 @@ if [[ ! -f "$OPENCRVS_OVERLAY" ]]; then
 	printf 'run npm run generate before the reader gate\n' >&2
 	exit 1
 fi
+if [[ ! -f "$OPENCRVS_OVERLAY.sha256" ]]; then
+	printf 'public OpenCRVS Events API overlay checksum is missing: %s\n' \
+		"$OPENCRVS_OVERLAY.sha256" >&2
+	printf 'run npm run generate before the reader gate\n' >&2
+	exit 1
+fi
 if [[ ! -f "$PUBLIC_SOURCE_OVERLAY" ]]; then
 	printf 'public no-credential source overlay is missing: %s\n' "$PUBLIC_SOURCE_OVERLAY" >&2
+	printf 'run npm run generate before the reader gate\n' >&2
+	exit 1
+fi
+if [[ ! -f "$PUBLIC_SOURCE_OVERLAY.sha256" ]]; then
+	printf 'public no-credential source overlay checksum is missing: %s\n' \
+		"$PUBLIC_SOURCE_OVERLAY.sha256" >&2
 	printf 'run npm run generate before the reader gate\n' >&2
 	exit 1
 fi
@@ -115,7 +128,7 @@ node "$HELPER" assert-contains "$OAUTH_TUTORIAL" \
 	'capability:' \
 	'file: adapter.rhai' \
 	'opencrvs-events-api-overlay-v1.sh' \
-	'rm -r integrations/person-record' \
+	'OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"' \
 	'../verify-opencrvs-claims/' \
 	'registryctl test' \
 	'registryctl check --explain' \
@@ -127,7 +140,7 @@ node "$HELPER" assert-contains "$OPENCRVS_TUTORIAL" \
 	'birth-event-found' \
 	'birth-event-registered' \
 	'opencrvs-events-api-overlay-v1.sh' \
-	'rm -r integrations/person-record' \
+	'OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"' \
 	'registryctl test' \
 	'registryctl check --explain' \
 	'registryctl build'
@@ -165,6 +178,30 @@ if [[ ! "$REGISTRYCTL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ 
 	printf 'unexpected Registryctl version: %s\n' "$REGISTRYCTL_VERSION" >&2
 	exit 1
 fi
+
+verify_overlay_asset() {
+	local overlay=$1
+	python3 - "$overlay" "$overlay.sha256" <<'PY'
+import hashlib
+import hmac
+import sys
+from pathlib import Path
+
+overlay = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="ascii").splitlines()
+if len(lines) != 1:
+    raise SystemExit("overlay checksum file must contain exactly one line")
+expected, separator, filename = lines[0].partition("  ")
+if separator != "  " or filename != overlay.name:
+    raise SystemExit("overlay checksum file names the wrong asset")
+actual = hashlib.sha256(overlay.read_bytes()).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("overlay checksum mismatch")
+PY
+}
+
+verify_overlay_asset "$OPENCRVS_OVERLAY"
+verify_overlay_asset "$PUBLIC_SOURCE_OVERLAY"
 
 run_reports() {
 	local project_directory=$1
@@ -221,10 +258,53 @@ node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/build.txt" "$HTTP_TUTORIAL" 'Review and build the project' text 1
 printf 'HTTP reader journey: PASS\n'
 
+APPROVAL_REPORT="$REPORT_ROOT/initial-approval"
+KEY_PROCEDURE="$WORK_ROOT/generate-evaluation-lane-keys.sh"
+mkdir -p "$APPROVAL_REPORT"
+node "$HELPER" extract-fence \
+	"$APPROVAL_TUTORIAL" \
+	'Generate evaluation-only lane keys' \
+	sh \
+	1 \
+	"$KEY_PROCEDURE"
+(
+	cd "$HTTP_PROJECT"
+	sh "$KEY_PROCEDURE"
+	mkdir operator-handoff
+	for lane in relay-public relay-consultation notary; do
+		"$REGISTRYCTL_BIN" trust anchor create \
+			--lane "$lane" \
+			--input ".registry-stack/build/local/signing-inputs/$lane" \
+			--public-key "evaluation-keys/$lane.public.jwk" \
+			--threshold 1 \
+			--output-file "operator-handoff/$lane-anchor.json" \
+			>"$APPROVAL_REPORT/$lane-anchor.txt"
+		"$REGISTRYCTL_BIN" trust bundle sign \
+			--lane "$lane" \
+			--input ".registry-stack/build/local/signing-inputs/$lane" \
+			--anchor "operator-handoff/$lane-anchor.json" \
+			--key "file:evaluation-keys/$lane.private.jwk" \
+			--output-dir "operator-handoff/$lane-bundle" \
+			>"$APPROVAL_REPORT/$lane-sign.txt"
+		"$REGISTRYCTL_BIN" trust bundle verify \
+			--bundle-dir "operator-handoff/$lane-bundle/bundle" \
+			--anchor "operator-handoff/$lane-bundle/anchor.json" \
+			>"$APPROVAL_REPORT/$lane-verify.txt"
+	done
+	"$REGISTRYCTL_BIN" trust approved-set assemble \
+		--environment local \
+		--relay-public operator-handoff/relay-public-bundle \
+		--relay-consultation operator-handoff/relay-consultation-bundle \
+		--notary operator-handoff/notary-bundle \
+		--output-file operator-handoff/approved-set.v1.json \
+		>"$APPROVAL_REPORT/approved-set.txt"
+)
+test -f "$HTTP_PROJECT/operator-handoff/approved-set.v1.json"
+printf 'Initial local approval journey: PASS\n'
+
 PUBLIC_SOURCE_PROJECT="$WORK_ROOT/public-source-reader"
 "$REGISTRYCTL_BIN" init "$PUBLIC_SOURCE_PROJECT" --template http \
 	>"$REPORT_ROOT/public-source-init.txt"
-rm -r "$PUBLIC_SOURCE_PROJECT/integrations/person-record"
 (
 	cd "$PUBLIC_SOURCE_PROJECT"
 	sh "$PUBLIC_SOURCE_OVERLAY"
@@ -259,7 +339,6 @@ printf 'Public no-credential source offline journey: PASS\n'
 OPENCRVS_PROJECT="${RETAINED_OAUTH_PROJECT:-$WORK_ROOT/opencrvs-reader}"
 "$REGISTRYCTL_BIN" init "$OPENCRVS_PROJECT" --template http \
 	>"$REPORT_ROOT/opencrvs-init.txt"
-rm -r "$OPENCRVS_PROJECT/integrations/person-record"
 (
 	cd "$OPENCRVS_PROJECT"
 	sh "$OPENCRVS_OVERLAY"

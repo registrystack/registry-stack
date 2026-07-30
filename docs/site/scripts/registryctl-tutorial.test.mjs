@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
@@ -14,6 +14,7 @@ import {
   assertTutorialLayout,
   extractFencedBlocks,
   parseJsonOutput,
+  writeFence,
   writeEvidenceManifest,
 } from './registryctl-tutorial.mjs';
 
@@ -81,6 +82,20 @@ test('synchronizes fenced examples with executable output and maintained files',
     () => assertFenceFileEquals(markdown, 'Output', 'yaml', 1, 'value: drifted\n'),
     /differs/,
   );
+});
+
+test('writes one selected fenced procedure as an owner-only executable input', (t) => {
+  const root = mkdtempSync(resolve(tmpdir(), 'registryctl-tutorial-fence-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const markdown = resolve(root, 'guide.md');
+  const output = resolve(root, 'procedure.sh');
+  const source = '## Procedure\n\n```sh\nregistryctl test --environment local\n```\n';
+  writeFileSync(markdown, source);
+
+  writeFence(markdown, 'Procedure', 'sh', 1, output);
+
+  assert.equal(readFileSync(output, 'utf8'), 'registryctl test --environment local\n');
+  assert.equal(statSync(output).mode & 0o777, 0o600);
 });
 
 test('parses one strict JSON document and asserts subsets without array-order coupling', () => {
@@ -180,6 +195,11 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.match(script, /todo-verification/);
   assert.match(script, /assert-fence-file-equals/);
   assert.match(script, /assert-fence-equals/);
+  assert.match(script, /extract-fence \\\n\t"\$APPROVAL_TUTORIAL"/);
+  assert.match(script, /Initial local approval journey: PASS/);
+  assert.match(script, /--input "\.registry-stack\/build\/local\/signing-inputs\/\$lane"/);
+  assert.match(script, /--environment local/);
+  assert.doesNotMatch(script, /deploy generate/);
   assert.match(script, /oauth2_bearer_no_expiry/);
   assert.match(script, /REGISTRYCTL_BIN must be an absolute installed-binary path/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_EVIDENCE_DIR/);
