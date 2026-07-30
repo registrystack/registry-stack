@@ -8,6 +8,8 @@ pub(crate) use axum_test::TestServer;
 pub(crate) use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 pub(crate) use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 
@@ -39,10 +41,7 @@ pub(crate) fn write_signed_notary_bundle_with_config(
     let kid = public.jkt().expect("thumbprint");
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: "registry-notary".to_string(),
-        environment: "development".to_string(),
-        stream_id: "notary-loader-test".to_string(),
-        instance_id: Some("notary-loader".to_string()),
+        acceptance_identity: notary_acceptance_identity(),
         bundle_id: "notary-loader-bundle".to_string(),
         sequence: 1,
         previous_config_hash: None,
@@ -56,15 +55,10 @@ pub(crate) fn write_signed_notary_bundle_with_config(
     write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-notary".to_string(),
-        environment: "development".to_string(),
-        stream_id: "notary-loader-test".to_string(),
-        instance_id: "notary-loader".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
-            kid,
-            jwk: public,
-            enabled: true,
-        }],
+        acceptance_identity: notary_acceptance_identity(),
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
     };
     let anchor_path = tmp.path().join("trust_anchor.json");
     std::fs::write(
@@ -77,6 +71,28 @@ pub(crate) fn write_signed_notary_bundle_with_config(
         anchor_path,
         state_path: tmp.path().join("antirollback.json"),
         config_hash,
+    }
+}
+
+pub(crate) fn notary_acceptance_identity() -> ProductAcceptanceIdentityV1 {
+    ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "notary-loader-project".to_string(),
+        environment: "development".to_string(),
+        lane: ProductAcceptanceLaneV1::Notary,
+        product: ProductAcceptanceProductV1::RegistryNotary,
+        stream: "notary-loader-test".to_string(),
+        instance: "notary-loader".to_string(),
+    }
+}
+
+pub(crate) fn notary_accepted_anchor_pin() -> registry_platform_ops::AcceptedAnchorPinV1 {
+    registry_platform_ops::AcceptedAnchorPinV1 {
+        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .to_string(),
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec!["kid-1".to_string()],
     }
 }
 
@@ -117,7 +133,7 @@ pub(crate) fn rewrite_signed_bundle_instance_id(
         &std::fs::read(fixture.bundle_dir.join("manifest.json")).expect("manifest reads"),
     )
     .expect("manifest parses");
-    manifest.instance_id = instance_id.map(str::to_string);
+    manifest.acceptance_identity.instance = instance_id.unwrap_or_default().to_string();
     let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private JWK parses");
     let kid = private.public().jkt().expect("signer thumbprint");
     write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);

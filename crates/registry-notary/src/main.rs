@@ -8,6 +8,7 @@ mod doctor;
 mod env_file;
 mod explain_config;
 mod logging;
+mod product_action;
 mod serve;
 
 use boot::*;
@@ -17,6 +18,7 @@ use doctor::*;
 use env_file::*;
 use explain_config::*;
 use logging::*;
+use product_action::*;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -58,10 +60,10 @@ use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     evaluate_ack_health, load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
-    posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
-    AuditSinkKind, BundleStateAction, BundleStateRequest, BundleVerificationCode,
-    BundleVerificationFailure, ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource,
-    PendingBundleAcceptance, UnsignedConfigSelection,
+    posture_safe_runtime_config_hash, resolve_bundle_state_action, AuditSinkKind,
+    BundleStateAction, BundleStateRequest, BundleVerificationCode, BundleVerificationFailure,
+    ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource, PendingBundleAcceptance,
+    UnsignedConfigSelection,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -120,6 +122,11 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run one closed, release-mapped product action.
+    ProductAction {
+        #[command(subcommand)]
+        action: ProductAction,
+    },
     /// Print the Registry Notary OpenAPI document as JSON.
     Openapi,
     /// Validate config, env-backed secrets, Relay activation, and VC wiring.
@@ -272,7 +279,8 @@ struct ConfigVerifyBundleArgs {
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let server_startup = args.command.is_none();
+    let server_startup =
+        args.command.is_none() || matches!(&args.command, Some(Command::ProductAction { .. }));
     match run(args).await {
         Ok(code) => code,
         Err(err) => {
@@ -307,6 +315,11 @@ fn top_level_error_message(
 }
 
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if let Some(Command::ProductAction { action }) = args.command.as_ref() {
+        ensure_closed_product_action_arguments(&args)?;
+        run_product_action(*action).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let server_startup = args.command.is_none();
     let server_config_input = if server_startup {
         Some(server_config_input(&args).map_err(value_free_configuration_failure)?)
@@ -351,6 +364,9 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             )
             .await?;
             Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::ProductAction { .. }) => {
+            unreachable!("product actions return before legacy input resolution")
         }
         Some(Command::Openapi) => {
             println!("{}", serde_json::to_string_pretty(&openapi_document())?);
@@ -491,10 +507,22 @@ mod operator_boundary_tests {
                 "/Users/SENTINEL_USER/SENTINEL_COUNTRY/SENTINEL_SECRET_STATE.json",
             ),
             key: registry_platform_ops::AntiRollbackKey {
-                product: "registry-notary".to_string(),
-                instance_id: "SENTINEL_PARSER_INSTANCE".to_string(),
-                environment: "SENTINEL_COUNTRY".to_string(),
-                stream_id: "governed-stream".to_string(),
+                acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1 {
+                    trust_domain: registry_platform_config::ProductTrustDomainV1::Governed,
+                    project: "governed-project".to_string(),
+                    environment: "SENTINEL_COUNTRY".to_string(),
+                    lane: registry_platform_config::ProductAcceptanceLaneV1::Notary,
+                    product: registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+                    stream: "governed-stream".to_string(),
+                    instance: "SENTINEL_PARSER_INSTANCE".to_string(),
+                },
+            },
+            accepted_anchor: registry_platform_ops::AcceptedAnchorPinV1 {
+                digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                version: 1,
+                threshold: 1,
+                enabled_signers: vec!["governed-signer-kid".to_string()],
             },
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some("governed-bundle-42".to_string()),

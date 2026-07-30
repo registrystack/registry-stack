@@ -1962,7 +1962,11 @@ pub struct ConfigAuditEvent {
     pub action: String,
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_identity: Option<registry_platform_config::ProductAcceptanceIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_manifest_hash: Option<String>,
     #[serde(
         default,
         rename = "bundle_sequence",
@@ -1976,6 +1980,10 @@ pub struct ConfigAuditEvent {
     pub previous_hash_matched: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_version: Option<u64>,
     pub product_validation_result: String,
     pub apply_result: String,
     pub posture_result: String,
@@ -2760,6 +2768,28 @@ mod tests {
         assert!(decoded.requester_type.is_none());
         assert!(decoded.requester_ref_hash.is_none());
         assert!(decoded.batch_items.is_none());
+    }
+
+    #[test]
+    fn config_audit_governance_evidence_is_optional_for_legacy_records() {
+        let decoded: ConfigAuditEvent = serde_json::from_value(json!({
+            "action": "boot",
+            "source": "signed_bundle_file",
+            "signer_kids": [],
+            "product_validation_result": "accepted",
+            "apply_result": "applied",
+            "posture_result": "accepted",
+            "applied": true,
+            "restart_required": false,
+            "change_classes": [],
+            "break_glass": false
+        }))
+        .expect("legacy config audit deserializes");
+
+        assert!(decoded.acceptance_identity.is_none());
+        assert!(decoded.bundle_manifest_hash.is_none());
+        assert!(decoded.anchor_digest.is_none());
+        assert!(decoded.anchor_version.is_none());
     }
 
     #[test]
