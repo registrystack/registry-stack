@@ -231,10 +231,8 @@ pub struct ProjectBuildOptions {
 ///
 /// Public Relay, consultation Relay, and Notary are independently signed
 /// inputs. A consultation project supplies both Relay pairs, plus Notary when
-/// that product is projected. Legacy v1-v3 combined Relay baselines cannot
-/// prove the split consultation lineage and require re-review as v4 baselines.
-/// The legacy `against` and `anchor` fields on [`ProjectBuildOptions`] remain
-/// available for single-lane callers.
+/// that product is projected. The `against` and `anchor` fields on
+/// [`ProjectBuildOptions`] remain available for single-lane callers.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectBuildBaselineSetOptions {
     pub relay_against: Option<PathBuf>,
@@ -265,9 +263,7 @@ pub struct ProjectPromotionOptions {
     pub project_directory: PathBuf,
     pub environment: String,
     /// One verified product baseline for single-lane Relay or Notary projects.
-    /// Multi-lane projects should use the lane-specific pairs below. Legacy
-    /// v1-v3 combined Relay baselines require re-review before they can be used
-    /// for the split public and consultation Relay lanes.
+    /// Multi-lane projects should use the lane-specific pairs below.
     pub against: Option<PathBuf>,
     pub anchor: Option<PathBuf>,
     pub relay_against: Option<PathBuf>,

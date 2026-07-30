@@ -51,8 +51,7 @@
     },
     "baseline_migration": {
       "enum": [
-        "not_required",
-        "re_review_and_sign_separate_relay_public_and_consultation_inputs"
+        "not_required"
       ]
     },
     "changes": {
@@ -886,8 +885,7 @@
         "incompatible_capability",
         "incompatible_schema",
         "incompatible_abi",
-        "compatibility_unresolved",
-        "legacy_relay_consultation_baseline_migration_required"
+        "compatibility_unresolved"
       ]
     }
   }

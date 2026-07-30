@@ -1136,20 +1136,8 @@ pub fn promote_registry_project(
 
     let baselines = match load_verified_promotion_baselines(options, &loaded) {
         Ok(baselines) => baselines,
-        Err(error)
-            if error.is::<LegacyRelayConsultationBaselineMigrationRequired>()
-                && promotion_baseline_supplied(options) =>
-        {
-            return unresolved_promotion_baseline_report(
-                &loaded,
-                PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs,
-            );
-        }
         Err(_) if promotion_baseline_supplied(options) => {
-            return unresolved_promotion_baseline_report(
-                &loaded,
-                PromotionBaselineMigration::NotRequired,
-            );
+            return unresolved_promotion_baseline_report(&loaded);
         }
         Err(_) => return Err(anyhow!("could not establish verified promotion baselines")),
     };
@@ -1176,12 +1164,11 @@ fn promotion_baseline_supplied(options: &ProjectPromotionOptions) -> bool {
 
 fn unresolved_promotion_baseline_report(
     loaded: &LoadedRegistryProject,
-    baseline_migration: PromotionBaselineMigration,
 ) -> Result<ProjectPromotionReportV1> {
     build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::NotProven,
         product_lanes: promotion_action_lanes(loaded, &[]),
-        baseline_migration,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: Vec::new(),
         reviewed_ceiling: ReviewedCeilingInput::Unresolved,
         trust: TrustResolutionInput::Unresolved,
@@ -1819,22 +1806,6 @@ mod promotion_adapter_tests {
             .blocking_reasons
             .contains(&PromotionBlockingReason::IncompatibleAbi));
 
-        let mut legacy = current.clone();
-        legacy["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
-        legacy
-            .as_object_mut()
-            .expect("legacy state is an object")
-            .remove("promotion_projection");
-        let baselines = verified_baselines(legacy);
-        let report = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
-            .expect("legacy signed baseline fails closed as a report");
-        assert!(report
-            .blocking_reasons
-            .contains(&PromotionBlockingReason::MissingSchema));
-        assert!(report
-            .blocking_reasons
-            .contains(&PromotionBlockingReason::ReviewedRevisionNotProven));
-
         let baselines = verified_baselines(current.clone());
         let report =
             build_promotion_report_from_normalized_state(&loaded, &current, &baselines[1..])
@@ -2423,13 +2394,7 @@ fn build_registry_project_inner(
         &loaded,
         BaselineSetCompleteness::CompleteTopologyWhenPresent,
     )
-    .map_err(|error| {
-        if error.is::<LegacyRelayConsultationBaselineMigrationRequired>() {
-            error
-        } else {
-            anyhow!("could not establish verified build baselines")
-        }
-    })?;
+    .map_err(|_| anyhow!("could not establish verified build baselines"))?;
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
     let artifact_inputs = validate_project_workbook_inputs(&loaded, &compiled)?;

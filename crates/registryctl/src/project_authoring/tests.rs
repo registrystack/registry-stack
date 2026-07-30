@@ -1982,27 +1982,24 @@ outputs:
         validate_signed_review_record(&review).expect("current review record is valid");
         validate_signed_approval_state(&approval_state).expect("current approval state is valid");
 
-        let mut legacy_v3_state = approval_state.clone();
-        legacy_v3_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V3);
-        legacy_v3_state["generated_closure_digests"]
-            .as_object_mut()
-            .expect("legacy closure digest set is an object")
-            .remove("relay_consultation");
-        validate_signed_approval_state(&legacy_v3_state)
-            .expect("v3 signed state remains parseable for baseline compatibility");
-
-        let mut legacy_state = approval_state.clone();
-        legacy_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
-        legacy_state
-            .as_object_mut()
-            .expect("legacy approval state is an object")
-            .remove("promotion_projection");
-        legacy_state["generated_closure_digests"]
-            .as_object_mut()
-            .expect("legacy closure digest set is an object")
-            .remove("relay_consultation");
-        validate_signed_approval_state(&legacy_state)
-            .expect("legacy signed state remains parseable for fail-closed migration reporting");
+        for unsupported_schema in [
+            "registry.project.approval-state.v1",
+            "registry.project.approval-state.v2",
+            "registry.project.approval-state.v3",
+        ] {
+            let mut unsupported_state = approval_state.clone();
+            unsupported_state["schema"] = json!(unsupported_schema);
+            let error = validate_signed_approval_state(&unsupported_state)
+                .expect_err("pre-1.0 approval state must not enter semantic validation");
+            let message = error.to_string();
+            assert_eq!(
+                message,
+                "baseline approval state uses an unsupported schema; recreate pre-1.0 generated \
+                 artifacts before rebuilding"
+            );
+            assert!(!message.contains(unsupported_schema));
+            assert!(!message.contains("fictional-citizen-registry"));
+        }
 
         let mut leaked_digest = review.clone();
         leaked_digest

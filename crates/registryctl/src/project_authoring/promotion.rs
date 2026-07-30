@@ -426,14 +426,12 @@ pub enum PromotionBlockingReason {
     IncompatibleSchema,
     IncompatibleAbi,
     CompatibilityUnresolved,
-    LegacyRelayConsultationBaselineMigrationRequired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromotionBaselineMigration {
     NotRequired,
-    ReReviewAndSignSeparateRelayPublicAndConsultationInputs,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -763,21 +761,11 @@ pub fn build_project_promotion_report(
     if input.reviewed_revision == ReviewedRevisionComparison::NotProven {
         blocking_reasons.insert(PromotionBlockingReason::ReviewedRevisionNotProven);
     }
-    if input.baseline_migration
-        == PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
-    {
-        blocking_reasons
-            .insert(PromotionBlockingReason::LegacyRelayConsultationBaselineMigrationRequired);
-    }
 
     let product_lanes = input.product_lanes.into_iter().collect::<BTreeSet<_>>();
     if product_lanes.is_empty()
         || (product_lanes.contains(&RequiredProductAction::RelayConsultation)
             && !product_lanes.contains(&RequiredProductAction::RelayPublic))
-        || (input.baseline_migration
-            == PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
-            && (!product_lanes.contains(&RequiredProductAction::RelayPublic)
-                || !product_lanes.contains(&RequiredProductAction::RelayConsultation)))
     {
         return Err(ProjectPromotionBuildError::InvalidProductLanes);
     }
