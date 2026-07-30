@@ -174,6 +174,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_registry_release.py",
     ),
     (
+        "Adopter Compose checker tests",
+        "run: python3 -m unittest release/scripts/test_check_adopter_compose_contract.py",
+    ),
+    (
+        "Adopter Compose conformance",
+        "run: bash release/scripts/check_adopter_compose_contract.sh",
+    ),
+    (
         "First-country release-form runner tests",
         "run: python3 -m unittest release/scripts/test_first_country_release_form.py",
     ),

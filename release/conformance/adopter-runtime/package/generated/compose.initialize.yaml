@@ -1,0 +1,183 @@
+services:
+  registry-relay-public-prepare-state:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-public, prepare_state_store]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    networks: [registry-edge]
+    volumes:
+      - type: bind
+        source: ./bundles/relay-public
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-public
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-public-audit:/var/lib/registry/audit
+
+  registry-relay-consultation-prepare-state:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-consultation, prepare_state_store]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./bundles/relay-consultation
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-consultation
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-consultation-audit:/var/lib/registry/audit
+
+  registry-notary-prepare-state:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    command: [product-action, prepare_state_store]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: prepare-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./bundles/notary
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/notary
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-notary-audit:/var/lib/registry/audit
+
+  registry-relay-public-initialize:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-public, initialize_state]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    networks: [registry-edge]
+    volumes:
+      - type: bind
+        source: ./bundles/relay-public
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-public
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-public-state:/var/lib/registry/state
+      - registry-relay-public-audit:/var/lib/registry/audit
+
+  registry-relay-consultation-initialize:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-consultation, initialize_state]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./bundles/relay-consultation
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-consultation
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-consultation-state:/var/lib/registry/state
+      - registry-relay-consultation-audit:/var/lib/registry/audit
+
+  registry-notary-initialize:
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    command: [product-action, initialize_state]
+    labels:
+      io.registrystack.probe.owner: renderer
+      io.registrystack.probe.role: initialize-state
+    restart: "no"
+    network_mode: service:registry-private-namespace
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./bundles/notary
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/notary
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-notary-state:/var/lib/registry/state
+      - registry-notary-audit:/var/lib/registry/audit
