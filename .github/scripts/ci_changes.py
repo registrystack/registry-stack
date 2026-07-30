@@ -412,13 +412,11 @@ def classify(
             "crates/registryctl/src/project_authoring/diagnostics.rs",
             "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
             "crates/registryctl/src/project_authoring/fixture_coverage.rs",
-            "crates/registryctl/src/project_authoring/migration.rs",
             "crates/registryctl/src/project_authoring/output.rs",
             "crates/registryctl/src/project_authoring/preflight.rs",
-            "crates/registryctl/src/project_authoring/promotion.rs",
+            "crates/registryctl/src/project_authoring/promotion_projection.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/project_authoring/required_product_action.rs",
-            "crates/registryctl/src/project_authoring/semantic_comparison.rs",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
         }
         for path in paths

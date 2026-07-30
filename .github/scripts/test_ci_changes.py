@@ -529,6 +529,7 @@ on:
             "crates/registryctl/assets/project-starters/**",
             "crates/registryctl/src/main.rs",
             "crates/registryctl/src/project_authoring/output.rs",
+            "crates/registryctl/src/project_authoring/promotion_projection.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/templates/**",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
