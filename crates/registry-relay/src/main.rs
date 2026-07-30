@@ -3,9 +3,10 @@
 //!
 //! Wires the V1 gateway into a runnable HTTP server:
 //! 1. Initialise operational tracing on stderr.
-//! 2. Load and validate the YAML config from `--config <path>`, the
-//!    `REGISTRY_RELAY_CONFIG` env var, or `./config/example.yaml` (in that
-//!    order of precedence).
+//! 2. Load and validate either a local YAML config selected by `--config
+//!    <path>`, `REGISTRY_RELAY_CONFIG`, or `./config/example.yaml` (in that
+//!    order of precedence), or a verified signed bundle selected by the
+//!    complete `--bundle-dir`, `--anchor-path`, and `--state-path` flag set.
 //! 3. Build the auth provider from the configured credential references.
 //!    The active provider is stored in the runtime snapshot so governed
 //!    compatible credential changes can swap it without a process restart.
@@ -164,7 +165,7 @@ const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 enum CliCommand {
     Version,
     Serve {
-        config_path: PathBuf,
+        config_source: ServeConfigSource,
         env_file: Option<PathBuf>,
         bind_override: Option<SocketAddr>,
         initialize_state: bool,
@@ -201,6 +202,35 @@ enum CliCommand {
         reason: String,
         operator: Option<String>,
     },
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ServeConfigSource {
+    LocalFile {
+        config_path: PathBuf,
+    },
+    SignedBundle {
+        bundle_dir: PathBuf,
+        anchor_path: PathBuf,
+        state_path: PathBuf,
+    },
+}
+
+impl std_fmt::Debug for ServeConfigSource {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        match self {
+            Self::LocalFile { .. } => formatter
+                .debug_struct("LocalFile")
+                .field("config_path", &"<configured>")
+                .finish(),
+            Self::SignedBundle { .. } => formatter
+                .debug_struct("SignedBundle")
+                .field("bundle_dir", &"<configured>")
+                .field("anchor_path", &"<configured>")
+                .field("state_path", &"<configured>")
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,11 +402,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Ok(())
         }
         CliCommand::Serve {
-            config_path,
+            config_source,
             env_file,
             bind_override,
             initialize_state,
-        } => run_server(config_path, env_file, bind_override, initialize_state).await,
+        } => run_server(config_source, env_file, bind_override, initialize_state).await,
         CliCommand::Healthcheck { url, timeout } => {
             run_healthcheck(&url, timeout).await?;
             println!("registry-relay healthcheck ok");
@@ -426,15 +456,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn run_server(
-    config_path: PathBuf,
+    config_source: ServeConfigSource,
     env_file: Option<PathBuf>,
     bind_override: Option<SocketAddr>,
     initialize_state: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
+    if matches!(&config_source, ServeConfigSource::SignedBundle { .. }) && config_path_env_is_set()
+    {
+        return Err(Box::new(CliError(
+            "local config cannot be combined with signed-bundle serve flags".to_string(),
+        )));
+    }
     let handle = Arc::new(RelayRuntimeHandle::new(
         compile_relay_runtime_with_options(
-            config_path,
+            config_source,
             bind_override,
             config::LoadOptions { initialize_state },
         )
@@ -1322,6 +1358,20 @@ async fn run_config_verify_bundle(
             );
         }
     };
+    if let Err(code) = config::loader::verify_relay_bundle_product_binding(&verified) {
+        print_json_report(config_verify_bundle_report(
+            ApplyReportResult::from(code),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(code),
+        ))?;
+        return Err(
+            ProcessStartupFailure::new(ProcessStartupCode::from_bundle_verification(code)).into(),
+        );
+    }
     let key = antirollback_key_from_verified_bundle(&verified);
     if let Err(error) = verify_bundle_state_read_only(
         &command.state_path,
@@ -1487,21 +1537,36 @@ async fn compile_relay_runtime(
     config_path: PathBuf,
     bind_override: Option<SocketAddr>,
 ) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
-    compile_relay_runtime_with_options(config_path, bind_override, config::LoadOptions::default())
-        .await
+    compile_relay_runtime_with_options(
+        ServeConfigSource::LocalFile { config_path },
+        bind_override,
+        config::LoadOptions::default(),
+    )
+    .await
 }
 
 async fn compile_relay_runtime_with_options(
-    config_path: PathBuf,
+    config_source: ServeConfigSource,
     bind_override: Option<SocketAddr>,
     load_options: config::LoadOptions,
 ) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
     info!("loading registry-relay config");
 
-    let loaded = reported_config_load(config::load_with_metadata_options(
-        &config_path,
-        load_options,
-    ))?;
+    let loaded = reported_config_load(match &config_source {
+        ServeConfigSource::LocalFile { config_path } => {
+            config::load_with_metadata_options(config_path, load_options)
+        }
+        ServeConfigSource::SignedBundle {
+            bundle_dir,
+            anchor_path,
+            state_path,
+        } => config::loader::load_verified_bundle_with_metadata_options(
+            bundle_dir,
+            anchor_path,
+            state_path,
+            load_options,
+        ),
+    })?;
     let config_provenance = loaded.provenance.clone();
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
@@ -2193,6 +2258,9 @@ fn parse_deployment_profile(value: String) -> Result<DeploymentProfile, CliError
 
 fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
     let mut config_path: Option<PathBuf> = None;
+    let mut bundle_dir: Option<PathBuf> = None;
+    let mut anchor_path: Option<PathBuf> = None;
+    let mut state_path: Option<PathBuf> = None;
     let mut env_file: Option<PathBuf> = None;
     let mut bind_override: Option<SocketAddr> = None;
     let mut initialize_state = false;
@@ -2204,6 +2272,21 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
         } else if arg == CONFIG_FLAG {
             index += 1;
             config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, BUNDLE_DIR_FLAG) {
+            bundle_dir = Some(required_path_value(BUNDLE_DIR_FLAG, value)?);
+        } else if arg == BUNDLE_DIR_FLAG {
+            index += 1;
+            bundle_dir = Some(required_path_arg(args, index, BUNDLE_DIR_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ANCHOR_PATH_FLAG) {
+            anchor_path = Some(required_path_value(ANCHOR_PATH_FLAG, value)?);
+        } else if arg == ANCHOR_PATH_FLAG {
+            index += 1;
+            anchor_path = Some(required_path_arg(args, index, ANCHOR_PATH_FLAG)?);
+        } else if let Some(value) = flag_value(arg, STATE_PATH_FLAG) {
+            state_path = Some(required_path_value(STATE_PATH_FLAG, value)?);
+        } else if arg == STATE_PATH_FLAG {
+            index += 1;
+            state_path = Some(required_path_arg(args, index, STATE_PATH_FLAG)?);
         } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
             env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
         } else if arg == ENV_FILE_FLAG {
@@ -2229,8 +2312,39 @@ fn parse_serve_command(args: &[String]) -> Result<CliCommand, CliError> {
     if bind_override.is_none() {
         bind_override = default_bind_from_env()?;
     }
+    let config_source = match (config_path, bundle_dir, anchor_path, state_path) {
+        (Some(_), bundle_dir, anchor_path, state_path)
+            if bundle_dir.is_some() || anchor_path.is_some() || state_path.is_some() =>
+        {
+            return Err(CliError(
+                "local config cannot be combined with signed-bundle serve flags".to_string(),
+            ));
+        }
+        (Some(config_path), None, None, None) => ServeConfigSource::LocalFile { config_path },
+        (None, Some(bundle_dir), Some(anchor_path), Some(state_path)) => {
+            if config_path_env_is_set() {
+                return Err(CliError(
+                    "local config cannot be combined with signed-bundle serve flags".to_string(),
+                ));
+            }
+            ServeConfigSource::SignedBundle {
+                bundle_dir,
+                anchor_path,
+                state_path,
+            }
+        }
+        (None, None, None, None) => ServeConfigSource::LocalFile {
+            config_path: default_config_path_from_env(),
+        },
+        (None, _, _, _) => {
+            return Err(CliError(format!(
+                "signed-bundle serve requires {BUNDLE_DIR_FLAG}, {ANCHOR_PATH_FLAG}, and {STATE_PATH_FLAG}"
+            )));
+        }
+        (Some(_), _, _, _) => unreachable!("mixed config source handled above"),
+    };
     Ok(CliCommand::Serve {
-        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        config_source,
         env_file,
         bind_override,
         initialize_state,
@@ -2317,7 +2431,7 @@ fn flag_value<'a>(arg: &'a str, flag: &str) -> Option<&'a str> {
 }
 
 fn required_path_arg(args: &[String], index: usize, flag: &str) -> Result<PathBuf, CliError> {
-    let Some(value) = args.get(index) else {
+    let Some(value) = args.get(index).filter(|value| !value.starts_with("--")) else {
         return Err(CliError(format!("{flag} requires a non-empty path")));
     };
     required_path_value(flag, value)
@@ -2531,6 +2645,10 @@ fn default_config_path_from_env() -> PathBuf {
         }
     }
     PathBuf::from(DEFAULT_CONFIG_PATH)
+}
+
+fn config_path_env_is_set() -> bool {
+    env::var_os("REGISTRY_RELAY_CONFIG").is_some_and(|value| !value.is_empty())
 }
 
 fn default_env_file_from_env() -> Option<PathBuf> {
@@ -2806,7 +2924,8 @@ mod tests {
         run_healthcheck, url_contains_userinfo, CliCommand, ConfigValueClassification,
         ConsultationBootstrapStateCommand, ConsultationServiceActivationError,
         ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
-        OperatorSafeConsultationActivationFailure, OutputFormat, ReportedConfigLoadFailure,
+        OperatorSafeConsultationActivationFailure, OutputFormat, ProcessStartupCode,
+        ProcessStartupFailure, ReportedConfigLoadFailure, ServeConfigSource,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
     };
     use axum::routing::get;
@@ -2816,13 +2935,15 @@ mod tests {
         verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError,
     };
     use registry_platform_config::{
-        sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
-        ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+        sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
+        ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
+        ConfigTrustAnchorSigner,
     };
     use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
     use registry_platform_ops::{
-        AntiRollbackKey, AntiRollbackStoreError, BundleStateAction, ConfigOverrideMode,
-        ConfigOverridePin, DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
+        bundle_verify_rejection_code, AntiRollbackKey, AntiRollbackStoreError, BundleStateAction,
+        BundleVerificationCode, ConfigOverrideMode, ConfigOverridePin, ConfigSource,
+        DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
     };
     use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
     use registry_relay::config::Config;
@@ -3099,6 +3220,40 @@ mod tests {
         .expect("signature writes");
     }
 
+    fn rewrite_signed_bundle_sequence(fixture: &SignedRelayBundleFixture, sequence: u64) {
+        let manifest_path = fixture.bundle_dir.join("manifest.json");
+        let mut manifest: ConfigBundleManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        manifest.sequence = sequence;
+        manifest.bundle_id = format!("relay-bind-bundle-{sequence}");
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let kid = private.public().jkt().expect("thumbprint");
+        write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+    }
+
+    fn rewrite_signed_bundle_product(fixture: &SignedRelayBundleFixture, product: &str) {
+        let manifest_path = fixture.bundle_dir.join("manifest.json");
+        let mut manifest: ConfigBundleManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        manifest.product = product.to_string();
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let kid = private.public().jkt().expect("thumbprint");
+        write_bundle_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+
+        let mut anchor: ConfigTrustAnchor = serde_json::from_slice(
+            &std::fs::read(&fixture.anchor_path).expect("trust anchor reads"),
+        )
+        .expect("trust anchor parses");
+        anchor.product = product.to_string();
+        std::fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
+        )
+        .expect("trust anchor writes");
+    }
+
     fn relay_bootstrap_config(fixture: &SignedRelayBundleFixture, hash_secret_env: &str) -> String {
         format!(
             r#"{}
@@ -3112,6 +3267,14 @@ config_trust:
             fixture.bundle_dir.display(),
             fixture.state_path.display()
         )
+    }
+
+    fn signed_bundle_source(fixture: &SignedRelayBundleFixture) -> ServeConfigSource {
+        ServeConfigSource::SignedBundle {
+            bundle_dir: fixture.bundle_dir.clone(),
+            anchor_path: fixture.anchor_path.clone(),
+            state_path: fixture.state_path.clone(),
+        }
     }
 
     fn test_antirollback_key() -> AntiRollbackKey {
@@ -3345,17 +3508,19 @@ config_trust:
         std::env::set_var(env_name, "registry-relay-bind-failure-secret-32-bytes");
         let dir = tempdir().expect("tempdir");
         let fixture = write_signed_relay_bundle(&dir, env_name);
-        let config_path = dir.path().join("bootstrap.yaml");
-        std::fs::write(&config_path, relay_bootstrap_config(&fixture, env_name))
-            .expect("bootstrap writes");
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("held listener binds");
         let occupied_addr = listener.local_addr().expect("listener exposes addr");
 
-        let error = super::run_server(config_path, None, Some(occupied_addr), true)
-            .await
-            .expect_err("occupied listener rejects startup");
+        let error = super::run_server(
+            signed_bundle_source(&fixture),
+            None,
+            Some(occupied_addr),
+            true,
+        )
+        .await
+        .expect_err("occupied listener rejects startup");
 
         assert!(
             error
@@ -3375,6 +3540,250 @@ config_trust:
         assert_eq!(err, AntiRollbackStoreError::MissingState);
 
         drop(listener);
+        std::env::remove_var(env_name);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn direct_verified_bundle_compiles_owned_runtime_without_bootstrap_or_state_mutation() {
+        let _guard = env_lock();
+        let env_name = "REGISTRY_RELAY_DIRECT_BUNDLE_AUDIT_HASH_SECRET";
+        std::env::set_var(env_name, "registry-relay-direct-bundle-secret-32-bytes");
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, env_name);
+
+        let runtime = super::compile_relay_runtime_with_options(
+            signed_bundle_source(&fixture),
+            None,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .await
+        .expect("verified bundle compiles directly");
+
+        assert!(runtime.config.config_trust.is_none());
+        assert_eq!(
+            runtime.config_provenance.source,
+            ConfigSource::SignedBundleFile
+        );
+        let acceptance = runtime
+            .pending_bundle_acceptance
+            .as_ref()
+            .expect("direct bundle owns pending acceptance");
+        assert_eq!(acceptance.state_action, BundleStateAction::Initialize);
+        assert_eq!(acceptance.source, ConfigSource::SignedBundleFile);
+        let state_error = FileAntiRollbackStore::new(&fixture.state_path)
+            .load(&acceptance.key)
+            .expect_err("runtime compilation does not persist acceptance");
+        assert_eq!(state_error, AntiRollbackStoreError::MissingState);
+
+        std::env::remove_var(env_name);
+    }
+
+    #[test]
+    fn direct_verified_bundle_rejects_signature_and_binding_failures_value_free() {
+        let signature_dir = tempdir().expect("signature tempdir");
+        let signature_fixture =
+            write_signed_relay_bundle(&signature_dir, "UNUSED_SIGNATURE_AUDIT_SECRET");
+        let signature_path = signature_fixture.bundle_dir.join("manifest.sig.json");
+        let mut signature_envelope: ConfigBundleSignatureEnvelope = serde_json::from_slice(
+            &std::fs::read(&signature_path).expect("signature envelope reads"),
+        )
+        .expect("signature envelope parses");
+        signature_envelope.signatures[0].sig = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+        std::fs::write(
+            &signature_path,
+            serde_json::to_vec_pretty(&signature_envelope).expect("signature envelope serializes"),
+        )
+        .expect("invalid signature writes");
+        let signature_verification = verify_config_bundle(
+            &signature_fixture.bundle_dir,
+            &signature_fixture.anchor_path,
+        )
+        .expect_err("invalid signature is rejected");
+        assert_eq!(
+            bundle_verify_rejection_code(&signature_verification),
+            BundleVerificationCode::REJECTED_SIGNATURE
+        );
+        let signature_error =
+            registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+                &signature_fixture.bundle_dir,
+                &signature_fixture.anchor_path,
+                &signature_fixture.state_path,
+                registry_relay::config::LoadOptions {
+                    initialize_state: true,
+                },
+            )
+            .expect_err("direct loader rejects invalid signature");
+        assert_eq!(signature_error.to_string(), "config validation error");
+
+        let binding_dir = tempdir().expect("binding tempdir");
+        let binding_fixture =
+            write_signed_relay_bundle(&binding_dir, "UNUSED_BINDING_AUDIT_SECRET");
+        let mut anchor: ConfigTrustAnchor = serde_json::from_slice(
+            &std::fs::read(&binding_fixture.anchor_path).expect("trust anchor reads"),
+        )
+        .expect("trust anchor parses");
+        anchor.environment = "sentinel-private-environment".to_string();
+        std::fs::write(
+            &binding_fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("trust anchor serializes"),
+        )
+        .expect("mismatched trust anchor writes");
+        let binding_verification =
+            verify_config_bundle(&binding_fixture.bundle_dir, &binding_fixture.anchor_path)
+                .expect_err("bundle binding mismatch is rejected");
+        assert_eq!(
+            bundle_verify_rejection_code(&binding_verification),
+            BundleVerificationCode::REJECTED_BINDING
+        );
+        let binding_error =
+            registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+                &binding_fixture.bundle_dir,
+                &binding_fixture.anchor_path,
+                &binding_fixture.state_path,
+                registry_relay::config::LoadOptions {
+                    initialize_state: true,
+                },
+            )
+            .expect_err("direct loader rejects binding mismatch");
+        let rendered = binding_error.to_string();
+        assert_eq!(rendered, "config validation error");
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
+        assert!(!rendered.contains(binding_fixture.anchor_path.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn direct_startup_rejects_cross_product_bundle_before_state_access() {
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, "UNUSED_CROSS_PRODUCT_AUDIT_SECRET");
+        rewrite_signed_bundle_product(&fixture, "registry-notary");
+        let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("cross-product bundle still verifies against its supplied anchor");
+        assert_eq!(
+            registry_relay::config::loader::verify_relay_bundle_product_binding(&verified),
+            Err(BundleVerificationCode::REJECTED_BINDING)
+        );
+
+        let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            &fixture.state_path,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .expect_err("Relay rejects a bundle for another product");
+
+        assert_eq!(error.to_string(), "config validation error");
+        assert!(!fixture.state_path.exists());
+    }
+
+    #[test]
+    fn bootstrap_startup_rejects_cross_product_bundle_before_fallback_or_state_access() {
+        let dir = tempdir().expect("tempdir");
+        let fixture =
+            write_signed_relay_bundle(&dir, "UNUSED_BOOTSTRAP_CROSS_PRODUCT_AUDIT_SECRET");
+        rewrite_signed_bundle_product(&fixture, "registry-notary");
+        verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("cross-product bundle still verifies against its supplied anchor");
+        let bootstrap_path = dir.path().join("bootstrap.yaml");
+        std::fs::write(
+            &bootstrap_path,
+            relay_bootstrap_config(&fixture, "UNUSED_BOOTSTRAP_CROSS_PRODUCT_AUDIT_SECRET"),
+        )
+        .expect("bootstrap config writes");
+
+        let error = registry_relay::config::load_with_metadata_options(
+            &bootstrap_path,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .expect_err("bootstrap startup rejects a bundle for another product");
+
+        assert_eq!(error.to_string(), "config validation error");
+        assert!(!fixture.state_path.exists());
+    }
+
+    #[tokio::test]
+    async fn config_verify_bundle_reports_cross_product_as_binding_before_state_access() {
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, "UNUSED_VERIFY_CROSS_PRODUCT_AUDIT_SECRET");
+        rewrite_signed_bundle_product(&fixture, "registry-notary");
+
+        let error = super::run_config_verify_bundle(super::ConfigVerifyBundleCommand {
+            bundle_dir: fixture.bundle_dir.clone(),
+            anchor_path: fixture.anchor_path.clone(),
+            state_path: fixture.state_path.clone(),
+        })
+        .await
+        .expect_err("offline verification rejects a bundle for another product");
+
+        let failure = error
+            .downcast_ref::<ProcessStartupFailure>()
+            .expect("binding rejection uses the process startup taxonomy");
+        assert_eq!(failure.code(), ProcessStartupCode::BUNDLE_BINDING_REJECTED);
+        assert!(!fixture.state_path.exists());
+    }
+
+    #[test]
+    fn direct_verified_bundle_requires_explicit_state_initialization() {
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, "UNUSED_STATE_INITIALIZATION_AUDIT_SECRET");
+
+        let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            &fixture.state_path,
+            registry_relay::config::LoadOptions::default(),
+        )
+        .expect_err("missing state is rejected without initialize-state");
+
+        assert_eq!(error.to_string(), "config validation error");
+        assert!(!fixture.state_path.exists());
+    }
+
+    #[test]
+    fn direct_verified_bundle_rejects_stale_state_without_break_glass_fallback() {
+        let _guard = env_lock();
+        let env_name = "REGISTRY_RELAY_STALE_BUNDLE_AUDIT_HASH_SECRET";
+        std::env::set_var(env_name, "registry-relay-stale-bundle-secret-32-bytes");
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, env_name);
+        rewrite_signed_bundle_sequence(&fixture, 2);
+        let loaded = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            &fixture.state_path,
+            registry_relay::config::LoadOptions {
+                initialize_state: true,
+            },
+        )
+        .expect("initial bundle loads");
+        let acceptance = loaded
+            .pending_bundle_acceptance
+            .expect("initial load produces pending acceptance");
+        super::persist_bundle_acceptance(&acceptance).expect("test state initializes");
+        rewrite_signed_bundle_sequence(&fixture, 1);
+
+        let error = registry_relay::config::loader::load_verified_bundle_with_metadata_options(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            &fixture.state_path,
+            registry_relay::config::LoadOptions::default(),
+        )
+        .expect_err("lower sequence is rejected");
+
+        assert_eq!(error.to_string(), "config validation error");
+        let record = FileAntiRollbackStore::new(&fixture.state_path)
+            .load(&acceptance.key)
+            .expect("accepted state remains readable");
+        assert_eq!(record.last_sequence, 2);
+        assert_eq!(record.last_config_hash, acceptance.config_hash);
+
         std::env::remove_var(env_name);
     }
 
@@ -3952,7 +4361,7 @@ audit:
         .expect("serve command parses");
 
         let CliCommand::Serve {
-            config_path,
+            config_source,
             env_file,
             bind_override,
             ..
@@ -3961,8 +4370,10 @@ audit:
             panic!("expected serve command");
         };
         assert_eq!(
-            config_path,
-            std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+            config_source,
+            ServeConfigSource::LocalFile {
+                config_path: std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+            }
         );
         assert!(env_file.is_none());
         assert!(bind_override.is_none());
@@ -3970,6 +4381,249 @@ audit:
         if let Some(value) = previous_env_file {
             std::env::set_var("REGISTRY_RELAY_ENV_FILE", value);
         }
+    }
+
+    #[test]
+    fn serve_cli_accepts_complete_verified_bundle_source() {
+        let _guard = env_lock();
+        let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
+        std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--bundle-dir",
+            "/etc/registry-relay/bundle",
+            "--anchor-path=/etc/registry-relay/trust-anchor.json",
+            "--state-path",
+            "/var/lib/registry-relay/antirollback.json",
+            "--initialize-state",
+        ]))
+        .expect("complete signed-bundle source parses");
+
+        let CliCommand::Serve {
+            config_source,
+            initialize_state,
+            ..
+        } = command
+        else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            config_source,
+            ServeConfigSource::SignedBundle {
+                bundle_dir: PathBuf::from("/etc/registry-relay/bundle"),
+                anchor_path: PathBuf::from("/etc/registry-relay/trust-anchor.json"),
+                state_path: PathBuf::from("/var/lib/registry-relay/antirollback.json"),
+            }
+        );
+        assert!(initialize_state);
+
+        if let Some(value) = previous_config {
+            std::env::set_var("REGISTRY_RELAY_CONFIG", value);
+        }
+    }
+
+    #[test]
+    fn serve_cli_rejects_missing_or_partial_verified_bundle_source_without_local_fallback() {
+        let _guard = env_lock();
+        let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
+        std::env::set_var(
+            "REGISTRY_RELAY_CONFIG",
+            "/sentinel/private/local-fallback.yaml",
+        );
+
+        let missing_value =
+            parse_cli_command_from(command_args(&["registry-relay", "--bundle-dir"]))
+                .expect_err("bundle-dir without a path is rejected");
+        assert_eq!(
+            missing_value.to_string(),
+            "--bundle-dir requires a non-empty path"
+        );
+
+        for args in [
+            vec!["registry-relay", "--bundle-dir", "/sentinel/private/bundle"],
+            vec![
+                "registry-relay",
+                "--bundle-dir",
+                "/sentinel/private/bundle",
+                "--anchor-path",
+                "/sentinel/private/anchor.json",
+            ],
+            vec![
+                "registry-relay",
+                "--anchor-path",
+                "/sentinel/private/anchor.json",
+                "--state-path",
+                "/sentinel/private/state.json",
+            ],
+        ] {
+            let error = parse_cli_command_from(command_args(&args))
+                .expect_err("partial signed-bundle source is rejected");
+            let rendered = error.to_string();
+            assert_eq!(
+                rendered,
+                "signed-bundle serve requires --bundle-dir, --anchor-path, and --state-path"
+            );
+            assert!(!rendered.contains("sentinel"));
+            assert!(!rendered.contains("local-fallback"));
+        }
+
+        if let Some(value) = previous_config {
+            std::env::set_var("REGISTRY_RELAY_CONFIG", value);
+        } else {
+            std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        }
+    }
+
+    #[test]
+    fn serve_cli_rejects_mixed_local_and_verified_bundle_sources_value_free() {
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--config",
+            "/sentinel/private/local.yaml",
+            "--bundle-dir",
+            "/sentinel/private/bundle",
+            "--anchor-path",
+            "/sentinel/private/anchor.json",
+            "--state-path",
+            "/sentinel/private/state.json",
+        ]))
+        .expect_err("mixed local and signed-bundle sources are rejected");
+
+        let rendered = error.to_string();
+        assert_eq!(
+            rendered,
+            "local config cannot be combined with signed-bundle serve flags"
+        );
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
+    }
+
+    #[test]
+    fn serve_cli_rejects_verified_bundle_with_local_config_environment() {
+        let _guard = env_lock();
+        let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
+        std::env::set_var(
+            "REGISTRY_RELAY_CONFIG",
+            "/sentinel/private/local-config.yaml",
+        );
+
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--bundle-dir",
+            "/sentinel/private/bundle",
+            "--anchor-path",
+            "/sentinel/private/anchor.json",
+            "--state-path",
+            "/sentinel/private/state.json",
+        ]))
+        .expect_err("local config environment conflicts with direct bundle");
+
+        let rendered = error.to_string();
+        assert_eq!(
+            rendered,
+            "local config cannot be combined with signed-bundle serve flags"
+        );
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
+
+        if let Some(value) = previous_config {
+            std::env::set_var("REGISTRY_RELAY_CONFIG", value);
+        } else {
+            std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn serve_cli_rejects_verified_bundle_with_non_unicode_local_config_environment() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let _guard = env_lock();
+        let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
+        std::env::set_var(
+            "REGISTRY_RELAY_CONFIG",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        );
+
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--bundle-dir",
+            "/sentinel/private/bundle",
+            "--anchor-path",
+            "/sentinel/private/anchor.json",
+            "--state-path",
+            "/sentinel/private/state.json",
+        ]))
+        .expect_err("non-Unicode local config environment conflicts with direct bundle");
+
+        let rendered = error.to_string();
+        assert_eq!(
+            rendered,
+            "local config cannot be combined with signed-bundle serve flags"
+        );
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
+
+        if let Some(value) = previous_config {
+            std::env::set_var("REGISTRY_RELAY_CONFIG", value);
+        } else {
+            std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn direct_bundle_serve_rejects_local_config_from_env_file_value_free() {
+        let _guard = env_lock();
+        let previous_config = std::env::var_os("REGISTRY_RELAY_CONFIG");
+        std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        let dir = tempdir().expect("tempdir");
+        let env_file = dir.path().join("relay.env");
+        std::fs::write(
+            &env_file,
+            "REGISTRY_RELAY_CONFIG=/sentinel/private/local-config.yaml\n",
+        )
+        .expect("env file writes");
+
+        let error = super::run_server(
+            ServeConfigSource::SignedBundle {
+                bundle_dir: PathBuf::from("/sentinel/private/bundle"),
+                anchor_path: PathBuf::from("/sentinel/private/anchor.json"),
+                state_path: PathBuf::from("/sentinel/private/state.json"),
+            },
+            Some(env_file),
+            None,
+            false,
+        )
+        .await
+        .expect_err("env-file local config conflicts with direct bundle");
+
+        let rendered = error.to_string();
+        assert_eq!(
+            rendered,
+            "local config cannot be combined with signed-bundle serve flags"
+        );
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
+
+        if let Some(value) = previous_config {
+            std::env::set_var("REGISTRY_RELAY_CONFIG", value);
+        } else {
+            std::env::remove_var("REGISTRY_RELAY_CONFIG");
+        }
+    }
+
+    #[test]
+    fn verified_bundle_serve_source_debug_is_value_free() {
+        let source = ServeConfigSource::SignedBundle {
+            bundle_dir: PathBuf::from("/sentinel/private/bundle"),
+            anchor_path: PathBuf::from("/sentinel/private/anchor.json"),
+            state_path: PathBuf::from("/sentinel/private/state.json"),
+        };
+
+        let rendered = format!("{source:?}");
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("private"));
     }
 
     #[test]
@@ -3984,7 +4638,7 @@ audit:
         .expect("serve command parses");
 
         let CliCommand::Serve {
-            config_path,
+            config_source,
             env_file,
             bind_override,
             ..
@@ -3993,8 +4647,10 @@ audit:
             panic!("expected serve command");
         };
         assert_eq!(
-            config_path,
-            std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+            config_source,
+            ServeConfigSource::LocalFile {
+                config_path: std::path::PathBuf::from("/etc/registry-relay/config.yaml")
+            }
         );
         assert_eq!(
             env_file,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Relay can now start directly from a signed Config Bundle with the complete
+  `--bundle-dir`, `--anchor-path`, and `--state-path` argument set. This mode
+  verifies the bundle and anti-rollback state without an unsigned bootstrap
+  configuration or break-glass fallback, and retains audit-before-persist
+  activation ordering.
 - Consultation public contracts can now declare recursive closed object and
   array outputs. Composite schemas, required fields, item limits, and canonical
   serialized-size limits are compiler-validated and hash-bound, and Relay
