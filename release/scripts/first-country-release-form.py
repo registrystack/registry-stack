@@ -164,7 +164,7 @@ PUBLIC_MATERIAL_FILENAMES = {
     "postgres-tls.crt",
 }
 HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
-OAUTH_MINIMIZED_CLAIMS = ["birth-event-found", "birth-event-registered"]
+OPENCRVS_MINIMIZED_CLAIM_IDS = ["birth-event-found", "birth-event-registered"]
 GOVERNED_LANES = ("relay-public", "relay-consultation", "notary")
 ROLLBACK_AFFECTED_LANES = ("relay-consultation", "notary")
 ROLLBACK_SAFE_MESSAGE = (
@@ -1583,11 +1583,11 @@ def stable_smoke_summary(
     }
 
 
-def stable_oauth_smoke_summary(report: Any) -> dict[str, Any]:
+def stable_opencrvs_smoke_summary(report: Any) -> dict[str, Any]:
     return stable_smoke_summary(
         report,
         expected_token_delta=1,
-        expected_claims=OAUTH_MINIMIZED_CLAIMS,
+        expected_claims=OPENCRVS_MINIMIZED_CLAIM_IDS,
     )
 
 
@@ -3320,7 +3320,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
     reader_summary: dict[str, Any]
     public_source_live_summary: dict[str, Any]
     oauth_runtime_summary: dict[str, Any]
-    oauth_smoke_summary: dict[str, Any]
+    opencrvs_smoke_summary: dict[str, Any]
     doctor_summary: dict[str, Any]
     status_summary: dict[str, Any]
     smoke_summary: dict[str, Any]
@@ -3538,12 +3538,12 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     logs=logs,
                 )
             )
-            oauth_smoke_summary = stable_oauth_smoke_summary(
+            opencrvs_smoke_summary = stable_opencrvs_smoke_summary(
                 read_closed_json(
                     logs / "oauth_dev_smoke.log", "OAuth development smoke report"
                 )
             )
-            write_json_log(logs, "oauth_dev_smoke", oauth_smoke_summary)
+            write_json_log(logs, "oauth_dev_smoke", opencrvs_smoke_summary)
             commands.append(
                 run_command(
                     "oauth_dev_down",
@@ -4681,7 +4681,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             "reader_journeys": reader_summary,
             "public_source_live": public_source_live_summary,
             "oauth_runtime": oauth_runtime_summary,
-            "oauth_smoke": oauth_smoke_summary,
+            "opencrvs_smoke": opencrvs_smoke_summary,
             "doctor": doctor_summary,
             "runtime": runtime_summary,
             "dev_status": status_summary,
@@ -4741,7 +4741,7 @@ def verify_stable_evidence(
     normalized = {
         "public_source_live": report["public_source_live"],
         "oauth_dev_up": report["oauth_runtime"],
-        "oauth_dev_smoke": report["oauth_smoke"],
+        "oauth_dev_smoke": report["opencrvs_smoke"],
         "doctor": report["doctor"],
         "dev_status": report["dev_status"],
         "dev_smoke": report["smoke"],
@@ -4834,7 +4834,7 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         "reader_journeys",
         "public_source_live",
         "oauth_runtime",
-        "oauth_smoke",
+        "opencrvs_smoke",
         "doctor",
         "runtime",
         "dev_status",
@@ -4859,7 +4859,7 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
     reader = report.get("reader_journeys")
     public_source_live = report.get("public_source_live")
     oauth_runtime = report.get("oauth_runtime")
-    oauth_smoke = report.get("oauth_smoke")
+    opencrvs_smoke = report.get("opencrvs_smoke")
     doctor = report.get("doctor")
     runtime = report.get("runtime")
     status = report.get("dev_status")
@@ -4980,7 +4980,7 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
                 "request_digest",
             )
         )
-        or stable_oauth_smoke_summary(oauth_smoke) != oauth_smoke
+        or stable_opencrvs_smoke_summary(opencrvs_smoke) != opencrvs_smoke
         or doctor
         != {
             "schema_version": "registryctl.doctor.v1",

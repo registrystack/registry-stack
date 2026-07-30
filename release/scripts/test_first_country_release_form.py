@@ -39,13 +39,8 @@ def fixture_bytes(identifier: str) -> bytes:
     return fixture_text(identifier).encode()
 
 
-def write_public_report_fixture(path: Path, report: dict) -> None:
-    serialized = json.dumps(report)
-    # These temporary test reports contain only synthetic, value-minimized
-    # evidence. CodeQL overtaints the whole object from credential-shaped schema
-    # field names, so keep the false-positive boundary at this single test sink.
-    # codeql[py/clear-text-storage-sensitive-data]
-    path.write_text(serialized, encoding="utf-8")
+def write_report_fixture(path: Path, report: dict) -> None:
+    path.write_text(json.dumps(report), encoding="utf-8")
 
 
 class FirstCountryReleaseFormTest(TestCase):
@@ -426,12 +421,12 @@ class FirstCountryReleaseFormTest(TestCase):
             },
             "permissions": {"runtime_root": "0700", "credentials": "0700"},
         }
-        oauth_smoke = json.loads(json.dumps(smoke))
-        oauth_smoke["project"] = "synthetic-opencrvs-events-api"
-        oauth_smoke["results"][0]["token_counter_delta"] = 1
-        oauth_smoke["results"][0][
+        opencrvs_smoke = json.loads(json.dumps(smoke))
+        opencrvs_smoke["project"] = "synthetic-opencrvs-events-api"
+        opencrvs_smoke["results"][0]["token_counter_delta"] = 1
+        opencrvs_smoke["results"][0][
             "minimized_claim_ids"
-        ] = self.module.OAUTH_MINIMIZED_CLAIMS
+        ] = self.module.OPENCRVS_MINIMIZED_CLAIM_IDS
         governed_phase = {
             "schema_version": "registryctl.deployment_generate.v1",
             "approved_set_sha256": "sha256:" + "8" * 64,
@@ -462,7 +457,7 @@ class FirstCountryReleaseFormTest(TestCase):
         normalized = {
             "public_source_live": public_source_summary,
             "oauth_dev_up": runtime,
-            "oauth_dev_smoke": oauth_smoke,
+            "oauth_dev_smoke": opencrvs_smoke,
             "oauth_dev_down": {
                 "outcome": "passed",
                 "runtime_state": "absent",
@@ -510,7 +505,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "reader_journeys": reader_summary,
             "public_source_live": public_source_summary,
             "oauth_runtime": runtime,
-            "oauth_smoke": oauth_smoke,
+            "opencrvs_smoke": opencrvs_smoke,
             "doctor": doctor,
             "runtime": runtime,
             "dev_status": status,
@@ -520,7 +515,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "redaction": {"status": "passed", "generated_files_scanned": 20},
         }
         path = evidence / "first-country-release-form.json"
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         self.module.protect_evidence_tree(evidence)
         return path, report, logs
 
@@ -549,7 +544,7 @@ class FirstCountryReleaseFormTest(TestCase):
             ],
         }
         path = runtime / "smoke-results.json"
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         return path
 
     def write_combined_runtime(self) -> Path:
@@ -1065,7 +1060,7 @@ class FirstCountryReleaseFormTest(TestCase):
     def test_stable_release_rejects_pre_v3_evidence_schema(self) -> None:
         path, report, _ = self.write_valid_stable_report_evidence()
         report["schema_version"] = "registry-stack.first-country-release-form.v1"
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "maintained release-form"
@@ -1110,7 +1105,7 @@ class FirstCountryReleaseFormTest(TestCase):
         report["runtime"]["workloads"]["relay-public"] = (
             "ghcr.io/registrystack/registry-relay@sha256:" + "9" * 64
         )
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "does not prove"
@@ -1127,7 +1122,7 @@ class FirstCountryReleaseFormTest(TestCase):
         ] = report["governed_deployment"]["initial"][
             "externally_recorded_closure_sha256"
         ]
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "did not change closure"
@@ -1269,7 +1264,7 @@ class FirstCountryReleaseFormTest(TestCase):
         command["log_sha256"] = hashlib.sha256(
             (logs / "dev_smoke.log").read_bytes()
         ).hexdigest()
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "counters or minimized"
@@ -1279,11 +1274,11 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.verify_report(path, self.assets, self.tag)
 
-    def test_oauth_smoke_requires_authorized_token_request(self) -> None:
+    def test_opencrvs_smoke_requires_authorized_token_request(self) -> None:
         path, report, logs = self.write_valid_stable_report_evidence()
-        report["oauth_smoke"]["results"][0]["token_counter_delta"] = 0
+        report["opencrvs_smoke"]["results"][0]["token_counter_delta"] = 0
         (logs / "oauth_dev_smoke.log").write_text(
-            json.dumps(report["oauth_smoke"], sort_keys=True) + "\n",
+            json.dumps(report["opencrvs_smoke"], sort_keys=True) + "\n",
             encoding="utf-8",
         )
         command = next(
@@ -1294,7 +1289,7 @@ class FirstCountryReleaseFormTest(TestCase):
         command["log_sha256"] = hashlib.sha256(
             (logs / "oauth_dev_smoke.log").read_bytes()
         ).hexdigest()
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
 
         with (
             self.assertRaisesRegex(
@@ -1318,7 +1313,7 @@ class FirstCountryReleaseFormTest(TestCase):
             if command["name"] == "oauth_dev_down"
         )
         command["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "OAuth development teardown"
@@ -1335,7 +1330,7 @@ class FirstCountryReleaseFormTest(TestCase):
         report["public_source_live"]["evidence_sha256"].pop(
             "public-demo-missing-smoke.txt"
         )
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
 
         with (
             self.assertRaisesRegex(
@@ -1485,7 +1480,7 @@ class FirstCountryReleaseFormTest(TestCase):
             if check["name"]
             != "matching evaluation returns the accepted predicate"
         ]
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
 
         with self.assertRaisesRegex(
             self.module.ReleaseFormError, "exact required outcomes"
@@ -1504,7 +1499,7 @@ class FirstCountryReleaseFormTest(TestCase):
         denial["passed"] = False
         denial["error"] = "bounded failure"
         report["passed"] = False
-        write_public_report_fixture(path, report)
+        write_report_fixture(path, report)
 
         with self.assertRaisesRegex(
             self.module.ReleaseFormError, "check is invalid"
