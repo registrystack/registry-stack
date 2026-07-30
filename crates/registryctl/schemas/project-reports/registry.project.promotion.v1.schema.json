@@ -12,6 +12,8 @@
     "runtime_activation",
     "disposition",
     "reviewed_revision",
+    "product_lanes",
+    "baseline_migration",
     "changes",
     "reviewed_ceiling",
     "trust",
@@ -42,6 +44,16 @@
     },
     "reviewed_revision": {
       "$ref": "#/$defs/reviewed_revision"
+    },
+    "product_lanes": {
+      "$ref": "#/$defs/product_actions",
+      "minItems": 1
+    },
+    "baseline_migration": {
+      "enum": [
+        "not_required",
+        "re_review_and_sign_separate_relay_public_and_consultation_inputs"
+      ]
     },
     "changes": {
       "type": "array",
@@ -90,7 +102,7 @@
     },
     "blocking_reasons": {
       "type": "array",
-      "maxItems": 19,
+      "maxItems": 20,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/blocking_reason"
@@ -120,7 +132,7 @@
           "const": "raw_authored_values_omitted"
         },
         {
-          "const": "separate_relay_and_notary_bundle_lifecycle"
+          "const": "separate_relay_public_relay_consultation_and_notary_bundle_lifecycle"
         }
       ],
       "items": false
@@ -812,11 +824,18 @@
     },
     "product_action": {
       "enum": [
-        "none",
-        "relay",
-        "notary",
-        "relay_and_notary"
+        "relay_public",
+        "relay_consultation",
+        "notary"
       ]
+    },
+    "product_actions": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/product_action"
+      }
     },
     "required_actions": {
       "type": "object",
@@ -837,13 +856,13 @@
           }
         },
         "re_sign": {
-          "$ref": "#/$defs/product_action"
+          "$ref": "#/$defs/product_actions"
         },
         "reactivate": {
-          "$ref": "#/$defs/product_action"
+          "$ref": "#/$defs/product_actions"
         },
         "restart": {
-          "$ref": "#/$defs/product_action"
+          "$ref": "#/$defs/product_actions"
         }
       }
     },
@@ -867,7 +886,8 @@
         "incompatible_capability",
         "incompatible_schema",
         "incompatible_abi",
-        "compatibility_unresolved"
+        "compatibility_unresolved",
+        "legacy_relay_consultation_baseline_migration_required"
       ]
     }
   }

@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{de, Deserialize, Deserializer, Serialize};
 
+use super::RequiredProductAction;
+
 pub const PROJECT_PROMOTION_SCHEMA_VERSION_V1: &str = "registry.project.promotion.v1";
 pub(crate) const MAX_PROMOTION_CHANGES: usize = 256;
 // The largest current valid projection is disclosure authority:
@@ -393,22 +395,13 @@ pub enum PromotionReviewClass {
     Release,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PromotionProductAction {
-    None,
-    Relay,
-    Notary,
-    RelayAndNotary,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromotionRequiredActions {
     pub review_classes: Vec<PromotionReviewClass>,
-    pub re_sign: PromotionProductAction,
-    pub reactivate: PromotionProductAction,
-    pub restart: PromotionProductAction,
+    pub re_sign: Vec<RequiredProductAction>,
+    pub reactivate: Vec<RequiredProductAction>,
+    pub restart: Vec<RequiredProductAction>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -433,6 +426,14 @@ pub enum PromotionBlockingReason {
     IncompatibleSchema,
     IncompatibleAbi,
     CompatibilityUnresolved,
+    LegacyRelayConsultationBaselineMigrationRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionBaselineMigration {
+    NotRequired,
+    ReReviewAndSignSeparateRelayPublicAndConsultationInputs,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -444,12 +445,14 @@ pub enum PromotionEvidenceLimitation {
     LiveEndpointReachabilityNotEvaluated,
     SecretMaterialNotInspected,
     RawAuthoredValuesOmitted,
-    SeparateRelayAndNotaryBundleLifecycle,
+    SeparateRelayPublicRelayConsultationAndNotaryBundleLifecycle,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectPromotionInput {
     pub reviewed_revision: ReviewedRevisionComparison,
+    pub product_lanes: Vec<RequiredProductAction>,
+    pub baseline_migration: PromotionBaselineMigration,
     pub changes: Vec<PromotionChangeInput>,
     pub reviewed_ceiling: ReviewedCeilingInput,
     pub trust: TrustResolutionInput,
@@ -629,6 +632,8 @@ pub struct ProjectPromotionReportV1 {
     pub runtime_activation: PromotionActivationEvaluation,
     pub disposition: PromotionDisposition,
     pub reviewed_revision: ReviewedRevisionComparison,
+    pub product_lanes: Vec<RequiredProductAction>,
+    pub baseline_migration: PromotionBaselineMigration,
     pub changes: Vec<PromotionChange>,
     pub reviewed_ceiling: ReviewedCeilingAssessment,
     pub trust: TrustResolutionAssessment,
@@ -647,6 +652,8 @@ struct ProjectPromotionReportWire {
     runtime_activation: PromotionActivationEvaluation,
     disposition: PromotionDisposition,
     reviewed_revision: ReviewedRevisionComparison,
+    product_lanes: Vec<RequiredProductAction>,
+    baseline_migration: PromotionBaselineMigration,
     changes: Vec<PromotionChange>,
     reviewed_ceiling: ReviewedCeilingAssessment,
     trust: TrustResolutionAssessment,
@@ -669,6 +676,8 @@ impl<'de> Deserialize<'de> for ProjectPromotionReportV1 {
             runtime_activation: wire.runtime_activation,
             disposition: wire.disposition,
             reviewed_revision: wire.reviewed_revision,
+            product_lanes: wire.product_lanes,
+            baseline_migration: wire.baseline_migration,
             changes: wire.changes,
             reviewed_ceiling: wire.reviewed_ceiling,
             trust: wire.trust,
@@ -690,6 +699,7 @@ impl<'de> Deserialize<'de> for ProjectPromotionReportV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectPromotionBuildError {
     TooManyChanges,
+    InvalidProductLanes,
 }
 
 fn rebuild_report_from_wire(
@@ -723,6 +733,8 @@ fn rebuild_report_from_wire(
     };
     build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: report.reviewed_revision,
+        product_lanes: report.product_lanes.clone(),
+        baseline_migration: report.baseline_migration,
         changes: report
             .changes
             .iter()
@@ -750,6 +762,24 @@ pub fn build_project_promotion_report(
     let mut blocking_reasons = BTreeSet::new();
     if input.reviewed_revision == ReviewedRevisionComparison::NotProven {
         blocking_reasons.insert(PromotionBlockingReason::ReviewedRevisionNotProven);
+    }
+    if input.baseline_migration
+        == PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+    {
+        blocking_reasons
+            .insert(PromotionBlockingReason::LegacyRelayConsultationBaselineMigrationRequired);
+    }
+
+    let product_lanes = input.product_lanes.into_iter().collect::<BTreeSet<_>>();
+    if product_lanes.is_empty()
+        || (product_lanes.contains(&RequiredProductAction::RelayConsultation)
+            && !product_lanes.contains(&RequiredProductAction::RelayPublic))
+        || (input.baseline_migration
+            == PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+            && (!product_lanes.contains(&RequiredProductAction::RelayPublic)
+                || !product_lanes.contains(&RequiredProductAction::RelayConsultation)))
+    {
+        return Err(ProjectPromotionBuildError::InvalidProductLanes);
     }
 
     let mut review_classes = BTreeSet::new();
@@ -820,7 +850,12 @@ pub fn build_project_promotion_report(
                 PromotionBoundaryAssessment::Violation
             };
 
-            add_change_actions(change.kind, &mut review_classes, &mut action_products);
+            add_change_actions(
+                change.kind,
+                &product_lanes,
+                &mut review_classes,
+                &mut action_products,
+            );
             PromotionChange {
                 address: change.kind.address(),
                 kind: change.kind,
@@ -886,9 +921,9 @@ pub fn build_project_promotion_report(
 
     let required_actions = PromotionRequiredActions {
         review_classes: review_classes.into_iter().collect(),
-        re_sign: action_products.action(),
-        reactivate: action_products.action(),
-        restart: action_products.action(),
+        re_sign: action_products.actions(),
+        reactivate: action_products.actions(),
+        restart: action_products.actions(),
     };
     let blocking_reasons = blocking_reasons.into_iter().collect::<Vec<_>>();
     let disposition = if !blocking_reasons.is_empty() {
@@ -908,6 +943,8 @@ pub fn build_project_promotion_report(
         runtime_activation: PromotionActivationEvaluation::NotEvaluated,
         disposition,
         reviewed_revision: input.reviewed_revision,
+        product_lanes: product_lanes.into_iter().collect(),
+        baseline_migration: input.baseline_migration,
         changes,
         reviewed_ceiling,
         trust,
@@ -921,7 +958,7 @@ pub fn build_project_promotion_report(
             PromotionEvidenceLimitation::LiveEndpointReachabilityNotEvaluated,
             PromotionEvidenceLimitation::SecretMaterialNotInspected,
             PromotionEvidenceLimitation::RawAuthoredValuesOmitted,
-            PromotionEvidenceLimitation::SeparateRelayAndNotaryBundleLifecycle,
+            PromotionEvidenceLimitation::SeparateRelayPublicRelayConsultationAndNotaryBundleLifecycle,
         ],
     })
 }
@@ -949,6 +986,7 @@ fn compatibility_reason(
 
 fn add_change_actions(
     kind: PromotionChangeKind,
+    product_lanes: &BTreeSet<RequiredProductAction>,
     reviews: &mut BTreeSet<PromotionReviewClass>,
     products: &mut ProductActionSet,
 ) {
@@ -956,12 +994,18 @@ fn add_change_actions(
         PromotionChangeKind::Origin | PromotionChangeKind::CredentialBinding => {
             reviews.insert(PromotionReviewClass::Security);
             reviews.insert(PromotionReviewClass::Interoperability);
-            products.add(ProductActionSet::RELAY);
+            products.add(
+                if product_lanes.contains(&RequiredProductAction::RelayConsultation) {
+                    ProductActionSet::RELAY_CONSULTATION
+                } else {
+                    ProductActionSet::RELAY_PUBLIC
+                },
+            );
         }
         PromotionChangeKind::Trust => {
             reviews.insert(PromotionReviewClass::Security);
             reviews.insert(PromotionReviewClass::Interoperability);
-            products.add(ProductActionSet::BOTH);
+            products.add(ProductActionSet::ALL);
         }
         PromotionChangeKind::Caller
         | PromotionChangeKind::Purpose
@@ -975,36 +1019,64 @@ fn add_change_actions(
         PromotionChangeKind::Operational => {
             reviews.insert(PromotionReviewClass::Operations);
             reviews.insert(PromotionReviewClass::Security);
-            products.add(ProductActionSet::BOTH);
+            products.add(ProductActionSet::ALL);
         }
-        PromotionChangeKind::ProductEnablement
-        | PromotionChangeKind::CapabilityEnablement
-        | PromotionChangeKind::IntegrationCeiling => {
+        PromotionChangeKind::ProductEnablement | PromotionChangeKind::CapabilityEnablement => {
             reviews.insert(PromotionReviewClass::Compatibility);
             reviews.insert(PromotionReviewClass::Release);
-            products.add(ProductActionSet::BOTH);
+            products.add(ProductActionSet::ALL);
+        }
+        PromotionChangeKind::IntegrationCeiling => {
+            reviews.insert(PromotionReviewClass::Compatibility);
+            reviews.insert(PromotionReviewClass::Release);
+            products.add(
+                if product_lanes.contains(&RequiredProductAction::RelayConsultation) {
+                    ProductActionSet::RELAY_CONSULTATION
+                } else {
+                    ProductActionSet::RELAY_PUBLIC
+                } | ProductActionSet::NOTARY,
+            );
         }
     }
+    products.retain(product_lanes);
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ProductActionSet(u8);
 
 impl ProductActionSet {
-    const RELAY: u8 = 0b01;
-    const NOTARY: u8 = 0b10;
-    const BOTH: u8 = Self::RELAY | Self::NOTARY;
+    const RELAY_PUBLIC: u8 = 0b001;
+    const RELAY_CONSULTATION: u8 = 0b010;
+    const NOTARY: u8 = 0b100;
+    const ALL: u8 = Self::RELAY_PUBLIC | Self::RELAY_CONSULTATION | Self::NOTARY;
 
     fn add(&mut self, product: u8) {
         self.0 |= product;
     }
 
-    const fn action(self) -> PromotionProductAction {
-        match self.0 {
-            Self::RELAY => PromotionProductAction::Relay,
-            Self::NOTARY => PromotionProductAction::Notary,
-            Self::BOTH => PromotionProductAction::RelayAndNotary,
-            _ => PromotionProductAction::None,
+    fn retain(&mut self, product_lanes: &BTreeSet<RequiredProductAction>) {
+        let mut available = 0;
+        for lane in product_lanes {
+            available |= match lane {
+                RequiredProductAction::RelayPublic => Self::RELAY_PUBLIC,
+                RequiredProductAction::RelayConsultation => Self::RELAY_CONSULTATION,
+                RequiredProductAction::Notary => Self::NOTARY,
+            };
         }
+        self.0 &= available;
+    }
+
+    fn actions(self) -> Vec<RequiredProductAction> {
+        [
+            (Self::RELAY_PUBLIC, RequiredProductAction::RelayPublic),
+            (
+                Self::RELAY_CONSULTATION,
+                RequiredProductAction::RelayConsultation,
+            ),
+            (Self::NOTARY, RequiredProductAction::Notary),
+        ]
+        .into_iter()
+        .filter_map(|(bit, action)| (self.0 & bit != 0).then_some(action))
+        .collect()
     }
 }

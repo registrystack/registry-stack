@@ -2,16 +2,19 @@
 
 #![allow(dead_code)]
 
+#[path = "../src/project_authoring/required_product_action.rs"]
+mod required_product_action;
+pub use required_product_action::RequiredProductAction;
 #[path = "../src/project_authoring/promotion.rs"]
 mod promotion;
 
 use promotion::{
     build_project_promotion_report, ProjectPromotionBuildError, ProjectPromotionInput,
-    ProjectPromotionReportV1, PromotionBlockingReason, PromotionChangeEffect, PromotionChangeInput,
-    PromotionChangeKind, PromotionCompatibilityInput, PromotionCompatibilityState,
-    PromotionDisposition, PromotionFieldClassification, PromotionFieldOwnership,
-    PromotionProductAction, ReviewedCeilingInput, ReviewedRevisionComparison, TrustResolutionInput,
-    MAX_PROMOTION_CHANGES,
+    ProjectPromotionReportV1, PromotionBaselineMigration, PromotionBlockingReason,
+    PromotionChangeEffect, PromotionChangeInput, PromotionChangeKind, PromotionCompatibilityInput,
+    PromotionCompatibilityState, PromotionDisposition, PromotionFieldClassification,
+    PromotionFieldOwnership, ReviewedCeilingInput, ReviewedRevisionComparison,
+    TrustResolutionInput, MAX_PROMOTION_CHANGES,
 };
 use serde_json::{json, Value};
 
@@ -70,6 +73,12 @@ fn change(
 fn canonical_input() -> ProjectPromotionInput {
     ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::DifferentReviewedSemanticRevision,
+        product_lanes: vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ],
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: vec![
             change(
                 PromotionChangeKind::CapabilityEnablement,
@@ -177,15 +186,27 @@ fn pure_builder_is_deterministic_value_free_and_matches_fixture() {
     );
     assert_eq!(
         first.required_actions.re_sign,
-        PromotionProductAction::RelayAndNotary
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         first.required_actions.reactivate,
-        PromotionProductAction::RelayAndNotary
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         first.required_actions.restart,
-        PromotionProductAction::RelayAndNotary
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert!(first.blocking_reasons.is_empty());
 }
@@ -194,6 +215,8 @@ fn pure_builder_is_deterministic_value_free_and_matches_fixture() {
 fn policy_and_ceiling_widening_fail_closed() {
     let report = build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::DifferentReviewedSemanticRevision,
+        product_lanes: canonical_input().product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: vec![change(
             PromotionChangeKind::ServicePolicy,
             PromotionFieldClassification::Internal,
@@ -219,6 +242,8 @@ fn policy_and_ceiling_widening_fail_closed() {
 fn missing_incompatible_and_unresolved_compatibility_fail_closed() {
     let report = build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::SameReviewedSemanticRevision,
+        product_lanes: canonical_input().product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: Vec::new(),
         reviewed_ceiling: ReviewedCeilingInput::WithinReviewedCeiling,
         trust: TrustResolutionInput::Unresolved,
@@ -246,6 +271,8 @@ fn missing_incompatible_and_unresolved_compatibility_fail_closed() {
 fn ownership_and_classification_boundaries_fail_closed() {
     let report = build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::SameReviewedSemanticRevision,
+        product_lanes: canonical_input().product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: vec![
             change(
                 PromotionChangeKind::Origin,
@@ -286,6 +313,8 @@ fn ownership_and_classification_boundaries_fail_closed() {
 fn incomplete_revision_and_ceiling_evidence_fail_closed() {
     let report = build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::DifferentReviewedSemanticRevision,
+        product_lanes: canonical_input().product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: vec![change(
             PromotionChangeKind::Origin,
             PromotionFieldClassification::Sensitive,
@@ -396,6 +425,8 @@ fn change_capacity_is_bounded_before_report_construction() {
     );
     let error = build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::SameReviewedSemanticRevision,
+        product_lanes: canonical_input().product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes: vec![repeated; MAX_PROMOTION_CHANGES + 1],
         reviewed_ceiling: ReviewedCeilingInput::WithinReviewedCeiling,
         trust: TrustResolutionInput::Resolved,

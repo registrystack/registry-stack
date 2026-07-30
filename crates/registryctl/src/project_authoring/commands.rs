@@ -2051,8 +2051,20 @@ pub fn promote_registry_project(
 
     let baselines = match load_verified_promotion_baselines(options, &loaded) {
         Ok(baselines) => baselines,
+        Err(error)
+            if error.is::<LegacyRelayConsultationBaselineMigrationRequired>()
+                && promotion_baseline_supplied(options) =>
+        {
+            return unresolved_promotion_baseline_report(
+                &loaded,
+                PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs,
+            );
+        }
         Err(_) if promotion_baseline_supplied(options) => {
-            return unresolved_promotion_baseline_report();
+            return unresolved_promotion_baseline_report(
+                &loaded,
+                PromotionBaselineMigration::NotRequired,
+            );
         }
         Err(_) => return Err(anyhow!("could not establish verified promotion baselines")),
     };
@@ -2077,9 +2089,14 @@ fn promotion_baseline_supplied(options: &ProjectPromotionOptions) -> bool {
         || options.notary_against.is_some()
 }
 
-fn unresolved_promotion_baseline_report() -> Result<ProjectPromotionReportV1> {
+fn unresolved_promotion_baseline_report(
+    loaded: &LoadedRegistryProject,
+    baseline_migration: PromotionBaselineMigration,
+) -> Result<ProjectPromotionReportV1> {
     build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision: ReviewedRevisionComparison::NotProven,
+        product_lanes: promotion_action_lanes(loaded, &[]),
+        baseline_migration,
         changes: Vec::new(),
         reviewed_ceiling: ReviewedCeilingInput::Unresolved,
         trust: TrustResolutionInput::Unresolved,
@@ -2124,10 +2141,13 @@ fn build_promotion_report_from_normalized_state(
     let current = promotion_projection_from_approval_state(current_approval_state, true)?;
     let current_compatibility =
         promotion_compatibility(loaded, current_approval_state, &current, baselines)?;
+    let product_lanes = promotion_action_lanes(loaded, baselines);
 
     let Some(baseline) = baselines.first() else {
         return build_project_promotion_report(ProjectPromotionInput {
             reviewed_revision: ReviewedRevisionComparison::NotProven,
+            product_lanes,
+            baseline_migration: PromotionBaselineMigration::NotRequired,
             changes: Vec::new(),
             reviewed_ceiling: ReviewedCeilingInput::WithinReviewedCeiling,
             trust: TrustResolutionInput::Unresolved,
@@ -2144,6 +2164,8 @@ fn build_promotion_report_from_normalized_state(
     }) {
         return build_project_promotion_report(ProjectPromotionInput {
             reviewed_revision: ReviewedRevisionComparison::NotProven,
+            product_lanes,
+            baseline_migration: PromotionBaselineMigration::NotRequired,
             changes: Vec::new(),
             reviewed_ceiling: ReviewedCeilingInput::Unresolved,
             trust: TrustResolutionInput::Unresolved,
@@ -2161,6 +2183,8 @@ fn build_promotion_report_from_normalized_state(
     }) {
         return build_project_promotion_report(ProjectPromotionInput {
             reviewed_revision: ReviewedRevisionComparison::NotProven,
+            product_lanes,
+            baseline_migration: PromotionBaselineMigration::NotRequired,
             changes: Vec::new(),
             reviewed_ceiling: ReviewedCeilingInput::Unresolved,
             trust: TrustResolutionInput::Unresolved,
@@ -2222,12 +2246,53 @@ fn build_promotion_report_from_normalized_state(
 
     build_project_promotion_report(ProjectPromotionInput {
         reviewed_revision,
+        product_lanes,
+        baseline_migration: PromotionBaselineMigration::NotRequired,
         changes,
         reviewed_ceiling,
         trust,
         compatibility: current_compatibility,
     })
     .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"))
+}
+
+fn promotion_action_lanes(
+    loaded: &LoadedRegistryProject,
+    baselines: &[VerifiedBaseline],
+) -> Vec<RequiredProductAction> {
+    let mut lanes = BTreeSet::new();
+    if loaded
+        .environment
+        .as_ref()
+        .is_some_and(|environment| {
+            project_promotion_products(environment).contains(&PromotionProjectedProduct::Relay)
+        })
+        || baselines
+            .iter()
+            .any(|baseline| baseline.lane == VerifiedBaselineLane::Relay)
+    {
+        lanes.insert(RequiredProductAction::RelayPublic);
+    }
+    if project_requires_relay_consultation_baseline(loaded)
+        || baselines
+            .iter()
+            .any(|baseline| baseline.lane == VerifiedBaselineLane::RelayConsultation)
+    {
+        lanes.insert(RequiredProductAction::RelayConsultation);
+    }
+    if loaded
+        .environment
+        .as_ref()
+        .is_some_and(|environment| {
+            project_promotion_products(environment).contains(&PromotionProjectedProduct::Notary)
+        })
+        || baselines
+            .iter()
+            .any(|baseline| baseline.lane == VerifiedBaselineLane::Notary)
+    {
+        lanes.insert(RequiredProductAction::Notary);
+    }
+    lanes.into_iter().collect()
 }
 
 fn promotion_compatibility(

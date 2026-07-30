@@ -66,6 +66,8 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // These ownership-oriented source units share this private module so the
 // authoring compiler can retain one closed internal type system without a
 // public API or visibility expansion.
+mod required_product_action;
+pub use required_product_action::*;
 mod report_contract;
 pub use report_contract::*;
 mod diagnostic_reference;

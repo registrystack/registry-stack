@@ -127,14 +127,14 @@ pub enum SemanticComparisonRequiredAction {
     ReviewSemanticChanges,
     RunAffectedFixtures,
     RegenerateGeneratedArtifacts,
-    /// Independently review, sign, and activate the generated
-    /// `private/relay-consultation` input.
-    ReviewSignActivateRelayConsultationInput,
-    ResignRelayBundle,
+    ResignRelayPublicBundle,
+    ResignRelayConsultationBundle,
     ResignNotaryBundle,
-    ReactivateRelayConfiguration,
+    ReactivateRelayPublicConfiguration,
+    ReactivateRelayConsultationConfiguration,
     ReactivateNotaryConfiguration,
-    RestartRegistryRelay,
+    RestartRegistryRelayPublic,
+    RestartRegistryRelayConsultation,
     RestartRegistryNotary,
 }
 
@@ -260,39 +260,12 @@ pub struct SemanticComparisonAffectedSubject {
     pub count: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticComparisonSigningRequirement {
-    None,
-    RelayBundle,
-    NotaryBundle,
-    RelayAndNotaryBundles,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticComparisonActivationRequirement {
-    None,
-    ApplyRelayConfig,
-    ApplyNotaryConfig,
-    ApplyRelayAndNotaryConfig,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticComparisonRestartRequirement {
-    None,
-    RegistryRelay,
-    RegistryNotary,
-    RegistryRelayAndNotary,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticComparisonRequirements {
-    pub signing: SemanticComparisonSigningRequirement,
-    pub activation: SemanticComparisonActivationRequirement,
-    pub restart: SemanticComparisonRestartRequirement,
+    pub signing: Vec<RequiredProductAction>,
+    pub activation: Vec<RequiredProductAction>,
+    pub restart: Vec<RequiredProductAction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -608,7 +581,7 @@ fn compare_loaded_projects(
         let generated_artifacts =
             filter_artifacts_for_topology(&field.generated_artifacts, product_topology);
         let review_classes = filter_reviews_for_topology(&field.review_classes, product_topology);
-        let requirements = requirements_for_consumers(&consumers);
+        let requirements = requirements_for_change(field, &consumers, product_topology);
         changes.push(ProjectSemanticComparisonChange {
             address: field.address.clone(),
             source: field.source,
@@ -635,7 +608,7 @@ fn compare_loaded_projects(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let required_actions = required_actions(&changes, product_topology.relay_consultation);
+    let required_actions = required_actions(&changes);
     let equivalent = changes.is_empty();
     Ok(ProjectSemanticComparisonReportV1 {
         schema_version: ProjectSemanticComparisonSchemaVersion::V1,
@@ -734,7 +707,7 @@ fn aggregate_changes(
             consumers: change.consumers.clone(),
             generated_artifacts: change.generated_artifacts.clone(),
             review_classes: change.review_classes.clone(),
-            requirements: change.requirements,
+            requirements: change.requirements.clone(),
         };
         if let Some(existing) = aggregated.get_mut(&key) {
             existing.occurrences = existing
@@ -1428,38 +1401,59 @@ fn disclosure_field(field: &str) -> bool {
     field.ends_with("/properties/disclosure")
 }
 
-fn requirements_for_consumers(
+fn requirements_for_change(
+    field: &SnapshotField,
     consumers: &[SemanticComparisonConsumer],
+    topology: ComparisonProductTopology,
 ) -> SemanticComparisonRequirements {
-    let relay = consumers.contains(&SemanticComparisonConsumer::RegistryRelay);
-    let notary = consumers.contains(&SemanticComparisonConsumer::RegistryNotary);
-    match (relay, notary) {
-        (true, true) => SemanticComparisonRequirements {
-            signing: SemanticComparisonSigningRequirement::RelayAndNotaryBundles,
-            activation: SemanticComparisonActivationRequirement::ApplyRelayAndNotaryConfig,
-            restart: SemanticComparisonRestartRequirement::RegistryRelayAndNotary,
-        },
-        (true, false) => SemanticComparisonRequirements {
-            signing: SemanticComparisonSigningRequirement::RelayBundle,
-            activation: SemanticComparisonActivationRequirement::ApplyRelayConfig,
-            restart: SemanticComparisonRestartRequirement::RegistryRelay,
-        },
-        (false, true) => SemanticComparisonRequirements {
-            signing: SemanticComparisonSigningRequirement::NotaryBundle,
-            activation: SemanticComparisonActivationRequirement::ApplyNotaryConfig,
-            restart: SemanticComparisonRestartRequirement::RegistryNotary,
-        },
-        (false, false) => SemanticComparisonRequirements {
-            signing: SemanticComparisonSigningRequirement::None,
-            activation: SemanticComparisonActivationRequirement::None,
-            restart: SemanticComparisonRestartRequirement::None,
-        },
+    let mut actions = BTreeSet::new();
+    if consumers.contains(&SemanticComparisonConsumer::RegistryRelay) {
+        match field.dimension {
+            SemanticComparisonDimension::Integration
+            | SemanticComparisonDimension::Fixture
+            | SemanticComparisonDimension::Consultation => {
+                if topology.relay_consultation {
+                    actions.insert(RequiredProductAction::RelayConsultation);
+                } else if topology.relay {
+                    // Relay-only projects use their one public input for
+                    // source-backed materialization.
+                    actions.insert(RequiredProductAction::RelayPublic);
+                }
+            }
+            SemanticComparisonDimension::Entity => {
+                if topology.relay {
+                    actions.insert(RequiredProductAction::RelayPublic);
+                }
+            }
+            SemanticComparisonDimension::Project
+            | SemanticComparisonDimension::ServicePolicy
+            | SemanticComparisonDimension::Claim
+            | SemanticComparisonDimension::Disclosure
+            | SemanticComparisonDimension::OperatorSecurity
+            | SemanticComparisonDimension::GeneratedReview
+            | SemanticComparisonDimension::GeneratedApproval => {
+                if topology.relay {
+                    actions.insert(RequiredProductAction::RelayPublic);
+                }
+                if topology.relay_consultation {
+                    actions.insert(RequiredProductAction::RelayConsultation);
+                }
+            }
+        }
+    }
+    if consumers.contains(&SemanticComparisonConsumer::RegistryNotary) {
+        actions.insert(RequiredProductAction::Notary);
+    }
+    let actions = actions.into_iter().collect::<Vec<_>>();
+    SemanticComparisonRequirements {
+        signing: actions.clone(),
+        activation: actions.clone(),
+        restart: actions,
     }
 }
 
 fn required_actions(
     changes: &[ProjectSemanticComparisonChange],
-    has_consultation_relay_input: bool,
 ) -> Vec<SemanticComparisonRequiredAction> {
     let mut actions = BTreeSet::new();
     if !changes.is_empty() {
@@ -1470,62 +1464,45 @@ fn required_actions(
         ]);
     }
     for change in changes {
-        match change.requirements.signing {
-            SemanticComparisonSigningRequirement::RelayBundle => {
-                actions.insert(SemanticComparisonRequiredAction::ResignRelayBundle);
-            }
-            SemanticComparisonSigningRequirement::NotaryBundle => {
-                actions.insert(SemanticComparisonRequiredAction::ResignNotaryBundle);
-            }
-            SemanticComparisonSigningRequirement::RelayAndNotaryBundles => {
-                actions.extend([
-                    SemanticComparisonRequiredAction::ResignRelayBundle,
-                    SemanticComparisonRequiredAction::ResignNotaryBundle,
-                ]);
-            }
-            SemanticComparisonSigningRequirement::None => {}
+        for product in &change.requirements.signing {
+            actions.insert(match product {
+                RequiredProductAction::RelayPublic => {
+                    SemanticComparisonRequiredAction::ResignRelayPublicBundle
+                }
+                RequiredProductAction::RelayConsultation => {
+                    SemanticComparisonRequiredAction::ResignRelayConsultationBundle
+                }
+                RequiredProductAction::Notary => {
+                    SemanticComparisonRequiredAction::ResignNotaryBundle
+                }
+            });
         }
-        match change.requirements.activation {
-            SemanticComparisonActivationRequirement::ApplyRelayConfig => {
-                actions.insert(SemanticComparisonRequiredAction::ReactivateRelayConfiguration);
-            }
-            SemanticComparisonActivationRequirement::ApplyNotaryConfig => {
-                actions.insert(SemanticComparisonRequiredAction::ReactivateNotaryConfiguration);
-            }
-            SemanticComparisonActivationRequirement::ApplyRelayAndNotaryConfig => {
-                actions.extend([
-                    SemanticComparisonRequiredAction::ReactivateRelayConfiguration,
-                    SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
-                ]);
-            }
-            SemanticComparisonActivationRequirement::None => {}
+        for product in &change.requirements.activation {
+            actions.insert(match product {
+                RequiredProductAction::RelayPublic => {
+                    SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration
+                }
+                RequiredProductAction::RelayConsultation => {
+                    SemanticComparisonRequiredAction::ReactivateRelayConsultationConfiguration
+                }
+                RequiredProductAction::Notary => {
+                    SemanticComparisonRequiredAction::ReactivateNotaryConfiguration
+                }
+            });
         }
-        match change.requirements.restart {
-            SemanticComparisonRestartRequirement::RegistryRelay => {
-                actions.insert(SemanticComparisonRequiredAction::RestartRegistryRelay);
-            }
-            SemanticComparisonRestartRequirement::RegistryNotary => {
-                actions.insert(SemanticComparisonRequiredAction::RestartRegistryNotary);
-            }
-            SemanticComparisonRestartRequirement::RegistryRelayAndNotary => {
-                actions.extend([
-                    SemanticComparisonRequiredAction::RestartRegistryRelay,
-                    SemanticComparisonRequiredAction::RestartRegistryNotary,
-                ]);
-            }
-            SemanticComparisonRestartRequirement::None => {}
+        for product in &change.requirements.restart {
+            actions.insert(match product {
+                RequiredProductAction::RelayPublic => {
+                    SemanticComparisonRequiredAction::RestartRegistryRelayPublic
+                }
+                RequiredProductAction::RelayConsultation => {
+                    SemanticComparisonRequiredAction::RestartRegistryRelayConsultation
+                }
+                RequiredProductAction::Notary => {
+                    SemanticComparisonRequiredAction::RestartRegistryNotary
+                }
+            });
         }
-    }
-    if has_consultation_relay_input
-        && changes.iter().any(|change| {
-            matches!(
-                change.requirements.signing,
-                SemanticComparisonSigningRequirement::RelayBundle
-                    | SemanticComparisonSigningRequirement::RelayAndNotaryBundles
-            )
-        })
-    {
-        actions.insert(SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput);
     }
     actions.into_iter().collect()
 }

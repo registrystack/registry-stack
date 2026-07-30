@@ -5,6 +5,12 @@
   "runtime_activation": "not_evaluated",
   "disposition": "ready_after_required_actions",
   "reviewed_revision": "different_reviewed_semantic_revision",
+  "product_lanes": [
+    "relay_public",
+    "relay_consultation",
+    "notary"
+  ],
+  "baseline_migration": "not_required",
   "changes": [
     {
       "address": {
@@ -171,9 +177,21 @@
       "operations",
       "release"
     ],
-    "re_sign": "relay_and_notary",
-    "reactivate": "relay_and_notary",
-    "restart": "relay_and_notary"
+    "re_sign": [
+      "relay_public",
+      "relay_consultation",
+      "notary"
+    ],
+    "reactivate": [
+      "relay_public",
+      "relay_consultation",
+      "notary"
+    ],
+    "restart": [
+      "relay_public",
+      "relay_consultation",
+      "notary"
+    ]
   },
   "blocking_reasons": [],
   "evidence_limitations": [
@@ -183,6 +201,6 @@
     "live_endpoint_reachability_not_evaluated",
     "secret_material_not_inspected",
     "raw_authored_values_omitted",
-    "separate_relay_and_notary_bundle_lifecycle"
+    "separate_relay_public_relay_consultation_and_notary_bundle_lifecycle"
   ]
 }

@@ -10,12 +10,12 @@ use registryctl::{
     compare_registry_projects_semantically, init_registry_project, FieldSensitivity,
     ProjectEnvironmentSemanticComparisonOptions, ProjectInitOptions,
     ProjectSemanticComparisonOptions, ProjectStarter, ProjectStarterSemanticComparisonOptions,
-    SemanticComparisonActivationRequirement, SemanticComparisonAffectedSubjectKind,
-    SemanticComparisonAssurance, SemanticComparisonChangeSource, SemanticComparisonConsumer,
-    SemanticComparisonDimension, SemanticComparisonDirection, SemanticComparisonEquivalence,
+    RequiredProductAction, SemanticComparisonAffectedSubjectKind, SemanticComparisonAssurance,
+    SemanticComparisonChangeSource, SemanticComparisonConsumer, SemanticComparisonDimension,
+    SemanticComparisonDirection, SemanticComparisonEquivalence,
     SemanticComparisonGeneratedArtifact, SemanticComparisonRequiredAction,
-    SemanticComparisonRestartRequirement, SemanticComparisonReviewPlanState,
-    SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
+    SemanticComparisonReviewClass, SemanticComparisonReviewPlanState,
+    SemanticComparisonSchemaFamily,
 };
 use serde_json::Value;
 
@@ -96,6 +96,16 @@ fn registry_id_change(
                 && change.address.field.as_str() == "/properties/registry/properties/id"
         })
         .expect("registry.id change is classified")
+}
+
+fn first_product_change(
+    report: &registryctl::ProjectSemanticComparisonReportV1,
+) -> &registryctl::ProjectSemanticComparisonChange {
+    report
+        .changes
+        .iter()
+        .find(|change| !change.requirements.signing.is_empty())
+        .expect("product-impacting change is classified")
 }
 
 #[test]
@@ -306,15 +316,27 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
     );
     assert_eq!(
         registry_id_change.requirements.signing,
-        SemanticComparisonSigningRequirement::RelayAndNotaryBundles
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         registry_id_change.requirements.activation,
-        SemanticComparisonActivationRequirement::ApplyRelayAndNotaryConfig
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         registry_id_change.requirements.restart,
-        SemanticComparisonRestartRequirement::RegistryRelayAndNotary
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         registry_id_change
@@ -331,12 +353,14 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
             SemanticComparisonRequiredAction::ReviewSemanticChanges,
             SemanticComparisonRequiredAction::RunAffectedFixtures,
             SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
-            SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput,
-            SemanticComparisonRequiredAction::ResignRelayBundle,
+            SemanticComparisonRequiredAction::ResignRelayPublicBundle,
+            SemanticComparisonRequiredAction::ResignRelayConsultationBundle,
             SemanticComparisonRequiredAction::ResignNotaryBundle,
-            SemanticComparisonRequiredAction::ReactivateRelayConfiguration,
+            SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration,
+            SemanticComparisonRequiredAction::ReactivateRelayConsultationConfiguration,
             SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
-            SemanticComparisonRequiredAction::RestartRegistryRelay,
+            SemanticComparisonRequiredAction::RestartRegistryRelayPublic,
+            SemanticComparisonRequiredAction::RestartRegistryRelayConsultation,
             SemanticComparisonRequiredAction::RestartRegistryNotary,
         ]
     );
@@ -348,6 +372,128 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
         assert!(!report.human_safe_summary().contains(value));
         assert!(!format!("{report:?}").contains(value));
     }
+}
+
+#[test]
+fn single_product_comparison_filters_actions_to_enabled_product_topology() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+
+    let relay_baseline = temporary.path().join("relay-baseline");
+    copy_project_tree(
+        &fixture_project("relay-only-materialization"),
+        &relay_baseline,
+    );
+    let relay_current = temporary.path().join("relay-current");
+    copy_project_tree(
+        &fixture_project("relay-only-materialization"),
+        &relay_current,
+    );
+    rewrite_yaml(&relay_current.join("entities/people.yaml"), |document| {
+        document["schema"]["properties"]["status"]["maxLength"] = Value::from(31);
+    });
+    let relay_report = compare_projects(&relay_current, &relay_baseline);
+    let relay_change = first_product_change(&relay_report);
+    assert_eq!(
+        relay_change.address.schema_family,
+        SemanticComparisonSchemaFamily::Entity
+    );
+    assert!(relay_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryRelay));
+    assert!(!relay_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryNotary));
+    assert!(relay_change
+        .generated_artifacts
+        .contains(&SemanticComparisonGeneratedArtifact::RelayConfig));
+    assert!(!relay_change
+        .generated_artifacts
+        .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
+    assert!(relay_change
+        .review_classes
+        .contains(&SemanticComparisonReviewClass::Relay));
+    assert!(!relay_change
+        .review_classes
+        .contains(&SemanticComparisonReviewClass::Notary));
+    assert_eq!(
+        relay_change.requirements.signing,
+        vec![RequiredProductAction::RelayPublic]
+    );
+    assert_eq!(
+        relay_change.requirements.activation,
+        vec![RequiredProductAction::RelayPublic]
+    );
+    assert_eq!(
+        relay_change.requirements.restart,
+        vec![RequiredProductAction::RelayPublic]
+    );
+    assert_eq!(
+        relay_report.required_actions,
+        vec![
+            SemanticComparisonRequiredAction::ReviewSemanticChanges,
+            SemanticComparisonRequiredAction::RunAffectedFixtures,
+            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
+            SemanticComparisonRequiredAction::ResignRelayPublicBundle,
+            SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration,
+            SemanticComparisonRequiredAction::RestartRegistryRelayPublic,
+        ]
+    );
+
+    let notary_baseline = temporary.path().join("notary-baseline");
+    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_baseline);
+    let notary_current = temporary.path().join("notary-current");
+    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_current);
+    rewrite_yaml(&notary_current.join("registry-stack.yaml"), |document| {
+        document["services"]["applicant-evaluation"]["purpose"] =
+            Value::String("changed-purpose".to_owned());
+    });
+    let notary_report = compare_projects(&notary_current, &notary_baseline);
+    let notary_change = first_product_change(&notary_report);
+    assert_eq!(
+        notary_change.address.schema_family,
+        SemanticComparisonSchemaFamily::Project
+    );
+    assert!(notary_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryNotary));
+    assert!(!notary_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryRelay));
+    assert!(notary_change
+        .generated_artifacts
+        .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
+    assert!(!notary_change
+        .generated_artifacts
+        .contains(&SemanticComparisonGeneratedArtifact::RelayConfig));
+    assert!(notary_change
+        .review_classes
+        .contains(&SemanticComparisonReviewClass::Notary));
+    assert!(!notary_change
+        .review_classes
+        .contains(&SemanticComparisonReviewClass::Relay));
+    assert_eq!(
+        notary_change.requirements.signing,
+        vec![RequiredProductAction::Notary]
+    );
+    assert_eq!(
+        notary_change.requirements.activation,
+        vec![RequiredProductAction::Notary]
+    );
+    assert_eq!(
+        notary_change.requirements.restart,
+        vec![RequiredProductAction::Notary]
+    );
+    assert_eq!(
+        notary_report.required_actions,
+        vec![
+            SemanticComparisonRequiredAction::ReviewSemanticChanges,
+            SemanticComparisonRequiredAction::RunAffectedFixtures,
+            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
+            SemanticComparisonRequiredAction::ResignNotaryBundle,
+            SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
+            SemanticComparisonRequiredAction::RestartRegistryNotary,
+        ]
+    );
 }
 
 #[test]
@@ -372,15 +518,27 @@ fn product_removal_comparison_keeps_removed_product_actions() {
         .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
     assert_eq!(
         change.requirements.signing,
-        SemanticComparisonSigningRequirement::RelayAndNotaryBundles
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         change.requirements.activation,
-        SemanticComparisonActivationRequirement::ApplyRelayAndNotaryConfig
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert_eq!(
         change.requirements.restart,
-        SemanticComparisonRestartRequirement::RegistryRelayAndNotary
+        vec![
+            RequiredProductAction::RelayPublic,
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]
     );
     assert!(report
         .required_actions
@@ -393,7 +551,7 @@ fn product_removal_comparison_keeps_removed_product_actions() {
         .contains(&SemanticComparisonRequiredAction::RestartRegistryNotary));
     assert!(report
         .required_actions
-        .contains(&SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput));
+        .contains(&SemanticComparisonRequiredAction::ResignRelayConsultationBundle));
 }
 
 #[test]
@@ -636,6 +794,38 @@ fn compare_cli_emits_value_free_human_and_strict_json_reports() {
     assert!(human.contains("semantic comparison: equivalent"));
     assert!(human.contains("External approval: not evaluated"));
     assert!(!human.contains(project_argument));
+
+    rewrite_yaml(&project.join("registry-stack.yaml"), |document| {
+        document["services"]["person-verification"]["purpose"] =
+            Value::String("reviewed-purpose".to_owned());
+    });
+    let changed_human_output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args([
+            "compare",
+            "--project-dir",
+            project_argument,
+            "--environment",
+            "local",
+            "--from-starter",
+        ])
+        .output()
+        .expect("registryctl changed comparison human output runs");
+    assert!(changed_human_output.status.success());
+    let changed_human =
+        String::from_utf8(changed_human_output.stdout).expect("changed human output is UTF-8");
+    for expected in [
+        "re-sign private/relay",
+        "re-sign private/relay-consultation",
+        "re-sign private/notary",
+        "restart the public Relay instance using private/relay",
+        "restart the consultation Relay instance using private/relay-consultation",
+        "restart Registry Notary using private/notary",
+    ] {
+        assert!(
+            changed_human.contains(expected),
+            "human output lacks {expected:?}: {changed_human}"
+        );
+    }
 }
 
 #[test]
@@ -687,14 +877,14 @@ fn fixture_change_is_included_in_the_generated_pending_review_plan() {
         .contains(&SemanticComparisonConsumer::RegistryNotary));
     assert_eq!(
         generated_change.requirements.signing,
-        SemanticComparisonSigningRequirement::None
+        Vec::<RequiredProductAction>::new()
     );
     assert_eq!(
         generated_change.requirements.activation,
-        SemanticComparisonActivationRequirement::None
+        Vec::<RequiredProductAction>::new()
     );
     assert_eq!(
         generated_change.requirements.restart,
-        SemanticComparisonRestartRequirement::None
+        Vec::<RequiredProductAction>::new()
     );
 }

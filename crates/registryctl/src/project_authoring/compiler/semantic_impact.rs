@@ -150,39 +150,48 @@ fn semantic_impact_for_dimension(
 
 #[derive(Clone, Copy)]
 struct AffectedProducts {
-    relay: bool,
+    relay_public: bool,
+    relay_consultation: bool,
     notary: bool,
 }
 
 impl AffectedProducts {
     const fn none() -> Self {
         Self {
-            relay: false,
+            relay_public: false,
+            relay_consultation: false,
             notary: false,
         }
     }
 
     const fn both() -> Self {
         Self {
-            relay: true,
+            relay_public: true,
+            relay_consultation: true,
             notary: true,
         }
     }
 
     const fn any(self) -> bool {
-        self.relay || self.notary
+        self.relay_public || self.relay_consultation || self.notary
+    }
+
+    const fn any_relay(self) -> bool {
+        self.relay_public || self.relay_consultation
     }
 
     const fn union(self, other: Self) -> Self {
         Self {
-            relay: self.relay || other.relay,
+            relay_public: self.relay_public || other.relay_public,
+            relay_consultation: self.relay_consultation || other.relay_consultation,
             notary: self.notary || other.notary,
         }
     }
 
     const fn intersect(self, other: Self) -> Self {
         Self {
-            relay: self.relay && other.relay,
+            relay_public: self.relay_public && other.relay_public,
+            relay_consultation: self.relay_consultation && other.relay_consultation,
             notary: self.notary && other.notary,
         }
     }
@@ -193,25 +202,38 @@ fn affected_products(
     baseline: Option<&Value>,
     dimension: SemanticDimension,
 ) -> AffectedProducts {
-    let dimension_products = match dimension {
-        SemanticDimension::Claim | SemanticDimension::Disclosure => AffectedProducts {
-            relay: false,
-            notary: true,
-        },
-        SemanticDimension::Integration
-        | SemanticDimension::ServicePolicy
-        | SemanticDimension::OperatorSecurity
-        | SemanticDimension::Compiler => AffectedProducts {
-            relay: true,
-            notary: true,
-        },
-    };
     let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
     let current_products = AffectedProducts {
-        relay: requires_relay,
+        relay_public: requires_relay,
+        relay_consultation: requires_relay
+            && loaded
+                .project
+                .services
+                .values()
+                .any(|service| !service.consultations.is_empty()),
         notary: requires_notary,
     };
-    dimension_products.intersect(current_products.union(baseline_product_topology(baseline)))
+    let product_topology = current_products.union(baseline_product_topology(baseline));
+    let dimension_products = match dimension {
+        SemanticDimension::Claim | SemanticDimension::Disclosure => AffectedProducts {
+            relay_public: false,
+            relay_consultation: false,
+            notary: true,
+        },
+        SemanticDimension::Integration => AffectedProducts {
+            relay_public: !product_topology.relay_consultation,
+            relay_consultation: product_topology.relay_consultation,
+            notary: true,
+        },
+        SemanticDimension::ServicePolicy
+        | SemanticDimension::OperatorSecurity
+        | SemanticDimension::Compiler => AffectedProducts {
+            relay_public: true,
+            relay_consultation: true,
+            notary: true,
+        },
+    };
+    dimension_products.intersect(product_topology)
 }
 
 fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
@@ -225,11 +247,14 @@ fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
         let mut topology = AffectedProducts::none();
         for product in products {
             match product.as_str() {
-                Some("relay") => topology.relay = true,
+                Some("relay") => topology.relay_public = true,
                 Some("notary") => topology.notary = true,
                 _ => return AffectedProducts::both(),
             }
         }
+        topology.relay_consultation = baseline
+            .pointer("/generated_closure_digests/relay_consultation")
+            .is_some_and(Value::is_string);
         return topology;
     }
 
@@ -238,7 +263,10 @@ fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
         .and_then(Value::as_object)
     {
         let topology = AffectedProducts {
-            relay: digests.get("relay").is_some_and(Value::is_string),
+            relay_public: digests.get("relay").is_some_and(Value::is_string),
+            relay_consultation: digests
+                .get("relay_consultation")
+                .is_some_and(Value::is_string),
             notary: digests.get("notary").is_some_and(Value::is_string),
         };
         if topology.any() {
@@ -291,17 +319,19 @@ fn affected_subjects(
         }
     }
 
-    if products.relay {
+    if products.relay_public {
         add(
             AffectedSubjectKind::ProductInput,
             "registry-relay.config".to_string(),
         );
-        if has_consultation_signing_input {
-            add(
-                AffectedSubjectKind::ProductInput,
-                "registry-relay.consultation.config".to_string(),
-            );
-        }
+    }
+    if products.relay_consultation && has_consultation_signing_input {
+        add(
+            AffectedSubjectKind::ProductInput,
+            "registry-relay.consultation.config".to_string(),
+        );
+    }
+    if products.any_relay() {
         for artifact in [
             "registry-relay.consultation-contracts",
             "registry-relay.integration-packs",
@@ -362,7 +392,7 @@ const fn subject_kind_rank(kind: AffectedSubjectKind) -> u8 {
 
 fn consumers(products: AffectedProducts) -> Vec<ImpactConsumer> {
     let mut consumers = vec![ImpactConsumer::RegistryctlAuthoring];
-    if products.relay {
+    if products.any_relay() {
         consumers.push(ImpactConsumer::RegistryRelay);
     }
     if products.notary {
@@ -426,7 +456,7 @@ fn review_classes(
             ImpactReviewClass::Release,
         ],
     };
-    if !products.relay {
+    if !products.any_relay() {
         classes.retain(|class| *class != ImpactReviewClass::Relay);
     }
     if !products.notary {
@@ -448,7 +478,7 @@ fn product_impacts(
         product: ProjectProduct::Registryctl,
         impact: ProductImpactClass::Revalidate,
     }];
-    if products.relay {
+    if products.any_relay() {
         impacts.push(ProductImpact {
             product: ProjectProduct::Relay,
             impact: runtime_impact,
@@ -467,31 +497,25 @@ fn product_impacts(
     impacts
 }
 
-const fn requirements(products: AffectedProducts) -> ImpactRequirements {
-    match (products.relay, products.notary) {
-        (false, false) => ImpactRequirements {
-            signing: SigningRequirement::None,
-            activation: ActivationRequirement::None,
-            restart: RestartRequirement::None,
-        },
-        (true, false) => ImpactRequirements {
-            signing: SigningRequirement::RelayBundle,
-            activation: ActivationRequirement::ApplyRelayConfig,
-            restart: RestartRequirement::RegistryRelay,
-        },
-        (false, true) => ImpactRequirements {
-            signing: SigningRequirement::NotaryBundle,
-            activation: ActivationRequirement::ApplyNotaryConfig,
-            restart: RestartRequirement::RegistryNotary,
-        },
-        (true, true) => ImpactRequirements {
-            // Relay and Notary remain separately owned product bundles. This
-            // plural requirement does not represent project-root or atomic
-            // cross-product signing.
-            signing: SigningRequirement::RelayAndNotaryBundles,
-            activation: ActivationRequirement::ApplyRelayAndNotaryConfig,
-            restart: RestartRequirement::RegistryRelayAndNotary,
-        },
+fn requirements(products: AffectedProducts) -> ImpactRequirements {
+    let actions = [
+        (
+            products.relay_public,
+            RequiredProductAction::RelayPublic,
+        ),
+        (
+            products.relay_consultation,
+            RequiredProductAction::RelayConsultation,
+        ),
+        (products.notary, RequiredProductAction::Notary),
+    ]
+    .into_iter()
+    .filter_map(|(required, action)| required.then_some(action))
+    .collect::<Vec<_>>();
+    ImpactRequirements {
+        signing: actions.clone(),
+        activation: actions.clone(),
+        restart: actions,
     }
 }
 
@@ -540,6 +564,10 @@ mod semantic_impact_tests {
             .iter()
             .map(|change| change.dimension)
             .collect()
+    }
+
+    fn actions(actions: &[RequiredProductAction]) -> Vec<RequiredProductAction> {
+        actions.to_vec()
     }
 
     fn consumer_rank(consumer: ImpactConsumer) -> u8 {
@@ -687,15 +715,10 @@ mod semantic_impact_tests {
                 .product_impacts
                 .iter()
                 .any(|impact| impact.product == ProjectProduct::Notary));
-            assert_eq!(change.requirements.signing, SigningRequirement::RelayBundle);
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyRelayConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryRelay
-            );
+            let expected = actions(&[RequiredProductAction::RelayPublic]);
+            assert_eq!(change.requirements.signing, expected);
+            assert_eq!(change.requirements.activation, expected);
+            assert_eq!(change.requirements.restart, expected);
             assert!(!change.affected_subjects.iter().any(|subject| {
                 subject.id.starts_with("registry-notary.")
                     || subject.id == "registry-relay.consultation.config"
@@ -727,7 +750,6 @@ mod semantic_impact_tests {
             product_inputs,
             vec![
                 "registry-notary.config",
-                "registry-relay.config",
                 "registry-relay.consultation.config",
             ]
         );
@@ -760,15 +782,10 @@ mod semantic_impact_tests {
                 .product_impacts
                 .iter()
                 .any(|impact| impact.product == ProjectProduct::Relay));
-            assert_eq!(change.requirements.signing, SigningRequirement::NotaryBundle);
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryNotary
-            );
+            let expected = actions(&[RequiredProductAction::Notary]);
+            assert_eq!(change.requirements.signing, expected);
+            assert_eq!(change.requirements.activation, expected);
+            assert_eq!(change.requirements.restart, expected);
             assert!(!change.affected_subjects.iter().any(|subject| {
                 subject.id.starts_with("registry-relay.")
                     || subject.kind == AffectedSubjectKind::Consultation
@@ -810,15 +827,10 @@ mod semantic_impact_tests {
                 .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
             assert!(change.consumers.contains(&ImpactConsumer::RegistryNotary));
             assert!(!change.consumers.contains(&ImpactConsumer::RegistryRelay));
-            assert_eq!(change.requirements.signing, SigningRequirement::NotaryBundle);
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryNotary
-            );
+            let expected = actions(&[RequiredProductAction::Notary]);
+            assert_eq!(change.requirements.signing, expected);
+            assert_eq!(change.requirements.activation, expected);
+            assert_eq!(change.requirements.restart, expected);
         }
         for dimension in [
             SemanticDimension::Integration,
@@ -830,18 +842,21 @@ mod semantic_impact_tests {
                 .iter()
                 .find(|change| change.dimension == dimension)
                 .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
-            assert_eq!(
-                change.requirements.signing,
-                SigningRequirement::RelayAndNotaryBundles
-            );
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyRelayAndNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryRelayAndNotary
-            );
+            let expected = if dimension == SemanticDimension::Integration {
+                actions(&[
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ])
+            } else {
+                actions(&[
+                    RequiredProductAction::RelayPublic,
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ])
+            };
+            assert_eq!(change.requirements.signing, expected);
+            assert_eq!(change.requirements.activation, expected);
+            assert_eq!(change.requirements.restart, expected);
         }
     }
 
@@ -885,18 +900,21 @@ mod semantic_impact_tests {
                 subject.kind == AffectedSubjectKind::ProductInput
                     && subject.id == "registry-relay.consultation.config"
             }));
-            assert_eq!(
-                change.requirements.signing,
-                SigningRequirement::RelayAndNotaryBundles
-            );
-            assert_eq!(
-                change.requirements.activation,
-                ActivationRequirement::ApplyRelayAndNotaryConfig
-            );
-            assert_eq!(
-                change.requirements.restart,
-                RestartRequirement::RegistryRelayAndNotary
-            );
+            let expected = if dimension == SemanticDimension::Integration {
+                actions(&[
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ])
+            } else {
+                actions(&[
+                    RequiredProductAction::RelayPublic,
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ])
+            };
+            assert_eq!(change.requirements.signing, expected);
+            assert_eq!(change.requirements.activation, expected);
+            assert_eq!(change.requirements.restart, expected);
         }
     }
 
@@ -916,18 +934,13 @@ mod semantic_impact_tests {
             .find(|change| change.dimension == SemanticDimension::Integration)
             .expect("legacy baseline conservatively retains integration impact");
 
-        assert_eq!(
-            integration.requirements.signing,
-            SigningRequirement::RelayAndNotaryBundles
-        );
-        assert_eq!(
-            integration.requirements.activation,
-            ActivationRequirement::ApplyRelayAndNotaryConfig
-        );
-        assert_eq!(
-            integration.requirements.restart,
-            RestartRequirement::RegistryRelayAndNotary
-        );
+        let expected = actions(&[
+            RequiredProductAction::RelayConsultation,
+            RequiredProductAction::Notary,
+        ]);
+        assert_eq!(integration.requirements.signing, expected);
+        assert_eq!(integration.requirements.activation, expected);
+        assert_eq!(integration.requirements.restart, expected);
     }
 
     #[test]
@@ -936,52 +949,55 @@ mod semantic_impact_tests {
         let expected = [
             (
                 SemanticDimension::Claim,
-                SigningRequirement::NotaryBundle,
-                ActivationRequirement::ApplyNotaryConfig,
-                RestartRequirement::RegistryNotary,
+                actions(&[RequiredProductAction::Notary]),
             ),
             (
                 SemanticDimension::Integration,
-                SigningRequirement::RelayAndNotaryBundles,
-                ActivationRequirement::ApplyRelayAndNotaryConfig,
-                RestartRequirement::RegistryRelayAndNotary,
+                actions(&[
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ]),
             ),
             (
                 SemanticDimension::ServicePolicy,
-                SigningRequirement::RelayAndNotaryBundles,
-                ActivationRequirement::ApplyRelayAndNotaryConfig,
-                RestartRequirement::RegistryRelayAndNotary,
+                actions(&[
+                    RequiredProductAction::RelayPublic,
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ]),
             ),
             (
                 SemanticDimension::OperatorSecurity,
-                SigningRequirement::RelayAndNotaryBundles,
-                ActivationRequirement::ApplyRelayAndNotaryConfig,
-                RestartRequirement::RegistryRelayAndNotary,
+                actions(&[
+                    RequiredProductAction::RelayPublic,
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ]),
             ),
             (
                 SemanticDimension::Disclosure,
-                SigningRequirement::NotaryBundle,
-                ActivationRequirement::ApplyNotaryConfig,
-                RestartRequirement::RegistryNotary,
+                actions(&[RequiredProductAction::Notary]),
             ),
             (
                 SemanticDimension::Compiler,
-                SigningRequirement::RelayAndNotaryBundles,
-                ActivationRequirement::ApplyRelayAndNotaryConfig,
-                RestartRequirement::RegistryRelayAndNotary,
+                actions(&[
+                    RequiredProductAction::RelayPublic,
+                    RequiredProductAction::RelayConsultation,
+                    RequiredProductAction::Notary,
+                ]),
             ),
         ];
 
-        for (dimension, signing, activation, restart) in expected {
+        for (dimension, expected) in expected {
             let impact = semantic_impact_for_dimension(
                 &loaded,
                 None,
                 dimension,
                 SemanticDirection::Changed,
             );
-            assert_eq!(impact.requirements.signing, signing);
-            assert_eq!(impact.requirements.activation, activation);
-            assert_eq!(impact.requirements.restart, restart);
+            assert_eq!(impact.requirements.signing, expected);
+            assert_eq!(impact.requirements.activation, expected);
+            assert_eq!(impact.requirements.restart, expected);
             assert!(impact.consumers.contains(&ImpactConsumer::BundleSigner));
             assert!(impact
                 .consumers

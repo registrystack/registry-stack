@@ -7,10 +7,10 @@ use registryctl::{
     add_config_anchor_key, build_registry_project_with_context, init_config_anchor,
     init_registry_project, promote_registry_project, sign_config_bundle, BundleSignOptions,
     ProjectBuildOptions, ProjectExecutionContext, ProjectInitOptions, ProjectPromotionOptions,
-    ProjectPromotionReportV1, ProjectStarter, PromotionBlockingReason, PromotionChangeEffect,
-    PromotionChangeKind, PromotionCompatibilityComponent, PromotionCompatibilityState,
-    PromotionDisposition, PromotionProductAction, ReviewedCeilingAssessment,
-    ReviewedRevisionComparison, TrustResolutionAssessment,
+    ProjectPromotionReportV1, ProjectStarter, PromotionBaselineMigration, PromotionBlockingReason,
+    PromotionChangeEffect, PromotionChangeKind, PromotionCompatibilityComponent,
+    PromotionCompatibilityState, PromotionDisposition, RequiredProductAction,
+    ReviewedCeilingAssessment, ReviewedRevisionComparison, TrustResolutionAssessment,
 };
 
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
@@ -298,18 +298,9 @@ fn assert_conservative_blocked_report(report: &ProjectPromotionReportV1, forbidd
         );
     }
     assert!(report.required_actions.review_classes.is_empty());
-    assert_eq!(
-        report.required_actions.re_sign,
-        PromotionProductAction::None
-    );
-    assert_eq!(
-        report.required_actions.reactivate,
-        PromotionProductAction::None
-    );
-    assert_eq!(
-        report.required_actions.restart,
-        PromotionProductAction::None
-    );
+    assert!(report.required_actions.re_sign.is_empty());
+    assert!(report.required_actions.reactivate.is_empty());
+    assert!(report.required_actions.restart.is_empty());
 
     let document = serde_json::to_value(report).expect("blocked report serializes");
     let schema: serde_json::Value =
@@ -452,15 +443,15 @@ fn verified_baseline_supports_safe_actions_and_cli_exit_and_format_contracts() {
     assert_eq!(purpose.changes[0].kind, PromotionChangeKind::Purpose);
     assert_eq!(
         purpose.required_actions.re_sign,
-        PromotionProductAction::Notary
+        vec![RequiredProductAction::Notary]
     );
     assert_eq!(
         purpose.required_actions.reactivate,
-        PromotionProductAction::Notary
+        vec![RequiredProductAction::Notary]
     );
     assert_eq!(
         purpose.required_actions.restart,
-        PromotionProductAction::Notary
+        vec![RequiredProductAction::Notary]
     );
     write(&project_path, &baseline_project);
 
@@ -486,15 +477,15 @@ fn verified_baseline_supports_safe_actions_and_cli_exit_and_format_contracts() {
     );
     assert_eq!(
         changed.required_actions.re_sign,
-        PromotionProductAction::Relay
+        vec![RequiredProductAction::RelayConsultation]
     );
     assert_eq!(
         changed.required_actions.reactivate,
-        PromotionProductAction::Relay
+        vec![RequiredProductAction::RelayConsultation]
     );
     assert_eq!(
         changed.required_actions.restart,
-        PromotionProductAction::Relay
+        vec![RequiredProductAction::RelayConsultation]
     );
 
     let changed_json = run_promote(&project, &baselines, "json");
@@ -502,9 +493,18 @@ fn verified_baseline_supports_safe_actions_and_cli_exit_and_format_contracts() {
     let changed_json: serde_json::Value =
         serde_json::from_slice(&changed_json.stdout).expect("changed JSON output parses");
     assert_eq!(changed_json["disposition"], "ready_after_required_actions");
-    assert_eq!(changed_json["required_actions"]["re_sign"], "relay");
-    assert_eq!(changed_json["required_actions"]["restart"], "relay");
-    assert_eq!(changed_json["required_actions"]["reactivate"], "relay");
+    assert_eq!(
+        changed_json["required_actions"]["re_sign"],
+        serde_json::json!(["relay_consultation"])
+    );
+    assert_eq!(
+        changed_json["required_actions"]["restart"],
+        serde_json::json!(["relay_consultation"])
+    );
+    assert_eq!(
+        changed_json["required_actions"]["reactivate"],
+        serde_json::json!(["relay_consultation"])
+    );
 
     let changed_human = run_promote(&project, &baselines, "human");
     assert_eq!(
@@ -516,9 +516,9 @@ fn verified_baseline_supports_safe_actions_and_cli_exit_and_format_contracts() {
     let human = String::from_utf8(changed_human.stdout).expect("human output is UTF-8");
     assert!(human.contains("Promotion: ReadyAfterRequiredActions"));
     assert!(human.contains("Origin: ChangedWithinReviewedAuthority"));
-    assert!(human.contains("Re-sign: Relay"));
-    assert!(human.contains("restart: Relay"));
-    assert!(human.contains("reactivate: Relay"));
+    assert!(human.contains("Re-sign: private/relay-consultation"));
+    assert!(human.contains("restart: private/relay-consultation"));
+    assert!(human.contains("reactivate: private/relay-consultation"));
 
     let authored = std::fs::read_to_string(&project_path)
         .expect("project reads")
@@ -704,6 +704,38 @@ fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
         "{}",
         String::from_utf8_lossy(&legacy_v2.stderr)
     );
+    let legacy_v2_promotion =
+        promote_registry_project(&legacy_promotion_options(&project, &legacy_v2_baseline))
+            .expect("legacy v2 promotion returns migration guidance");
+    assert_eq!(
+        legacy_v2_promotion.baseline_migration,
+        PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+    );
+
+    let mut legacy_v3 = approval.clone();
+    legacy_v3["schema"] = serde_json::json!("registry.project.approval-state.v3");
+    legacy_v3["generated_closure_digests"]
+        .as_object_mut()
+        .expect("v3 closure set is an object")
+        .remove("relay_consultation");
+    let mut legacy_v3_bytes =
+        serde_json::to_vec_pretty(&legacy_v3).expect("v3 approval state serializes");
+    legacy_v3_bytes.push(b'\n');
+    std::fs::write(&approval_path, legacy_v3_bytes).expect("v3 approval state writes");
+    let legacy_v3_baseline = sign_product_baseline(
+        &output,
+        temporary.path(),
+        "registry-notary",
+        "notary",
+        "notary-legacy-v3",
+    );
+    let legacy_v3_promotion =
+        promote_registry_project(&legacy_promotion_options(&project, &legacy_v3_baseline))
+            .expect("legacy v3 promotion returns migration guidance");
+    assert_eq!(
+        legacy_v3_promotion.baseline_migration,
+        PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+    );
 
     let mut legacy = approval.clone();
     legacy["schema"] = serde_json::json!("registry.project.approval-state.v1");
@@ -711,6 +743,10 @@ fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
         .as_object_mut()
         .expect("legacy state is an object")
         .remove("promotion_projection");
+    legacy["generated_closure_digests"]
+        .as_object_mut()
+        .expect("v1 closure set is an object")
+        .remove("relay_consultation");
     let mut legacy_bytes =
         serde_json::to_vec_pretty(&legacy).expect("legacy approval state serializes");
     legacy_bytes.push(b'\n');
@@ -728,6 +764,44 @@ fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
         promote_registry_project(&legacy_promotion_options(&project, &legacy_baseline))
             .expect("legacy baseline fails closed as a report");
     assert_conservative_blocked_report(&legacy_direct, &forbidden);
+    assert_eq!(
+        legacy_direct.baseline_migration,
+        PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+    );
+    assert!(legacy_direct
+        .blocking_reasons
+        .contains(&PromotionBlockingReason::LegacyRelayConsultationBaselineMigrationRequired));
+    let legacy_json: serde_json::Value =
+        serde_json::from_slice(&legacy.stdout).expect("legacy JSON output parses");
+    assert_eq!(
+        legacy_json["baseline_migration"],
+        "re_review_and_sign_separate_relay_public_and_consultation_inputs"
+    );
+    assert!(legacy_json["blocking_reasons"]
+        .as_array()
+        .expect("legacy blocking reasons are an array")
+        .contains(&serde_json::json!(
+            "legacy_relay_consultation_baseline_migration_required"
+        )));
+
+    let legacy_human = run_promote_legacy(&project, &legacy_baseline, "human");
+    assert_eq!(legacy_human.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(legacy_human.stdout).expect("legacy human output is UTF-8"),
+        "Promotion: Blocked\n\
+         \u{20}\u{20}Evidence: offline static comparison\n\
+         \u{20}\u{20}Classified changes: 0\n\
+         \u{20}\u{20}Blocking reasons:\n\
+         \u{20}\u{20}- ReviewedRevisionNotProven\n\
+         \u{20}\u{20}- ComparisonEvidenceIncomplete\n\
+         \u{20}\u{20}- ReviewedCeilingUnresolved\n\
+         \u{20}\u{20}- TrustUnresolved\n\
+         \u{20}\u{20}- CompatibilityUnresolved\n\
+         \u{20}\u{20}- LegacyRelayConsultationBaselineMigrationRequired\n\
+         \u{20}\u{20}Baseline migration: re-review the project and sign separate private/relay and private/relay-consultation inputs before promoting\n\
+         \u{20}\u{20}Required reviews: none\n\
+         \u{20}\u{20}Re-sign: none; restart: none; reactivate: none\n"
+    );
 
     approval["promotion_projection"]["fields"][0]["digest"] =
         serde_json::json!(format!("sha256:{MALFORMED_PROJECTION_SENTINEL}"));

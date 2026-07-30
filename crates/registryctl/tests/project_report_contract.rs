@@ -4,6 +4,9 @@
 
 #[path = "../src/project_authoring/knowledge.rs"]
 mod knowledge;
+#[path = "../src/project_authoring/required_product_action.rs"]
+mod required_product_action;
+pub use required_product_action::RequiredProductAction;
 #[path = "../src/project_authoring/report_contract.rs"]
 mod report_contract;
 pub use report_contract::{ProjectRelativePath, Sha256Digest};

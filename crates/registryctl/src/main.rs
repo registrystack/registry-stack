@@ -16,7 +16,7 @@ use registryctl::{
     ProjectPromotionReportV1, ProjectSchemaKind, ProjectSemanticComparisonOptions,
     ProjectSemanticComparisonReportV1, ProjectStarter, ProjectStarterSemanticComparisonOptions,
     ProjectTestOptions, ProjectTestSelection, ProjectTrustedLocalAuthoredValue,
-    PromotionDisposition, RedactionReason, Sample,
+    PromotionDisposition, RedactionReason, Sample, SemanticComparisonRequiredAction,
 };
 
 fn main() -> Result<()> {
@@ -687,7 +687,48 @@ fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1)
     if !report.required_actions.is_empty() {
         writeln!(output, "Required actions:")?;
         for action in &report.required_actions {
-            writeln!(output, "  - {action:?}")?;
+            writeln!(
+                output,
+                "  - {}",
+                match action {
+                    SemanticComparisonRequiredAction::ReviewSemanticChanges => {
+                        "review semantic changes"
+                    }
+                    SemanticComparisonRequiredAction::RunAffectedFixtures => {
+                        "run affected fixtures"
+                    }
+                    SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts => {
+                        "regenerate generated artifacts"
+                    }
+                    SemanticComparisonRequiredAction::ResignRelayPublicBundle => {
+                        "re-sign private/relay"
+                    }
+                    SemanticComparisonRequiredAction::ResignRelayConsultationBundle => {
+                        "re-sign private/relay-consultation"
+                    }
+                    SemanticComparisonRequiredAction::ResignNotaryBundle => {
+                        "re-sign private/notary"
+                    }
+                    SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration => {
+                        "reactivate private/relay"
+                    }
+                    SemanticComparisonRequiredAction::ReactivateRelayConsultationConfiguration => {
+                        "reactivate private/relay-consultation"
+                    }
+                    SemanticComparisonRequiredAction::ReactivateNotaryConfiguration => {
+                        "reactivate private/notary"
+                    }
+                    SemanticComparisonRequiredAction::RestartRegistryRelayPublic => {
+                        "restart the public Relay instance using private/relay"
+                    }
+                    SemanticComparisonRequiredAction::RestartRegistryRelayConsultation => {
+                        "restart the consultation Relay instance using private/relay-consultation"
+                    }
+                    SemanticComparisonRequiredAction::RestartRegistryNotary => {
+                        "restart Registry Notary using private/notary"
+                    }
+                }
+            )?;
         }
     }
     writeln!(
@@ -944,6 +985,15 @@ fn render_promotion_report(report: &ProjectPromotionReportV1) -> Result<String> 
             writeln!(output, "  - {reason:?}")?;
         }
     }
+    if report.baseline_migration
+        == registryctl::PromotionBaselineMigration::ReReviewAndSignSeparateRelayPublicAndConsultationInputs
+    {
+        writeln!(
+            output,
+            "  Baseline migration: re-review the project and sign separate private/relay and \
+             private/relay-consultation inputs before promoting"
+        )?;
+    }
     if report.required_actions.review_classes.is_empty() {
         writeln!(output, "  Required reviews: none")?;
     } else {
@@ -961,12 +1011,27 @@ fn render_promotion_report(report: &ProjectPromotionReportV1) -> Result<String> 
     }
     writeln!(
         output,
-        "  Re-sign: {:?}; restart: {:?}; reactivate: {:?}",
-        report.required_actions.re_sign,
-        report.required_actions.restart,
-        report.required_actions.reactivate
+        "  Re-sign: {}; restart: {}; reactivate: {}",
+        render_required_product_actions(&report.required_actions.re_sign),
+        render_required_product_actions(&report.required_actions.restart),
+        render_required_product_actions(&report.required_actions.reactivate)
     )?;
     Ok(output.trim_end().to_owned())
+}
+
+fn render_required_product_actions(actions: &[registryctl::RequiredProductAction]) -> String {
+    if actions.is_empty() {
+        return "none".to_owned();
+    }
+    actions
+        .iter()
+        .map(|action| match action {
+            registryctl::RequiredProductAction::RelayPublic => "private/relay",
+            registryctl::RequiredProductAction::RelayConsultation => "private/relay-consultation",
+            registryctl::RequiredProductAction::Notary => "private/notary",
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_migration_report(report: &ProjectMigrationReportV1) -> Result<String> {

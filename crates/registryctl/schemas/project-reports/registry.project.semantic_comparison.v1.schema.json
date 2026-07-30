@@ -55,7 +55,7 @@
     },
     "required_actions": {
       "type": "array",
-      "maxItems": 10,
+      "maxItems": 12,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/required_action"
@@ -291,29 +291,22 @@
       "additionalProperties": false,
       "properties": {
         "signing": {
-          "enum": [
-            "none",
-            "relay_bundle",
-            "notary_bundle",
-            "relay_and_notary_bundles"
-          ]
+          "$ref": "#/$defs/product_actions"
         },
         "activation": {
-          "enum": [
-            "none",
-            "apply_relay_config",
-            "apply_notary_config",
-            "apply_relay_and_notary_config"
-          ]
+          "$ref": "#/$defs/product_actions"
         },
         "restart": {
-          "enum": [
-            "none",
-            "registry_relay",
-            "registry_notary",
-            "registry_relay_and_notary"
-          ]
+          "$ref": "#/$defs/product_actions"
         }
+      }
+    },
+    "product_actions": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["relay_public", "relay_consultation", "notary"]
       }
     },
     "change": {
@@ -425,12 +418,14 @@
         "review_semantic_changes",
         "run_affected_fixtures",
         "regenerate_generated_artifacts",
-        "review_sign_activate_relay_consultation_input",
-        "resign_relay_bundle",
+        "resign_relay_public_bundle",
+        "resign_relay_consultation_bundle",
         "resign_notary_bundle",
-        "reactivate_relay_configuration",
+        "reactivate_relay_public_configuration",
+        "reactivate_relay_consultation_configuration",
         "reactivate_notary_configuration",
-        "restart_registry_relay",
+        "restart_registry_relay_public",
+        "restart_registry_relay_consultation",
         "restart_registry_notary"
       ]
     }
