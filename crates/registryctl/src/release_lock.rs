@@ -542,6 +542,28 @@ pub fn verify_release_lock_for_package(bytes: &[u8]) -> Result<VerifiedReleaseLo
     Ok(verified)
 }
 
+/// Exercise the exact post-signature admission boundary with a payload emitted
+/// by the release producer. The parity test cannot mint a production Sigstore
+/// identity, so only the cryptographic authentication step is omitted.
+#[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by a direct-module integration test")
+)]
+pub(crate) fn semantically_admit_release_lock_payload_for_test(
+    signed_payload: &[u8],
+) -> Result<VerifiedReleaseLockV1> {
+    let lock = parse_and_validate_signed_payload(signed_payload)?;
+    if release_major(&lock.release.product_version)? != 1 {
+        bail!("test release lock payload is outside the supported Registry Stack 1.x line");
+    }
+    Ok(VerifiedReleaseLockV1 {
+        signed_payload_sha256: format!("sha256:{}", hex::encode(Sha256::digest(signed_payload))),
+        envelope: RetainedVerifiedEnvelope::new(signed_payload),
+        lock,
+    })
+}
+
 /// Verify the installed lock and bind it to this exact Registryctl executable.
 ///
 /// The lock envelope contains its Sigstore bundle inline, so reading this one
@@ -627,17 +649,7 @@ fn verify_release_lock_material(bytes: &[u8]) -> Result<VerifiedReleaseLockV1> {
         bail!("release lock signed_payload is not canonical base64");
     }
 
-    let payload_value = parse_json_strict(&signed_payload)
-        .context("release lock signed payload is not strict duplicate-free JSON")?;
-    if canonicalize_json(&payload_value)
-        .context("release lock signed payload cannot be canonicalized")?
-        != signed_payload
-    {
-        bail!("release lock signed payload is not RFC 8785 canonical JSON");
-    }
-    let lock: RegistryReleaseLockV1 = serde_json::from_value(payload_value)
-        .context("release lock signed payload does not match the closed v1 schema")?;
-    lock.validate()?;
+    let lock = parse_and_validate_signed_payload(&signed_payload)?;
 
     let bundle_json = serde_json::to_string(&envelope.sigstore_bundle)
         .context("release lock Sigstore bundle cannot be encoded")?;
@@ -662,6 +674,24 @@ fn verify_release_lock_material(bytes: &[u8]) -> Result<VerifiedReleaseLockV1> {
         envelope: RetainedVerifiedEnvelope::new(bytes),
         lock,
     })
+}
+
+fn parse_and_validate_signed_payload(signed_payload: &[u8]) -> Result<RegistryReleaseLockV1> {
+    if signed_payload.len() > MAX_SIGNED_PAYLOAD_BYTES {
+        bail!("release lock signed payload exceeds its size bound");
+    }
+    let payload_value = parse_json_strict(signed_payload)
+        .context("release lock signed payload is not strict duplicate-free JSON")?;
+    if canonicalize_json(&payload_value)
+        .context("release lock signed payload cannot be canonicalized")?
+        != signed_payload
+    {
+        bail!("release lock signed payload is not RFC 8785 canonical JSON");
+    }
+    let lock: RegistryReleaseLockV1 = serde_json::from_value(payload_value)
+        .context("release lock signed payload does not match the closed v1 schema")?;
+    lock.validate()?;
+    Ok(lock)
 }
 
 fn release_major(version: &str) -> Result<u64> {
@@ -819,7 +849,8 @@ impl LockedProductRecipeV1 {
 impl LockedPostgresqlRecipeV1 {
     fn validate(&self, label: &str) -> Result<()> {
         self.serve.validate(&format!("{label} serve"))?;
-        self.bootstrap.validate(&format!("{label} bootstrap"))?;
+        self.bootstrap
+            .validate_postgresql_bootstrap(&format!("{label} bootstrap"))?;
         validate_command(&self.health_probe, &format!("{label} health probe"))?;
         validate_postgresql_recipe_commands(self)?;
         if self.server_environment
@@ -865,6 +896,15 @@ impl LockedPostgresqlRecipeV1 {
 impl LockedRuntimeActionV1 {
     fn validate(&self, label: &str) -> Result<()> {
         validate_command(&self.command, &format!("{label} command"))?;
+        self.validate_inputs(label)
+    }
+
+    fn validate_postgresql_bootstrap(&self, label: &str) -> Result<()> {
+        validate_multiline_command(&self.command, &format!("{label} command"))?;
+        self.validate_inputs(label)
+    }
+
+    fn validate_inputs(&self, label: &str) -> Result<()> {
         if self.mounts.len() > 8 || self.environment_files.len() > 2 || self.secret_files.len() > 8
         {
             bail!("{label} input projection exceeds its closed bound");
@@ -1352,6 +1392,14 @@ fn validate_release_version(value: &str) -> Result<()> {
 }
 
 fn validate_command(command: &[String], label: &str) -> Result<()> {
+    validate_command_controls(command, label, false)
+}
+
+fn validate_multiline_command(command: &[String], label: &str) -> Result<()> {
+    validate_command_controls(command, label, true)
+}
+
+fn validate_command_controls(command: &[String], label: &str, allow_lf: bool) -> Result<()> {
     if command.is_empty()
         || command.len() > 32
         || command.iter().any(|part| {
@@ -1359,7 +1407,7 @@ fn validate_command(command: &[String], label: &str) -> Result<()> {
                 || part.len() > 32 * 1024
                 || part
                     .bytes()
-                    .any(|byte| byte == 0 || byte.is_ascii_control())
+                    .any(|byte| byte.is_ascii_control() && (!allow_lf || byte != b'\n'))
         })
     {
         bail!("{label} is not a bounded closed command");

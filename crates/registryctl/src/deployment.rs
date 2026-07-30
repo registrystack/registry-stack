@@ -1150,6 +1150,36 @@ impl VerifiedDeploymentInputsV1 {
         )
     }
 
+    /// Preserve the production release-lock authority flow while allowing a
+    /// structural approved-set fixture in the cross-language parity test.
+    #[cfg(test)]
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "used by a direct-module integration test")
+    )]
+    pub(crate) fn from_semantically_admitted_release_lock_for_test(
+        approved_set_file: &Path,
+        release_lock: &VerifiedReleaseLockV1,
+        acceptance_identity: ProductAcceptanceIdentityV1,
+    ) -> Result<Self> {
+        let approved_root = approved_set_file
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let (plan, runtime, release_metadata) = deployment_authority(release_lock)?;
+        Self::from_components(
+            approved_set_file,
+            approved_root,
+            plan,
+            runtime,
+            release_metadata,
+            release_lock.envelope_bytes().to_vec(),
+            release_lock.envelope_sha256().to_string(),
+            false,
+            Some(acceptance_identity),
+        )
+    }
+
     #[cfg(test)]
     #[cfg_attr(
         test,

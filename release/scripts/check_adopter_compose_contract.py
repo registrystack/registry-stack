@@ -256,6 +256,36 @@ STAGER_SPECS = {
     },
 }
 
+STAGER_RUNTIME_ACTIONS = {
+    "registry-postgresql-stage-secrets": [
+        ("postgresql-serve", "postgresql_state_plane", "serve"),
+        ("postgresql-bootstrap", "postgresql_state_plane", "bootstrap"),
+    ],
+    "registry-relay-public-stage-secrets": [
+        ("relay-public-serve", "relay_public", "serve"),
+        ("relay-public-prepare", "relay_public", "prepare_state_store"),
+        ("relay-public-initialize", "relay_public", "initialize_state"),
+    ],
+    "registry-relay-consultation-stage-secrets": [
+        ("relay-consultation-serve", "relay_consultation", "serve"),
+        (
+            "relay-consultation-prepare",
+            "relay_consultation",
+            "prepare_state_store",
+        ),
+        (
+            "relay-consultation-initialize",
+            "relay_consultation",
+            "initialize_state",
+        ),
+    ],
+    "registry-notary-stage-secrets": [
+        ("notary-serve", "notary", "serve"),
+        ("notary-prepare", "notary", "prepare_state_store"),
+        ("notary-initialize", "notary", "initialize_state"),
+    ],
+}
+
 DURABLE_VOLUMES = frozenset(
     {
         "registry-postgresql-data",
@@ -444,15 +474,115 @@ class ContractError(RuntimeError):
     """Raised when a normalized fixture violates the package contract."""
 
 
+def fixture_runtime_contract() -> dict[str, Any]:
+    return {
+        "ordinary_commands": ORDINARY_COMMANDS,
+        "initialization_commands": INITIALIZATION_COMMANDS,
+        "health_probes": {
+            name: ["CMD", "/conformance-only-healthcheck"]
+            for name in WORKLOAD_SERVICES
+        },
+        "stager_commands": {
+            name: STAGER_COMMAND for name in STAGER_SERVICES
+        },
+        "declared_compose_files": OPERATOR_SECRET_FILES,
+    }
+
+
+def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        runtime = payload["runtime"]
+        products = {
+            "registry-relay-public": runtime["relay_public"],
+            "registry-relay-consultation": runtime["relay_consultation"],
+            "registry-notary": runtime["notary"],
+        }
+        postgresql = runtime["postgresql_state_plane"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ContractError(
+            "RegistryReleaseLockV1 parity payload is incomplete"
+        ) from error
+
+    ordinary_commands = {
+        name: recipe["serve"]["command"] for name, recipe in products.items()
+    }
+    ordinary_commands["registry-postgres"] = postgresql["serve"]["command"]
+    initialization_commands = {
+        "registry-postgres-bootstrap": postgresql["bootstrap"]["command"],
+        "registry-relay-public-prepare-state": (
+            products["registry-relay-public"]["prepare_state_store"]["command"]
+        ),
+        "registry-relay-consultation-prepare-state": (
+            products["registry-relay-consultation"][
+                "prepare_state_store"
+            ]["command"]
+        ),
+        "registry-notary-prepare-state": (
+            products["registry-notary"]["prepare_state_store"]["command"]
+        ),
+        "registry-relay-public-initialize": (
+            products["registry-relay-public"]["initialize_state"]["command"]
+        ),
+        "registry-relay-consultation-initialize": (
+            products["registry-relay-consultation"][
+                "initialize_state"
+            ]["command"]
+        ),
+        "registry-notary-initialize": (
+            products["registry-notary"]["initialize_state"]["command"]
+        ),
+    }
+    health_probes = {
+        name: recipe["health_probe"] for name, recipe in products.items()
+    }
+    health_probes["registry-postgres"] = postgresql["health_probe"]
+
+    stager_commands = {}
+    for service, actions in STAGER_RUNTIME_ACTIONS.items():
+        script = "umask 077\n"
+        for stage_id, recipe_id, action_id in actions:
+            projections = runtime[recipe_id][action_id]["secret_files"]
+            if not projections:
+                continue
+            output = f"/registryctl-stage/output/{stage_id}"
+            script += (
+                f"/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
+            )
+            for projection in projections:
+                target = Path(projection["target"]).name
+                script += (
+                    f"/usr/bin/install -m {projection['mode']} "
+                    f"/run/secrets/{projection['file_id']} {output}/{target}\n"
+                    f"/usr/bin/chown {projection['uid']}:{projection['gid']} "
+                    f"{output}/{target}\n"
+                )
+        stager_commands[service] = [script]
+
+    return {
+        "ordinary_commands": ordinary_commands,
+        "initialization_commands": initialization_commands,
+        "health_probes": health_probes,
+        "stager_commands": stager_commands,
+        "declared_compose_files": {
+            item["id"] for item in runtime["operator_files"]
+        },
+    }
+
+
 def _compose_config(
-    compose_command: Sequence[str], fixture_root: Path, *files: str
+    compose_command: Sequence[str],
+    fixture_root: Path,
+    *files: str,
+    package_root: Path | None = None,
 ) -> dict[str, Any]:
+    package_root = package_root or fixture_root / "package"
     command = [
         *compose_command,
         "--project-name",
         PROJECT_NAME,
         "--env-file",
-        str(fixture_root / "package/generated/compose.empty.env"),
+        str(package_root / "generated/compose.empty.env"),
     ]
     for relative_file in files:
         command.extend(("-f", str(fixture_root / relative_file)))
@@ -555,7 +685,10 @@ def _secret_projections(service: dict[str, Any]) -> dict[str, str]:
 
 
 def _assert_product_hardening(
-    name: str, service: dict[str, Any], *, healthcheck: bool
+    name: str,
+    service: dict[str, Any],
+    *,
+    health_probe: list[str] | None,
 ) -> None:
     if (
         service.get("user") != "65532:65532"
@@ -568,12 +701,12 @@ def _assert_product_hardening(
         raise ContractError(f"{name} lost product hardening")
     expected_healthcheck = (
         {
-            "test": ["CMD", "/conformance-only-healthcheck"],
+            "test": health_probe,
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
         }
-        if healthcheck
+        if health_probe is not None
         else None
     )
     if service.get("healthcheck") != expected_healthcheck:
@@ -581,7 +714,10 @@ def _assert_product_hardening(
 
 
 def _assert_postgresql_hardening(
-    name: str, service: dict[str, Any], *, healthcheck: bool
+    name: str,
+    service: dict[str, Any],
+    *,
+    health_probe: list[str] | None,
 ) -> None:
     if (
         service.get("user") != "999:999"
@@ -595,12 +731,12 @@ def _assert_postgresql_hardening(
         raise ContractError(f"{name} lost PostgreSQL hardening")
     expected_healthcheck = (
         {
-            "test": ["CMD", "/conformance-only-healthcheck"],
+            "test": health_probe,
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
         }
-        if healthcheck
+        if health_probe is not None
         else None
     )
     if service.get("healthcheck") != expected_healthcheck:
@@ -684,12 +820,13 @@ def _assert_stager(
     service: dict[str, Any],
     *,
     postgresql_image: str,
+    command: list[str],
 ) -> None:
     spec = STAGER_SPECS[name]
     if (
         service.get("image") != postgresql_image
         or service.get("entrypoint") != ["/bin/sh", "-ceu"]
-        or service.get("command") != STAGER_COMMAND
+        or service.get("command") != command
         or service.get("user") != "0:0"
         or service.get("read_only") is not True
         or service.get("cap_drop") != ["ALL"]
@@ -726,8 +863,12 @@ def _assert_stager(
         raise ContractError(f"{name} gained cross-lane input authority")
 
 
-def _assert_operator_file_inventory(model: dict[str, Any], fixture_root: Path) -> None:
-    expected_directory = (fixture_root / "package/operator/secrets").resolve()
+def _assert_operator_file_inventory(
+    model: dict[str, Any],
+    package_root: Path,
+    declared_compose_files: set[str] | frozenset[str],
+) -> None:
+    expected_directory = (package_root / "operator/secrets").resolve()
     observed_environment_files = set()
     for service in _services(model).values():
         if not isinstance(service, dict):
@@ -741,7 +882,9 @@ def _assert_operator_file_inventory(model: dict[str, Any], fixture_root: Path) -
     if observed_environment_files != ordinary_environments:
         raise ContractError("package has the wrong operator environment files")
     declared_secrets = model.get("secrets")
-    expected_names = {f"registry-{name}" for name in OPERATOR_SECRET_FILES}
+    expected_names = {
+        f"registry-{name}" for name in declared_compose_files
+    }
     if (
         not isinstance(declared_secrets, dict)
         or set(declared_secrets) != expected_names
@@ -758,7 +901,7 @@ def _assert_operator_file_inventory(model: dict[str, Any], fixture_root: Path) -
             raise ContractError("operator secret escaped package/operator/secrets")
         observed_secret_files.add(Path(path).name)
     if observed_environment_files | observed_secret_files != (
-        EXPECTED_OPERATOR_FILES - {"postgresql-bootstrap-environment"}
+        ordinary_environments | declared_compose_files
     ):
         raise ContractError("package operator-file inventory is incomplete")
 
@@ -861,7 +1004,12 @@ def assert_ordinary_model(
     model: dict[str, Any],
     expected_images: dict[str, str],
     fixture_root: Path = FIXTURE_ROOT,
+    *,
+    package_root: Path | None = None,
+    runtime_contract: dict[str, Any] | None = None,
 ) -> None:
+    package_root = package_root or fixture_root / "package"
+    runtime_contract = runtime_contract or fixture_runtime_contract()
     assert_value_free(model)
     services = _services(model)
     if set(services) != ORDINARY_SERVICES:
@@ -875,12 +1023,13 @@ def assert_ordinary_model(
             name,
             services[name],
             postgresql_image=expected_images["registry-postgres"],
+            command=runtime_contract["stager_commands"][name],
         )
     for name in WORKLOAD_SERVICES:
         service = services[name]
         if service.get("image") != expected_images[name]:
             raise ContractError(f"{name} does not use its exact plan image")
-        if service.get("command") != ORDINARY_COMMANDS[name]:
+        if service.get("command") != runtime_contract["ordinary_commands"][name]:
             raise ContractError(f"{name} has the wrong ordinary command")
         if service.get("restart") != "unless-stopped":
             raise ContractError(f"{name} has the wrong ordinary restart policy")
@@ -898,11 +1047,15 @@ def assert_ordinary_model(
         "registry-relay-consultation",
         "registry-notary",
     ):
-        _assert_product_hardening(name, services[name], healthcheck=True)
+        _assert_product_hardening(
+            name,
+            services[name],
+            health_probe=runtime_contract["health_probes"][name],
+        )
     _assert_postgresql_hardening(
         "registry-postgres",
         services["registry-postgres"],
-        healthcheck=True,
+        health_probe=runtime_contract["health_probes"]["registry-postgres"],
     )
     for name, environment in LANE_ENVIRONMENTS.items():
         if [path.name for path in _env_file_paths(services[name])] != [environment]:
@@ -964,14 +1117,20 @@ def assert_ordinary_model(
         if service.get("ports") != expected_ports.get(name):
             raise ContractError(f"{name} has the wrong host publication boundary")
     _assert_top_level_resources(model)
-    _assert_operator_file_inventory(model, fixture_root)
+    _assert_operator_file_inventory(
+        model,
+        package_root,
+        runtime_contract["declared_compose_files"],
+    )
 
 
 def assert_initialization_model(
     model: dict[str, Any],
     ordinary: dict[str, Any],
     expected_images: dict[str, str],
+    runtime_contract: dict[str, Any] | None = None,
 ) -> None:
+    runtime_contract = runtime_contract or fixture_runtime_contract()
     assert_value_free(model)
     services = _services(model)
     if set(services) != ORDINARY_SERVICES | INITIALIZATION_SERVICES:
@@ -1002,7 +1161,9 @@ def assert_initialization_model(
     if (
         bootstrap.get("image") != expected_images["registry-postgres"]
         or bootstrap.get("command")
-        != INITIALIZATION_COMMANDS["registry-postgres-bootstrap"]
+        != runtime_contract["initialization_commands"][
+            "registry-postgres-bootstrap"
+        ]
         or bootstrap.get("restart") != "no"
         or [path.name for path in bootstrap_env_files]
         != ["postgresql-server.env", "postgresql-bootstrap-environment"]
@@ -1021,7 +1182,7 @@ def assert_initialization_model(
     _assert_postgresql_hardening(
         "registry-postgres-bootstrap",
         bootstrap,
-        healthcheck=False,
+        health_probe=None,
     )
     bootstrap_mounts = _mounts(bootstrap)
     if set(bootstrap_mounts) != {"/run/secrets"}:
@@ -1036,7 +1197,8 @@ def assert_initialization_model(
         environment = LANE_ENVIRONMENTS[ordinary_name]
         if (
             service.get("image") != expected_images[ordinary_name]
-            or service.get("command") != INITIALIZATION_COMMANDS[name]
+            or service.get("command")
+            != runtime_contract["initialization_commands"][name]
             or service.get("restart") != "no"
             or set(service.get("networks", {})) != {NETWORK_RUNTIME}
             or _dependencies(service) != INITIALIZATION_DEPENDENCIES[name]
@@ -1046,7 +1208,7 @@ def assert_initialization_model(
             or "ports" in service
         ):
             raise ContractError(f"{name} has the wrong initialization contract")
-        _assert_product_hardening(name, service, healthcheck=False)
+        _assert_product_hardening(name, service, health_probe=None)
         _assert_product_mounts(name, service, lane, action=action)
     if model.get("networks") != ordinary.get("networks"):
         raise ContractError("initialization delta changed package networks")
@@ -1097,15 +1259,58 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
     assert_parent_include(parent, ordinary)
 
 
+def run_rendered_package_contract(
+    compose_command: Sequence[str],
+    package_root: Path,
+    release_lock_payload: Path,
+) -> None:
+    expected_images = validate_plan(
+        package_root / "generated/deployment-plan.v1.json"
+    )
+    runtime_contract = runtime_contract_from_payload(release_lock_payload)
+    ordinary = _compose_config(
+        compose_command,
+        package_root.parent,
+        str(package_root / "generated/compose.yaml"),
+        package_root=package_root,
+    )
+    assert_ordinary_model(
+        ordinary,
+        expected_images,
+        package_root.parent,
+        package_root=package_root,
+        runtime_contract=runtime_contract,
+    )
+    initialized = _compose_config(
+        compose_command,
+        package_root.parent,
+        str(package_root / "generated/compose.yaml"),
+        str(package_root / "generated/compose.initialize.yaml"),
+        package_root=package_root,
+    )
+    assert_initialization_model(
+        initialized,
+        ordinary,
+        expected_images,
+        runtime_contract,
+    )
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compose-command", nargs="+", default=None)
     parser.add_argument("--compose-binary", type=Path)
     parser.add_argument("--label", default="current")
     parser.add_argument("--fixture-root", type=Path, default=FIXTURE_ROOT)
+    parser.add_argument("--package-root", type=Path)
+    parser.add_argument("--release-lock-payload", type=Path)
     args = parser.parse_args(argv)
     if args.compose_command is not None and args.compose_binary is not None:
         parser.error("--compose-command and --compose-binary are mutually exclusive")
+    if (args.package_root is None) != (args.release_lock_payload is None):
+        parser.error(
+            "--package-root and --release-lock-payload must be provided together"
+        )
     return args
 
 
@@ -1119,7 +1324,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         else ["docker", "compose"]
     )
     try:
-        run_contract(compose_command, args.fixture_root.resolve())
+        if args.package_root is None:
+            run_contract(compose_command, args.fixture_root.resolve())
+        else:
+            run_rendered_package_contract(
+                compose_command,
+                args.package_root.resolve(),
+                args.release_lock_payload.resolve(),
+            )
     except ContractError as error:
         print(f"adopter Compose conformance failed: {error}", file=sys.stderr)
         return 1

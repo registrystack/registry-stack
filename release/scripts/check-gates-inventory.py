@@ -182,6 +182,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: bash release/scripts/check_adopter_compose_contract.sh",
     ),
     (
+        "Release-lock runtime and Compose parity",
+        "run: bash release/scripts/check-runtime-contract-parity.sh",
+    ),
+    (
         "First-country release-form runner tests",
         "run: python3 -m unittest release/scripts/test_first_country_release_form.py",
     ),

@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::Mutex;
 
 use approved_set::{
@@ -23,9 +24,10 @@ use approved_set::{
     APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 use deployment::{
-    generate_deployment_package_with_test_inputs, verify_deployment_package_with_models,
-    verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentGenerateRequestV1,
-    DeploymentOwnershipStateV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
+    generate_deployment_package_with_test_inputs, render_deployment_package,
+    verify_deployment_package_with_models, verify_deployment_package_with_test_inputs,
+    DeploymentBindingV1, DeploymentGenerateRequestV1, DeploymentOwnershipStateV1,
+    DeploymentPackageRenderRequestV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
     DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
     ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
     ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
@@ -1685,4 +1687,125 @@ fn regeneration_does_not_mix_a_binding_change_with_a_release_update() {
         .to_string()
         .contains("cannot combine a binding change"));
     assert!(!fixture.package.join("generated.previous").exists());
+}
+
+fn runtime_parity_checker(package: &Path, payload: &Path) -> Output {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .unwrap();
+    Command::new("python3")
+        .current_dir(repository)
+        .arg(repository.join("release/scripts/check_adopter_compose_contract.py"))
+        .arg("--package-root")
+        .arg(package)
+        .arg("--release-lock-payload")
+        .arg(payload)
+        .arg("--label")
+        .arg("registry-release-lock-runtime-parity")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn python_release_lock_runtime_renders_compose_conformance() {
+    let _path_lock = PROCESS_PATH_LOCK.lock().unwrap();
+    let fixture = package_fixture();
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .unwrap();
+    let payload = fixture
+        ._temp
+        .path()
+        .join("registry-release-lock.payload.json");
+    let producer = Command::new("python3")
+        .current_dir(repository)
+        .arg(repository.join("release/scripts/runtime_parity_payload.py"))
+        .arg("--output")
+        .arg(&payload)
+        .output()
+        .unwrap();
+    assert!(
+        producer.status.success(),
+        "payload producer failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&producer.stdout),
+        String::from_utf8_lossy(&producer.stderr)
+    );
+
+    let payload_bytes = fs::read(&payload).unwrap();
+    let payload_text = std::str::from_utf8(&payload_bytes).unwrap();
+    for (label, source, replacement, diagnostic) in [
+        (
+            "product command drift",
+            r#""command":["product-action","serve"]"#,
+            r#""command":["product-action","drift"]"#,
+            "exact supported command",
+        ),
+        (
+            "bootstrap carriage return",
+            "export PGPASSWORD",
+            r"\rexport PGPASSWORD",
+            "bounded closed command",
+        ),
+        (
+            "bootstrap tab",
+            "export PGPASSWORD",
+            r"\texport PGPASSWORD",
+            "bounded closed command",
+        ),
+        (
+            "altered multiline bootstrap",
+            "export PGPASSWORD",
+            "export PGPASSW0RD",
+            "exact reviewed recipe",
+        ),
+    ] {
+        let drifted = payload_text.replacen(source, replacement, 1);
+        assert_ne!(drifted, payload_text, "{label}");
+        let error =
+            release_lock::semantically_admit_release_lock_payload_for_test(drifted.as_bytes())
+                .err()
+                .unwrap_or_else(|| panic!("{label} must fail semantic admission"));
+        assert!(error.to_string().contains(diagnostic), "{label}: {error:#}");
+    }
+
+    let admitted =
+        release_lock::semantically_admit_release_lock_payload_for_test(&payload_bytes).unwrap();
+    let verified_inputs =
+        VerifiedDeploymentInputsV1::from_semantically_admitted_release_lock_for_test(
+            &fixture.approved_set_file,
+            &admitted,
+            approved_set_support::identity(ApprovedLaneV1::RelayPublic, "runtime-parity"),
+        )
+        .unwrap();
+    let package = fixture._temp.path().join("runtime-parity-package");
+    let report = render_deployment_package(&DeploymentPackageRenderRequestV1 {
+        output_dir: package.clone(),
+        binding: binding(),
+        verified_inputs,
+    })
+    .unwrap();
+    assert_eq!(report.manifest.generator_release, "1.0.0");
+
+    let checked = runtime_parity_checker(&package, &payload);
+    assert!(
+        checked.status.success(),
+        "Compose conformance failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let compose_path = package.join("generated/compose.yaml");
+    let mut compose: Value = serde_norway::from_slice(&fs::read(&compose_path).unwrap()).unwrap();
+    compose["services"]["registry-notary"]["command"] = json!(["runtime-drift"]);
+    fs::write(&compose_path, serde_norway::to_string(&compose).unwrap()).unwrap();
+    let drift = runtime_parity_checker(&package, &payload);
+    assert!(!drift.status.success(), "Compose drift was not detected");
+    assert!(
+        String::from_utf8_lossy(&drift.stderr).contains("wrong ordinary command"),
+        "unexpected drift diagnostic:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&drift.stdout),
+        String::from_utf8_lossy(&drift.stderr)
+    );
 }

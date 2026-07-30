@@ -663,6 +663,9 @@ jobs:
       - name: Test RegistryReleaseLockV1 tooling
         run: python3 -m unittest release/scripts/test_registry_release_lock.py
 
+      - name: Check release-lock runtime and Compose parity
+        run: bash release/scripts/check-runtime-contract-parity.sh
+
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
 
