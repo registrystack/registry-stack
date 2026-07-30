@@ -226,7 +226,7 @@ test('transferred package acceptance uses external closure and operator-file che
   assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*postgresql-server\.env/);
   assert.match(
     verifyBlock,
-    /^TRANSFER_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>$/m,
+    /^TRANSFER_CLOSURE_SHA256="<independently-recorded-generated-closure-sha256>"$/m,
   );
   assert.match(
     verifyBlock,

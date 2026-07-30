@@ -267,7 +267,7 @@ test('OpenCRVS remains a synthetic case study, not a template or conformance cla
   assert.match(tutorial, /birth-event-found/);
   assert.match(tutorial, /birth-event-registered/);
   assert.doesNotMatch(tutorial, /--template opencrvs|init --from opencrvs/);
-  assert.match(cutover, /only public 1\.0 template is `http`/);
+  assert.match(cutover, /public 1\.0 starter is `http`/);
   assert.match(cutover, /OAuth-backed Rhai is an adaptation of an HTTP project/);
   assert.match(cutover, /OpenCRVS material is a synthetic example.*not a template/);
   assert.doesNotMatch(cutover, /both public templates/);

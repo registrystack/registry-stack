@@ -124,7 +124,7 @@ Do not derive it from files in that package.
 After placing the operator-owned inputs, verify the package before initialization:
 
 ```sh
-TRANSFER_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>
+TRANSFER_CLOSURE_SHA256="<independently-recorded-generated-closure-sha256>"
 registryctl deploy verify \
   --package ./registry-stack \
   --expected-closure-sha256 "$TRANSFER_CLOSURE_SHA256" \

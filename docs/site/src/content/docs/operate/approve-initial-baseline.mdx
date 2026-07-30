@@ -288,7 +288,7 @@ test -f operator-handoff/approved-set.v1.json
 registryctl deploy generate \
   --approved-set operator-handoff/approved-set.v1.json \
   --output-dir operator-handoff/registry-stack
-GENERATED_CLOSURE_SHA256=<independently-recorded-generated-closure-sha256>
+GENERATED_CLOSURE_SHA256="<independently-recorded-generated-closure-sha256>"
 registryctl deploy verify \
   --package operator-handoff/registry-stack \
   --expected-closure-sha256 "$GENERATED_CLOSURE_SHA256"
