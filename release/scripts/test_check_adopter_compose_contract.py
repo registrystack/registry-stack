@@ -147,6 +147,20 @@ class AdopterComposeContractTests(unittest.TestCase):
                 expected_parent="parent-private-client",
             )
 
+    def test_parent_boundary_rejects_container_volumes_from(self) -> None:
+        model = json.loads(json.dumps(self.baseline))
+        model["services"]["parent-private-client"] = {
+            "volumes_from": [
+                "container:registry-adopter-probe-registry-notary-1"
+            ]
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "inherited"):
+            CHECKER.assert_parent_boundary(
+                model,
+                self.baseline,
+                expected_parent="parent-private-client",
+            )
+
     def test_negative_fixture_rejects_mixed_private_boundaries(self) -> None:
         model = json.loads(json.dumps(self.baseline))
         model["services"]["parent-private-client"] = {

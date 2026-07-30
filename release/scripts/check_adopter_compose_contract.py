@@ -557,11 +557,15 @@ def assert_parent_boundary(
             and network_mode.startswith("container:")
         ):
             raise ContractError(f"parent service {name} joined the private namespace")
+        volume_sources = [str(source) for source in service.get("volumes_from", [])]
         inherited_services = {
-            str(source).split(":", 1)[0]
-            for source in service.get("volumes_from", [])
+            source.split(":", 1)[0]
+            for source in volume_sources
+            if not source.startswith("container:")
         }
-        if inherited_services.intersection(PRODUCT_SERVICES):
+        if inherited_services.intersection(PRODUCT_SERVICES) or any(
+            source.startswith("container:") for source in volume_sources
+        ):
             raise ContractError(
                 f"parent service {name} inherited renderer-owned volumes"
             )
@@ -1128,6 +1132,16 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
     )
     assert_parent_rejected(
         volumes_from,
+        baseline,
+        "inherited renderer-owned volumes",
+    )
+    container_volumes_from = _compose_config(
+        compose_command,
+        fixture_root,
+        "negative-container-volumes-from/compose.yaml",
+    )
+    assert_parent_rejected(
+        container_volumes_from,
         baseline,
         "inherited renderer-owned volumes",
     )
