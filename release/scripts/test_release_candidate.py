@@ -9,12 +9,11 @@ import io
 import json
 import tarfile
 import tempfile
-import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 SCRIPT = Path(__file__).with_name("release_candidate.py")
@@ -318,7 +317,7 @@ def fixture(root: Path, *, now: datetime) -> dict:
     }
 
 
-class ReleaseCandidateTest(unittest.TestCase):
+class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
@@ -1581,4 +1580,4 @@ class ReleaseCandidateTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

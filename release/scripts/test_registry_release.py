@@ -7,10 +7,9 @@ import stat
 import subprocess
 import sys
 import tempfile
-import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 import yaml
 
@@ -85,7 +84,7 @@ def load_registry_release():
     return module
 
 
-class RegistryReleaseTest(unittest.TestCase):
+class RegistryReleaseTest(TestCase):
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -4285,4 +4284,4 @@ def render_capsule(
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
