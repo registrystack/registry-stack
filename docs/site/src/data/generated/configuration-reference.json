@@ -18160,7 +18160,7 @@
         "pointer": "/$defs/service/oneOf/0",
         "path_kind": "branch"
       },
-      "purpose": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Every claim derives from at least one declared Relay consultation.",
+      "purpose": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Every claim derives from exactly one declared Relay consultation.",
       "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",

@@ -15,14 +15,15 @@ use registry_notary_core::{
     BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
     BatchSummary, BoundedClaimId, BoundedCorrelationId, ClaimDefinition, ClaimEvidenceMode,
     ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig, DisclosureDowngrade,
-    DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceConfig, EvidenceEntity,
-    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
-    ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
-    StoredIssuanceClaimProvenance, StoredIssuanceConsultationProvenance, StoredIssuanceProvenance,
-    StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDenialCode, TargetRefView,
-    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, MAX_CLAIM_DEPENDENCY_EDGES_V1,
-    MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE,
-    SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceAuthProfileId,
+    EvidenceConfig, EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat,
+    EvidencePrincipal, EvidenceRequestContext, ProvenanceUsed, RegistryNotaryCelConfig,
+    RenderRequest, RuleConfig, StoredIssuanceClaimProvenance, StoredIssuanceConsultationProvenance,
+    StoredIssuanceProvenance, StoredSubjectAccessMetadata, SubjectAccessConfig,
+    SubjectAccessDenialCode, TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC, MAX_CLAIM_DEPENDENCY_EDGES_V1, MAX_CLAIM_DEPENDENCY_NODES_V1,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
+    SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(test)]
 use registry_notary_core::{

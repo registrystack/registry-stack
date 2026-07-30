@@ -14,7 +14,7 @@ A Registry Stack project may deploy:
 - Notary without configured claims, for an empty control-plane deployment; or
 - Relay and Notary, for claims derived from Relay consultation outcomes and outputs.
 
-Every evaluable claim must derive from at least one compiler-pinned Relay
+Every evaluable claim must derive from exactly one compiler-pinned Relay
 consultation. Credential issuance is available only from a freshly executed
 Relay-backed evaluation with the exact required provenance.
 

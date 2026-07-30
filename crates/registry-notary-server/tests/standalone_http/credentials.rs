@@ -595,6 +595,114 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
+pub(super) async fn direct_credential_disallowed_profile_preserves_profile_denial() {
+    set_audit_secret();
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = subject_access_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.subject_access.allowed_operations.issue_credential = true;
+    let machine_profile = config
+        .evidence
+        .credential_profiles
+        .get("civil_status_sd_jwt")
+        .expect("civil status profile exists")
+        .clone();
+    config
+        .evidence
+        .credential_profiles
+        .insert("machine_only_sd_jwt".to_string(), machine_profile);
+    config.evidence.claims[0]
+        .credential_profiles
+        .push("machine_only_sd_jwt".to_string());
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
+    let server = TestServer::builder().mock_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "subject_access",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/vnd.registry-notary.claim-result+json"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+
+    let issue = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "credential_profile": "machine_only_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value"
+        }))
+        .await;
+    issue.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = issue.json();
+    assert_problem_identity(&body, StatusCode::FORBIDDEN, "subject_access.denied");
+    assert!(body.get("credential").is_none());
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/v1/credentials",
+        "credential_denied",
+        StatusCode::FORBIDDEN,
+        "subject_access.profile_denied",
+    );
+    assert_eq!(
+        denied["denial_code"],
+        json!("subject_access.profile_denied")
+    );
+    assert_eq!(denied["verification_id"], json!(evaluation_id));
+    assert_eq!(denied["credential_profile"], json!("machine_only_sd_jwt"));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
+    assert_eq!(denied["forwarded"], json!(false));
+    assert!(!records.iter().any(|record| {
+        record["path"] == json!("/v1/credentials")
+            && record["decision"] == json!("credential_issued")
+    }));
+    assert_audit_records_do_not_contain(
+        &records,
+        &[&token, &authorization, "person-1", "citizen-subject"],
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
     set_audit_secret();
     std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);

@@ -18,6 +18,41 @@ struct FixedRelayConsultation {
     outcome: RuntimeRelayOutcome,
 }
 
+#[derive(Debug, Default)]
+struct FederationCorrelationRelay {
+    evaluation_ids: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl ActivatedRelayConsultations for FederationCorrelationRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+        self.evaluation_ids
+            .lock()
+            .expect("federation correlation lock is not poisoned")
+            .push(key.evaluation_id().to_string());
+        RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(2, 1),
+            RuntimeRelayOutcome::Match,
+            Some(status_match_data()?),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+}
+
 fn status_match_data() -> Result<RuntimeRelayMatchData, crate::relay_client::RelayClientError> {
     RuntimeRelayOutputMap::from_json(BTreeMap::from([(
         "registration_status".to_string(),
@@ -54,6 +89,55 @@ impl ActivatedRelayConsultations for FixedRelayConsultation {
             OffsetDateTime::UNIX_EPOCH,
         )
     }
+}
+
+#[tokio::test]
+async fn federation_request_jti_becomes_the_relay_evaluation_id() {
+    const REQUEST_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6";
+    let claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    let relay = Arc::new(FederationCorrelationRelay::default());
+    let bound: Arc<dyn ActivatedRelayConsultations> = relay.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let mut principal = machine_principal();
+    principal.auth_profile_id = EvidenceAuthProfileId::Federation;
+    let evaluation_capability = EvaluationCapability::Machine {
+        scopes: BTreeSet::from(["registry:evidence".to_string()]),
+    };
+    let correlation_id =
+        BoundedCorrelationId::new(REQUEST_JTI).expect("request jti is a bounded correlation id");
+
+    let results = runtime
+        .evaluate_with_capability(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &principal,
+            evaluation_capability,
+            test_request("enrollment-status"),
+            None,
+            None,
+            Some(correlation_id),
+        )
+        .await
+        .expect("federated registry-backed evaluation succeeds");
+
+    assert_ne!(results[0].evaluation_id, REQUEST_JTI);
+    assert_eq!(
+        relay
+            .evaluation_ids
+            .lock()
+            .expect("federation correlation lock is not poisoned")
+            .as_slice(),
+        [REQUEST_JTI]
+    );
 }
 
 #[derive(Debug)]

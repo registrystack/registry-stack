@@ -501,6 +501,8 @@ impl RegistryNotaryRuntime {
         let request_hash = hash_json(&request)?;
         let evaluation_ulid = audit.begin_evaluation();
         let evaluation_id = evaluation_ulid.to_string();
+        let relay_evaluation_id =
+            relay_evaluation_id(principal, correlation_id.as_ref(), evaluation_ulid)?;
         let relay_plan = plan_relay_consultations(
             &evidence,
             principal,
@@ -508,7 +510,7 @@ impl RegistryNotaryRuntime {
             &claim_versions,
             &levels,
             &purpose,
-            evaluation_ulid,
+            relay_evaluation_id,
             self.activated_relay.as_ref(),
             Arc::clone(&audit),
             None,
@@ -1298,6 +1300,21 @@ fn plan_relay_consultations(
             EvidenceError::InvalidRequest
         }
     })
+}
+
+fn relay_evaluation_id(
+    principal: &EvidencePrincipal,
+    correlation_id: Option<&BoundedCorrelationId>,
+    generated: Ulid,
+) -> Result<Ulid, EvidenceError> {
+    if principal.auth_profile_id != EvidenceAuthProfileId::Federation {
+        return Ok(generated);
+    }
+    let correlation_id = correlation_id.ok_or(EvidenceError::RuleEvaluationFailed)?;
+    Ulid::from_string(correlation_id.as_str())
+        .ok()
+        .filter(|candidate| candidate.to_string() == correlation_id.as_str())
+        .ok_or(EvidenceError::RuleEvaluationFailed)
 }
 
 pub(super) fn canonical_request_scalar(value: &Value) -> Option<String> {

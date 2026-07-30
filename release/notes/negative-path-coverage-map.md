@@ -218,8 +218,8 @@ public evidence or disposition.
   `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_binding_denials_are_audited_and_redacted`,
   `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
   `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_disallowed_profile_preserves_profile_denial`,
   `crates/registry-notary-server/tests/standalone_http/credentials.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
-  `crates/registry-notary-server/tests/subject_access_guard_test.rs::subject_access_credential_issuance_rejects_disallowed_profile`,
   `crates/registry-notary-server/src/api/tests/evaluations.rs::evaluation_access_uses_stored_claim_version_scope`,
   `crates/registry-notary-server/src/runtime/tests/render.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
   and `crates/registry-notary-server/src/api/tests/credentials.rs::issue_credential_fails_closed_when_status_record_write_fails`.

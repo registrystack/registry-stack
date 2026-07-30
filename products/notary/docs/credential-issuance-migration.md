@@ -16,7 +16,7 @@ evaluation-only compatibility mode. Configuration containing
 To migrate:
 
 1. Remove claims that have no authoritative evidence source.
-2. For retained claims, declare at least one compiler-pinned Relay
+2. For retained claims, declare exactly one compiler-pinned Relay
    consultation and derive the result only from its typed outputs.
 3. Rename the authorization wire value `delegated_attestation` to
    `delegated_subject_access`.

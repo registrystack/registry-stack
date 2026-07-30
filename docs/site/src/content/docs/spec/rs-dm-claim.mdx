@@ -93,7 +93,7 @@ REQ-DM-CLAIM-001: A claim definition MUST carry a stable identifier (`id`); the 
 
 A claim's inputs are the named request paths it may consume, drawn from the target subject, requester, and declared variables. The `registry_backed` evidence mode binds compiler-pinned Relay consultations whose typed outputs feed the rule. Notary has no direct registry source mode and no claim mode without Relay.
 
-REQ-DM-CLAIM-002: Each claim MUST declare `registry_backed` evidence and at least one Relay consultation. It MUST bind every Relay consultation by profile id and contract hash and MUST map only declared typed request inputs. Registry Notary MUST enforce the claim's required scopes before Relay work.
+REQ-DM-CLAIM-002: Each claim MUST declare `registry_backed` evidence and exactly one Relay consultation. It MUST bind that Relay consultation by profile id and contract hash and MUST map only declared typed request inputs. Registry Notary MUST enforce the claim's required scopes before Relay work.
 
 REQ-DM-CLAIM-003: A registry-backed claim SHOULD bind only the Relay outputs its rule needs. Consultation input mapping MUST NOT select a Relay origin, credential, method, capability, output projection, or response mapper. Request paths outside the closed mapping MUST be rejected.
 

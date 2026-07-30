@@ -7,7 +7,7 @@ credentials from policy-approved Registry Relay evidence about themselves.
 The identity token authorizes access. It is not evidence and never supplies a
 claim value.
 
-Every Notary claim must derive from at least one compiler-pinned Relay
+Every Notary claim must derive from exactly one compiler-pinned Relay
 consultation. Notary does not support caller-authored or source-independent
 claim issuance or evaluation.
 

@@ -157,7 +157,7 @@ REQ-PR-NOTARY-012: CCCEV-shaped output MUST NOT assert conformance to CCCEV 2.00
 
 Registry Notary materializes a credential from a stored evaluation through `POST /v1/credentials`. The credential is an SD-JWT VC, which gives the holder selective disclosure: the holder chooses which fields to reveal to which verifier.
 
-Every configured claim derives from at least one compiler-pinned Relay
+Every configured claim derives from exactly one compiler-pinned Relay
 consultation. Credential profiles, subject-access allow-lists, federation
 profiles, and OID4VCI projections select only `registry_backed` claims.
 

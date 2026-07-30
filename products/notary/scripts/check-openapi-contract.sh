@@ -60,4 +60,7 @@ if ! git cat-file -e "$BASE_REF:$SPEC_PATH_FROM_ROOT" 2>/dev/null; then
 fi
 
 git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
-oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
+
+# Accepted one-time diffs live in the ignore file; see its header comment.
+oasdiff breaking --fail-on ERR --err-ignore openapi/oasdiff-err-ignore.txt \
+    "$BASELINE" "$GENERATED"

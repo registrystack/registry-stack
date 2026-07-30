@@ -3,12 +3,13 @@
 ## Unreleased
 
 - BREAKING: The `self_attested` evidence mode is removed. Every configured
-  claim must derive from at least one compiler-pinned Relay consultation.
+  claim must derive from exactly one compiler-pinned Relay consultation.
   OIDC subject binding and delegated subject access remain authorization
   controls and never supply claim evidence. Configuration using the removed
   evidence mode is rejected. Rename `delegated_attestation` to
   `delegated_subject_access` and `evidence:self_attest` to
-  `evidence:subject_access`.
+  `evidence:subject_access`. Every batch evaluation now requires an
+  `Idempotency-Key` header.
 - Registry-backed direct Relay claims can preserve bounded closed objects and
   arrays through stored evaluation and SD-JWT issuance. Type Metadata publishes
   the namespaced recursive value contract. Each top-level structured claim is

@@ -45,7 +45,7 @@ admits. Those inputs can include target or requester identifiers, declared varia
 relationship attributes.
 The REST call is authenticated the way the rest of the service is: an API key or bearer token in
 static-credential mode, or an OIDC token, whichever your deployment is configured for.
-For every claim, Registry Notary requests at least one compiler-pinned
+For every claim, Registry Notary requests exactly one compiler-pinned
 consultation from Registry Relay. Request inputs may parameterize the
 consultation but do not become evidence.
 The caller does not supply the evaluated value, and cannot inject one.

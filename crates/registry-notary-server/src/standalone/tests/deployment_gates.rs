@@ -288,8 +288,14 @@ impl ConfigBuilder {
                 "        allowed: [value, redacted]\n",
                 "      formats:\n",
                 "        - application/vnd.registry-notary.claim-result+json\n",
-            )
+        )
         .to_string();
+        if self.federation_signer {
+            claim = claim.replace(
+                "subject_id: target.id",
+                "subject_id: request.target.identifiers.national_id",
+            );
+        }
         if self.credential_signer {
             claim.push_str(concat!(
                 "      credential_profiles:\n",
