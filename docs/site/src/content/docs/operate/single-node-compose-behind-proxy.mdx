@@ -84,6 +84,7 @@ registry-stack/
     compose.empty.env
     compose.yaml
     compose.initialize.yaml
+    deployment-binding.v1.yaml
     deployment-plan.v1.json
     deployment-manifest.v1.json
     operator-files.v1.json
@@ -93,6 +94,10 @@ registry-stack/
     bundles/
     anchors/
 ```
+
+The generated binding projection retains the inputs that Registryctl used to render and verify
+the generated closure.
+Continue to edit only the operator-owned `binding.yaml`, then regenerate.
 
 The package copies the three signed product bundles and their anchors into separate,
 digest-specific directories.
