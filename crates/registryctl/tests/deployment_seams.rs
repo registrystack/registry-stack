@@ -13,8 +13,10 @@ pub mod release_lock;
 mod deployment;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use approved_set::{
     ApprovedBaselineLanesV1, ApprovedBaselineSetV1, ApprovedLaneV1,
@@ -34,6 +36,27 @@ use release_lock::{
     LockedRuntimeMountV1, LockedSecretProjectionV1, LockedServiceHardeningV1,
 };
 use serde_json::{json, Value};
+
+static PROCESS_PATH_LOCK: Mutex<()> = Mutex::new(());
+
+struct ProcessPathGuard(Option<OsString>);
+
+impl ProcessPathGuard {
+    fn replace(path: &Path) -> Self {
+        let previous = std::env::var_os("PATH");
+        std::env::set_var("PATH", path);
+        Self(previous)
+    }
+}
+
+impl Drop for ProcessPathGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(previous) => std::env::set_var("PATH", previous),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+}
 
 fn image(repository: &str, digest_byte: char) -> ImageIdentityV1 {
     ImageIdentityV1::parse(format!(
@@ -880,14 +903,24 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         "service_healthy"
     );
     assert_eq!(
-        delta_services["registry-postgres"]["entrypoint"],
-        json!(["docker-entrypoint.sh"])
+        delta_services["registry-postgres"],
+        json!({
+            "entrypoint": [
+                "/bin/bash",
+                "-ceu",
+                "pgdata=\"$${PGDATA:-/var/lib/postgresql/data}\"\ntest -z \"$$(find \"$$pgdata\" -mindepth 1 -maxdepth 1 -print -quit)\" || { echo 'PostgreSQL data directory is not empty; refusing explicit initialization' >&2; exit 1; }\nexec /usr/local/bin/docker-entrypoint.sh \"$@\"",
+                "--"
+            ]
+        })
     );
-    assert!(
-        fixture.models.ordinary["services"]["registry-postgres"]["entrypoint"][2]
-            .as_str()
-            .unwrap()
-            .contains("data directory is empty")
+    assert_eq!(
+        fixture.models.ordinary["services"]["registry-postgres"]["entrypoint"],
+        json!([
+            "/bin/bash",
+            "-ceu",
+            "test -s \"$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION\" || { echo 'PostgreSQL data directory is empty; run the explicit initialization workflow first' >&2; exit 1; }\nexec /usr/local/bin/docker-entrypoint.sh \"$@\"",
+            "--"
+        ])
     );
 }
 
@@ -1490,18 +1523,12 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
 }
 
 #[test]
-fn production_verifier_owns_real_compose_normalization() {
+fn production_verifier_succeeds_without_docker() {
     let fixture = package_fixture();
-    let rendered = deployment::render_compose_package(
-        &fixture.verified_inputs,
-        &serde_norway::from_slice(&fs::read(fixture.package.join("binding.yaml")).unwrap())
-            .unwrap(),
-    )
-    .unwrap();
-    let expected = deployment::normalize_rendered_models(&fixture.package, &rendered).unwrap();
-    let actual = deployment::normalize_package_models(&fixture.package).unwrap();
-    assert_eq!(actual.standalone_ordinary, expected.standalone_ordinary);
-    assert_eq!(actual.initialization, expected.initialization);
+    let unavailable_path = tempfile::tempdir().unwrap();
+    assert!(!unavailable_path.path().join("docker").exists());
+    let _path_lock = PROCESS_PATH_LOCK.lock().unwrap();
+    let _path_guard = ProcessPathGuard::replace(unavailable_path.path());
     let report =
         verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
             package_dir: &fixture.package,

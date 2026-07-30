@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use crate::approved_set::{ApprovedBaselineSetV1, ApprovedLaneV1, PortableArtifactLocator};
 use crate::release_lock::{
@@ -44,7 +43,6 @@ const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
 const SECRET_STAGER_SUFFIX: &str = "-stage-secrets";
 const NETWORK_RUNTIME: &str = "registry-runtime";
-const COMPOSE_MINIMUM_VERSION: [u16; 3] = [2, 35, 0];
 pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
     "notary-environment",
     "notary-relay-workload-credential",
@@ -1980,11 +1978,11 @@ fn verify_deployment_package_with_package_inputs(
             .join("generated/deployment-manifest.v1.json"),
     )?;
     let expected_models = if sha256_uri(&binding_bytes) == manifest.binding_sha256 {
-        normalize_rendered_models(request.package_dir, &rendered)?
+        effective_rendered_models(&rendered.models)?
     } else {
-        normalize_managed_base_models(request.package_dir)?
+        stored_rendered_models(request.package_dir)?
     };
-    let effective_models = normalize_package_models(request.package_dir)?;
+    let effective_models = stored_rendered_models(request.package_dir)?;
     verify_deployment_package_core(
         request,
         package_inputs,
@@ -2020,12 +2018,7 @@ pub(crate) fn verify_deployment_package_with_models(
             .join("generated/deployment-manifest.v1.json"),
     )?;
     let expected_models = if sha256_uri(&binding_bytes) == manifest.binding_sha256 {
-        let expected_initialization =
-            merge_compose_delta(&rendered.models.ordinary, &rendered.models.initialization)?;
-        EffectiveComposeModelsV1 {
-            standalone_ordinary: rendered.models.ordinary,
-            initialization: expected_initialization,
-        }
+        effective_rendered_models(&rendered.models)?
     } else {
         stored_rendered_models(request.package_dir)?
     };
@@ -2491,7 +2484,14 @@ fn render_initialization_model(
             services.insert(SERVICE_POSTGRESQL_BOOTSTRAP.to_string(), service);
             services.insert(
                 SERVICE_POSTGRESQL.to_string(),
-                json!({"entrypoint": ["docker-entrypoint.sh"]}),
+                json!({
+                    "entrypoint": [
+                        "/bin/bash",
+                        "-ceu",
+                        "pgdata=\"$${PGDATA:-/var/lib/postgresql/data}\"\ntest -z \"$$(find \"$$pgdata\" -mindepth 1 -maxdepth 1 -print -quit)\" || { echo 'PostgreSQL data directory is not empty; refusing explicit initialization' >&2; exit 1; }\nexec /usr/local/bin/docker-entrypoint.sh \"$@\"",
+                        "--"
+                    ]
+                }),
             );
             continue;
         }
@@ -2980,81 +2980,24 @@ fn action_dependency_map(
     dependencies
 }
 
-pub(crate) fn normalize_rendered_models(
-    package_dir: &Path,
-    rendered: &RenderedComposePackageV1,
-) -> Result<EffectiveComposeModelsV1> {
-    let parent = package_dir
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let temporary = tempfile::Builder::new()
-        .prefix(".registry-compose-canonical-")
-        .tempdir_in(parent)
-        .context("failed to stage canonical Compose normalization")?;
-    let generated = temporary.path().join("generated");
-    fs::create_dir_all(&generated)?;
-    write_bytes(generated.join("compose.empty.env"), b"")?;
-    write_bytes(
-        generated.join("postgresql-server.env"),
-        rendered.postgresql_server_environment.as_bytes(),
-    )?;
-    write_bytes(
-        generated.join("compose.yaml"),
-        rendered.compose_yaml.as_bytes(),
-    )?;
-    write_bytes(
-        generated.join("compose.initialize.yaml"),
-        rendered.initialization_yaml.as_bytes(),
-    )?;
-    let ordinary = compose_config(
-        &generated.join("compose.empty.env"),
-        &[generated.join("compose.yaml")],
-    )?;
-    let initialization = compose_config(
-        &generated.join("compose.empty.env"),
-        &[
-            generated.join("compose.yaml"),
-            generated.join("compose.initialize.yaml"),
-        ],
-    )?;
+fn effective_rendered_models(models: &RenderedComposeModelsV1) -> Result<EffectiveComposeModelsV1> {
     Ok(EffectiveComposeModelsV1 {
-        standalone_ordinary: scrub_normalized_bind_sources(temporary.path(), ordinary)?,
-        initialization: scrub_normalized_bind_sources(temporary.path(), initialization)?,
+        standalone_ordinary: models.ordinary.clone(),
+        initialization: merge_compose_delta(&models.ordinary, &models.initialization)?,
     })
 }
 
-fn normalize_managed_base_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1> {
-    let generated = package_dir.join("generated");
-    let empty_env = generated.join("compose.empty.env");
-    let base = generated.join("compose.yaml");
-    let initialization_delta = generated.join("compose.initialize.yaml");
-    Ok(EffectiveComposeModelsV1 {
-        standalone_ordinary: scrub_normalized_bind_sources(
-            package_dir,
-            compose_config(&empty_env, std::slice::from_ref(&base))?,
-        )?,
-        initialization: scrub_normalized_bind_sources(
-            package_dir,
-            compose_config(&empty_env, &[base, initialization_delta])?,
-        )?,
-    })
-}
-
-#[cfg(test)]
-#[cfg_attr(
-    test,
-    allow(dead_code, reason = "used by direct-module integration tests")
-)]
 fn stored_rendered_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1> {
-    let ordinary: Value = serde_norway::from_slice(&read_bounded(
-        &package_dir.join("generated/compose.yaml"),
-        MAX_PORTABLE_DOCUMENT_BYTES,
-    )?)?;
-    let initialization_delta: Value = serde_norway::from_slice(&read_bounded(
-        &package_dir.join("generated/compose.initialize.yaml"),
-        MAX_PORTABLE_DOCUMENT_BYTES,
-    )?)?;
+    let generated = package_dir.join("generated");
+    let base = generated.join("compose.yaml");
+    let initialization = generated.join("compose.initialize.yaml");
+    for path in [&base, &initialization] {
+        reject_compose_include_features(path)?;
+    }
+    reject_implicit_env(package_dir)?;
+    reject_implicit_env(&generated)?;
+    let ordinary = read_stored_compose_document(&base, "ordinary")?;
+    let initialization_delta = read_stored_compose_document(&initialization, "initialization")?;
     let initialization = merge_compose_delta(&ordinary, &initialization_delta)?;
     Ok(EffectiveComposeModelsV1 {
         standalone_ordinary: ordinary,
@@ -3062,89 +3005,17 @@ fn stored_rendered_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1
     })
 }
 
-pub(crate) fn normalize_package_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1> {
-    require_compose_version()?;
-    let generated = package_dir.join("generated");
-    let base = generated.join("compose.yaml");
-    let initialization_delta = generated.join("compose.initialize.yaml");
-    let empty_env = generated.join("compose.empty.env");
-    for path in [&base, &initialization_delta] {
-        reject_compose_include_features(path)?;
+fn read_stored_compose_document(path: &Path, label: &str) -> Result<Value> {
+    let document: Value =
+        serde_norway::from_slice(&read_bounded(path, MAX_PORTABLE_DOCUMENT_BYTES)?)
+            .with_context(|| format!("failed to parse stored {label} Compose document"))?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| anyhow!("stored {label} Compose document must be an object"))?;
+    if object.get("services").and_then(Value::as_object).is_none() {
+        bail!("stored {label} Compose document must contain a service object");
     }
-    reject_implicit_env(package_dir)?;
-    reject_implicit_env(&generated)?;
-
-    let ordinary = scrub_normalized_bind_sources(
-        package_dir,
-        compose_config(&empty_env, std::slice::from_ref(&base))?,
-    )?;
-    let initialization = scrub_normalized_bind_sources(
-        package_dir,
-        compose_config(&empty_env, &[base, initialization_delta])?,
-    )?;
-    Ok(EffectiveComposeModelsV1 {
-        standalone_ordinary: ordinary,
-        initialization,
-    })
-}
-
-fn require_compose_version() -> Result<()> {
-    let output = Command::new("docker")
-        .args(["compose", "version", "--short"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Docker Compose is unavailable")?;
-    if !output.status.success() {
-        bail!("Docker Compose is unavailable");
-    }
-    let version =
-        String::from_utf8(output.stdout).context("Docker Compose returned a non-UTF-8 version")?;
-    let numeric = version.trim().trim_start_matches('v');
-    let parts = numeric
-        .split('.')
-        .take(3)
-        .map(|part| {
-            part.split_once('-')
-                .map_or(part, |(number, _)| number)
-                .parse::<u16>()
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("Docker Compose returned an unsupported version")?;
-    if parts.len() != 3 || parts.as_slice() < &COMPOSE_MINIMUM_VERSION {
-        bail!("managed deployment verification requires Docker Compose 2.35.0 or later");
-    }
-    Ok(())
-}
-
-fn compose_config(empty_env: &Path, compose_files: &[PathBuf]) -> Result<Value> {
-    if compose_files.is_empty() {
-        bail!("Compose normalization requires at least one explicit file");
-    }
-    let mut command = Command::new("docker");
-    command
-        .args(["compose", "--env-file"])
-        .arg(empty_env)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped());
-    for file in compose_files {
-        command.arg("-f").arg(file);
-    }
-    let output = command
-        .args([
-            "config",
-            "--no-interpolate",
-            "--no-env-resolution",
-            "--format",
-            "json",
-        ])
-        .output()
-        .context("failed to invoke Docker Compose normalization")?;
-    if !output.status.success() {
-        bail!("Docker Compose rejected the deployment model");
-    }
-    serde_json::from_slice(&output.stdout)
-        .context("Docker Compose returned an invalid normalized JSON model")
+    Ok(document)
 }
 
 fn reject_implicit_env(directory: &Path) -> Result<()> {
@@ -3164,6 +3035,7 @@ fn reject_compose_include_features(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn scrub_normalized_bind_sources(
     package_root: &Path,
     mut model: Value,
@@ -3236,6 +3108,7 @@ pub(crate) fn scrub_normalized_bind_sources(
     Ok(model)
 }
 
+#[cfg(test)]
 fn normalized_operator_or_generated_path(
     canonical_package_root: &Path,
     lexical_package_root: &Path,
@@ -3274,6 +3147,7 @@ fn normalized_operator_or_generated_path(
     }
 }
 
+#[cfg(test)]
 fn lexically_normalize_absolute_path(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("Compose normalization path must be absolute");
@@ -3557,11 +3431,6 @@ fn initialization_with_effective_ordinary(
     Some(expected)
 }
 
-#[cfg(test)]
-#[cfg_attr(
-    test,
-    allow(dead_code, reason = "used by direct-module integration tests")
-)]
 pub(crate) fn merge_compose_delta(base: &Value, delta: &Value) -> Result<Value> {
     fn merge(target: &mut Value, overlay: &Value) {
         match (target, overlay) {
