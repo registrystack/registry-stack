@@ -496,6 +496,34 @@ on:
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
+    def test_current_reader_journey_inputs_route_the_source_journey(self) -> None:
+        inputs = (
+            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh",
+            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh.sha256",
+            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh",
+            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256",
+            "docs/site/src/content/docs/configure/oauth-client-credentials.mdx",
+            "docs/site/src/content/docs/operate/approve-initial-baseline.mdx",
+            "docs/site/src/content/docs/tutorials/author-registry-project.mdx",
+            "docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx",
+            "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
+        )
+
+        for path in inputs:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["registryctl_tutorial"]
+                )
+
+        for deleted_path in (
+            "docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx",
+            "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
+        ):
+            with self.subTest(deleted_path=deleted_path):
+                self.assertFalse(
+                    classify(self.workspace, (deleted_path,))["registryctl_tutorial"]
+                )
+
     def test_first_country_generation_inputs_run_docs(self) -> None:
         inputs = (
             "crates/registryctl/assets/project-starters/**",
