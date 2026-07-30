@@ -2,11 +2,12 @@
 
 Registry Relay turns registry data you already hold, in spreadsheets or PostgreSQL, into protected, scoped, read-only HTTP APIs. Authorized callers read records over purpose-bound routes, and the gateway never widens reach at request time. Relay also publishes discovery metadata that points callers to a Registry Notary for claim and evidence verification.
 
-New here? Start with the hosted walkthrough, then the first-run tutorials in Registry Docs:
+New here? Start with the current Registry Docs project-authoring journey:
 
-- [See it live](https://docs.registrystack.org/start/see-it-live/): read a protected API and get a credential against a hosted lab, with zero install.
-- [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
-- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+- [Build and run an HTTP registry project](https://docs.registrystack.org/tutorials/author-registry-project/)
+- [Configure OAuth client credentials](https://docs.registrystack.org/configure/oauth-client-credentials/)
+- [Add OAuth-backed Rhai adaptation](https://docs.registrystack.org/tutorials/configure-project-script-adapter/): adapt the HTTP starter when fixed response mapping is insufficient.
+- [Exercise a synthetic OpenCRVS Events API-shaped search](https://docs.registrystack.org/tutorials/verify-opencrvs-claims/): a case study of the generic OAuth, HTTP, and Rhai path, not an OpenCRVS template or compatibility claim.
 
 The references describe supported behavior. Some links open the source repository on GitHub.
 
