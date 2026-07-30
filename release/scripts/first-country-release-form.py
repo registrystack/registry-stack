@@ -62,7 +62,11 @@ STABLE_COMMAND_ORDER = (
     "deploy_verify",
     "parent_include_config",
     "initialize_config",
-    "initialize_stage_secrets",
+    "inspect_secret_stagers",
+    "initialize_stage_relay_public_secrets",
+    "initialize_stage_relay_consultation_secrets",
+    "initialize_stage_notary_secrets",
+    "initialize_stage_postgresql_secrets",
     "initialize_postgresql",
     "initialize_relay_public_prepare",
     "initialize_relay_consultation_prepare",
@@ -88,6 +92,7 @@ STABLE_COMMAND_ORDER = (
     "failed_activation_recovery",
     "updated_start",
     "updated_stop",
+    "rollback_stage_secrets",
     "rollback_rejected",
     "final_start",
     "isolated_teardown",
@@ -185,6 +190,88 @@ GOVERNED_OPERATOR_SOURCES = {
     "postgresql-tls-certificate": ("postgres-tls.crt",),
     "postgresql-tls-private-key": ("postgres-tls.key",),
     "postgresql-admin-password": ("postgres-admin-password",),
+}
+SECRET_STAGER_CONTRACT = {
+    "registry-relay-public-stage-secrets": {
+        "outputs": ("relay-public-serve",),
+        "sources": (
+            "relay-public-tls-certificate",
+            "relay-public-tls-private-key",
+        ),
+    },
+    "registry-relay-consultation-stage-secrets": {
+        "outputs": (
+            "relay-consultation-serve",
+            "relay-consultation-prepare",
+            "relay-consultation-initialize",
+        ),
+        "sources": (
+            "postgresql-tls-certificate",
+            "relay-consultation-tls-certificate",
+            "relay-consultation-tls-private-key",
+        ),
+    },
+    "registry-notary-stage-secrets": {
+        "outputs": (
+            "notary-serve",
+            "notary-prepare",
+            "notary-initialize",
+        ),
+        "sources": (
+            "notary-relay-workload-credential",
+            "notary-signing-key",
+            "notary-tls-certificate",
+            "notary-tls-private-key",
+            "postgresql-tls-certificate",
+            "relay-consultation-tls-certificate",
+        ),
+    },
+    "registry-postgresql-stage-secrets": {
+        "outputs": ("postgresql-serve", "postgresql-bootstrap"),
+        "sources": (
+            "postgresql-admin-password",
+            "postgresql-tls-certificate",
+            "postgresql-tls-private-key",
+        ),
+    },
+}
+SECRET_STAGE_CONSUMERS = {
+    "registry-postgres": (
+        "registry-postgresql-stage-secrets",
+        "postgresql-serve",
+    ),
+    "registry-relay-public": (
+        "registry-relay-public-stage-secrets",
+        "relay-public-serve",
+    ),
+    "registry-relay-consultation": (
+        "registry-relay-consultation-stage-secrets",
+        "relay-consultation-serve",
+    ),
+    "registry-notary": (
+        "registry-notary-stage-secrets",
+        "notary-serve",
+    ),
+    "registry-postgres-bootstrap": (
+        "registry-postgresql-stage-secrets",
+        "postgresql-bootstrap",
+    ),
+    "registry-relay-consultation-prepare-state": (
+        "registry-relay-consultation-stage-secrets",
+        "relay-consultation-prepare",
+    ),
+    "registry-relay-consultation-initialize": (
+        "registry-relay-consultation-stage-secrets",
+        "relay-consultation-initialize",
+    ),
+    "registry-notary-prepare-state": (
+        "registry-notary-stage-secrets",
+        "notary-prepare",
+    ),
+    "registry-notary-initialize": (
+        "registry-notary-stage-secrets",
+        "notary-initialize",
+    ),
 }
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
@@ -1505,7 +1592,6 @@ def governed_deployment_binding(
         "environment": identity["environment"],
         "loopback_address": "127.0.0.1",
         "ports": {"relay_public": 4242, "notary": 4255},
-        "edge_network_name": None,
         "secret_files": {
             name: f"operator/secrets/{name}"
             for name in sorted(GOVERNED_OPERATOR_SOURCES)
@@ -2128,6 +2214,320 @@ def compose_initialization_base(package: Path) -> list[str]:
     ]
 
 
+def compose_secret_stage_commands(
+    package: Path,
+    stagers: Iterable[str] = SECRET_STAGER_CONTRACT,
+) -> list[list[str]]:
+    selected = tuple(stagers)
+    if len(selected) != len(set(selected)) or any(
+        stager not in SECRET_STAGER_CONTRACT for stager in selected
+    ):
+        raise ReleaseFormError("secret stager selection is not a closed subset")
+    return [
+        [
+            *compose_base(package),
+            "run",
+            "--rm",
+            "--no-deps",
+            stager,
+        ]
+        for stager in selected
+    ]
+
+
+def compose_staged_consumer_commands(
+    package: Path,
+    consumers: Iterable[list[str]],
+    stagers: Iterable[str] = SECRET_STAGER_CONTRACT,
+) -> list[list[str]]:
+    return [
+        *compose_secret_stage_commands(package, stagers),
+        *list(consumers),
+    ]
+
+
+def expected_secret_staging_summary() -> dict[str, Any]:
+    return {
+        "outcome": "passed",
+        "stagers": [
+            {
+                "service": service,
+                "outputs": list(contract["outputs"]),
+                "sources": list(contract["sources"]),
+            }
+            for service, contract in SECRET_STAGER_CONTRACT.items()
+        ],
+        "ordinary_consumers": [
+            {
+                "service": service,
+                "stager": stager,
+                "output": output,
+            }
+            for service, (stager, output) in SECRET_STAGE_CONSUMERS.items()
+            if service
+            in {
+                "registry-postgres",
+                "registry-relay-public",
+                "registry-relay-consultation",
+                "registry-notary",
+            }
+        ],
+        "initialization_consumers": [
+            {
+                "service": service,
+                "stager": stager,
+                "output": output,
+            }
+            for service, (stager, output) in SECRET_STAGE_CONSUMERS.items()
+        ],
+    }
+
+
+def stable_secret_staging_summary(
+    ordinary: Any,
+    initialization: Any,
+    *,
+    volume_prefix: str,
+) -> dict[str, Any]:
+    if not volume_prefix:
+        raise ReleaseFormError("secret staging volume prefix is unavailable")
+    models = {
+        "ordinary": ordinary,
+        "initialization": initialization,
+    }
+    services_by_model: dict[str, dict[str, Any]] = {}
+    expected_stagers = set(SECRET_STAGER_CONTRACT)
+    for model_name, model in models.items():
+        services = model.get("services") if isinstance(model, dict) else None
+        if not isinstance(services, dict):
+            raise ReleaseFormError(
+                f"{model_name} Compose model has no closed service inventory"
+            )
+        observed_stagers = {
+            name for name in services if name.endswith("-stage-secrets")
+        }
+        if (
+            observed_stagers != expected_stagers
+            or "registry-runtime-stage-secrets" in services
+        ):
+            raise ReleaseFormError(
+                f"{model_name} Compose model has the wrong isolated stager roster"
+            )
+        services_by_model[model_name] = services
+
+    ordinary_services = services_by_model["ordinary"]
+    initialization_services = services_by_model["initialization"]
+    for service_name, contract in SECRET_STAGER_CONTRACT.items():
+        service = ordinary_services[service_name]
+        if service != initialization_services[service_name]:
+            raise ReleaseFormError(
+                f"initialization changed isolated stager {service_name}"
+            )
+        mounts = service.get("volumes") if isinstance(service, dict) else None
+        secrets = service.get("secrets") if isinstance(service, dict) else None
+        if (
+            service.get("network_mode") != "none"
+            or service.get("user") != "0:0"
+            or service.get("read_only") is not True
+            or service.get("cap_add") != ["CHOWN"]
+            or service.get("cap_drop") != ["ALL"]
+            or service.get("security_opt") != ["no-new-privileges:true"]
+            or service.get("tmpfs") != ["/tmp"]
+            or service.get("restart") != "no"
+            or not isinstance(mounts, list)
+            or not isinstance(secrets, list)
+        ):
+            raise ReleaseFormError(
+                f"{service_name} lost its isolated security projection"
+            )
+        for forbidden in (
+            "depends_on",
+            "env_file",
+            "healthcheck",
+            "networks",
+            "ports",
+        ):
+            if forbidden in service:
+                raise ReleaseFormError(
+                    f"{service_name} gained forbidden {forbidden} authority"
+                )
+        observed_outputs: dict[str, str] = {}
+        for mount in mounts:
+            if (
+                not isinstance(mount, dict)
+                or mount.get("type") != "volume"
+                or not isinstance(mount.get("source"), str)
+                or not isinstance(mount.get("target"), str)
+                or mount.get("read_only") not in (None, False)
+                or mount["target"] in observed_outputs
+            ):
+                raise ReleaseFormError(
+                    f"{service_name} has an invalid writable output authority"
+                )
+            observed_outputs[mount["target"]] = mount["source"]
+        expected_outputs = {
+            f"/registryctl-stage/output/{stage_id}": (
+                f"{volume_prefix}-operator-files-{stage_id}"
+            )
+            for stage_id in contract["outputs"]
+        }
+        if observed_outputs != expected_outputs:
+            raise ReleaseFormError(
+                f"{service_name} has cross-lane or incomplete output authority"
+            )
+        observed_sources = {
+            (
+                secret.get("source"),
+                secret.get("target"),
+            )
+            for secret in secrets
+            if isinstance(secret, dict)
+        }
+        expected_sources = {
+            (f"registry-{file_id}", f"/run/secrets/{file_id}")
+            for file_id in contract["sources"]
+        }
+        if (
+            len(observed_sources) != len(secrets)
+            or observed_sources != expected_sources
+        ):
+            raise ReleaseFormError(
+                f"{service_name} has cross-lane or incomplete source authority"
+            )
+
+    ordinary_consumers = {
+        name: contract
+        for name, contract in SECRET_STAGE_CONSUMERS.items()
+        if name
+        in {
+            "registry-postgres",
+            "registry-relay-public",
+            "registry-relay-consultation",
+            "registry-notary",
+        }
+    }
+    expected_consumers_by_model = {
+        "ordinary": ordinary_consumers,
+        "initialization": SECRET_STAGE_CONSUMERS,
+    }
+    for model_name, expected_consumers in expected_consumers_by_model.items():
+        services = services_by_model[model_name]
+        missing_consumers = set(expected_consumers).difference(services)
+        if missing_consumers:
+            raise ReleaseFormError(
+                f"{model_name} Compose model is missing staged-secret consumers"
+            )
+        for service_name, service in services.items():
+            if service_name in expected_stagers or not isinstance(service, dict):
+                continue
+            mounts = service.get("volumes", [])
+            if not isinstance(mounts, list):
+                raise ReleaseFormError(
+                    f"{service_name} has an invalid secret consumer mount inventory"
+                )
+            secret_mounts = [
+                mount
+                for mount in mounts
+                if isinstance(mount, dict) and mount.get("target") == "/run/secrets"
+            ]
+            dependencies = service.get("depends_on")
+            stager_dependencies = {
+                name: dependency
+                for name, dependency in (
+                    dependencies.items() if isinstance(dependencies, dict) else ()
+                )
+                if name.endswith("-stage-secrets")
+            }
+            if service_name not in expected_consumers:
+                if secret_mounts or stager_dependencies:
+                    raise ReleaseFormError(
+                        f"{service_name} has unowned staged-secret authority"
+                    )
+                continue
+            stager, stage_id = expected_consumers[service_name]
+            if secret_mounts != [
+                {
+                    "type": "volume",
+                    "source": f"{volume_prefix}-operator-files-{stage_id}",
+                    "target": "/run/secrets",
+                    "read_only": True,
+                    "volume": {},
+                }
+            ]:
+                raise ReleaseFormError(
+                    f"{service_name} has the wrong staged-secret consumer authority"
+                )
+            if stager_dependencies != {
+                stager: {
+                    "condition": "service_completed_successfully",
+                    "required": True,
+                }
+            }:
+                raise ReleaseFormError(
+                    f"{service_name} does not wait for its exact isolated stager"
+                )
+    return expected_secret_staging_summary()
+
+
+def inspect_secret_staging_contract(
+    package: Path,
+    *,
+    volume_prefix: str,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    documents: list[Any] = []
+    for command in (
+        [
+            *compose_base(package),
+            "config",
+            "--no-interpolate",
+            "--no-env-resolution",
+            "--format",
+            "json",
+        ],
+        [
+            *compose_initialization_base(package),
+            "config",
+            "--no-interpolate",
+            "--no-env-resolution",
+            "--format",
+            "json",
+        ],
+    ):
+        result = subprocess.run(
+            command,
+            cwd=package.parent,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        try:
+            document = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise ReleaseFormError(
+                "cannot inspect isolated secret staging models"
+            ) from error
+        if result.returncode != 0:
+            raise ReleaseFormError("isolated secret staging model is unavailable")
+        documents.append(document)
+    summary = stable_secret_staging_summary(
+        documents[0],
+        documents[1],
+        volume_prefix=volume_prefix,
+    )
+    write_json_log(logs, "inspect_secret_stagers", summary)
+    return {
+        "name": "inspect_secret_stagers",
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / "inspect_secret_stagers.log"),
+    }
+
+
 def compose_verify_state_commands(package: Path) -> list[list[str]]:
     return [
         [
@@ -2196,6 +2596,7 @@ def backup_and_restore_governed_volumes(
     package: Path,
     *,
     postgresql_image: str,
+    volume_prefix: str,
     backup_root: Path,
     env: dict[str, str],
     logs: Path,
@@ -2257,25 +2658,42 @@ def backup_and_restore_governed_volumes(
         selected_sources.update(source for source, _target in selected)
     if len(selected_sources) != 7:
         raise ReleaseFormError("governed backup must select exactly seven durable volumes")
-    stager = services.get("registry-runtime-stage-secrets")
-    stager_mounts = stager.get("volumes") if isinstance(stager, dict) else None
-    if not isinstance(stager_mounts, list):
-        raise ReleaseFormError("governed staged-secret volume inventory is unavailable")
-    staged_sources = {
-        mount.get("source")
-        for mount in stager_mounts
-        if isinstance(mount, dict)
-        and mount.get("type") == "volume"
-        and isinstance(mount.get("target"), str)
-        and mount["target"].startswith("/registryctl-stage/output/")
-        and isinstance(mount.get("source"), str)
-    }
-    unexpected = set(declared_volumes).difference(selected_sources)
+    observed_stagers = {name for name in services if name.endswith("-stage-secrets")}
     if (
-        selected_sources.intersection(staged_sources)
-        or unexpected != staged_sources
-        or any(not name.endswith("-secrets") for name in staged_sources)
+        observed_stagers != set(SECRET_STAGER_CONTRACT)
+        or "registry-runtime-stage-secrets" in services
     ):
+        raise ReleaseFormError("governed staged-secret roster is invalid")
+    staged_sources: set[str] = set()
+    for stager_name, contract in SECRET_STAGER_CONTRACT.items():
+        stager = services[stager_name]
+        stager_mounts = stager.get("volumes") if isinstance(stager, dict) else None
+        if not isinstance(stager_mounts, list):
+            raise ReleaseFormError(
+                "governed staged-secret volume inventory is unavailable"
+            )
+        observed_outputs = {
+            (mount.get("source"), mount.get("target"))
+            for mount in stager_mounts
+            if isinstance(mount, dict)
+            and mount.get("type") == "volume"
+            and isinstance(mount.get("source"), str)
+            and isinstance(mount.get("target"), str)
+        }
+        expected_outputs = {
+            (
+                f"{volume_prefix}-operator-files-{stage_id}",
+                f"/registryctl-stage/output/{stage_id}",
+            )
+            for stage_id in contract["outputs"]
+        }
+        if observed_outputs != expected_outputs:
+            raise ReleaseFormError(
+                f"{stager_name} has the wrong backup-excluded output authority"
+            )
+        staged_sources.update(source for source, _target in observed_outputs)
+    unexpected = set(declared_volumes).difference(selected_sources)
+    if selected_sources.intersection(staged_sources) or unexpected != staged_sources:
         raise ReleaseFormError("governed backup found an unexpected durable volume")
     volumes = sorted(
         (
@@ -3121,16 +3539,31 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     logs=logs,
                 )
             )
+            commands.append(
+                inspect_secret_staging_contract(
+                    package,
+                    volume_prefix=volume_prefix,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            stage_commands = compose_secret_stage_commands(package)
             initialization_steps = [
                 (
-                    "initialize_stage_secrets",
-                    [
-                        *compose_base(package),
-                        "run",
-                        "--rm",
-                        "--no-deps",
-                        "registry-runtime-stage-secrets",
-                    ],
+                    "initialize_stage_relay_public_secrets",
+                    stage_commands[0],
+                ),
+                (
+                    "initialize_stage_relay_consultation_secrets",
+                    stage_commands[1],
+                ),
+                (
+                    "initialize_stage_notary_secrets",
+                    stage_commands[2],
+                ),
+                (
+                    "initialize_stage_postgresql_secrets",
+                    stage_commands[3],
                 ),
                 (
                     "initialize_postgresql",
@@ -3209,7 +3642,9 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "governed_start",
-                    [
+                    compose_staged_consumer_commands(
+                        package,
+                        [
                         *compose_verify_state_commands(package),
                         [
                             *compose_base(package),
@@ -3221,6 +3656,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                         ],
                         [*compose_base(package), "ps"],
                     ],
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3229,7 +3665,9 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "governed_restart",
-                    [
+                    compose_staged_consumer_commands(
+                        package,
+                        [
                         [*compose_base(package), "restart"],
                         [
                             *compose_base(package),
@@ -3241,6 +3679,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                         ],
                         *compose_verify_state_commands(package),
                     ],
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3259,6 +3698,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 backup_and_restore_governed_volumes(
                     package,
                     postgresql_image=verified["postgresql_image"],
+                    volume_prefix=volume_prefix,
                     backup_root=governed_private / "backup",
                     env=environment,
                     logs=logs,
@@ -3267,14 +3707,9 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "restored_start",
-                    [
+                    compose_staged_consumer_commands(
+                        package,
                         [
-                            *compose_base(package),
-                            "run",
-                            "--rm",
-                            "--no-deps",
-                            "registry-runtime-stage-secrets",
-                        ],
                         *compose_verify_state_commands(package),
                         [
                             *compose_base(package),
@@ -3285,6 +3720,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                             "120",
                         ],
                     ],
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3536,13 +3972,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_expected_failure(
                     "failed_activation",
-                    [
-                        *compose_base(package),
-                        "run",
-                        "--rm",
-                        "--no-deps",
-                        "registry-runtime-stage-secrets",
-                    ],
+                    compose_secret_stage_commands(
+                        package,
+                        ("registry-notary-stage-secrets",),
+                    )[0],
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3583,14 +4016,9 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "updated_start",
-                    [
+                    compose_staged_consumer_commands(
+                        package,
                         [
-                            *compose_base(package),
-                            "run",
-                            "--rm",
-                            "--no-deps",
-                            "registry-runtime-stage-secrets",
-                        ],
                         *compose_verify_state_commands(package),
                         [
                             *compose_base(package),
@@ -3601,6 +4029,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                             "120",
                         ],
                     ],
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3610,6 +4039,21 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 run_command(
                     "updated_stop",
                     [*compose_base(package), "down"],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_compose_group(
+                    "rollback_stage_secrets",
+                    compose_secret_stage_commands(
+                        rollback_package,
+                        (
+                            "registry-relay-consultation-stage-secrets",
+                            "registry-notary-stage-secrets",
+                        ),
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3636,7 +4080,9 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "final_start",
-                    [
+                    compose_staged_consumer_commands(
+                        package,
+                        [
                         *compose_verify_state_commands(package),
                         [
                             *compose_base(package),
@@ -3647,6 +4093,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                             "120",
                         ],
                     ],
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -3864,6 +4311,16 @@ def verify_stable_evidence(
             raise ReleaseFormError(
                 f"{name} evidence log does not bind the normalized report"
             )
+    if (
+        read_closed_json(
+            logs / "inspect_secret_stagers.log",
+            "isolated secret staging inspection log",
+        )
+        != expected_secret_staging_summary()
+    ):
+        raise ReleaseFormError(
+            "isolated secret staging evidence does not prove the closed authority roster"
+        )
     if read_closed_json(logs / "dev_down.log", "development teardown log") != {
         "outcome": "passed",
         "runtime_state": "absent",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -84,6 +85,91 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             return self.module.verify_asset_set(self.assets, self.tag)
 
+    def secret_staging_models(self):
+        volume_prefix = "release"
+        stagers = {}
+        for service_name, contract in self.module.SECRET_STAGER_CONTRACT.items():
+            stagers[service_name] = {
+                "network_mode": "none",
+                "user": "0:0",
+                "read_only": True,
+                "cap_add": ["CHOWN"],
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": ["/tmp"],
+                "restart": "no",
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": (f"{volume_prefix}-operator-files-{stage_id}"),
+                        "target": f"/registryctl-stage/output/{stage_id}",
+                        "volume": {},
+                    }
+                    for stage_id in contract["outputs"]
+                ],
+                "secrets": [
+                    {
+                        "source": f"registry-{file_id}",
+                        "target": f"/run/secrets/{file_id}",
+                    }
+                    for file_id in contract["sources"]
+                ],
+            }
+
+        def consumer(stager, stage_id):
+            return {
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": (f"{volume_prefix}-operator-files-{stage_id}"),
+                        "target": "/run/secrets",
+                        "read_only": True,
+                        "volume": {},
+                    }
+                ],
+                "depends_on": {
+                    stager: {
+                        "condition": "service_completed_successfully",
+                        "required": True,
+                    }
+                },
+            }
+
+        ordinary_names = {
+            "registry-postgres",
+            "registry-relay-public",
+            "registry-relay-consultation",
+            "registry-notary",
+        }
+        ordinary = {
+            "services": {
+                **stagers,
+                **{
+                    service_name: consumer(*contract)
+                    for service_name, contract in (
+                        self.module.SECRET_STAGE_CONSUMERS.items()
+                    )
+                    if service_name in ordinary_names
+                },
+            }
+        }
+        initialization = copy.deepcopy(ordinary)
+        initialization["services"].update(
+            {
+                service_name: consumer(*contract)
+                for service_name, contract in (
+                    self.module.SECRET_STAGE_CONSUMERS.items()
+                )
+                if service_name not in ordinary_names
+            }
+        )
+        initialization["services"].update(
+            {
+                "registry-relay-public-prepare-state": {"volumes": []},
+                "registry-relay-public-initialize": {"volumes": []},
+            }
+        )
+        return ordinary, initialization, volume_prefix
 
     def write_valid_stable_report_evidence(self):
         verified = self.verify_assets()
@@ -286,6 +372,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "dev_smoke": smoke,
             "dev_logs": product_logs,
             "inspect": runtime,
+            "inspect_secret_stagers": (self.module.expected_secret_staging_summary()),
         }
         commands = []
         for name in self.module.STABLE_COMMAND_ORDER:
@@ -449,6 +536,13 @@ class FirstCountryReleaseFormTest(TestCase):
             "dev_down",
             "deploy_verify",
             "parent_include_config",
+            "initialize_config",
+            "inspect_secret_stagers",
+            "initialize_stage_relay_public_secrets",
+            "initialize_stage_relay_consultation_secrets",
+            "initialize_stage_notary_secrets",
+            "initialize_stage_postgresql_secrets",
+            "initialize_postgresql",
             "initialize_relay_public",
             "initialize_relay_consultation",
             "initialize_notary",
@@ -458,7 +552,11 @@ class FirstCountryReleaseFormTest(TestCase):
             "update_generate",
             "failed_activation",
             "failed_activation_recovery",
+            "updated_start",
+            "updated_stop",
+            "rollback_stage_secrets",
             "rollback_rejected",
+            "final_start",
             "isolated_teardown",
         )
         self.assertEqual(
@@ -479,6 +577,141 @@ class FirstCountryReleaseFormTest(TestCase):
             "check-registryctl-public-source-live.sh", stable_source
         )
         self.assertNotIn('"spreadsheet"', stable_source)
+
+    def test_secret_stage_commands_precede_each_consumer_sequence(self) -> None:
+        package = self.root / "package"
+        expected_stagers = tuple(self.module.SECRET_STAGER_CONTRACT)
+        stage_commands = self.module.compose_secret_stage_commands(package)
+        self.assertEqual(
+            tuple(command[-1] for command in stage_commands),
+            expected_stagers,
+        )
+        self.assertNotIn(
+            "registry-runtime-stage-secrets",
+            {argument for command in stage_commands for argument in command},
+        )
+
+        consumers = self.module.compose_verify_state_commands(package)
+        ordered = self.module.compose_staged_consumer_commands(
+            package,
+            consumers,
+        )
+        self.assertEqual(
+            tuple(command[-1] for command in ordered[:4]),
+            expected_stagers,
+        )
+        self.assertEqual(ordered[4:], consumers)
+
+        rollback_stagers = (
+            "registry-relay-consultation-stage-secrets",
+            "registry-notary-stage-secrets",
+        )
+        rollback = self.module.compose_staged_consumer_commands(
+            package,
+            consumers[1:3],
+            rollback_stagers,
+        )
+        self.assertEqual(
+            tuple(command[-1] for command in rollback[:2]),
+            rollback_stagers,
+        )
+        self.assertEqual(rollback[2:], consumers[1:3])
+
+    def test_secret_staging_models_enforce_exact_lane_authority(self) -> None:
+        ordinary, initialization, volume_prefix = self.secret_staging_models()
+        self.assertEqual(
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                initialization,
+                volume_prefix=volume_prefix,
+            ),
+            self.module.expected_secret_staging_summary(),
+        )
+
+        wrong_roster = copy.deepcopy(ordinary)
+        wrong_roster["services"]["registry-runtime-stage-secrets"] = wrong_roster[
+            "services"
+        ].pop("registry-relay-public-stage-secrets")
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "wrong isolated stager roster"
+        ):
+            self.module.stable_secret_staging_summary(
+                wrong_roster,
+                initialization,
+                volume_prefix=volume_prefix,
+            )
+
+        cross_lane_source_ordinary = copy.deepcopy(ordinary)
+        cross_lane_source_initialization = copy.deepcopy(initialization)
+        cross_lane_secret = {
+            "source": "registry-notary-signing-key",
+            "target": "/run/secrets/notary-signing-key",
+        }
+        cross_lane_source_ordinary["services"]["registry-relay-public-stage-secrets"][
+            "secrets"
+        ].append(cross_lane_secret)
+        cross_lane_source_initialization["services"][
+            "registry-relay-public-stage-secrets"
+        ]["secrets"].append(cross_lane_secret)
+        with self.assertRaisesRegex(self.module.ReleaseFormError, "source authority"):
+            self.module.stable_secret_staging_summary(
+                cross_lane_source_ordinary,
+                cross_lane_source_initialization,
+                volume_prefix=volume_prefix,
+            )
+
+        cross_lane_output_ordinary = copy.deepcopy(ordinary)
+        cross_lane_output_initialization = copy.deepcopy(initialization)
+        cross_lane_output_ordinary["services"]["registry-relay-public-stage-secrets"][
+            "volumes"
+        ][0]["source"] = f"{volume_prefix}-operator-files-notary-serve"
+        cross_lane_output_initialization["services"][
+            "registry-relay-public-stage-secrets"
+        ]["volumes"][0]["source"] = f"{volume_prefix}-operator-files-notary-serve"
+        with self.assertRaisesRegex(self.module.ReleaseFormError, "output authority"):
+            self.module.stable_secret_staging_summary(
+                cross_lane_output_ordinary,
+                cross_lane_output_initialization,
+                volume_prefix=volume_prefix,
+            )
+
+        wrong_consumer = copy.deepcopy(initialization)
+        wrong_consumer["services"]["registry-relay-public"]["volumes"][0]["source"] = (
+            f"{volume_prefix}-operator-files-notary-serve"
+        )
+        with self.assertRaisesRegex(self.module.ReleaseFormError, "consumer authority"):
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                wrong_consumer,
+                volume_prefix=volume_prefix,
+            )
+
+        wrong_dependency = copy.deepcopy(initialization)
+        wrong_dependency["services"]["registry-relay-public"]["depends_on"] = {
+            "registry-notary-stage-secrets": {
+                "condition": "service_completed_successfully",
+                "required": True,
+            }
+        }
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "exact isolated stager"
+        ):
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                wrong_dependency,
+                volume_prefix=volume_prefix,
+            )
+
+        missing_consumer = copy.deepcopy(initialization)
+        missing_consumer["services"].pop("registry-notary-initialize")
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "missing staged-secret consumers"
+        ):
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                missing_consumer,
+                volume_prefix=volume_prefix,
+            )
 
     def test_stable_release_rejects_pre_v3_evidence_schema(self) -> None:
         path, report, _ = self.write_valid_stable_report_evidence()
@@ -1326,6 +1559,7 @@ class FirstCountryReleaseFormTest(TestCase):
             set(self.module.GOVERNED_OPERATOR_SOURCES),
         )
         self.assertEqual(binding["ports"], {"relay_public": 4242, "notary": 4255})
+        self.assertNotIn("edge_network_name", binding)
         if os.name == "posix":
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
 
@@ -1436,6 +1670,7 @@ class FirstCountryReleaseFormTest(TestCase):
     def test_backup_selects_exactly_seven_durable_volumes(self) -> None:
         package = self.root / "package"
         package.mkdir()
+        volume_prefix = "release"
         durable = {
             "registry-postgres": {
                 "/var/lib/postgresql/data": "release-postgresql-data"
@@ -1462,24 +1697,31 @@ class FirstCountryReleaseFormTest(TestCase):
             }
             for service, targets in durable.items()
         }
-        services["registry-runtime-stage-secrets"] = {
-            "volumes": [
-                {
-                    "type": "volume",
-                    "source": "release-stage-secrets",
-                    "target": "/registryctl-stage/output/fixture",
-                }
-            ]
-        }
+        for stager_name, contract in self.module.SECRET_STAGER_CONTRACT.items():
+            services[stager_name] = {
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": (f"{volume_prefix}-operator-files-{stage_id}"),
+                        "target": f"/registryctl-stage/output/{stage_id}",
+                    }
+                    for stage_id in contract["outputs"]
+                ]
+            }
         sources = {
             source for targets in durable.values() for source in targets.values()
+        }
+        staged_sources = {
+            mount["source"]
+            for stager_name in self.module.SECRET_STAGER_CONTRACT
+            for mount in services[stager_name]["volumes"]
         }
         document = {
             "name": "governed-fixture",
             "services": services,
             "volumes": {
                 **{source: {"name": source} for source in sources},
-                "release-stage-secrets": {},
+                **{source: {} for source in staged_sources},
             },
         }
 
@@ -1502,6 +1744,7 @@ class FirstCountryReleaseFormTest(TestCase):
             self.module.backup_and_restore_governed_volumes(
                 package,
                 postgresql_image=self.postgresql,
+                volume_prefix=volume_prefix,
                 backup_root=self.root / "backup",
                 env={},
                 logs=logs,
@@ -1511,6 +1754,29 @@ class FirstCountryReleaseFormTest(TestCase):
                 "consistency_group_volumes"
             ],
             7,
+        )
+
+        public_stage = services["registry-relay-public-stage-secrets"]
+        public_stage["volumes"][0]["source"] = (
+            f"{volume_prefix}-operator-files-notary-serve"
+        )
+        with (
+            mock.patch.object(self.module.subprocess, "run", side_effect=completed),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "wrong backup-excluded output authority",
+            ),
+        ):
+            self.module.backup_and_restore_governed_volumes(
+                package,
+                postgresql_image=self.postgresql,
+                volume_prefix=volume_prefix,
+                backup_root=self.root / "cross-lane-backup",
+                env={},
+                logs=logs,
+            )
+        public_stage["volumes"][0]["source"] = (
+            f"{volume_prefix}-operator-files-relay-public-serve"
         )
 
         document["volumes"]["unexpected-durable"] = {}
@@ -1525,6 +1791,7 @@ class FirstCountryReleaseFormTest(TestCase):
             self.module.backup_and_restore_governed_volumes(
                 package,
                 postgresql_image=self.postgresql,
+                volume_prefix=volume_prefix,
                 backup_root=self.root / "second-backup",
                 env={},
                 logs=logs,
