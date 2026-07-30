@@ -22,8 +22,10 @@ use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy
 use registry_platform_config::{
     sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
     ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
-    ConfigTrustAnchorSigner, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE, MAX_MANIFEST_BYTES,
-    MAX_SIGNATURE_ENVELOPE_BYTES, MAX_TRUST_ANCHOR_BYTES,
+    ConfigTrustAnchorSigner, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
+    ProductAcceptanceProductV1, ProductTrustDomainV1, MAX_BUNDLE_FILE_BYTES,
+    MAX_CONFIG_BUNDLE_SEQUENCE, MAX_MANIFEST_BYTES, MAX_SIGNATURE_ENVELOPE_BYTES,
+    MAX_TRUST_ANCHOR_BYTES,
 };
 use registry_platform_crypto::{
     canonicalize_json, parse_json_strict, sign as sign_payload, PrivateJwk, PublicJwk,
@@ -33,6 +35,15 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
+
+mod trust;
+
+pub use trust::{
+    create_trust_anchor, rotate_trust_anchor, sign_product_bundle, ProductBundleSignOptions,
+    ProductBundleSignReportV1, SigningInputMarkerV1, TrustAnchorCreateOptions,
+    TrustAnchorCreateReportV1, TrustAnchorRotateOptions, TrustAnchorRotateReportV1,
+    SIGNING_INPUT_MARKER_FILE, SIGNING_INPUT_SCHEMA_ID, SIGNING_INPUT_SCHEMA_VERSION,
+};
 
 mod project_authoring;
 
@@ -784,12 +795,13 @@ pub fn verify_config_bundle_cli(
 ) -> Result<BundleVerifyReport> {
     let verified = verify_config_bundle(bundle_dir, anchor_path)
         .with_context(|| format!("failed to verify config bundle {}", bundle_dir.display()))?;
+    let identity = verified.manifest.acceptance_identity.clone();
     Ok(BundleVerifyReport {
         schema_version: "registryctl.config_bundle.verify.v1".to_string(),
-        product: verified.manifest.product,
-        environment: verified.manifest.environment,
-        stream_id: verified.manifest.stream_id,
-        instance_id: verified.manifest.instance_id,
+        product: product_acceptance_product_name(identity.product).to_string(),
+        environment: identity.environment,
+        stream_id: identity.stream,
+        instance_id: Some(identity.instance),
         bundle_id: verified.manifest.bundle_id,
         sequence: verified.manifest.sequence,
         config_path: verified.config_path,
@@ -820,12 +832,19 @@ pub fn sign_config_bundle(options: BundleSignOptions) -> Result<BundleSignReport
         .find(|file| file.relative_path == primary_config_path)
         .map(|file| file.sha256.clone())
         .expect("primary config path was selected from files");
+    let instance = options
+        .instance_id
+        .clone()
+        .unwrap_or_else(|| options.stream_id.clone());
+    let acceptance_identity = legacy_product_acceptance_identity(
+        &options.product,
+        &options.environment,
+        &options.stream_id,
+        &instance,
+    )?;
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: options.product,
-        environment: options.environment,
-        stream_id: options.stream_id,
-        instance_id: options.instance_id,
+        acceptance_identity,
         bundle_id: options.bundle_id,
         sequence: options.sequence,
         previous_config_hash: None,
@@ -901,13 +920,14 @@ pub fn init_config_anchor(
     stream_id: String,
     instance_id: String,
 ) -> Result<AnchorReport> {
+    let acceptance_identity =
+        legacy_product_acceptance_identity(&product, &environment, &stream_id, &instance_id)?;
     let anchor = ConfigTrustAnchor {
         schema: CONFIG_TRUST_ANCHOR_SCHEMA.to_string(),
-        product,
-        environment,
-        stream_id,
-        instance_id,
-        signers: Vec::new(),
+        acceptance_identity,
+        version: 1,
+        threshold: 1,
+        enabled_signers: Vec::new(),
     };
     write_trust_anchor_file(anchor_path, &anchor)?;
     Ok(anchor_report(anchor_path, &anchor))
@@ -918,6 +938,9 @@ pub fn add_config_anchor_key(
     jwk_path: &Path,
     enabled: bool,
 ) -> Result<AnchorReport> {
+    if !enabled {
+        bail!("disabled trust-anchor keys are unsupported; omit the key instead");
+    }
     let mut anchor = read_anchor_unvalidated(anchor_path)?;
     let jwk_text = read_bounded_utf8_file(jwk_path, MAX_JWK_JSON_BYTES)?;
     let jwk = PublicJwk::parse(&jwk_text)
@@ -925,12 +948,19 @@ pub fn add_config_anchor_key(
     let kid = jwk
         .jkt()
         .context("failed to compute JWK thumbprint for anchor key")?;
-    if anchor.signers.iter().any(|signer| signer.kid == kid) {
+    if anchor
+        .enabled_signers
+        .iter()
+        .any(|signer| signer.kid == kid)
+    {
         bail!("trust anchor already contains signer {kid}");
     }
     anchor
-        .signers
-        .push(ConfigTrustAnchorSigner { kid, jwk, enabled });
+        .enabled_signers
+        .push(ConfigTrustAnchorSigner { kid, jwk });
+    anchor
+        .enabled_signers
+        .sort_by(|left, right| left.kid.cmp(&right.kid));
     anchor
         .validate()
         .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
@@ -940,12 +970,12 @@ pub fn add_config_anchor_key(
 
 pub fn remove_config_anchor_key(anchor_path: &Path, kid: &str) -> Result<AnchorReport> {
     let mut anchor = read_anchor_unvalidated(anchor_path)?;
-    let before = anchor.signers.len();
-    anchor.signers.retain(|signer| signer.kid != kid);
-    if anchor.signers.len() == before {
+    let before = anchor.enabled_signers.len();
+    anchor.enabled_signers.retain(|signer| signer.kid != kid);
+    if anchor.enabled_signers.len() == before {
         bail!("trust anchor does not contain signer {kid}");
     }
-    if !anchor.signers.is_empty() {
+    if !anchor.enabled_signers.is_empty() {
         anchor
             .validate()
             .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
@@ -1180,12 +1210,15 @@ fn read_anchor_unvalidated(anchor_path: &Path) -> Result<ConfigTrustAnchor> {
     if anchor.schema != CONFIG_TRUST_ANCHOR_SCHEMA {
         bail!("trust anchor schema is invalid");
     }
-    if anchor.product.trim().is_empty()
-        || anchor.environment.trim().is_empty()
-        || anchor.stream_id.trim().is_empty()
-        || anchor.instance_id.trim().is_empty()
-    {
-        bail!("trust anchor binding fields must be non-empty");
+    anchor
+        .acceptance_identity
+        .validate()
+        .context("trust anchor acceptance identity is invalid")?;
+    if anchor.version == 0 {
+        bail!("trust anchor version must be non-zero");
+    }
+    if anchor.threshold == 0 {
+        bail!("trust anchor threshold must be non-zero");
     }
     Ok(anchor)
 }
@@ -1287,16 +1320,55 @@ fn anchor_report(anchor_path: &Path, anchor: &ConfigTrustAnchor) -> AnchorReport
     AnchorReport {
         schema_version: "registryctl.config_anchor.v1".to_string(),
         anchor_path: anchor_path.to_path_buf(),
-        product: anchor.product.clone(),
-        environment: anchor.environment.clone(),
-        stream_id: anchor.stream_id.clone(),
-        instance_id: anchor.instance_id.clone(),
-        signer_count: anchor.signers.len(),
-        enabled_signer_count: anchor
-            .signers
-            .iter()
-            .filter(|signer| signer.enabled)
-            .count(),
+        product: product_acceptance_product_name(anchor.acceptance_identity.product).to_string(),
+        environment: anchor.acceptance_identity.environment.clone(),
+        stream_id: anchor.acceptance_identity.stream.clone(),
+        instance_id: anchor.acceptance_identity.instance.clone(),
+        signer_count: anchor.enabled_signers.len(),
+        enabled_signer_count: anchor.enabled_signers.len(),
+    }
+}
+
+fn legacy_product_acceptance_identity(
+    product: &str,
+    environment: &str,
+    stream: &str,
+    instance: &str,
+) -> Result<ProductAcceptanceIdentityV1> {
+    let (product, lane) = match product {
+        "registry-relay" => {
+            let lane = if stream.contains("consultation") || instance.contains("consultation") {
+                ProductAcceptanceLaneV1::RelayConsultation
+            } else {
+                ProductAcceptanceLaneV1::RelayPublic
+            };
+            (ProductAcceptanceProductV1::RegistryRelay, lane)
+        }
+        "registry-notary" => (
+            ProductAcceptanceProductV1::RegistryNotary,
+            ProductAcceptanceLaneV1::Notary,
+        ),
+        _ => bail!("unsupported config bundle product"),
+    };
+    let identity = ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: stream.to_string(),
+        environment: environment.to_string(),
+        lane,
+        product,
+        stream: stream.to_string(),
+        instance: instance.to_string(),
+    };
+    identity
+        .validate()
+        .context("legacy config acceptance identity is invalid")?;
+    Ok(identity)
+}
+
+fn product_acceptance_product_name(product: ProductAcceptanceProductV1) -> &'static str {
+    match product {
+        ProductAcceptanceProductV1::RegistryRelay => "registry-relay",
+        ProductAcceptanceProductV1::RegistryNotary => "registry-notary",
     }
 }
 
@@ -7459,7 +7531,7 @@ mod tests {
             product: "registry-notary".to_string(),
             environment: "production".to_string(),
             stream_id: "civil-registry".to_string(),
-            instance_id: None,
+            instance_id: Some("notary-011".to_string()),
             sequence: 1,
             bundle_id: "rollout-1".to_string(),
             out: bundle_dir.clone(),

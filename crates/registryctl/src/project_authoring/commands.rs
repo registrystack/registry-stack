@@ -3342,6 +3342,7 @@ fn build_registry_project_inner(
         &options.project_directory,
         Some(options.environment.as_str()),
     )?;
+    let signing_input_identities = governed_signing_input_identities(&loaded)?;
     preflight_project_rhai_scripts(&loaded)?;
     let baselines = load_verified_approved_baseline_set(
         baseline_paths,
@@ -3387,6 +3388,7 @@ fn build_registry_project_inner(
         &loaded.project.registry.id,
         &options.environment,
         &artifact_inputs,
+        &signing_input_identities,
     )?;
     let reported_output = ProjectRelativePath::new(format!("{BUILD_ROOT}/{}", options.environment))
         .map_err(|error| anyhow!("invalid project-relative build output path: {error}"))?;

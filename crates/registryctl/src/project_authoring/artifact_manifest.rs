@@ -173,7 +173,25 @@ fn collect_generated_artifacts_under(
 }
 
 fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClassification> {
-    let path = normalized_relative_path(relative)?;
+    let original_path = normalized_relative_path(relative)?;
+    if let Some(product) = signing_input_marker_consumer(&original_path) {
+        return Ok(artifact_classification(
+            crate::SIGNING_INPUT_SCHEMA_ID,
+            &[ArtifactClass::DeploymentInput],
+            ArtifactSensitivity::Internal,
+            ArtifactPublication::OperatorOnly,
+            ArtifactReviewState::GeneratedCandidate,
+            ArtifactLifecycle::UnsignedNonDeployable,
+            BUNDLE_INPUT_ACTIONS,
+            &[
+                product,
+                ArtifactConsumer::BundleSigner,
+                ArtifactConsumer::DeploymentTooling,
+                ArtifactConsumer::Operator,
+            ],
+        ));
+    }
+    let path = signing_input_legacy_path(&original_path).unwrap_or(original_path);
     let classification = if path == "reviewable/review.json" {
         artifact_classification(
             "registry.project.review.v1",
@@ -438,6 +456,29 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
     Ok(classification)
 }
 
+fn signing_input_marker_consumer(path: &str) -> Option<ArtifactConsumer> {
+    match path {
+        "signing-inputs/relay-public/signing-input.v1.json"
+        | "signing-inputs/relay-consultation/signing-input.v1.json" => {
+            Some(ArtifactConsumer::RegistryRelay)
+        }
+        "signing-inputs/notary/signing-input.v1.json" => {
+            Some(ArtifactConsumer::RegistryNotary)
+        }
+        _ => None,
+    }
+}
+
+fn signing_input_legacy_path(path: &str) -> Option<String> {
+    for lane in ["relay-public", "relay-consultation", "notary"] {
+        let prefix = format!("signing-inputs/{lane}/");
+        if let Some(tail) = path.strip_prefix(&prefix) {
+            return Some(format!("private/{lane}/{tail}"));
+        }
+    }
+    None
+}
+
 // The closed classification dimensions are intentionally visible together so
 // every generated artifact review covers the whole publication boundary.
 #[allow(clippy::too_many_arguments)]
@@ -608,5 +649,26 @@ mod artifact_manifest_tests {
                 "unexpected classification error for {path}: {error:#}"
             );
         }
+    }
+
+    #[test]
+    fn signing_input_markers_and_lane_artifacts_are_closed_and_classified() {
+        for path in [
+            "signing-inputs/relay-public/signing-input.v1.json",
+            "signing-inputs/relay-consultation/signing-input.v1.json",
+            "signing-inputs/notary/signing-input.v1.json",
+            "signing-inputs/relay-public/config/relay.yaml",
+            "signing-inputs/relay-consultation/config/relay.yaml",
+            "signing-inputs/notary/config/notary.yaml",
+        ] {
+            classify_generated_artifact(Path::new(path))
+                .unwrap_or_else(|error| panic!("{path} should be classified: {error:#}"));
+        }
+
+        let error = classify_generated_artifact(Path::new(
+            "signing-inputs/relay-public/config/artifacts/consultation-contracts/example.json",
+        ))
+        .expect_err("public Relay signing input must reject consultation output");
+        assert!(format!("{error:#}").contains("has no reviewed classification"));
     }
 }

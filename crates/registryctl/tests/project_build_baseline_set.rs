@@ -246,15 +246,16 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let state: serde_json::Value =
         serde_json::from_slice(&relay_next).expect("next approval state parses");
     assert_eq!(
-        state["baseline"]["verified_manifests"]["relay"]["product"],
+        state["baseline"]["verified_manifests"]["relay"]["acceptance_identity"]["product"],
         "registry-relay"
     );
     assert_eq!(
-        state["baseline"]["verified_manifests"]["notary"]["product"],
+        state["baseline"]["verified_manifests"]["notary"]["acceptance_identity"]["product"],
         "registry-notary"
     );
     assert_eq!(
-        state["baseline"]["verified_manifests"]["relay_consultation"]["product"],
+        state["baseline"]["verified_manifests"]["relay_consultation"]["acceptance_identity"]
+            ["product"],
         "registry-relay"
     );
     assert_eq!(

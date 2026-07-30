@@ -3,19 +3,22 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use registry_platform_config::ProductAcceptanceLaneV1;
 use registryctl::{
     add_config_anchor_key, build_registry_project_with_baselines_and_context,
     build_registry_project_with_context, check_registry_project_with_context,
-    compare_registry_projects_semantically, init_config_anchor, init_registry_project,
-    inspect_project_capabilities, preflight_registry_project, render_project_authoring_diagnostics,
-    setup_registry_project_editor, sign_config_bundle, test_registry_project_selected_with_context,
+    compare_registry_projects_semantically, create_trust_anchor, init_config_anchor,
+    init_registry_project, inspect_project_capabilities, preflight_registry_project,
+    render_project_authoring_diagnostics, setup_registry_project_editor, sign_config_bundle,
+    sign_product_bundle, test_registry_project_selected_with_context,
     test_registry_project_with_context, verify_config_bundle_cli, BundleSignOptions,
-    ClassifierSafeReportedValue, InitSource, ProjectAuthoringDiagnostics,
+    ClassifierSafeReportedValue, InitSource, ProductBundleSignOptions, ProjectAuthoringDiagnostics,
     ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityOptions,
     ProjectCheckOptions, ProjectEditorSetupOptions, ProjectExecutionContext,
     ProjectExplanationReportV1, ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions,
     ProjectPreflightOptions, ProjectSchemaKind, ProjectSemanticComparisonOptions, ProjectStarter,
     ProjectTestOptions, ProjectTestSelection, SemanticComparisonEquivalence,
+    TrustAnchorCreateOptions,
 };
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -1933,6 +1936,60 @@ fn signed_dci_rejects_wrong_jwks_algorithm_and_key_use() {
             "{error:#}"
         );
     }
+}
+
+#[test]
+fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
+    let relay_root = tempfile::tempdir().expect("Relay-only temporary directory");
+    let relay = copy_project("relay-only-records", relay_root.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: relay.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("Relay-only project tests");
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: relay.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("Relay-only project explains");
+    let relay_build = build_registry_project(&ProjectBuildOptions {
+        project_directory: relay,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("Relay-only project cannot ship a partial governed signed set");
+    assert!(format!("{relay_build:#}").contains("governed build requires"));
+
+    let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
+    let notary = copy_project("notary-only-evaluation", notary_root.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: notary.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("Notary-only project tests");
+    let check = check_registry_project(&ProjectCheckOptions {
+        project_directory: notary.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("Notary-only project explains");
+    assert!(check.explanation.is_some());
+    let notary_build = build_registry_project(&ProjectBuildOptions {
+        project_directory: notary,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("Notary-only project cannot ship a partial governed signed set");
+    assert!(format!("{notary_build:#}").contains("governed build requires"));
 }
 
 #[test]
@@ -8066,47 +8123,130 @@ fn generated_product_inputs_sign_and_verify_without_secret_values() {
     let private_key = temporary.path().join("private.jwk");
     let public_key = temporary.path().join("public.jwk");
     std::fs::write(&private_key, TEST_PRIVATE_JWK).expect("private test key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = std::fs::metadata(&private_key)
+            .expect("private key metadata reads")
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&private_key, permissions)
+            .expect("private key becomes owner-only");
+    }
     std::fs::write(&public_key, TEST_PUBLIC_JWK).expect("public test key writes");
-    for (label, product, input) in [
+    let signing_inputs = output.join("signing-inputs");
+    let mut lanes = std::fs::read_dir(&signing_inputs)
+        .expect("signing inputs enumerate")
+        .map(|entry| {
+            entry
+                .expect("lane entry reads")
+                .file_name()
+                .into_string()
+                .expect("lane name is UTF-8")
+        })
+        .collect::<Vec<_>>();
+    lanes.sort();
+    assert_eq!(
+        lanes,
+        ["notary", "relay-consultation", "relay-public"],
+        "governed build publishes exactly the three approved lanes"
+    );
+
+    for (label, product, lane, expected_instance) in [
         (
-            "relay",
+            "relay-public",
             "registry-relay",
-            output.join("private/relay-public"),
+            ProductAcceptanceLaneV1::RelayPublic,
+            "household-relay",
         ),
         (
             "relay-consultation",
             "registry-relay",
-            output.join("private/relay-consultation"),
+            ProductAcceptanceLaneV1::RelayConsultation,
+            "household-relay-consultation",
         ),
-        ("notary", "registry-notary", output.join("private/notary")),
+        (
+            "notary",
+            "registry-notary",
+            ProductAcceptanceLaneV1::Notary,
+            "household-notary",
+        ),
     ] {
-        let bundle = temporary.path().join(format!("{label}-bundle"));
+        let input = signing_inputs.join(label);
+        let marker_bytes =
+            std::fs::read(input.join("signing-input.v1.json")).expect("lane marker reads");
+        let marker: registryctl::SigningInputMarkerV1 =
+            serde_json::from_slice(&marker_bytes).expect("lane marker parses");
+        assert_eq!(marker.schema_id, "registry.stack.signing_input");
+        assert_eq!(marker.schema_version, "1.0");
+        assert_eq!(
+            marker.acceptance_identity.project,
+            "fictional-household-authority"
+        );
+        assert_eq!(marker.acceptance_identity.environment, "local");
+        assert_eq!(marker.acceptance_identity.lane, lane);
+        assert_eq!(
+            marker.acceptance_identity.stream,
+            "fictional-household-authority"
+        );
+        assert_eq!(marker.acceptance_identity.instance, expected_instance);
+
         let anchor = temporary.path().join(format!("{label}-anchor.json"));
-        init_config_anchor(
-            &anchor,
-            product.to_string(),
-            "local".to_string(),
-            "project-authoring".to_string(),
-            "project-instance".to_string(),
-        )
-        .expect("anchor initializes");
-        add_config_anchor_key(&anchor, &public_key, true).expect("anchor key adds");
-        sign_config_bundle(BundleSignOptions {
-            input,
-            key: private_key.display().to_string(),
-            product: product.to_string(),
-            environment: "local".to_string(),
-            stream_id: "project-authoring".to_string(),
-            instance_id: Some("project-instance".to_string()),
-            sequence: 1,
-            bundle_id: format!("{label}-golden"),
-            out: bundle.clone(),
+        create_trust_anchor(&TrustAnchorCreateOptions {
+            lane,
+            input: input.clone(),
+            public_keys: vec![public_key.clone()],
+            threshold: 1,
+            output_file: anchor.clone(),
         })
-        .expect("generated input signs");
-        let verified = verify_config_bundle_cli(&bundle, &anchor).expect("signed bundle verifies");
+        .expect("lane anchor creates");
+        let signed_output = temporary.path().join(format!("{label}-signed"));
+        sign_product_bundle(&ProductBundleSignOptions {
+            lane,
+            input,
+            anchor,
+            keys: vec![format!("file:{}", private_key.display())],
+            output_dir: signed_output.clone(),
+        })
+        .expect("generated lane input signs");
+        let verified = verify_config_bundle_cli(
+            &signed_output.join("bundle"),
+            &signed_output.join("anchor.json"),
+        )
+        .expect("signed lane bundle verifies");
         assert_eq!(verified.product, product);
         assert_eq!(verified.signer_kids.len(), 1);
     }
+
+    let first_markers = ["relay-public", "relay-consultation", "notary"].map(|lane| {
+        std::fs::read(
+            output
+                .join("signing-inputs")
+                .join(lane)
+                .join("signing-input.v1.json"),
+        )
+        .expect("first marker reads")
+    });
+    let repeated = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("repeated project build succeeds");
+    let repeated_output =
+        resolve_build_output(&project, repeated.output.expect("repeated build output"));
+    let repeated_markers = ["relay-public", "relay-consultation", "notary"].map(|lane| {
+        std::fs::read(
+            repeated_output
+                .join("signing-inputs")
+                .join(lane)
+                .join("signing-input.v1.json"),
+        )
+        .expect("repeated marker reads")
+    });
+    assert_eq!(first_markers, repeated_markers);
 }
 
 #[cfg(unix)]

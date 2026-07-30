@@ -7,16 +7,18 @@ use registryctl::{
     AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
     BundleVerifyReport, ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat,
     FieldSourceKind, FixtureRequestBindingState, InitProjectKind, InitReport, InitSource,
-    MigrationDisposition, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
-    ProjectCapabilityInventoryReportV1, ProjectCapabilityOptions, ProjectCheckOptions,
-    ProjectCommandReport, ProjectEditorSetupOptions, ProjectEditorSetupReport,
-    ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext, ProjectFieldAddress,
-    ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions, ProjectMigrationReportV1,
-    ProjectPreflightOptions, ProjectPreflightReportV1, ProjectPromotionOptions,
-    ProjectPromotionReportV1, ProjectSchemaKind, ProjectSemanticComparisonOptions,
-    ProjectSemanticComparisonReportV1, ProjectStarter, ProjectStarterSemanticComparisonOptions,
-    ProjectTestOptions, ProjectTestSelection, ProjectTrustedLocalAuthoredValue,
-    PromotionDisposition, RedactionReason, Sample, SemanticComparisonRequiredAction,
+    MigrationDisposition, ProductBundleSignOptions, ProductBundleSignReportV1,
+    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
+    ProjectCapabilityOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectEditorSetupReport, ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext,
+    ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions,
+    ProjectMigrationReportV1, ProjectPreflightOptions, ProjectPreflightReportV1,
+    ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
+    ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
+    ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
+    ProjectTrustedLocalAuthoredValue, PromotionDisposition, RedactionReason, Sample,
+    SemanticComparisonRequiredAction, TrustAnchorCreateOptions, TrustAnchorCreateReportV1,
+    TrustAnchorRotateOptions, TrustAnchorRotateReportV1,
 };
 
 fn main() -> Result<()> {
@@ -497,6 +499,22 @@ fn main() -> Result<()> {
                 })?;
                 print_formatted_report(format, &report, render_bundle_sign_report)?;
             }
+            BundleCommand::SignInput {
+                lane,
+                input,
+                anchor,
+                keys,
+                output_dir,
+            } => {
+                let report = registryctl::sign_product_bundle(&ProductBundleSignOptions {
+                    lane: lane.into(),
+                    input,
+                    anchor,
+                    keys,
+                    output_dir,
+                })?;
+                print_formatted_report(format, &report, render_product_bundle_sign_report)?;
+            }
         },
         Commands::Anchor { format, command } => match command {
             AnchorCommand::Init {
@@ -533,6 +551,38 @@ fn main() -> Result<()> {
                 print_formatted_report(format, &report, |report| {
                     render_anchor_report(report, "Updated")
                 })?;
+            }
+            AnchorCommand::Create {
+                lane,
+                input,
+                public_keys,
+                threshold,
+                output_file,
+            } => {
+                let report = registryctl::create_trust_anchor(&TrustAnchorCreateOptions {
+                    lane: lane.into(),
+                    input,
+                    public_keys,
+                    threshold,
+                    output_file,
+                })?;
+                print_formatted_report(format, &report, render_trust_anchor_create_report)?;
+            }
+            AnchorCommand::Rotate {
+                current_anchor,
+                next_public_keys,
+                next_threshold,
+                keys,
+                output_dir,
+            } => {
+                let report = registryctl::rotate_trust_anchor(&TrustAnchorRotateOptions {
+                    current_anchor,
+                    next_public_keys,
+                    next_threshold,
+                    keys,
+                    output_dir,
+                })?;
+                print_formatted_report(format, &report, render_trust_anchor_rotate_report)?;
             }
         },
         Commands::Bruno { command } => match command {
@@ -1132,16 +1182,20 @@ fn render_bundle_inspect_report(report: &BundleInspectReport) -> Result<String> 
     let manifest = &report.manifest;
     let mut output = String::new();
     writeln!(output, "Config Bundle {:?}.", manifest.bundle_id)?;
-    writeln!(output, "  Product: {}", human_line(&manifest.product))?;
+    let identity = &manifest.acceptance_identity;
+    writeln!(
+        output,
+        "  Product: {}",
+        acceptance_product_name(identity.product)
+    )?;
     writeln!(
         output,
         "  Environment: {}",
-        human_line(&manifest.environment)
+        human_line(&identity.environment)
     )?;
-    writeln!(output, "  Stream: {}", human_line(&manifest.stream_id))?;
-    if let Some(instance_id) = &manifest.instance_id {
-        writeln!(output, "  Instance: {}", human_line(instance_id))?;
-    }
+    writeln!(output, "  Lane: {}", acceptance_lane_name(identity.lane))?;
+    writeln!(output, "  Stream: {}", human_line(&identity.stream))?;
+    writeln!(output, "  Instance: {}", human_line(&identity.instance))?;
     writeln!(output, "  Sequence: {}", manifest.sequence)?;
     writeln!(
         output,
@@ -1172,6 +1226,25 @@ fn render_bundle_verify_report(report: &BundleVerifyReport) -> Result<String> {
     writeln!(output, "  Config hash: {}", human_line(&report.config_hash))?;
     writeln!(output, "  Signers: {}", human_list(&report.signer_kids))?;
     Ok(output.trim_end().to_string())
+}
+
+fn acceptance_product_name(
+    product: registry_platform_config::ProductAcceptanceProductV1,
+) -> &'static str {
+    match product {
+        registry_platform_config::ProductAcceptanceProductV1::RegistryRelay => "registry-relay",
+        registry_platform_config::ProductAcceptanceProductV1::RegistryNotary => "registry-notary",
+    }
+}
+
+fn acceptance_lane_name(lane: registry_platform_config::ProductAcceptanceLaneV1) -> &'static str {
+    match lane {
+        registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => "relay-public",
+        registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+            "relay-consultation"
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+    }
 }
 
 fn render_bundle_sign_report(report: &BundleSignReport) -> Result<String> {
@@ -1205,6 +1278,23 @@ fn render_bundle_sign_report(report: &BundleSignReport) -> Result<String> {
     Ok(output.trim_end().to_string())
 }
 
+fn render_product_bundle_sign_report(report: &ProductBundleSignReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Signed {:?} bundle at {}.",
+        report.lane,
+        human_path(&report.output_dir)
+    )?;
+    writeln!(output, "  Config hash: {}", human_line(&report.config_hash))?;
+    writeln!(output, "  Signers: {}", human_list(&report.signer_kids))?;
+    writeln!(output, "  Anchor: {}", human_line(&report.anchor_digest))?;
+    writeln!(output, "  Next: {}", report.next_action)?;
+    Ok(output.trim_end().to_string())
+}
+
 fn render_anchor_report(report: &AnchorReport, action: &str) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -1223,6 +1313,44 @@ fn render_anchor_report(report: &AnchorReport, action: &str) -> Result<String> {
         "  Signers: {} enabled, {} total",
         report.enabled_signer_count, report.signer_count
     )?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_trust_anchor_create_report(report: &TrustAnchorCreateReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Created {:?} trust anchor at {}.",
+        report.lane,
+        human_path(&report.output_file)
+    )?;
+    writeln!(output, "  Version: {}", report.anchor_version)?;
+    writeln!(output, "  Threshold: {}", report.threshold)?;
+    writeln!(output, "  Anchor: {}", human_line(&report.anchor_digest))?;
+    writeln!(output, "  Next: {}", report.next_action)?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_trust_anchor_rotate_report(report: &TrustAnchorRotateReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Rotated {:?} trust anchor at {}.",
+        report.lane,
+        human_path(&report.output_dir)
+    )?;
+    writeln!(
+        output,
+        "  Version: {} -> {}",
+        report.predecessor_anchor_version, report.next_anchor_version
+    )?;
+    writeln!(output, "  Threshold: {}", report.threshold)?;
+    writeln!(output, "  Anchor: {}", human_line(&report.anchor_digest))?;
+    writeln!(output, "  Next: {}", report.next_action)?;
     Ok(output.trim_end().to_string())
 }
 
@@ -2877,10 +3005,15 @@ mod tests {
     fn human_bundle_and_anchor_reports_surface_operator_decisions() {
         let manifest = registry_platform_config::ConfigBundleManifest {
             schema: "registry.platform.config_bundle.v1".to_string(),
-            product: "registry-notary".to_string(),
-            environment: "production".to_string(),
-            stream_id: "civil-registry".to_string(),
-            instance_id: Some("notary-011".to_string()),
+            acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1 {
+                trust_domain: registry_platform_config::ProductTrustDomainV1::Governed,
+                project: "civil-registry".to_string(),
+                environment: "production".to_string(),
+                lane: registry_platform_config::ProductAcceptanceLaneV1::Notary,
+                product: registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+                stream: "civil-registry".to_string(),
+                instance: "notary-011".to_string(),
+            },
             bundle_id: "rollout-3".to_string(),
             sequence: 42,
             previous_config_hash: None,
@@ -3400,6 +3533,97 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn hidden_signed_input_commands_parse_closed_lane_and_repeatable_keys() {
+        let create = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "create",
+            "--lane",
+            "relay-consultation",
+            "--input",
+            "signing-inputs/relay-consultation",
+            "--public-key",
+            "first-public.jwk",
+            "--public-key",
+            "second-public.jwk",
+            "--threshold",
+            "2",
+            "--output-file",
+            "anchor.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            create.command,
+            Commands::Anchor {
+                command: AnchorCommand::Create {
+                    lane: TrustLane::RelayConsultation,
+                    public_keys,
+                    threshold: 2,
+                    ..
+                },
+                ..
+            } if public_keys.len() == 2
+        ));
+
+        let rotate = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "rotate",
+            "--current-anchor",
+            "anchor.json",
+            "--next-public-key",
+            "next-public.jwk",
+            "--next-threshold",
+            "1",
+            "--key",
+            "file:current-private.jwk",
+            "--output-dir",
+            "rotation",
+        ])
+        .unwrap();
+        assert!(matches!(
+            rotate.command,
+            Commands::Anchor {
+                command: AnchorCommand::Rotate {
+                    next_threshold: 1,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let sign = Cli::try_parse_from([
+            "registryctl",
+            "bundle",
+            "sign-input",
+            "--lane",
+            "notary",
+            "--input",
+            "signing-inputs/notary",
+            "--anchor",
+            "anchor.json",
+            "--key",
+            "op://Registry/Notary/private-jwk",
+            "--key",
+            "file:notary-private-backup.jwk",
+            "--output-dir",
+            "signed-notary",
+        ])
+        .unwrap();
+        assert!(matches!(
+            sign.command,
+            Commands::Bundle {
+                command: BundleCommand::SignInput {
+                    lane: TrustLane::Notary,
+                    keys,
+                    ..
+                },
+                ..
+            } if keys.len() == 2
+        ));
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -3462,6 +3686,25 @@ enum BundleCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Sign one generated lane input using its closed acceptance identity.
+    #[command(hide = true, name = "sign-input")]
+    SignInput {
+        /// Product lane selected for signing.
+        #[arg(long, value_enum)]
+        lane: TrustLane,
+        /// Generated lane input containing signing-input.v1.json.
+        #[arg(long)]
+        input: PathBuf,
+        /// Trust anchor bound to the exact lane acceptance identity.
+        #[arg(long)]
+        anchor: PathBuf,
+        /// Private JWK locator using file: or op://.
+        #[arg(long = "key", required = true)]
+        keys: Vec<String>,
+        /// Fresh directory that will receive the signed bundle and anchor.
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -3505,6 +3748,64 @@ enum AnchorCommand {
         #[arg(long)]
         kid: String,
     },
+    /// Create an immutable initial trust anchor for one generated lane input.
+    #[command(hide = true)]
+    Create {
+        /// Product lane selected for the trust anchor.
+        #[arg(long, value_enum)]
+        lane: TrustLane,
+        /// Generated lane input containing signing-input.v1.json.
+        #[arg(long)]
+        input: PathBuf,
+        /// Public JWK to enable. Repeat for each signer.
+        #[arg(long = "public-key", required = true)]
+        public_keys: Vec<PathBuf>,
+        /// Required number of distinct valid signatures.
+        #[arg(long)]
+        threshold: u32,
+        /// Fresh trust-anchor file to create.
+        #[arg(long)]
+        output_file: PathBuf,
+    },
+    /// Authorize the next immutable trust anchor with current trusted keys.
+    #[command(hide = true)]
+    Rotate {
+        /// Current trust-anchor file.
+        #[arg(long)]
+        current_anchor: PathBuf,
+        /// Public JWK to enable in the next anchor. Repeat for each signer.
+        #[arg(long = "next-public-key", required = true)]
+        next_public_keys: Vec<PathBuf>,
+        /// Required number of distinct signatures for the next anchor.
+        #[arg(long)]
+        next_threshold: u32,
+        /// Current private-key locator using file: or op://. Repeat to meet threshold.
+        #[arg(long = "key", required = true)]
+        keys: Vec<String>,
+        /// Fresh directory that will receive anchor.json and transition.json.
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum TrustLane {
+    #[value(name = "relay-public")]
+    RelayPublic,
+    #[value(name = "relay-consultation")]
+    RelayConsultation,
+    #[value(name = "notary")]
+    Notary,
+}
+
+impl From<TrustLane> for registry_platform_config::ProductAcceptanceLaneV1 {
+    fn from(lane: TrustLane) -> Self {
+        match lane {
+            TrustLane::RelayPublic => Self::RelayPublic,
+            TrustLane::RelayConsultation => Self::RelayConsultation,
+            TrustLane::Notary => Self::Notary,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

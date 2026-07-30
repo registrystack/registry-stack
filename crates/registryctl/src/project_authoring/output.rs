@@ -583,6 +583,7 @@ fn generated_evidence(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_compiled_project(
     root: &Path,
     output: &Path,
@@ -591,7 +592,16 @@ fn write_compiled_project(
     project: &str,
     environment: &str,
     artifact_inputs: &[ArtifactInputDigest],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
 ) -> Result<ProjectArtifactManifestRef> {
+    if compiled.relay_private.is_empty()
+        || compiled.relay_consultation_private.is_empty()
+        || compiled.notary_private.is_empty()
+    {
+        bail!(
+            "governed build requires complete relay-public, relay-consultation, and notary signing inputs"
+        );
+    }
     let expected_parent = root.join(BUILD_ROOT);
     let parent = output
         .parent()
@@ -643,6 +653,31 @@ fn write_compiled_project(
             &approval_state_bytes,
         )?;
     }
+    for (identity, files) in [
+        (&signing_input_identities[0], &compiled.relay_private),
+        (
+            &signing_input_identities[1],
+            &compiled.relay_consultation_private,
+        ),
+        (&signing_input_identities[2], &compiled.notary_private),
+    ] {
+        let lane_root = temporary
+            .join("signing-inputs")
+            .join(product_acceptance_lane_name(identity.lane));
+        create_dir_owner_only(&lane_root)?;
+        write_file_map(&lane_root, files)?;
+        write_private_file(&lane_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
+        write_private_file(
+            &lane_root.join(APPROVAL_STATE_PATH),
+            &approval_state_bytes,
+        )?;
+        let marker = crate::SigningInputMarkerV1::governed(identity.clone())?;
+        let marker_bytes = crate::trust::canonical_signing_input_marker(&marker)?;
+        write_private_file(
+            &lane_root.join(crate::SIGNING_INPUT_MARKER_FILE),
+            &marker_bytes,
+        )?;
+    }
     if let Some(identity) = runtime_identity {
         // The temporary build root is freshly created owner-only state and is
         // not published until the rename below. Privileged ownership changes
@@ -683,6 +718,79 @@ fn write_compiled_project(
             .with_context(|| format!("failed to remove prior build {}", backup.display()))?;
     }
     Ok(artifact_manifest)
+}
+
+fn governed_signing_input_identities(
+    loaded: &LoadedRegistryProject,
+) -> Result<[registry_platform_config::ProductAcceptanceIdentityV1; 3]> {
+    use registry_platform_config::{
+        ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+        ProductTrustDomainV1,
+    };
+
+    let environment_name = loaded
+        .environment_name
+        .as_deref()
+        .ok_or_else(|| anyhow!("governed build requires an explicit environment"))?;
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("governed build requires an environment binding"))?;
+    let relay = environment
+        .deployment
+        .relay
+        .as_ref()
+        .ok_or_else(|| anyhow!("governed build requires a public and consultation Relay binding"))?;
+    let notary = environment
+        .deployment
+        .notary
+        .as_ref()
+        .ok_or_else(|| anyhow!("governed build requires a Notary binding"))?;
+    let project = loaded.project.registry.id.clone();
+    let identity = |lane, product, instance| ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: project.clone(),
+        environment: environment_name.to_string(),
+        lane,
+        product,
+        stream: project.clone(),
+        instance,
+    };
+    let identities = [
+        identity(
+            ProductAcceptanceLaneV1::RelayPublic,
+            ProductAcceptanceProductV1::RegistryRelay,
+            relay.service.clone(),
+        ),
+        identity(
+            ProductAcceptanceLaneV1::RelayConsultation,
+            ProductAcceptanceProductV1::RegistryRelay,
+            format!("{}-consultation", relay.service),
+        ),
+        identity(
+            ProductAcceptanceLaneV1::Notary,
+            ProductAcceptanceProductV1::RegistryNotary,
+            notary.service.clone(),
+        ),
+    ];
+    for identity in &identities {
+        identity
+            .validate()
+            .context("generated signing-input acceptance identity is invalid")?;
+    }
+    Ok(identities)
+}
+
+fn product_acceptance_lane_name(
+    lane: registry_platform_config::ProductAcceptanceLaneV1,
+) -> &'static str {
+    match lane {
+        registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => "relay-public",
+        registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+            "relay-consultation"
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+    }
 }
 
 #[cfg(unix)]
@@ -884,10 +992,24 @@ impl std::fmt::Display for LegacyRelayConsultationBaselineMigrationRequired {
 impl std::error::Error for LegacyRelayConsultationBaselineMigrationRequired {}
 
 impl VerifiedBaselineLane {
-    fn product(self) -> &'static str {
+    fn product(self) -> registry_platform_config::ProductAcceptanceProductV1 {
         match self {
-            Self::Relay | Self::RelayConsultation => "registry-relay",
-            Self::Notary => "registry-notary",
+            Self::Relay | Self::RelayConsultation => {
+                registry_platform_config::ProductAcceptanceProductV1::RegistryRelay
+            }
+            Self::Notary => {
+                registry_platform_config::ProductAcceptanceProductV1::RegistryNotary
+            }
+        }
+    }
+
+    fn acceptance_lane(self) -> registry_platform_config::ProductAcceptanceLaneV1 {
+        match self {
+            Self::Relay => registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
+            Self::RelayConsultation => {
+                registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation
+            }
+            Self::Notary => registry_platform_config::ProductAcceptanceLaneV1::Notary,
         }
     }
 
@@ -1098,14 +1220,21 @@ fn load_verified_baseline(
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("verified baseline requires an explicit environment"))?;
-    let lane = expected_lane.unwrap_or(match verified.manifest.product.as_str() {
-        "registry-relay" => VerifiedBaselineLane::Relay,
-        "registry-notary" => VerifiedBaselineLane::Notary,
-        _ => bail!("verified baseline manifest has an unsupported product"),
+    let identity = &verified.manifest.acceptance_identity;
+    let lane = expected_lane.unwrap_or(match identity.lane {
+        registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => {
+            VerifiedBaselineLane::Relay
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+            VerifiedBaselineLane::RelayConsultation
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::Notary => VerifiedBaselineLane::Notary,
     });
-    if verified.manifest.product != lane.product() || verified.manifest.environment != environment
+    if identity.product != lane.product()
+        || identity.lane != lane.acceptance_lane()
+        || identity.environment != environment
     {
-        bail!("verified baseline manifest is not bound to this product environment");
+        bail!("verified baseline manifest is not bound to this product lane and environment");
     }
     let review_bytes =
         read_verified_bundle_payload(bundle, &verified.manifest, APPROVAL_REVIEW_PATH, "review")?;
@@ -1239,7 +1368,9 @@ fn validate_verified_product_closure(
     manifest: &registry_platform_config::ConfigBundleManifest,
     lane: VerifiedBaselineLane,
 ) -> Result<()> {
-    if manifest.product != lane.product() {
+    if manifest.acceptance_identity.product != lane.product()
+        || manifest.acceptance_identity.lane != lane.acceptance_lane()
+    {
         bail!("verified baseline manifest has the wrong product for its selected lane");
     }
     let closure = lane.closure();
@@ -1630,23 +1761,26 @@ fn validate_approval_baseline(
             "baseline approval verified_manifests",
         )?;
         let mut present = 0_usize;
-        for (field, expected_product, projected_product, required) in [
+        for (field, expected_product, expected_lane, projected_product, required) in [
             (
                 "relay",
-                "registry-relay",
+                registry_platform_config::ProductAcceptanceProductV1::RegistryRelay,
+                registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
                 PromotionProjectedProduct::Relay,
                 promotion_products
                     .is_some_and(|products| products.contains(&PromotionProjectedProduct::Relay)),
             ),
             (
                 "relay_consultation",
-                "registry-relay",
+                registry_platform_config::ProductAcceptanceProductV1::RegistryRelay,
+                registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation,
                 PromotionProjectedProduct::Relay,
                 consultation_closure,
             ),
             (
                 "notary",
-                "registry-notary",
+                registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+                registry_platform_config::ProductAcceptanceLaneV1::Notary,
                 PromotionProjectedProduct::Notary,
                 promotion_products
                     .is_some_and(|products| products.contains(&PromotionProjectedProduct::Notary)),
@@ -1670,7 +1804,10 @@ fn validate_approval_baseline(
             manifest
                 .validate()
                 .context("baseline approval product manifest identity is invalid")?;
-            if manifest.product != expected_product || manifest.environment != environment {
+            if manifest.acceptance_identity.product != expected_product
+                || manifest.acceptance_identity.lane != expected_lane
+                || manifest.acceptance_identity.environment != environment
+            {
                 bail!("baseline approval product manifest identity has the wrong product");
             }
             if !required
@@ -1702,7 +1839,7 @@ fn validate_approval_baseline(
         manifest
             .validate()
             .context("baseline approval verified_manifest is invalid")?;
-        if manifest.environment != environment {
+        if manifest.acceptance_identity.environment != environment {
             bail!("baseline approval verified_manifest has the wrong environment");
         }
     }
