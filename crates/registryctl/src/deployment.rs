@@ -6,10 +6,11 @@ use std::process::{Command, Stdio};
 
 use crate::approved_set::{ApprovedBaselineSetV1, ApprovedLaneV1, PortableArtifactLocator};
 use crate::release_lock::{
-    verify_release_lock_for_package, VerifiedProductRuntimeV1, VerifiedReleaseLockV1,
-    VerifiedRuntimeMappingV1, VerifiedSupportingRuntimeV1,
+    verify_installed_release_lock, verify_release_lock_for_package, VerifiedProductRuntimeV1,
+    VerifiedReleaseLockV1, VerifiedRuntimeMappingV1, VerifiedSupportingRuntimeV1,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use registry_platform_config::ProductAcceptanceIdentityV1;
 use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
@@ -1025,6 +1026,19 @@ pub struct DeploymentPackageRenderRequestV1 {
     pub verified_inputs: VerifiedDeploymentInputsV1,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeploymentGenerateRequestV1 {
+    pub approved_set_file: PathBuf,
+    pub output_dir: PathBuf,
+}
+
+pub struct DeploymentVerifyRequestV1<'a> {
+    pub package_dir: &'a Path,
+    pub expected_approved_set_file: Option<&'a Path>,
+    pub parent_compose_files: &'a [PathBuf],
+    pub externally_recorded_closure_sha256: Option<String>,
+}
+
 /// The single generation authority assembled after product-lane and release
 /// verification. Its fields are private so a caller cannot independently mix
 /// an approved set, image plan, command mapping, and release lock.
@@ -1039,6 +1053,7 @@ pub struct VerifiedDeploymentInputsV1 {
     registry_release_lock: Vec<u8>,
     registry_release_lock_sha256: String,
     lanes: Vec<VerifiedLanePackageSourceV1>,
+    acceptance_identity: ProductAcceptanceIdentityV1,
 }
 
 impl VerifiedDeploymentInputsV1 {
@@ -1063,6 +1078,7 @@ impl VerifiedDeploymentInputsV1 {
             release_lock.envelope_bytes().to_vec(),
             release_lock.envelope_sha256().to_string(),
             true,
+            None,
         )
     }
 
@@ -1073,6 +1089,7 @@ impl VerifiedDeploymentInputsV1 {
         plan: DeploymentPlanV1,
         runtime: LockedRuntimeMappingV1,
         release_metadata: DeploymentReleaseMetadataV1,
+        acceptance_identity: ProductAcceptanceIdentityV1,
     ) -> Result<Self> {
         let approved_root = approved_set_file
             .parent()
@@ -1091,6 +1108,7 @@ impl VerifiedDeploymentInputsV1 {
             registry_release_lock,
             registry_release_lock_sha256,
             false,
+            Some(acceptance_identity),
         )
     }
 
@@ -1110,6 +1128,7 @@ impl VerifiedDeploymentInputsV1 {
             release_lock.envelope_bytes().to_vec(),
             release_lock.envelope_sha256().to_string(),
             true,
+            None,
         )
     }
 
@@ -1123,6 +1142,7 @@ impl VerifiedDeploymentInputsV1 {
         registry_release_lock: Vec<u8>,
         registry_release_lock_sha256: String,
         independently_verify_lanes: bool,
+        test_acceptance_identity: Option<ProductAcceptanceIdentityV1>,
     ) -> Result<Self> {
         plan.validate()?;
         runtime.validate()?;
@@ -1140,6 +1160,21 @@ impl VerifiedDeploymentInputsV1 {
             #[cfg(not(test))]
             unreachable!("structural approved-set loading is test-only");
         };
+        let acceptance_identity = if independently_verify_lanes {
+            crate::approved_set::verify_approved_lane_from_set_with_root(
+                approved_set_file,
+                ApprovedLaneV1::RelayPublic,
+                approved_artifact_root,
+            )?
+            .acceptance_identity()
+            .clone()
+        } else {
+            test_acceptance_identity
+                .ok_or_else(|| anyhow!("test deployment identity is unavailable"))?
+        };
+        acceptance_identity
+            .validate()
+            .context("deployment acceptance identity is invalid")?;
         let source_approved_set_sha256 = source_approved_set.digest()?;
         let canonical_root = fs::canonicalize(approved_artifact_root)
             .context("failed to resolve approved-set artifact root")?;
@@ -1219,11 +1254,8 @@ impl VerifiedDeploymentInputsV1 {
             registry_release_lock,
             registry_release_lock_sha256,
             lanes,
+            acceptance_identity,
         })
-    }
-
-    pub fn plan(&self) -> &DeploymentPlanV1 {
-        &self.plan
     }
 }
 
@@ -1251,6 +1283,291 @@ fn deployment_authority(
     runtime.validate()?;
     release_metadata.validate()?;
     Ok((plan, runtime, release_metadata))
+}
+
+pub fn generate_deployment_package(
+    request: DeploymentGenerateRequestV1,
+) -> Result<DeploymentPackageRenderReportV1> {
+    let installed_release_lock = verified_installed_release_lock()?;
+    let verified_inputs = VerifiedDeploymentInputsV1::from_verified_components(
+        &request.approved_set_file,
+        &installed_release_lock,
+    )?;
+    generate_deployment_package_core(&request, verified_inputs, None, true)
+}
+
+#[cfg(test)]
+pub(crate) fn generate_deployment_package_with_test_inputs(
+    request: DeploymentGenerateRequestV1,
+    verified_inputs: VerifiedDeploymentInputsV1,
+    preceding_inputs: Option<&VerifiedDeploymentInputsV1>,
+) -> Result<DeploymentPackageRenderReportV1> {
+    generate_deployment_package_core(&request, verified_inputs, preceding_inputs, false)
+}
+
+pub fn verify_generated_deployment(
+    request: DeploymentVerifyRequestV1<'_>,
+) -> Result<DeploymentOwnershipReportV1> {
+    let installed_release_lock = verified_installed_release_lock()?;
+    let installed_inputs = VerifiedDeploymentInputsV1::from_verified_package(
+        request.package_dir,
+        &installed_release_lock,
+    )
+    .context("installed release deployment projection is invalid")?;
+    let expected_approved_baseline_set_sha256 = request
+        .expected_approved_set_file
+        .map(|path| {
+            crate::approved_set::load_approved_baseline_set(path)
+                .and_then(|set| set.digest())
+                .context("expected approved set failed independent verification")
+        })
+        .transpose()?;
+    verify_deployment_package(&DeploymentPackageVerificationRequestV1 {
+        package_dir: request.package_dir,
+        verified_inputs: &installed_inputs,
+        parent_compose_files: request.parent_compose_files,
+        expected_inputs: ExpectedGenerationInputsV1 {
+            source_approved_baseline_set_sha256: expected_approved_baseline_set_sha256,
+            registry_release_lock_sha256: None,
+            externally_recorded_closure_sha256: request.externally_recorded_closure_sha256,
+        },
+    })
+}
+
+fn generate_deployment_package_core(
+    request: &DeploymentGenerateRequestV1,
+    verified_inputs: VerifiedDeploymentInputsV1,
+    preceding_test_inputs: Option<&VerifiedDeploymentInputsV1>,
+    use_production_verifier: bool,
+) -> Result<DeploymentPackageRenderReportV1> {
+    if output_is_absent_or_empty(&request.output_dir)? {
+        let binding = safe_binding_for_inputs(&verified_inputs)?;
+        return render_deployment_package(&DeploymentPackageRenderRequestV1 {
+            output_dir: request.output_dir.clone(),
+            binding,
+            verified_inputs,
+        });
+    }
+
+    let previous = request.output_dir.join("generated.previous");
+    match fs::symlink_metadata(&previous) {
+        Ok(_) => {
+            bail!("deployment regeneration refuses an unresolved generated.previous closure")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).context("failed to inspect the preceding generated closure")
+        }
+    }
+
+    let preceding_inputs = if use_production_verifier {
+        load_verified_package_inputs(&request.output_dir)?
+    } else {
+        preceding_test_inputs
+            .cloned()
+            .ok_or_else(|| anyhow!("test regeneration requires preceding package authority"))?
+    };
+    if preceding_inputs.acceptance_identity.project != verified_inputs.acceptance_identity.project
+        || preceding_inputs.acceptance_identity.environment
+            != verified_inputs.acceptance_identity.environment
+    {
+        bail!("deployment regeneration cannot change the signed project or environment identity");
+    }
+
+    let binding_bytes = read_bounded_regular_file(
+        &request.output_dir.join("binding.yaml"),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )?;
+    let binding: DeploymentBindingV1 = serde_norway::from_slice(&binding_bytes)
+        .context("existing deployment binding is not a supported closed document")?;
+    binding.validate()?;
+    let preceding_manifest: DeploymentManifestV1 = read_json(
+        &request
+            .output_dir
+            .join("generated/deployment-manifest.v1.json"),
+    )?;
+    let binding_changed = preceding_manifest.binding_sha256 != sha256_uri(&binding_bytes);
+    let product_or_evidence_update = preceding_manifest.source_approved_baseline_set_sha256
+        != verified_inputs.source_approved_set_sha256
+        || preceding_manifest.registry_release_lock_sha256
+            != verified_inputs.registry_release_lock_sha256;
+    if binding_changed && product_or_evidence_update {
+        bail!(
+            "deployment regeneration cannot combine a binding change with a product or evidence update"
+        );
+    }
+    let expected_binding = safe_binding_for_inputs(&verified_inputs)?;
+    if binding.package_id != expected_binding.package_id
+        || binding.environment != expected_binding.environment
+    {
+        bail!("existing deployment binding does not match the signed package identity");
+    }
+
+    let verification_request = DeploymentPackageVerificationRequestV1 {
+        package_dir: &request.output_dir,
+        verified_inputs: &verified_inputs,
+        parent_compose_files: &[],
+        expected_inputs: ExpectedGenerationInputsV1 {
+            source_approved_baseline_set_sha256: Some(
+                verified_inputs.source_approved_set_sha256.clone(),
+            ),
+            ..ExpectedGenerationInputsV1::default()
+        },
+    };
+    let preceding_report = if use_production_verifier {
+        verify_deployment_package(&verification_request)?
+    } else {
+        verify_deployment_package_with_package_inputs(&verification_request, &preceding_inputs)?
+    };
+    let may_regenerate = preceding_report.ownership == DeploymentOwnershipStateV1::Managed
+        || (preceding_report.ownership == DeploymentOwnershipStateV1::Adapted
+            && preceding_report.in_place_regeneration_safe);
+    if !may_regenerate {
+        bail!(
+            "deployment regeneration refuses a package outside managed or override-only ownership"
+        );
+    }
+    if preceding_report.ownership == DeploymentOwnershipStateV1::Managed
+        && preceding_report.package_freshness == PackageFreshnessV1::Current
+    {
+        return existing_render_report(&request.output_dir, &verified_inputs, &binding);
+    }
+    if preceding_inputs.release_metadata.postgresql_major
+        != verified_inputs.release_metadata.postgresql_major
+    {
+        bail!("deployment regeneration refuses a PostgreSQL major transition");
+    }
+
+    let parent = request
+        .output_dir
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let candidate_parent = tempfile::Builder::new()
+        .prefix(".registry-stack-regeneration-")
+        .tempdir_in(parent)
+        .context("failed to stage deployment regeneration")?;
+    let package_name = request
+        .output_dir
+        .file_name()
+        .ok_or_else(|| anyhow!("deployment output directory has no package name"))?;
+    let candidate = candidate_parent.path().join(package_name);
+    let mut candidate_report = render_deployment_package(&DeploymentPackageRenderRequestV1 {
+        output_dir: candidate.clone(),
+        binding: binding.clone(),
+        verified_inputs: verified_inputs.clone(),
+    })?;
+    let override_path = request.output_dir.join("operator-override.yaml");
+    match fs::symlink_metadata(&override_path) {
+        Ok(_) => copy_regular_file(&override_path, &candidate.join("operator-override.yaml"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("failed to inspect the operator override"),
+    }
+    let candidate_verification = DeploymentPackageVerificationRequestV1 {
+        package_dir: &candidate,
+        verified_inputs: &verified_inputs,
+        parent_compose_files: &[],
+        expected_inputs: ExpectedGenerationInputsV1 {
+            source_approved_baseline_set_sha256: Some(
+                verified_inputs.source_approved_set_sha256.clone(),
+            ),
+            externally_recorded_closure_sha256: Some(
+                candidate_report.externally_recorded_closure_sha256.clone(),
+            ),
+            ..ExpectedGenerationInputsV1::default()
+        },
+    };
+    let candidate_ownership = if use_production_verifier {
+        verify_deployment_package(&candidate_verification)?
+    } else {
+        verify_deployment_package_with_package_inputs(&candidate_verification, &verified_inputs)?
+    };
+    if !(candidate_ownership.ownership == DeploymentOwnershipStateV1::Managed
+        || (candidate_ownership.ownership == DeploymentOwnershipStateV1::Adapted
+            && candidate_ownership.in_place_regeneration_safe))
+    {
+        bail!("staged deployment closure failed managed verification");
+    }
+
+    let generated = request.output_dir.join("generated");
+    let candidate_generated = candidate.join("generated");
+    fs::rename(&generated, &previous)
+        .context("failed to retain the preceding generated closure")?;
+    if let Err(error) = fs::rename(&candidate_generated, &generated) {
+        let rollback = fs::rename(&previous, &generated);
+        if let Err(rollback_error) = rollback {
+            return Err(error).context(format!(
+                "failed to publish the candidate closure and failed to restore the preceding closure: {rollback_error}"
+            ));
+        }
+        return Err(error).context("failed to publish the candidate generated closure");
+    }
+    candidate_report.output_dir = request.output_dir.clone();
+    Ok(candidate_report)
+}
+
+fn verified_installed_release_lock() -> Result<VerifiedReleaseLockV1> {
+    let executable = std::env::current_exe().context("running Registryctl path is unavailable")?;
+    let sibling = executable
+        .parent()
+        .ok_or_else(|| anyhow!("running Registryctl has no parent directory"))?
+        .join("registry-release-lock.v1.json");
+    verify_installed_release_lock(&sibling)
+}
+
+fn load_verified_package_inputs(package_dir: &Path) -> Result<VerifiedDeploymentInputsV1> {
+    let release_lock_bytes = read_bounded_regular_file(
+        &package_dir.join("generated/inputs/registry-release-lock.v1.json"),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )?;
+    let release_lock = verify_release_lock_for_package(&release_lock_bytes)
+        .context("package Registry release lock verification failed")?;
+    VerifiedDeploymentInputsV1::from_verified_package(package_dir, &release_lock)
+}
+
+fn safe_binding_for_inputs(inputs: &VerifiedDeploymentInputsV1) -> Result<DeploymentBindingV1> {
+    let identity = &inputs.acceptance_identity;
+    identity
+        .validate()
+        .context("signed deployment identity is invalid")?;
+    let identity_bytes = canonicalize_json(&json!({
+        "project": identity.project,
+        "environment": identity.environment,
+    }))?;
+    let digest = hex::encode(Sha256::digest(&identity_bytes));
+    Ok(DeploymentBindingV1::safe_default(
+        format!("registry-{}", &digest[..24]),
+        identity.environment.clone(),
+    ))
+}
+
+fn output_is_absent_or_empty(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                bail!("deployment output must be an absent or regular directory");
+            }
+            Ok(fs::read_dir(path)?.next().is_none())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).context("failed to inspect deployment output"),
+    }
+}
+
+fn existing_render_report(
+    output_dir: &Path,
+    inputs: &VerifiedDeploymentInputsV1,
+    binding: &DeploymentBindingV1,
+) -> Result<DeploymentPackageRenderReportV1> {
+    let manifest: DeploymentManifestV1 =
+        read_json(&output_dir.join("generated/deployment-manifest.v1.json"))?;
+    Ok(DeploymentPackageRenderReportV1 {
+        output_dir: output_dir.to_path_buf(),
+        source_approved_baseline_set_sha256: manifest.source_approved_baseline_set_sha256.clone(),
+        externally_recorded_closure_sha256: manifest.generated_closure_sha256.clone(),
+        manifest,
+        models: render_compose_package(inputs, binding)?.models,
+    })
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -1502,7 +1819,7 @@ pub struct DeploymentPackageVerificationRequestV1<'a> {
 pub fn verify_deployment_package(
     request: &DeploymentPackageVerificationRequestV1<'_>,
 ) -> Result<DeploymentOwnershipReportV1> {
-    let release_lock_bytes = read_bounded(
+    let release_lock_bytes = read_bounded_regular_file(
         &request
             .package_dir
             .join("generated/inputs/registry-release-lock.v1.json"),
@@ -1530,8 +1847,11 @@ fn verify_deployment_package_with_package_inputs(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     package_inputs: &VerifiedDeploymentInputsV1,
 ) -> Result<DeploymentOwnershipReportV1> {
-    let binding_bytes = fs::read(request.package_dir.join("binding.yaml"))
-        .context("failed to read deployment binding")?;
+    let binding_bytes = read_bounded_regular_file(
+        &request.package_dir.join("binding.yaml"),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )
+    .context("failed to read deployment binding")?;
     let binding: DeploymentBindingV1 = serde_norway::from_slice(&binding_bytes)
         .context("deployment binding is not a supported closed document")?;
     binding.validate()?;
@@ -1551,17 +1871,22 @@ fn verify_deployment_package_with_package_inputs(
     verify_deployment_package_core(request, package_inputs, &effective_models, &expected_models)
 }
 
+#[cfg(test)]
 pub(crate) fn verify_deployment_package_with_models(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     effective_models: &EffectiveComposeModelsV1,
 ) -> Result<DeploymentOwnershipReportV1> {
     let rendered = render_compose_package(
         request.verified_inputs,
-        &serde_norway::from_slice::<DeploymentBindingV1>(&fs::read(
-            request.package_dir.join("binding.yaml"),
+        &serde_norway::from_slice::<DeploymentBindingV1>(&read_bounded_regular_file(
+            &request.package_dir.join("binding.yaml"),
+            MAX_PORTABLE_DOCUMENT_BYTES,
         )?)?,
     )?;
-    let binding_bytes = fs::read(request.package_dir.join("binding.yaml"))?;
+    let binding_bytes = read_bounded_regular_file(
+        &request.package_dir.join("binding.yaml"),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )?;
     let manifest: DeploymentManifestV1 = read_json(
         &request
             .package_dir
@@ -1596,8 +1921,11 @@ fn verify_deployment_package_core(
     let installed_inputs = request.verified_inputs;
     inputs.plan.validate()?;
     inputs.runtime.validate()?;
-    let binding_bytes = fs::read(request.package_dir.join("binding.yaml"))
-        .context("failed to read deployment binding")?;
+    let binding_bytes = read_bounded_regular_file(
+        &request.package_dir.join("binding.yaml"),
+        MAX_PORTABLE_DOCUMENT_BYTES,
+    )
+    .context("failed to read deployment binding")?;
     let package_binding = serde_norway::from_slice::<DeploymentBindingV1>(&binding_bytes);
     let binding_valid = package_binding
         .as_ref()
@@ -1711,7 +2039,7 @@ fn verify_deployment_package_core(
             .join("generated/inputs/approved-baseline-set.v1.json"),
         MAX_PORTABLE_DOCUMENT_BYTES,
     )?;
-    let release_lock_bytes = read_bounded(
+    let release_lock_bytes = read_bounded_regular_file(
         &request
             .package_dir
             .join("generated/inputs/registry-release-lock.v1.json"),
@@ -1759,8 +2087,6 @@ fn verify_deployment_package_core(
     {
         violations.push("deployment package contains an unexpected implicit .env".to_string());
     }
-    stale |=
-        manifest.source_approved_baseline_set_sha256 != installed_inputs.source_approved_set_sha256;
     stale |= manifest.registry_release_lock_sha256 != installed_inputs.registry_release_lock_sha256;
     if let Some(expected) = &request.expected_inputs.source_approved_baseline_set_sha256 {
         stale |= expected != &manifest.source_approved_baseline_set_sha256;
@@ -2333,6 +2659,7 @@ fn normalize_managed_base_models(package_dir: &Path) -> Result<EffectiveComposeM
     })
 }
 
+#[cfg(test)]
 fn stored_rendered_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1> {
     let ordinary: Value = serde_norway::from_slice(&read_bounded(
         &package_dir.join("generated/compose.yaml"),
@@ -3031,6 +3358,7 @@ fn initialization_with_effective_ordinary(
     Some(expected)
 }
 
+#[cfg(test)]
 pub(crate) fn merge_compose_delta(base: &Value, delta: &Value) -> Result<Value> {
     fn merge(target: &mut Value, overlay: &Value) {
         match (target, overlay) {
@@ -3542,6 +3870,15 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
         bail!("deployment package file exceeds its size limit");
     }
     Ok(bytes)
+}
+
+fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
+        bail!("deployment package input must be a bounded regular non-symlink file");
+    }
+    read_bounded(path, max_bytes)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {

@@ -17,9 +17,9 @@ use approved_set::{
     APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 use deployment::{
-    render_deployment_package, verify_deployment_package_with_models,
-    verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentOwnershipStateV1,
-    DeploymentPackageRenderRequestV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
+    generate_deployment_package_with_test_inputs, verify_deployment_package_with_models,
+    verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentGenerateRequestV1,
+    DeploymentOwnershipStateV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
     DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
     ImageIdentityV1, LockedProductRuntimeV1, LockedRuntimeMappingV1, LockedSupportingRuntimeV1,
     ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
@@ -93,6 +93,7 @@ fn write_source_tree(root: &Path, lane: ApprovedLaneV1) {
 struct PackageFixture {
     _temp: tempfile::TempDir,
     package: PathBuf,
+    approved_set_file: PathBuf,
     verified_inputs: VerifiedDeploymentInputsV1,
     models: deployment::RenderedComposeModelsV1,
     externally_recorded_root: String,
@@ -137,7 +138,6 @@ fn package_fixture() -> PackageFixture {
     fs::write(&approved, approved_set.canonical_bytes().unwrap()).unwrap();
     fs::write(&release_lock, "{\"release\":\"1.0.0\"}\n").unwrap();
     let plan = plan();
-    let binding = binding();
     let runtime = runtime();
     let verified_inputs = VerifiedDeploymentInputsV1::from_test_components(
         &approved,
@@ -149,22 +149,73 @@ fn package_fixture() -> PackageFixture {
             minimum_compose_version: "2.35.0".to_string(),
             postgresql_major: 17,
         },
+        approved_set_support::identity(ApprovedLaneV1::RelayPublic, "deployment-test"),
     )
     .unwrap();
     let package = temp.path().join("registry-stack");
-    let report = render_deployment_package(&DeploymentPackageRenderRequestV1 {
-        output_dir: package.clone(),
-        binding: binding.clone(),
-        verified_inputs: verified_inputs.clone(),
-    })
+    let report = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: approved.clone(),
+            output_dir: package.clone(),
+        },
+        verified_inputs.clone(),
+        None,
+    )
     .unwrap();
     PackageFixture {
         _temp: temp,
         package,
+        approved_set_file: approved,
         verified_inputs,
         models: report.models,
         externally_recorded_root: report.externally_recorded_closure_sha256,
     }
+}
+
+fn updated_inputs(
+    fixture: &PackageFixture,
+    release: &str,
+    postgresql_major: u16,
+) -> VerifiedDeploymentInputsV1 {
+    let release_lock = fixture
+        .approved_set_file
+        .parent()
+        .unwrap()
+        .join(format!("registry-release-lock-{release}.v1.json"));
+    fs::write(&release_lock, format!("{{\"release\":\"{release}\"}}\n")).unwrap();
+    VerifiedDeploymentInputsV1::from_test_components(
+        &fixture.approved_set_file,
+        &release_lock,
+        plan(),
+        runtime(),
+        DeploymentReleaseMetadataV1 {
+            generator_release: format!("registryctl {release}-test"),
+            minimum_compose_version: "2.35.0".to_string(),
+            postgresql_major,
+        },
+        approved_set_support::identity(ApprovedLaneV1::RelayPublic, "deployment-test"),
+    )
+    .unwrap()
+}
+
+fn file_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn collect(root: &Path, current: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(current).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                collect(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    collect(root, root, &mut files);
+    files
 }
 
 fn verify(
@@ -716,4 +767,195 @@ fn production_verifier_parses_local_parent_includes_and_rejects_private_access()
         .violations
         .iter()
         .any(|violation| violation.contains("private product boundary")));
+}
+
+#[test]
+fn high_level_generation_derives_a_safe_binding_from_signed_identity() {
+    let fixture = package_fixture();
+    fs::remove_dir_all(&fixture.package).unwrap();
+    generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        fixture.verified_inputs.clone(),
+        None,
+    )
+    .unwrap();
+    let binding: DeploymentBindingV1 =
+        serde_norway::from_slice(&fs::read(fixture.package.join("binding.yaml")).unwrap()).unwrap();
+    assert_eq!(binding.environment, "production");
+    assert!(binding.package_id.starts_with("registry-"));
+    assert_ne!(binding.package_id, "registry-test");
+    generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        fixture.verified_inputs.clone(),
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap();
+    assert!(!fixture.package.join("generated.previous").exists());
+}
+
+#[test]
+fn regeneration_preserves_binding_operator_and_verified_override_byte_for_byte() {
+    let fixture = package_fixture();
+    let operator_file = fixture.package.join("operator/secrets/operator-kept");
+    fs::write(&operator_file, b"operator-owned\n").unwrap();
+    let override_file = fixture.package.join("operator-override.yaml");
+    fs::write(
+        &override_file,
+        "services:\n  registry-relay-public:\n    labels:\n      example.owner: operator\n",
+    )
+    .unwrap();
+    let binding_before = fs::read(fixture.package.join("binding.yaml")).unwrap();
+    let operator_before = file_tree(&fixture.package.join("operator"));
+    let override_before = fs::read(&override_file).unwrap();
+    let next = updated_inputs(&fixture, "1.0.1", 17);
+
+    generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read(fixture.package.join("binding.yaml")).unwrap(),
+        binding_before
+    );
+    assert_eq!(
+        file_tree(&fixture.package.join("operator")),
+        operator_before
+    );
+    assert_eq!(fs::read(override_file).unwrap(), override_before);
+    assert!(fixture.package.join("generated.previous").is_dir());
+}
+
+#[test]
+fn regeneration_verifies_the_older_lock_and_retains_its_generated_closure() {
+    let fixture = package_fixture();
+    let old_lock = fs::read(
+        fixture
+            .package
+            .join("generated/inputs/registry-release-lock.v1.json"),
+    )
+    .unwrap();
+    let next = updated_inputs(&fixture, "1.0.1", 17);
+
+    generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read(
+            fixture
+                .package
+                .join("generated.previous/inputs/registry-release-lock.v1.json")
+        )
+        .unwrap(),
+        old_lock
+    );
+    assert_ne!(
+        fs::read(
+            fixture
+                .package
+                .join("generated/inputs/registry-release-lock.v1.json")
+        )
+        .unwrap(),
+        old_lock
+    );
+}
+
+#[test]
+fn regeneration_refuses_an_unresolved_preceding_closure() {
+    let fixture = package_fixture();
+    fs::create_dir(fixture.package.join("generated.previous")).unwrap();
+    let next = updated_inputs(&fixture, "1.0.1", 17);
+    let error = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("unresolved generated.previous"));
+}
+
+#[test]
+fn regeneration_refuses_adapted_generator_owned_files() {
+    let fixture = package_fixture();
+    fs::write(
+        fixture.package.join("generated/RUNBOOK.md"),
+        b"operator edited generated content\n",
+    )
+    .unwrap();
+    let next = updated_inputs(&fixture, "1.0.1", 17);
+    let error = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("outside managed or override-only ownership"));
+    assert!(!fixture.package.join("generated.previous").exists());
+}
+
+#[test]
+fn regeneration_refuses_a_postgresql_major_transition_before_staging() {
+    let fixture = package_fixture();
+    let next = updated_inputs(&fixture, "1.1.0", 18);
+    let error = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("PostgreSQL major transition"));
+    assert!(!fixture.package.join("generated.previous").exists());
+}
+
+#[test]
+fn regeneration_does_not_mix_a_binding_change_with_a_release_update() {
+    let fixture = package_fixture();
+    let binding_file = fixture.package.join("binding.yaml");
+    let mut changed: DeploymentBindingV1 =
+        serde_norway::from_slice(&fs::read(&binding_file).unwrap()).unwrap();
+    changed.durable_volume_prefix = "registry-reviewed-binding".to_string();
+    fs::write(&binding_file, serde_norway::to_string(&changed).unwrap()).unwrap();
+    let next = updated_inputs(&fixture, "1.0.1", 17);
+    let error = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+        },
+        next,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("cannot combine a binding change"));
+    assert!(!fixture.package.join("generated.previous").exists());
 }
