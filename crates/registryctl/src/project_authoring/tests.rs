@@ -1346,8 +1346,8 @@ outputs:
         let loaded = load_registry_project(&project, Some("local")).expect("golden project loads");
         let compiled = compile_project(&loaded, None).expect("golden project compiles");
         let relay = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
             .expect("consultation Relay config exists");
         let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
 
@@ -1358,8 +1358,8 @@ outputs:
             let bytes = serde_norway::to_string(&tampered).expect("tampered config serializes");
             let error = validate_generated_relay(
                 bytes.as_bytes(),
-                &compiled.relay_private,
-                "config/relay-consultation.yaml",
+                &compiled.relay_consultation_private,
+                "config/relay.yaml",
             )
             .expect_err("tampered binding pin must fail closed");
             let diagnostic = format!("{error:#}");
@@ -1377,19 +1377,59 @@ outputs:
             .expect("golden project loads");
         let compiled = compile_project(&loaded, None).expect("golden project compiles");
         let public_path = Path::new("config/relay.yaml");
-        let consultation_path = Path::new("config/relay-consultation.yaml");
+        let consultation_path = Path::new("config/relay.yaml");
         let public_bytes = compiled
             .relay_private
             .get(public_path)
             .expect("public Relay config exists");
         let consultation_bytes = compiled
-            .relay_private
+            .relay_consultation_private
             .get(consultation_path)
             .expect("consultation Relay config exists");
         let public: Value =
             serde_norway::from_slice(public_bytes).expect("public Relay config parses");
         let consultation: Value =
             serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
+
+        assert_eq!(
+            compiled
+                .relay_private
+                .keys()
+                .map(PathBuf::as_path)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                Path::new("config/relay.yaml"),
+                Path::new("descriptors/operations.json"),
+                Path::new("descriptors/secret-consumers.json"),
+            ]),
+            "the public Relay input contains only instance-applicable generated members"
+        );
+        let referenced_artifacts = consultation["consultation"]["artifacts"]
+            .as_object()
+            .expect("consultation artifact closure exists")
+            .values()
+            .flat_map(|entries| {
+                entries
+                    .as_array()
+                    .expect("consultation artifact class is a list")
+            })
+            .map(|entry| {
+                entry["path"]
+                    .as_str()
+                    .expect("consultation artifact has a path")
+            })
+            .collect::<BTreeSet<_>>();
+        let vendored_artifacts = compiled
+            .relay_consultation_private
+            .keys()
+            .filter_map(|path| path.strip_prefix("config").ok())
+            .filter_map(|path| path.to_str())
+            .filter(|path| path.starts_with("artifacts/"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            vendored_artifacts, referenced_artifacts,
+            "the consultation Relay input vendors exactly its selected artifacts"
+        );
 
         assert!(public.get("consultation").is_none());
         assert!(consultation.get("consultation").is_some());
@@ -1410,12 +1450,64 @@ outputs:
             consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
             false
         );
+        let public_operations: Value = serde_json::from_slice(
+            compiled
+                .relay_private
+                .get(Path::new("descriptors/operations.json"))
+                .expect("public Relay operations descriptor exists"),
+        )
+        .expect("public Relay operations descriptor parses");
+        let consultation_operations: Value = serde_json::from_slice(
+            compiled
+                .relay_consultation_private
+                .get(Path::new("descriptors/operations.json"))
+                .expect("consultation Relay operations descriptor exists"),
+        )
+        .expect("consultation Relay operations descriptor parses");
+        assert_eq!(public_operations["service"], "household-relay");
+        assert_eq!(public_operations["consultation_profiles"], 0);
+        assert_eq!(
+            consultation_operations["service"],
+            "household-relay-consultation"
+        );
+        assert_eq!(consultation_operations["consultation_profiles"], 1);
+
+        for (files, config) in [
+            (&compiled.relay_private, &public),
+            (&compiled.relay_consultation_private, &consultation),
+        ] {
+            let descriptor: Value = serde_json::from_slice(
+                files
+                    .get(Path::new("descriptors/secret-consumers.json"))
+                    .expect("Relay secret-consumer descriptor exists"),
+            )
+            .expect("Relay secret-consumer descriptor parses");
+            assert_eq!(
+                descriptor,
+                secret_consumer_descriptor("registry-relay", config),
+                "each Relay instance describes only the secrets selected by its primary config"
+            );
+        }
+        assert_eq!(
+            compiled.approval_state["generated_closure_digests"]["relay"],
+            json!(closure_digest(&compiled.relay_private).expect("public Relay closure digests"))
+        );
+        assert_eq!(
+            compiled.approval_state["generated_closure_digests"]["relay_consultation"],
+            json!(closure_digest(&compiled.relay_consultation_private)
+                .expect("consultation Relay closure digests"))
+        );
+        assert_ne!(
+            compiled.approval_state["generated_closure_digests"]["relay"],
+            compiled.approval_state["generated_closure_digests"]["relay_consultation"],
+            "the approval state independently binds both Relay instances"
+        );
         validate_generated_relay(public_bytes, &compiled.relay_private, "config/relay.yaml")
             .expect("public Relay passes production loading");
         validate_generated_relay(
             consultation_bytes,
-            &compiled.relay_private,
-            "config/relay-consultation.yaml",
+            &compiled.relay_consultation_private,
+            "config/relay.yaml",
         )
         .expect("consultation Relay passes production loading and activation");
     }
@@ -1445,8 +1537,8 @@ outputs:
             compile_project(&loaded, None).expect("non-canonical local project compiles");
         let unrelated_consultation: Value = serde_norway::from_slice(
             unrelated
-                .relay_private
-                .get(Path::new("config/relay-consultation.yaml"))
+                .relay_consultation_private
+                .get(Path::new("config/relay.yaml"))
                 .expect("consultation Relay config exists"),
         )
         .expect("consultation Relay config parses");
@@ -1483,8 +1575,8 @@ outputs:
         )
         .expect("public Relay config parses");
         let consultation_bytes = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
             .expect("consultation Relay config exists");
         let consultation: Value =
             serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
@@ -3452,12 +3544,25 @@ outputs:
         validate_signed_review_record(&review).expect("current review record is valid");
         validate_signed_approval_state(&approval_state).expect("current approval state is valid");
 
+        let mut legacy_v3_state = approval_state.clone();
+        legacy_v3_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V3);
+        legacy_v3_state["generated_closure_digests"]
+            .as_object_mut()
+            .expect("legacy closure digest set is an object")
+            .remove("relay_consultation");
+        validate_signed_approval_state(&legacy_v3_state)
+            .expect("v3 signed state remains parseable for baseline compatibility");
+
         let mut legacy_state = approval_state.clone();
         legacy_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
         legacy_state
             .as_object_mut()
             .expect("legacy approval state is an object")
             .remove("promotion_projection");
+        legacy_state["generated_closure_digests"]
+            .as_object_mut()
+            .expect("legacy closure digest set is an object")
+            .remove("relay_consultation");
         validate_signed_approval_state(&legacy_state)
             .expect("legacy signed state remains parseable for fail-closed migration reporting");
 

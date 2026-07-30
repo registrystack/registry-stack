@@ -102,7 +102,7 @@
         },
         {
           "kind": "product_input",
-          "count": 2
+          "count": 3
         },
         {
           "kind": "generated_artifact",
@@ -121,6 +121,7 @@
     "review_semantic_changes",
     "run_affected_fixtures",
     "regenerate_generated_artifacts",
+    "review_sign_activate_relay_consultation_input",
     "resign_relay_bundle",
     "resign_notary_bundle",
     "reactivate_relay_configuration",

@@ -86,7 +86,7 @@ fn sign_product_baseline(
     SignedProductBaseline { bundle, anchor }
 }
 
-fn sign_common_pair(
+fn sign_common_set(
     output: &Path,
     temporary: &Path,
     suffix: &str,
@@ -99,6 +99,14 @@ fn sign_common_pair(
         "local",
         &format!("{suffix}-relay"),
     );
+    let relay_consultation = sign_product_baseline(
+        output,
+        temporary,
+        "registry-relay",
+        "relay-consultation",
+        "local",
+        &format!("{suffix}-relay-consultation"),
+    );
     let notary = sign_product_baseline(
         output,
         temporary,
@@ -110,6 +118,8 @@ fn sign_common_pair(
     ProjectBuildBaselineSetOptions {
         relay_against: Some(relay.bundle),
         relay_anchor: Some(relay.anchor),
+        relay_consultation_against: Some(relay_consultation.bundle),
+        relay_consultation_anchor: Some(relay_consultation.anchor),
         notary_against: Some(notary.bundle),
         notary_anchor: Some(notary.anchor),
     }
@@ -161,22 +171,30 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let output = initial_build(&project);
     let relay_initial = std::fs::read(output.join("private/relay/approval/project-state.json"))
         .expect("initial Relay approval state reads");
+    let relay_consultation_initial =
+        std::fs::read(output.join("private/relay-consultation/approval/project-state.json"))
+            .expect("initial consultation Relay approval state reads");
     let notary_initial = std::fs::read(output.join("private/notary/approval/project-state.json"))
         .expect("initial Notary approval state reads");
+    assert_eq!(relay_initial, relay_consultation_initial);
     assert_eq!(relay_initial, notary_initial);
     let initial_state: serde_json::Value =
         serde_json::from_slice(&relay_initial).expect("initial approval state parses");
     assert_eq!(
         initial_state["schema"],
-        "registry.project.approval-state.v3"
+        "registry.project.approval-state.v4"
     );
     assert!(initial_state["baseline"].is_null());
 
-    let baselines = sign_common_pair(&output, temporary.path(), "common");
+    let baselines = sign_common_set(&output, temporary.path(), "common");
     let relay_baseline = baselines
         .relay_against
         .as_deref()
         .expect("Relay baseline exists");
+    let relay_consultation_baseline = baselines
+        .relay_consultation_against
+        .as_deref()
+        .expect("consultation Relay baseline exists");
     let notary_baseline = baselines
         .notary_against
         .as_deref()
@@ -188,10 +206,22 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
             .expect("signed Notary approval state reads")
     );
     assert_eq!(
+        std::fs::read(relay_baseline.join("approval/project-state.json"))
+            .expect("signed Relay approval state reads"),
+        std::fs::read(relay_consultation_baseline.join("approval/project-state.json"))
+            .expect("signed consultation Relay approval state reads")
+    );
+    assert_eq!(
         std::fs::read(relay_baseline.join("approval/review.json"))
             .expect("signed Relay review reads"),
         std::fs::read(notary_baseline.join("approval/review.json"))
             .expect("signed Notary review reads")
+    );
+    assert_eq!(
+        std::fs::read(relay_baseline.join("approval/review.json"))
+            .expect("signed Relay review reads"),
+        std::fs::read(relay_consultation_baseline.join("approval/review.json"))
+            .expect("signed consultation Relay review reads")
     );
     let report = build_registry_project_with_baselines_and_context(
         &build_options(&project),
@@ -204,8 +234,12 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let next_output = project.join(report.output.expect("reviewed build output is reported"));
     let relay_next = std::fs::read(next_output.join("private/relay/approval/project-state.json"))
         .expect("next Relay approval state reads");
+    let relay_consultation_next =
+        std::fs::read(next_output.join("private/relay-consultation/approval/project-state.json"))
+            .expect("next consultation Relay approval state reads");
     let notary_next = std::fs::read(next_output.join("private/notary/approval/project-state.json"))
         .expect("next Notary approval state reads");
+    assert_eq!(relay_next, relay_consultation_next);
     assert_eq!(relay_next, notary_next);
     let state: serde_json::Value =
         serde_json::from_slice(&relay_next).expect("next approval state parses");
@@ -218,12 +252,20 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
         "registry-notary"
     );
     assert_eq!(
+        state["baseline"]["verified_manifests"]["relay_consultation"]["product"],
+        "registry-relay"
+    );
+    assert_eq!(
         state["baseline"]["verified_manifests"]["relay"]["bundle_id"],
         "common-relay-bundle"
     );
     assert_eq!(
         state["baseline"]["verified_manifests"]["notary"]["bundle_id"],
         "common-notary-bundle"
+    );
+    assert_eq!(
+        state["baseline"]["verified_manifests"]["relay_consultation"]["bundle_id"],
+        "common-relay-consultation-bundle"
     );
 }
 
@@ -234,7 +276,7 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     let output = initial_build(&project);
     let original_state = std::fs::read(output.join("private/relay/approval/project-state.json"))
         .expect("initial approval state reads");
-    let baselines = sign_common_pair(&output, temporary.path(), "rejection");
+    let baselines = sign_common_set(&output, temporary.path(), "rejection");
 
     let partial = ProjectBuildBaselineSetOptions {
         relay_against: baselines.relay_against.clone(),
@@ -251,10 +293,19 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     let swapped = ProjectBuildBaselineSetOptions {
         relay_against: baselines.notary_against.clone(),
         relay_anchor: baselines.notary_anchor.clone(),
+        relay_consultation_against: baselines.relay_consultation_against.clone(),
+        relay_consultation_anchor: baselines.relay_consultation_anchor.clone(),
         notary_against: baselines.relay_against.clone(),
         notary_anchor: baselines.relay_anchor.clone(),
     };
     assert_value_free_rejection(&project, &swapped, temporary.path());
+
+    let wrong_relay_closure = ProjectBuildBaselineSetOptions {
+        relay_consultation_against: baselines.relay_against.clone(),
+        relay_consultation_anchor: baselines.relay_anchor.clone(),
+        ..baselines.clone()
+    };
+    assert_value_free_rejection(&project, &wrong_relay_closure, temporary.path());
 
     let tampered_bundle = temporary.path().join("tampered-relay-bundle");
     copy_tree(
@@ -285,6 +336,8 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     let wrong_environment = ProjectBuildBaselineSetOptions {
         relay_against: Some(wrong_environment.bundle),
         relay_anchor: Some(wrong_environment.anchor),
+        relay_consultation_against: baselines.relay_consultation_against,
+        relay_consultation_anchor: baselines.relay_consultation_anchor,
         notary_against: baselines.notary_against,
         notary_anchor: baselines.notary_anchor,
     };
@@ -303,6 +356,14 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
         "relay",
         "local",
         "divergent-relay",
+    );
+    let relay_consultation = sign_product_baseline(
+        &first_output,
+        temporary.path(),
+        "registry-relay",
+        "relay-consultation",
+        "local",
+        "divergent-relay-consultation",
     );
 
     let environment_path = project.join("environments/local.yaml");
@@ -328,8 +389,84 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
     let divergent = ProjectBuildBaselineSetOptions {
         relay_against: Some(relay.bundle),
         relay_anchor: Some(relay.anchor),
+        relay_consultation_against: Some(relay_consultation.bundle),
+        relay_consultation_anchor: Some(relay_consultation.anchor),
         notary_against: Some(notary.bundle),
         notary_anchor: Some(notary.anchor),
     };
     assert_value_free_rejection(&project, &divergent, temporary.path());
+}
+
+#[test]
+fn legacy_v3_relay_baseline_requires_split_lane_re_review() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let project = initialize_project(temporary.path());
+    let output = initial_build(&project);
+    let legacy_output = temporary.path().join("legacy-v3-output");
+    copy_tree(&output, &legacy_output);
+
+    let state_path = legacy_output.join("private/relay/approval/project-state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).expect("current approval state reads"))
+            .expect("current approval state parses");
+    state["schema"] = serde_json::json!("registry.project.approval-state.v3");
+    state["generated_closure_digests"]
+        .as_object_mut()
+        .expect("closure set is an object")
+        .remove("relay_consultation");
+    let mut state_bytes = serde_json::to_vec_pretty(&state).expect("legacy state serializes");
+    state_bytes.push(b'\n');
+    for product_directory in ["relay", "notary"] {
+        std::fs::write(
+            legacy_output
+                .join("private")
+                .join(product_directory)
+                .join("approval/project-state.json"),
+            &state_bytes,
+        )
+        .expect("legacy approval state writes");
+    }
+
+    let relay = sign_product_baseline(
+        &legacy_output,
+        temporary.path(),
+        "registry-relay",
+        "relay",
+        "local",
+        "legacy-v3-relay",
+    );
+    let notary = sign_product_baseline(
+        &legacy_output,
+        temporary.path(),
+        "registry-notary",
+        "notary",
+        "local",
+        "legacy-v3-notary",
+    );
+    let legacy = ProjectBuildBaselineSetOptions {
+        relay_against: Some(relay.bundle),
+        relay_anchor: Some(relay.anchor),
+        relay_consultation_against: None,
+        relay_consultation_anchor: None,
+        notary_against: Some(notary.bundle),
+        notary_anchor: Some(notary.anchor),
+    };
+
+    let error = build_registry_project_with_baselines_and_context(
+        &build_options(&project),
+        &legacy,
+        &context(),
+    )
+    .expect_err("v3 combined Relay baseline cannot prove split consultation lineage");
+    let message = format!("{error:#}");
+    assert!(message.contains("legacy v1-v3 approved Relay baselines"));
+    assert!(message.contains("re-review"));
+    assert!(message.contains("separate Relay public and consultation baselines"));
+    for forbidden in [
+        "approved-baseline-project",
+        "FICTIONAL_REGISTRY_TOKEN",
+        temporary.path().to_str().expect("temporary path is UTF-8"),
+    ] {
+        assert!(!message.contains(forbidden));
+    }
 }

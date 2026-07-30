@@ -101,6 +101,31 @@ Treat generated Relay and Notary configuration as build output, not as another
 authoring surface. `registryctl` diagnostics apply to the project sources that
 produced that output. Hand-editing compiled configuration is unsupported and
 has no project-level diagnostic path; change the project and regenerate it.
+When a project includes consultation profiles, the build emits separate
+`private/relay` and `private/relay-consultation` signing inputs. Each contains
+one primary `config/relay.yaml` plus only that runtime instance's artifacts,
+operations, and secret-consumer descriptor. The matching Notary input remains
+under `private/notary`.
+
+When continuing from approved signed inputs, supply each generated runtime
+instance through its matching baseline pair:
+
+```sh
+registryctl build \
+  --project-dir registry-project \
+  --environment local \
+  --relay-against public-relay-bundle \
+  --relay-anchor public-relay-anchor.json \
+  --relay-consultation-against consultation-relay-bundle \
+  --relay-consultation-anchor consultation-relay-anchor.json \
+  --notary-against notary-bundle \
+  --notary-anchor notary-anchor.json
+```
+
+Omit a pair only when that product input is absent from the project topology.
+The earlier v1-v3 combined Relay closure cannot prove independent lineage for
+the split public and consultation inputs. Re-review that project and sign both
+new Relay inputs before continuing its approved baseline.
 
 OAuth client-credentials integrations select one exact token-response shape
 with `source.auth.response_profile`:

@@ -25,6 +25,7 @@ fn compile_project_for_environment(
     validate_entity_generation_changes(loaded, environment, baseline)?;
     let mut reviewable = BTreeMap::new();
     let mut relay_private = BTreeMap::new();
+    let mut relay_consultation_private = BTreeMap::new();
     let mut packs = BTreeMap::new();
 
     for (id, entity) in &loaded.entities {
@@ -45,16 +46,16 @@ fn compile_project_for_environment(
         let path = PathBuf::from(format!("config/artifacts/integration-packs/{alias}.json"));
         let review_path = PathBuf::from(format!("integration-packs/{alias}.json"));
         reviewable.insert(review_path, authored.canonical_json().into());
-        relay_private.insert(path, authored.canonical_json().into());
+        relay_consultation_private.insert(path, authored.canonical_json().into());
         for artifact in &evidence {
-            relay_private.insert(
+            relay_consultation_private.insert(
                 PathBuf::from("config").join(&artifact.path),
                 artifact.bytes.clone(),
             );
         }
         if integration.script.is_some() {
             let script_path = canonical_rhai_script_path(loaded, alias)?;
-            relay_private.insert(
+            relay_consultation_private.insert(
                 PathBuf::from("config").join(script_path),
                 compiled_rhai_source(integration)?,
             );
@@ -124,8 +125,9 @@ fn compile_project_for_environment(
                 "config/artifacts/private-bindings/{service_id}-{consultation_name}.json"
             ));
             reviewable.insert(review_path, contract.artifact().canonical_json().into());
-            relay_private.insert(contract_path, contract.artifact().canonical_json().into());
-            relay_private.insert(binding_path, binding.canonical_json().into());
+            relay_consultation_private
+                .insert(contract_path, contract.artifact().canonical_json().into());
+            relay_consultation_private.insert(binding_path, binding.canonical_json().into());
             profiles.push(GeneratedProfile {
                 service_id: service_id.clone(),
                 consultation_name: consultation_name.clone(),
@@ -153,9 +155,7 @@ fn compile_project_for_environment(
                 .into_bytes()
                 .into_boxed_slice(),
         );
-        let consultation_relay_config = if profiles.is_empty() {
-            None
-        } else {
+        if !profiles.is_empty() {
             let consultation_relay_config = generated_relay_config(
                 loaded,
                 environment_name,
@@ -164,34 +164,50 @@ fn compile_project_for_environment(
                 &profiles,
                 GeneratedRelayConfigKind::Consultation,
             )?;
-            relay_private.insert(
-                PathBuf::from("config/relay-consultation.yaml"),
+            relay_consultation_private.insert(
+                PathBuf::from("config/relay.yaml"),
                 serde_norway::to_string(&consultation_relay_config)?
                     .into_bytes()
                     .into_boxed_slice(),
             );
-            Some(consultation_relay_config)
-        };
+            relay_consultation_private.insert(
+                PathBuf::from("descriptors/operations.json"),
+                canonical_json_line(&operational_descriptor(
+                    "registry-relay",
+                    &format!("{}-consultation", relay_service.service),
+                    environment.deployment.profile,
+                    profiles.len(),
+                ))?
+                .into_boxed_slice(),
+            );
+            relay_consultation_private.insert(
+                PathBuf::from("descriptors/secret-consumers.json"),
+                canonical_json_line(&secret_consumer_descriptor(
+                    "registry-relay",
+                    &consultation_relay_config,
+                ))?
+                .into_boxed_slice(),
+            );
+        } else {
+            relay_consultation_private.clear();
+        }
         relay_private.insert(
             PathBuf::from("descriptors/operations.json"),
             canonical_json_line(&operational_descriptor(
                 "registry-relay",
                 &relay_service.service,
                 environment.deployment.profile,
-                profiles.len(),
+                0,
             ))?
             .into_boxed_slice(),
         );
-        let mut relay_secret_configs = vec![&relay_config];
-        relay_secret_configs.extend(consultation_relay_config.as_ref());
         relay_private.insert(
             PathBuf::from("descriptors/secret-consumers.json"),
-            canonical_json_line(&secret_consumer_descriptor_from_configs(
-                "registry-relay",
-                relay_secret_configs,
-            ))?
-            .into_boxed_slice(),
+            canonical_json_line(&secret_consumer_descriptor("registry-relay", &relay_config))?
+                .into_boxed_slice(),
         );
+    } else {
+        relay_consultation_private.clear();
     }
     let mut notary_private = BTreeMap::new();
     if let Some(notary_service) = &environment.deployment.notary {
@@ -227,12 +243,16 @@ fn compile_project_for_environment(
     let relay_digest = (!relay_private.is_empty())
         .then(|| closure_digest(&relay_private))
         .transpose()?;
+    let relay_consultation_digest = (!relay_consultation_private.is_empty())
+        .then(|| closure_digest(&relay_consultation_private))
+        .transpose()?;
     let notary_digest = (!notary_private.is_empty())
         .then(|| closure_digest(&notary_private))
         .transpose()?;
     let closure_digests = json!({
         "reviewable": reviewable_digest,
         "relay": relay_digest,
+        "relay_consultation": relay_consultation_digest,
         "notary": notary_digest,
     });
     let disclosure_profiles = disclosure_review_profiles(&loaded.project);
@@ -297,6 +317,7 @@ fn compile_project_for_environment(
     Ok(CompiledProject {
         reviewable,
         relay_private,
+        relay_consultation_private,
         notary_private,
         review,
         approval_state,

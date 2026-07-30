@@ -136,7 +136,11 @@ fn semantic_impact_for_dimension(
         location: SemanticImpactLocation::Dimension,
         dimension,
         direction,
-        affected_subjects: affected_subjects(loaded, affected_products),
+        affected_subjects: affected_subjects(
+            loaded,
+            affected_products,
+            has_consultation_signing_input(loaded, baseline),
+        ),
         consumers: consumers(affected_products),
         review_classes: review_classes(dimension, affected_products),
         product_impacts: product_impacts(dimension, affected_products),
@@ -250,6 +254,7 @@ fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
 fn affected_subjects(
     loaded: &LoadedRegistryProject,
     products: AffectedProducts,
+    has_consultation_signing_input: bool,
 ) -> Vec<AffectedSubject> {
     let mut subjects = BTreeMap::<(u8, String), AffectedSubjectKind>::new();
     let mut add = |kind: AffectedSubjectKind, id: String| {
@@ -291,6 +296,12 @@ fn affected_subjects(
             AffectedSubjectKind::ProductInput,
             "registry-relay.config".to_string(),
         );
+        if has_consultation_signing_input {
+            add(
+                AffectedSubjectKind::ProductInput,
+                "registry-relay.consultation.config".to_string(),
+            );
+        }
         for artifact in [
             "registry-relay.consultation-contracts",
             "registry-relay.integration-packs",
@@ -318,6 +329,22 @@ fn affected_subjects(
         .into_iter()
         .map(|((_, id), kind)| AffectedSubject { kind, id })
         .collect()
+}
+
+fn has_consultation_signing_input(
+    loaded: &LoadedRegistryProject,
+    baseline: Option<&Value>,
+) -> bool {
+    loaded
+        .project
+        .services
+        .values()
+        .any(|service| !service.consultations.is_empty())
+        || baseline
+            .and_then(|state| {
+                state.pointer("/generated_closure_digests/relay_consultation")
+            })
+            .is_some_and(Value::is_string)
 }
 
 const fn subject_kind_rank(kind: AffectedSubjectKind) -> u8 {
@@ -680,12 +707,39 @@ mod semantic_impact_tests {
             );
             assert!(!change.affected_subjects.iter().any(|subject| {
                 subject.id.starts_with("registry-notary.")
+                    || subject.id == "registry-relay.consultation.config"
                     || matches!(
                         subject.kind,
                         AffectedSubjectKind::Claim | AffectedSubjectKind::Disclosure
                     )
             }));
         }
+    }
+
+    #[test]
+    fn relay_impact_names_the_separate_consultation_signing_input() {
+        let loaded = loaded_project();
+        let impact = semantic_impact_for_dimension(
+            &loaded,
+            None,
+            SemanticDimension::Integration,
+            SemanticDirection::Changed,
+        );
+        let product_inputs = impact
+            .affected_subjects
+            .iter()
+            .filter(|subject| subject.kind == AffectedSubjectKind::ProductInput)
+            .map(|subject| subject.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            product_inputs,
+            vec![
+                "registry-notary.config",
+                "registry-relay.config",
+                "registry-relay.consultation.config",
+            ]
+        );
     }
 
     #[test]
@@ -751,6 +805,9 @@ mod semantic_impact_tests {
         baseline["promotion_projection"] = json!({
             "products": ["relay", "notary"],
         });
+        baseline["generated_closure_digests"] = json!({
+            "relay_consultation": format!("sha256:{}", "c".repeat(64)),
+        });
         let report =
             project_semantic_impact_report(&current, Some(&baseline), &disclosure_digest());
 
@@ -815,6 +872,9 @@ mod semantic_impact_tests {
         baseline["promotion_projection"] = json!({
             "products": ["relay", "notary"],
         });
+        baseline["generated_closure_digests"] = json!({
+            "relay_consultation": format!("sha256:{}", "c".repeat(64)),
+        });
         let report =
             project_semantic_impact_report(&current, Some(&baseline), &disclosure_digest());
 
@@ -830,6 +890,10 @@ mod semantic_impact_tests {
                 .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
             assert!(change.consumers.contains(&ImpactConsumer::RegistryRelay));
             assert!(change.consumers.contains(&ImpactConsumer::RegistryNotary));
+            assert!(change.affected_subjects.iter().any(|subject| {
+                subject.kind == AffectedSubjectKind::ProductInput
+                    && subject.id == "registry-relay.consultation.config"
+            }));
             assert_eq!(
                 change.requirements.signing,
                 SigningRequirement::RelayAndNotaryBundles

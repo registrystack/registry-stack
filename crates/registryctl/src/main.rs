@@ -336,6 +336,8 @@ fn main() -> Result<()> {
             anchor,
             relay_against,
             relay_anchor,
+            relay_consultation_against,
+            relay_consultation_anchor,
             notary_against,
             notary_anchor,
             format,
@@ -347,6 +349,8 @@ fn main() -> Result<()> {
                 anchor,
                 relay_against,
                 relay_anchor,
+                relay_consultation_against,
+                relay_consultation_anchor,
                 notary_against,
                 notary_anchor,
             })?;
@@ -423,6 +427,8 @@ fn main() -> Result<()> {
             anchor,
             relay_against,
             relay_anchor,
+            relay_consultation_against,
+            relay_consultation_anchor,
             notary_against,
             notary_anchor,
             format,
@@ -437,6 +443,8 @@ fn main() -> Result<()> {
                 &ProjectBuildBaselineSetOptions {
                     relay_against,
                     relay_anchor,
+                    relay_consultation_against,
+                    relay_consultation_anchor,
                     notary_against,
                     notary_anchor,
                 },
@@ -2123,13 +2131,13 @@ enum Commands {
         /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(
             long,
-            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+            conflicts_with_all = ["relay_against", "relay_anchor", "relay_consultation_against", "relay_consultation_anchor", "notary_against", "notary_anchor"]
         )]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
         #[arg(
             long,
-            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+            conflicts_with_all = ["relay_against", "relay_anchor", "relay_consultation_against", "relay_consultation_anchor", "notary_against", "notary_anchor"]
         )]
         anchor: Option<PathBuf>,
         /// Relay Config Bundle baseline for a combined Relay and Notary project.
@@ -2138,6 +2146,12 @@ enum Commands {
         /// Relay trust anchor for --relay-against.
         #[arg(long, requires = "relay_against")]
         relay_anchor: Option<PathBuf>,
+        /// Consultation Relay Config Bundle baseline. Legacy v1-v3 combined Relay baselines require re-review.
+        #[arg(long, requires = "relay_consultation_anchor")]
+        relay_consultation_against: Option<PathBuf>,
+        /// Relay trust anchor for --relay-consultation-against.
+        #[arg(long, requires = "relay_consultation_against")]
+        relay_consultation_anchor: Option<PathBuf>,
         /// Notary Config Bundle baseline for a combined Relay and Notary project.
         #[arg(long, requires = "notary_anchor")]
         notary_against: Option<PathBuf>,
@@ -2178,14 +2192,14 @@ enum Commands {
         #[arg(
             long,
             requires = "anchor",
-            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+            conflicts_with_all = ["relay_against", "relay_anchor", "relay_consultation_against", "relay_consultation_anchor", "notary_against", "notary_anchor"]
         )]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
         #[arg(
             long,
             requires = "against",
-            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+            conflicts_with_all = ["relay_against", "relay_anchor", "relay_consultation_against", "relay_consultation_anchor", "notary_against", "notary_anchor"]
         )]
         anchor: Option<PathBuf>,
         /// Relay Config Bundle approved baseline for a combined project comparison.
@@ -2194,6 +2208,12 @@ enum Commands {
         /// Relay trust anchor for --relay-against.
         #[arg(long, requires = "relay_against")]
         relay_anchor: Option<PathBuf>,
+        /// Consultation Relay Config Bundle baseline. Legacy v1-v3 combined Relay baselines require re-review.
+        #[arg(long, requires = "relay_consultation_anchor")]
+        relay_consultation_against: Option<PathBuf>,
+        /// Relay trust anchor for --relay-consultation-against.
+        #[arg(long, requires = "relay_consultation_against")]
+        relay_consultation_anchor: Option<PathBuf>,
         /// Notary Config Bundle approved baseline for a combined project comparison.
         #[arg(long, requires = "notary_anchor")]
         notary_against: Option<PathBuf>,
@@ -2539,6 +2559,10 @@ mod tests {
             "relay-bundle",
             "--relay-anchor",
             "relay-anchor.json",
+            "--relay-consultation-against",
+            "relay-consultation-bundle",
+            "--relay-consultation-anchor",
+            "relay-consultation-anchor.json",
             "--notary-against",
             "notary-bundle",
             "--notary-anchor",
@@ -2552,12 +2576,16 @@ mod tests {
             Commands::Promote {
                 relay_against: Some(relay),
                 relay_anchor: Some(relay_anchor),
+                relay_consultation_against: Some(relay_consultation),
+                relay_consultation_anchor: Some(relay_consultation_anchor),
                 notary_against: Some(notary),
                 notary_anchor: Some(notary_anchor),
                 format: OutputFormat::Json,
                 ..
             } if relay == std::path::Path::new("relay-bundle")
                 && relay_anchor == std::path::Path::new("relay-anchor.json")
+                && relay_consultation == std::path::Path::new("relay-consultation-bundle")
+                && relay_consultation_anchor == std::path::Path::new("relay-consultation-anchor.json")
                 && notary == std::path::Path::new("notary-bundle")
                 && notary_anchor == std::path::Path::new("notary-anchor.json")
         ));
@@ -2685,6 +2713,8 @@ mod tests {
                 anchor: None,
                 relay_against: None,
                 relay_anchor: None,
+                relay_consultation_against: None,
+                relay_consultation_anchor: None,
                 notary_against: None,
                 notary_anchor: None,
                 format: OutputFormat::Human,
@@ -2699,6 +2729,10 @@ mod tests {
             "relay-bundle",
             "--relay-anchor",
             "relay-anchor.json",
+            "--relay-consultation-against",
+            "relay-consultation-bundle",
+            "--relay-consultation-anchor",
+            "relay-consultation-anchor.json",
             "--notary-against",
             "notary-bundle",
             "--notary-anchor",
@@ -2710,11 +2744,15 @@ mod tests {
             Commands::Build {
                 relay_against: Some(relay),
                 relay_anchor: Some(relay_anchor),
+                relay_consultation_against: Some(relay_consultation),
+                relay_consultation_anchor: Some(relay_consultation_anchor),
                 notary_against: Some(notary),
                 notary_anchor: Some(notary_anchor),
                 ..
             } if relay == std::path::Path::new("relay-bundle")
                 && relay_anchor == std::path::Path::new("relay-anchor.json")
+                && relay_consultation == std::path::Path::new("relay-consultation-bundle")
+                && relay_consultation_anchor == std::path::Path::new("relay-consultation-anchor.json")
                 && notary == std::path::Path::new("notary-bundle")
                 && notary_anchor == std::path::Path::new("notary-anchor.json")
         ));
