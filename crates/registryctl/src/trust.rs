@@ -107,6 +107,7 @@ pub struct ProductBundleSignOptions {
     pub lane: ProductAcceptanceLaneV1,
     pub input: PathBuf,
     pub anchor: PathBuf,
+    pub preceding_approved_set: Option<PathBuf>,
     pub keys: Vec<String>,
     pub output_dir: PathBuf,
 }
@@ -329,6 +330,90 @@ fn sign_product_bundle_with_resolver(
         .map(|file| file.sha256.clone())
         .expect("primary config path is selected from the collected closure");
     let closure_digest = signing_input_closure_digest(&files);
+    let (sequence, previous_config_hash, anchor_history) = if let Some(preceding_set) =
+        &options.preceding_approved_set
+    {
+        let lane = crate::ApprovedLaneV1::from_acceptance_lane(options.lane);
+        let preceding = crate::approved_set::verify_approved_lane_from_set(preceding_set, lane)
+            .context("failed to verify preceding approved lane before signing")?;
+        if preceding.acceptance_identity() != &marker.acceptance_identity {
+            bail!("preceding approved lane changed the complete product acceptance identity");
+        }
+        let preceding_set_document =
+            crate::approved_set::load_approved_baseline_set(preceding_set)?;
+        let preceding_entry = preceding_set_document.lanes.get(lane);
+        let preceding_root = preceding_set
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let preceding_anchor =
+            load_trust_anchor_input(&crate::approved_set::resolve_portable_artifact(
+                preceding_root,
+                &preceding_entry.locators.anchor,
+            )?)?;
+        let preceding_anchor_digest = trust_anchor_digest(&preceding_anchor)
+            .context("failed to digest preceding lane anchor")?;
+        let selected_anchor_digest =
+            trust_anchor_digest(&anchor).context("failed to digest selected lane anchor")?;
+        let mut anchor_history = preceding_entry
+            .locators
+            .anchor_transitions
+            .iter()
+            .map(|link| {
+                let historical_anchor_path = crate::approved_set::resolve_portable_artifact(
+                    preceding_root,
+                    &link.predecessor_anchor,
+                )?;
+                let historical_transition_path = crate::approved_set::resolve_portable_artifact(
+                    preceding_root,
+                    &link.transition,
+                )?;
+                let historical_anchor = load_trust_anchor_input(&historical_anchor_path)?;
+                let historical_transition =
+                    registry_platform_config::load_anchor_transition(&historical_transition_path)
+                        .context("failed to load preceding historical anchor transition")?;
+                Ok((
+                    canonical_trust_anchor(&historical_anchor)
+                        .context("failed to canonicalize historical predecessor anchor")?,
+                    canonical_json_line(&historical_transition)
+                        .context("failed to canonicalize historical anchor transition")?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if selected_anchor_digest != preceding_anchor_digest {
+            let transition_path = options
+                .anchor
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .join("transition.json");
+            let transition = registry_platform_config::load_anchor_transition(&transition_path)
+                .context("changed lane anchor requires its authenticated transition")?;
+            verify_anchor_transition(&preceding_anchor, &anchor, &transition)
+                .context("selected lane anchor is not the next authenticated anchor")?;
+            anchor_history.push((
+                canonical_trust_anchor(&preceding_anchor)
+                    .context("failed to canonicalize predecessor lane anchor")?,
+                canonical_json_line(&transition)
+                    .context("failed to canonicalize verified anchor transition")?,
+            ));
+        }
+        let sequence = preceding
+            .manifest_sequence()
+            .checked_add(1)
+            .filter(|sequence| *sequence <= MAX_CONFIG_BUNDLE_SEQUENCE)
+            .ok_or_else(|| anyhow!("preceding lane sequence cannot be advanced"))?;
+        (
+            sequence,
+            Some(preceding.config_hash().to_string()),
+            anchor_history,
+        )
+    } else {
+        if anchor.version != 1 {
+            bail!("initial lane signing requires trust anchor version 1");
+        }
+        (1, None, Vec::new())
+    };
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .context("failed to format bundle creation time")?;
@@ -336,8 +421,8 @@ fn sign_product_bundle_with_resolver(
         schema: CONFIG_BUNDLE_SCHEMA.to_string(),
         acceptance_identity: marker.acceptance_identity.clone(),
         bundle_id: closure_digest,
-        sequence: 1,
-        previous_config_hash: None,
+        sequence,
+        previous_config_hash,
         config_hash: config_hash.clone(),
         files: files
             .iter()
@@ -417,6 +502,20 @@ fn sign_product_bundle_with_resolver(
     write_new_private_file(&bundle_root.join("manifest.sig.json"), &envelope_bytes)?;
     let staged_anchor = staging.path().join("anchor.json");
     write_new_private_file(&staged_anchor, &anchor_bytes)?;
+    for (index, (predecessor_anchor, transition)) in anchor_history.iter().enumerate() {
+        write_new_private_file(
+            &staging
+                .path()
+                .join(format!("anchor-history/{index:04}.anchor.json")),
+            predecessor_anchor,
+        )?;
+        write_new_private_file(
+            &staging
+                .path()
+                .join(format!("anchor-history/{index:04}.transition.json")),
+            transition,
+        )?;
+    }
     let verified = registry_platform_config::verify_config_bundle(&bundle_root, &staged_anchor)
         .context("generated bundle failed pre-publication self-verification")?;
     if verified.signer_kids != signer_kids {
@@ -1129,6 +1228,55 @@ mod tests {
         .expect("marker writes");
     }
 
+    fn write_review_evidence(root: &Path, lane: ProductAcceptanceLaneV1) {
+        fs::create_dir_all(root.join("approval")).unwrap();
+        let config = match lane {
+            ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation => {
+                "config/relay.yaml"
+            }
+            ProductAcceptanceLaneV1::Notary => "config/notary.yaml",
+        };
+        let config_digest =
+            registry_platform_config::sha256_uri(&fs::read(root.join(config)).unwrap());
+        let lane_closure = serde_json::json!([{
+            "path": config,
+            "sha256": config_digest,
+        }]);
+        let lane_digest =
+            registry_platform_config::sha256_uri(&canonicalize_json(&lane_closure).unwrap());
+        let consultations = match lane {
+            ProductAcceptanceLaneV1::RelayPublic => serde_json::json!({}),
+            ProductAcceptanceLaneV1::RelayConsultation | ProductAcceptanceLaneV1::Notary => {
+                serde_json::json!({
+                    "evidence.lookup": {
+                        "profile_id": "profile",
+                        "integration": "source",
+                        "contract_hash": format!("sha256:{}", "a".repeat(64)),
+                    }
+                })
+            }
+        };
+        fs::write(
+            root.join("approval/review.json"),
+            canonical_json_line(&serde_json::json!({ "consultations": consultations })).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("approval/project-state.json"),
+            canonical_json_line(&serde_json::json!({
+                "generated_closure_digests": {
+                    (match lane {
+                        ProductAcceptanceLaneV1::RelayPublic => "relay",
+                        ProductAcceptanceLaneV1::RelayConsultation => "relay_consultation",
+                        ProductAcceptanceLaneV1::Notary => "notary",
+                    }): lane_digest,
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     fn write_anchor(path: &Path, identity: ProductAcceptanceIdentityV1) -> ConfigTrustAnchor {
         let anchor = ConfigTrustAnchor {
             schema: CONFIG_TRUST_ANCHOR_SCHEMA.to_string(),
@@ -1228,6 +1376,7 @@ mod tests {
                     lane: ProductAcceptanceLaneV1::Notary,
                     input: input.clone(),
                     anchor: changed_anchor,
+                    preceding_approved_set: None,
                     keys: vec!["op://vault/item/key".to_string()],
                     output_dir: temp.path().join(format!("{field}.output")),
                 },
@@ -1246,6 +1395,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::RelayPublic,
                 input,
                 anchor: anchor_path,
+                preceding_approved_set: None,
                 keys: vec!["op://vault/item/key".to_string()],
                 output_dir: temp.path().join("swapped-lane.output"),
             },
@@ -1333,6 +1483,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::Notary,
                 input: input.clone(),
                 anchor: anchor_path.clone(),
+                preceding_approved_set: None,
                 keys: vec!["op://vault/item/first".to_string()],
                 output_dir: temp.path().join("insufficient"),
             },
@@ -1351,6 +1502,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::Notary,
                 input: input.clone(),
                 anchor: anchor_path.clone(),
+                preceding_approved_set: None,
                 keys: vec![
                     "op://vault/item/first".to_string(),
                     "op://vault/item/duplicate".to_string(),
@@ -1369,6 +1521,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::Notary,
                 input,
                 anchor: anchor_path,
+                preceding_approved_set: None,
                 keys: vec![
                     "op://vault/item/second".to_string(),
                     "op://vault/item/first".to_string(),
@@ -1394,6 +1547,326 @@ mod tests {
         )
         .expect("published threshold bundle verifies");
         assert_eq!(verified.signer_kids, report.signer_kids);
+    }
+
+    #[test]
+    fn approved_lane_verifier_rejects_signed_arbitrary_bundle_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input");
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        write_signing_input(&input, acceptance_identity.clone());
+        fs::create_dir_all(input.join("approval")).unwrap();
+        let config_digest = registry_platform_config::sha256_uri(
+            &fs::read(input.join("config/notary.yaml")).unwrap(),
+        );
+        let lane_closure = serde_json::json!([{
+            "path": "config/notary.yaml",
+            "sha256": config_digest,
+        }]);
+        let lane_digest =
+            registry_platform_config::sha256_uri(&canonicalize_json(&lane_closure).unwrap());
+        fs::write(
+            input.join("approval/review.json"),
+            canonical_json_line(&serde_json::json!({ "consultations": {} })).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            input.join("approval/project-state.json"),
+            canonical_json_line(&serde_json::json!({
+                "generated_closure_digests": { "notary": lane_digest },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let anchor_path = temp.path().join("anchor.json");
+        write_anchor(&anchor_path, acceptance_identity);
+        let output = temp.path().join("signed");
+        sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input,
+                anchor: anchor_path,
+                preceding_approved_set: None,
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: output.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .expect("bundle signs");
+
+        let manifest_path = output.join("bundle/manifest.json");
+        let signature_path = output.join("bundle/manifest.sig.json");
+        let mut manifest: ConfigBundleManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.bundle_id = format!("sha256:{}", "f".repeat(64));
+        let manifest_value = serde_json::to_value(&manifest).unwrap();
+        let canonical_manifest = canonicalize_json(&manifest_value).unwrap();
+        let private = PrivateJwk::parse(TEST_PRIVATE_JWK).unwrap();
+        let kid = private.public().jkt().unwrap();
+        let signature = sign_payload(&canonical_manifest, &private).unwrap();
+        let envelope = ConfigBundleSignatureEnvelope {
+            schema: CONFIG_BUNDLE_SIGNATURE_SCHEMA.to_string(),
+            signatures: vec![ConfigBundleSignature {
+                kid,
+                alg: signing_algorithm_label(private.algorithm().unwrap()).to_string(),
+                sig: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
+            }],
+        };
+        fs::write(&manifest_path, canonical_json_line(&manifest).unwrap()).unwrap();
+        fs::write(&signature_path, canonical_json_line(&envelope).unwrap()).unwrap();
+        registry_platform_config::verify_config_bundle(
+            output.join("bundle"),
+            output.join("anchor.json"),
+        )
+        .expect("signature-valid arbitrary bundle_id passes platform verification");
+
+        let error = crate::approved_set::verify_signed_lane_directory(
+            crate::ApprovedLaneV1::Notary,
+            &output,
+        )
+        .expect_err("approved-lane verifier must recompute the exact closure digest");
+        assert!(format!("{error:#}").contains("bundle_id"));
+    }
+
+    #[test]
+    fn update_signing_derives_sequence_and_predecessor_from_verified_approved_set() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut verified_lanes = BTreeMap::new();
+        let mut lane_paths = BTreeMap::new();
+        for lane in [
+            ProductAcceptanceLaneV1::RelayPublic,
+            ProductAcceptanceLaneV1::RelayConsultation,
+            ProductAcceptanceLaneV1::Notary,
+        ] {
+            let lane_label = crate::ApprovedLaneV1::from_acceptance_lane(lane).to_string();
+            let input = temporary.path().join(format!("{lane_label}-input"));
+            let lane_identity = identity(lane);
+            write_signing_input(&input, lane_identity.clone());
+            write_review_evidence(&input, lane);
+            let anchor = temporary.path().join(format!("{lane_label}.anchor.json"));
+            write_anchor(&anchor, lane_identity);
+            let signed = temporary.path().join(format!("{lane_label}-signed"));
+            sign_product_bundle_with_resolver(
+                &ProductBundleSignOptions {
+                    lane,
+                    input,
+                    anchor,
+                    preceding_approved_set: None,
+                    keys: vec!["op://vault/item/key".to_string()],
+                    output_dir: signed.clone(),
+                },
+                |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+            )
+            .unwrap();
+            verified_lanes.insert(
+                crate::ApprovedLaneV1::from_acceptance_lane(lane),
+                crate::approved_set::verify_signed_lane_directory(
+                    crate::ApprovedLaneV1::from_acceptance_lane(lane),
+                    &signed,
+                )
+                .unwrap(),
+            );
+            lane_paths.insert(crate::ApprovedLaneV1::from_acceptance_lane(lane), signed);
+        }
+        let set_file = temporary.path().join("approved-set.json");
+        crate::approved_set::assemble_initial_approved_set(
+            &crate::approved_set::InitialApprovedSetInputs {
+                relay_public: lane_paths[&crate::ApprovedLaneV1::RelayPublic].clone(),
+                relay_consultation: lane_paths[&crate::ApprovedLaneV1::RelayConsultation].clone(),
+                notary: lane_paths[&crate::ApprovedLaneV1::Notary].clone(),
+            },
+            &set_file,
+            |request| {
+                verified_lanes
+                    .remove(&request.lane)
+                    .ok_or_else(|| anyhow!("missing verified lane"))
+            },
+        )
+        .unwrap();
+
+        let update_input = temporary.path().join("notary-update-input");
+        let notary_identity = identity(ProductAcceptanceLaneV1::Notary);
+        write_signing_input(&update_input, notary_identity);
+        fs::write(
+            update_input.join("config/notary.yaml"),
+            b"instance:\n  id: changed\n",
+        )
+        .unwrap();
+        write_review_evidence(&update_input, ProductAcceptanceLaneV1::Notary);
+        let update_output = temporary.path().join("notary-updated");
+        sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input: update_input,
+                anchor: lane_paths[&crate::ApprovedLaneV1::Notary].join("anchor.json"),
+                preceding_approved_set: Some(set_file.clone()),
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: update_output.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .unwrap();
+        let updated = registry_platform_config::verify_config_bundle(
+            update_output.join("bundle"),
+            update_output.join("anchor.json"),
+        )
+        .unwrap();
+        assert_eq!(updated.manifest.sequence, 2);
+        let preceding = registry_platform_config::verify_config_bundle(
+            lane_paths[&crate::ApprovedLaneV1::Notary].join("bundle"),
+            lane_paths[&crate::ApprovedLaneV1::Notary].join("anchor.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            updated.manifest.previous_config_hash.as_deref(),
+            Some(preceding.manifest.config_hash.as_str())
+        );
+
+        let verified_update = crate::approved_set::verify_signed_lane_directory(
+            crate::ApprovedLaneV1::Notary,
+            &update_output,
+        )
+        .unwrap();
+        let portable_root = fs::canonicalize(temporary.path()).unwrap();
+        let set_two = temporary.path().join("approved-set-two.json");
+        crate::approved_set::assemble_updated_approved_set(
+            &set_file,
+            &crate::ReviewedBuildUpdateV1 {
+                notary: Some(verified_update.entry().reviewed_binding()),
+                ..Default::default()
+            },
+            &crate::approved_set::AffectedLaneReplacements {
+                notary: Some(update_output.clone()),
+                ..Default::default()
+            },
+            &set_two,
+            |request| crate::approved_set::verify_lane_request(request, &portable_root),
+        )
+        .unwrap();
+
+        let public_key = temporary.path().join("rotation-public.jwk");
+        fs::write(&public_key, serde_json::to_vec(&signer().jwk).unwrap()).unwrap();
+        let rotation_two = temporary.path().join("rotation-two");
+        rotate_trust_anchor_with_resolver(
+            &TrustAnchorRotateOptions {
+                current_anchor: update_output.join("anchor.json"),
+                next_public_keys: vec![public_key.clone()],
+                next_threshold: 1,
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: rotation_two.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .unwrap();
+        let rotated_input = temporary.path().join("notary-rotated-input");
+        write_signing_input(&rotated_input, identity(ProductAcceptanceLaneV1::Notary));
+        fs::write(
+            rotated_input.join("config/notary.yaml"),
+            b"instance:\n  id: rotated-two\n",
+        )
+        .unwrap();
+        write_review_evidence(&rotated_input, ProductAcceptanceLaneV1::Notary);
+        let rotated_output = temporary.path().join("notary-rotated");
+        sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input: rotated_input,
+                anchor: rotation_two.join("anchor.json"),
+                preceding_approved_set: Some(set_two.clone()),
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: rotated_output.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .unwrap();
+        assert!(rotated_output
+            .join("anchor-history/0000.anchor.json")
+            .is_file());
+        assert!(rotated_output
+            .join("anchor-history/0000.transition.json")
+            .is_file());
+        let verified_rotated = crate::approved_set::verify_signed_lane_directory(
+            crate::ApprovedLaneV1::Notary,
+            &rotated_output,
+        )
+        .unwrap();
+        let set_three = temporary.path().join("approved-set-three.json");
+        crate::approved_set::assemble_updated_approved_set(
+            &set_two,
+            &crate::ReviewedBuildUpdateV1 {
+                notary: Some(verified_rotated.entry().reviewed_binding()),
+                ..Default::default()
+            },
+            &crate::approved_set::AffectedLaneReplacements {
+                notary: Some(rotated_output.clone()),
+                ..Default::default()
+            },
+            &set_three,
+            |request| crate::approved_set::verify_lane_request(request, &portable_root),
+        )
+        .unwrap();
+
+        let rotation_three = temporary.path().join("rotation-three");
+        rotate_trust_anchor_with_resolver(
+            &TrustAnchorRotateOptions {
+                current_anchor: rotation_two.join("anchor.json"),
+                next_public_keys: vec![public_key],
+                next_threshold: 1,
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: rotation_three.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .unwrap();
+        let rotated_again_input = temporary.path().join("notary-rotated-again-input");
+        write_signing_input(
+            &rotated_again_input,
+            identity(ProductAcceptanceLaneV1::Notary),
+        );
+        fs::write(
+            rotated_again_input.join("config/notary.yaml"),
+            b"instance:\n  id: rotated-three\n",
+        )
+        .unwrap();
+        write_review_evidence(&rotated_again_input, ProductAcceptanceLaneV1::Notary);
+        let rotated_again_output = temporary.path().join("notary-rotated-again");
+        sign_product_bundle_with_resolver(
+            &ProductBundleSignOptions {
+                lane: ProductAcceptanceLaneV1::Notary,
+                input: rotated_again_input,
+                anchor: rotation_three.join("anchor.json"),
+                preceding_approved_set: Some(set_three),
+                keys: vec!["op://vault/item/key".to_string()],
+                output_dir: rotated_again_output.clone(),
+            },
+            |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
+        )
+        .unwrap();
+        let verified_twice_rotated = crate::approved_set::verify_signed_lane_directory(
+            crate::ApprovedLaneV1::Notary,
+            &rotated_again_output,
+        )
+        .expect("every historical transition verifies oldest to terminal anchor");
+        assert_eq!(
+            verified_twice_rotated
+                .entry()
+                .locators
+                .anchor_transitions
+                .len(),
+            2
+        );
+
+        fs::copy(
+            rotated_again_output.join("anchor-history/0001.transition.json"),
+            rotated_again_output.join("anchor-history/0000.transition.json"),
+        )
+        .unwrap();
+        let error = crate::approved_set::verify_signed_lane_directory(
+            crate::ApprovedLaneV1::Notary,
+            &rotated_again_output,
+        )
+        .expect_err("tampering any historical transition must fail closed");
+        assert!(format!("{error:#}").contains("historical lane anchor transition"));
     }
 
     #[test]
@@ -1534,6 +2007,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::Notary,
                 input,
                 anchor: anchor_path,
+                preceding_approved_set: None,
                 keys: vec![format!("file:{}", private_key.display())],
                 output_dir: output.clone(),
             },
@@ -1581,6 +2055,7 @@ mod tests {
                 lane: ProductAcceptanceLaneV1::Notary,
                 input,
                 anchor: anchor_path,
+                preceding_approved_set: None,
                 keys: vec![format!("file:{}", private_key.display())],
                 output_dir: output.clone(),
             },

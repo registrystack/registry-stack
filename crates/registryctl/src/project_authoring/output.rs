@@ -2,6 +2,87 @@
 
 include!("artifact_manifest.rs");
 
+pub const REVIEWED_BUILD_RECORD_FILE: &str = "reviewed-build.v1.json";
+const REVIEW_COMPARISON_REPORT_SCHEMA_VERSION: &str = "registryctl.review_comparison_report.v1";
+const REVIEWED_BUILD_RECORD_SCHEMA_ID: &str = "registry.stack.reviewed_build";
+const REVIEWED_BUILD_RECORD_SCHEMA_VERSION: &str = "1.0";
+const REVIEWED_PROJECT_BUILD_REPORT_SCHEMA_VERSION: &str =
+    "registryctl.reviewed_project_build_report.v1";
+
+#[derive(Debug, Clone)]
+pub struct ReviewCompareOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    pub against: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewComparisonReportV1 {
+    pub schema_version: &'static str,
+    pub project: String,
+    pub environment: String,
+    pub changed: bool,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub reviewed_bindings: crate::ReviewedBuildUpdateV1,
+    pub input_owner: &'static str,
+    pub output_owner: &'static str,
+    pub mutation: &'static str,
+    pub next_action: &'static str,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedBuildRecordV1 {
+    pub schema_id: String,
+    pub schema_version: String,
+    pub project: String,
+    pub environment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preceding_approved_set_digest: Option<String>,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub bindings: crate::ReviewedBuildUpdateV1,
+}
+
+impl ReviewedBuildRecordV1 {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_id != REVIEWED_BUILD_RECORD_SCHEMA_ID
+            || self.schema_version != REVIEWED_BUILD_RECORD_SCHEMA_VERSION
+            || self.project.is_empty()
+            || self.environment.is_empty()
+        {
+            bail!("reviewed-build record identity or schema is invalid");
+        }
+        if let Some(digest) = &self.preceding_approved_set_digest {
+            validate_reviewed_sha256(digest, "preceding approved-set digest")?;
+        }
+        self.bindings.validate_bindings()?;
+        if self.affected_lanes != self.bindings.affected_lanes() {
+            bail!("reviewed-build affected lanes do not match its closed bindings");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewedProjectBuildOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    pub against: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedProjectBuildReportV1 {
+    pub schema_version: &'static str,
+    pub build: ProjectCommandReport,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub reviewed_build_record: ProjectRelativePath,
+    pub reviewed_build_record_digest: String,
+    pub output_owner: &'static str,
+    pub next_action: &'static str,
+}
+
 /// Trusted process-local dependencies used while executing project fixtures.
 ///
 /// The worker executable is supplied only by reviewed Rust callers. It is not
@@ -583,6 +664,371 @@ fn generated_evidence(
         .collect()
 }
 
+struct PreparedReviewedProject {
+    loaded: LoadedRegistryProject,
+    compiled: CompiledProject,
+    signing_input_identities: [registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    preceding_approved_set_digest: Option<String>,
+    affected_lanes: Vec<crate::ApprovedLaneV1>,
+    bindings: crate::ReviewedBuildUpdateV1,
+}
+
+pub fn compare_reviewed_project(
+    options: &ReviewCompareOptions,
+) -> Result<ReviewComparisonReportV1> {
+    let prepared = prepare_reviewed_project(
+        &options.project_directory,
+        &options.environment,
+        options.against.as_deref(),
+    )?;
+    Ok(ReviewComparisonReportV1 {
+        schema_version: REVIEW_COMPARISON_REPORT_SCHEMA_VERSION,
+        project: prepared.loaded.project.registry.id,
+        environment: options.environment.clone(),
+        changed: !prepared.affected_lanes.is_empty(),
+        affected_lanes: prepared.affected_lanes,
+        reviewed_bindings: prepared.bindings,
+        input_owner: "project author and current approved-set operator",
+        output_owner: "reviewer",
+        mutation: "none",
+        next_action: "run registryctl build with the same environment and --against value",
+    })
+}
+
+pub fn build_reviewed_project(
+    options: &ReviewedProjectBuildOptions,
+) -> Result<ReviewedProjectBuildReportV1> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    let prepared = prepare_reviewed_project(
+        &options.project_directory,
+        &options.environment,
+        options.against.as_deref(),
+    )?;
+    preflight_project_rhai_scripts(&prepared.loaded)?;
+    validate_generated_product_configs(&prepared.compiled)?;
+    let artifact_inputs = validate_project_workbook_inputs(&prepared.loaded, &prepared.compiled)?;
+    let (fixtures, generated_observations, request_observations, call_budget_actual) =
+        execute_all_fixtures_with_coverage_observations(
+            &prepared.loaded,
+            &prepared.compiled,
+            None,
+            None,
+            false,
+            &execution_context,
+        )?;
+    require_passing_fixtures(&fixtures)?;
+    let fixture_coverage = generate_fixture_coverage_report(
+        &prepared.loaded,
+        &fixtures,
+        &generated_observations,
+        &request_observations,
+        call_budget_actual,
+    )?;
+    let output = prepared
+        .loaded
+        .root
+        .join(BUILD_ROOT)
+        .join(options.environment.as_str());
+    let record = ReviewedBuildRecordV1 {
+        schema_id: REVIEWED_BUILD_RECORD_SCHEMA_ID.to_string(),
+        schema_version: REVIEWED_BUILD_RECORD_SCHEMA_VERSION.to_string(),
+        project: prepared.loaded.project.registry.id.clone(),
+        environment: options.environment.clone(),
+        preceding_approved_set_digest: prepared.preceding_approved_set_digest,
+        affected_lanes: prepared.affected_lanes.clone(),
+        bindings: prepared.bindings,
+    };
+    record.validate()?;
+    let emitted = record
+        .affected_lanes
+        .iter()
+        .map(|lane| lane.acceptance_lane())
+        .collect::<Vec<_>>();
+    let artifact_manifest = write_compiled_project_selected(
+        &prepared.loaded.root,
+        &output,
+        &prepared.compiled,
+        None,
+        &prepared.loaded.project.registry.id,
+        &options.environment,
+        &artifact_inputs,
+        &prepared.signing_input_identities,
+        &emitted,
+        Some(&record),
+    )?;
+    let reported_output = ProjectRelativePath::new(format!("{BUILD_ROOT}/{}", options.environment))
+        .map_err(|error| anyhow!("invalid project-relative build output path: {error}"))?;
+    let record_relative = ProjectRelativePath::new(format!(
+        "{BUILD_ROOT}/{}/{}",
+        options.environment, REVIEWED_BUILD_RECORD_FILE
+    ))
+    .map_err(|error| anyhow!("invalid reviewed-build record path: {error}"))?;
+    let record_bytes = canonical_json_line(
+        &serde_json::to_value(&record).context("failed to serialize reviewed-build record")?,
+    )?;
+    let build = ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
+        status: "built",
+        project: prepared.loaded.project.registry.id,
+        environment: prepared.loaded.environment_name,
+        fixtures,
+        semantic_changes: prepared.compiled.semantic_changes,
+        baseline: if options.against.is_some() {
+            "verified_signed_bundle"
+        } else {
+            "initial_without_baseline"
+        },
+        output: Some(reported_output.as_str().to_string()),
+        semantic_impact: Some(prepared.compiled.semantic_impact),
+        artifact_manifest: Some(artifact_manifest),
+        fixture_coverage: Some(fixture_coverage),
+        explanation: None,
+    };
+    Ok(ReviewedProjectBuildReportV1 {
+        schema_version: REVIEWED_PROJECT_BUILD_REPORT_SCHEMA_VERSION,
+        build,
+        affected_lanes: record.affected_lanes,
+        reviewed_build_record: record_relative,
+        reviewed_build_record_digest: sha256_uri(&record_bytes),
+        output_owner: "product signers and approved-set operator",
+        next_action: "sign each emitted affected lane, then assemble the approved set",
+    })
+}
+
+pub(crate) fn reviewed_project_id(project_directory: &Path, environment: &str) -> Result<String> {
+    Ok(load_registry_project(project_directory, Some(environment))?
+        .project
+        .registry
+        .id)
+}
+
+pub(crate) fn load_current_reviewed_build_record(
+    project_directory: &Path,
+    environment: &str,
+) -> Result<ReviewedBuildRecordV1> {
+    let path = project_directory
+        .join(BUILD_ROOT)
+        .join(environment)
+        .join(REVIEWED_BUILD_RECORD_FILE);
+    reject_symlink_components(project_directory, &path)?;
+    let metadata =
+        fs::symlink_metadata(&path).context("current reviewed-build record is unavailable")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        bail!("current reviewed-build record is not a bounded regular file");
+    }
+    let bytes = fs::read(&path).context("failed to read current reviewed-build record")?;
+    let value =
+        parse_json_strict(&bytes).context("current reviewed-build record is not strict JSON")?;
+    let record: ReviewedBuildRecordV1 = serde_json::from_value(value)
+        .context("current reviewed-build record has an invalid closed contract")?;
+    record.validate()?;
+    Ok(record)
+}
+
+fn prepare_reviewed_project(
+    project_directory: &Path,
+    environment: &str,
+    against: Option<&Path>,
+) -> Result<PreparedReviewedProject> {
+    let loaded = load_registry_project(project_directory, Some(environment))?;
+    let signing_input_identities = governed_signing_input_identities(&loaded)?;
+    let (baselines, preceding, preceding_digest) = if let Some(set_file) = against {
+        let set = crate::approved_set::load_approved_baseline_set(set_file)?;
+        let mut baselines = VerifiedBaselineSet::default();
+        let root = set_file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for lane in crate::ApprovedLaneV1::ALL {
+            let verified = crate::approved_set::verify_approved_lane_from_set(set_file, lane)?;
+            let expected = &signing_input_identities[match lane {
+                crate::ApprovedLaneV1::RelayPublic => 0,
+                crate::ApprovedLaneV1::RelayConsultation => 1,
+                crate::ApprovedLaneV1::Notary => 2,
+            }];
+            if verified.acceptance_identity() != expected {
+                bail!("approved set lane identity does not match the selected project environment");
+            }
+            let entry = set.lanes.get(lane);
+            let bundle =
+                crate::approved_set::resolve_portable_artifact(root, &entry.locators.bundle)?;
+            let anchor =
+                crate::approved_set::resolve_portable_artifact(root, &entry.locators.anchor)?;
+            let baseline = load_verified_baseline(
+                Some(&bundle),
+                Some(&anchor),
+                &loaded,
+                Some(match lane {
+                    crate::ApprovedLaneV1::RelayPublic => VerifiedBaselineLane::Relay,
+                    crate::ApprovedLaneV1::RelayConsultation => {
+                        VerifiedBaselineLane::RelayConsultation
+                    }
+                    crate::ApprovedLaneV1::Notary => VerifiedBaselineLane::Notary,
+                }),
+            )?
+            .ok_or_else(|| anyhow!("approved set lane baseline is absent"))?;
+            baselines.insert(baseline)?;
+        }
+        baselines.validate_common_signed_state()?;
+        (
+            baselines,
+            Some(set),
+            Some(crate::approved_set::load_approved_baseline_set(set_file)?.digest()?),
+        )
+    } else {
+        (VerifiedBaselineSet::default(), None, None)
+    };
+    let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
+    validate_generated_product_configs(&compiled)?;
+    let all_bindings = reviewed_bindings(&compiled, &signing_input_identities)?;
+    let affected_lanes = crate::ApprovedLaneV1::ALL
+        .into_iter()
+        .filter(|lane| {
+            preceding.as_ref().is_none_or(|set| {
+                let current = all_bindings
+                    .get(*lane)
+                    .expect("all current lane bindings are present");
+                let previous = set.lanes.get(*lane).reviewed_binding();
+                current.lane_scoped_reviewed_input_digest
+                    != previous.lane_scoped_reviewed_input_digest
+                    || current.interfaces != previous.interfaces
+            })
+        })
+        .collect::<Vec<_>>();
+    let bindings = crate::ReviewedBuildUpdateV1 {
+        relay_public: affected_lanes
+            .contains(&crate::ApprovedLaneV1::RelayPublic)
+            .then(|| {
+                all_bindings
+                    .get(crate::ApprovedLaneV1::RelayPublic)
+                    .expect("fixed binding")
+                    .clone()
+            }),
+        relay_consultation: affected_lanes
+            .contains(&crate::ApprovedLaneV1::RelayConsultation)
+            .then(|| {
+                all_bindings
+                    .get(crate::ApprovedLaneV1::RelayConsultation)
+                    .expect("fixed binding")
+                    .clone()
+            }),
+        notary: affected_lanes
+            .contains(&crate::ApprovedLaneV1::Notary)
+            .then(|| {
+                all_bindings
+                    .get(crate::ApprovedLaneV1::Notary)
+                    .expect("fixed binding")
+                    .clone()
+            }),
+    };
+    bindings.validate_bindings()?;
+    Ok(PreparedReviewedProject {
+        loaded,
+        compiled,
+        signing_input_identities,
+        preceding_approved_set_digest: preceding_digest,
+        affected_lanes,
+        bindings,
+    })
+}
+
+fn reviewed_bindings(
+    compiled: &CompiledProject,
+    identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+) -> Result<crate::ReviewedBuildUpdateV1> {
+    let review_bytes = canonical_json_line(&compiled.review)?;
+    let state_bytes = canonical_json_line(&compiled.approval_state)?;
+    let consultation_interface = compiled
+        .review
+        .get("consultations")
+        .and_then(Value::as_object)
+        .filter(|consultations| !consultations.is_empty())
+        .map(|consultations| {
+            canonicalize_json(&Value::Object(consultations.clone())).map(|bytes| sha256_uri(&bytes))
+        })
+        .transpose()
+        .context("failed to canonicalize reviewed consultation interface")?;
+    let binding = |lane: crate::ApprovedLaneV1,
+                   identity: &registry_platform_config::ProductAcceptanceIdentityV1,
+                   files: &BTreeMap<PathBuf, Box<[u8]>>|
+     -> Result<crate::ReviewedLaneBindingV1> {
+        let lane_digest = compiled
+            .approval_state
+            .pointer(&format!(
+                "/generated_closure_digests/{}",
+                lane.closure_name()
+            ))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("compiled project lacks a lane-scoped reviewed digest"))?
+            .to_string();
+        let marker = crate::SigningInputMarkerV1::governed(identity.clone())?;
+        let marker_bytes = crate::trust::canonical_signing_input_marker(&marker)?;
+        let mut closure = files
+            .iter()
+            .map(|(path, bytes)| Ok((normalized_relative_path(path)?, sha256_uri(bytes))))
+            .collect::<Result<Vec<_>>>()?;
+        closure.extend([
+            (APPROVAL_REVIEW_PATH.to_string(), sha256_uri(&review_bytes)),
+            (APPROVAL_STATE_PATH.to_string(), sha256_uri(&state_bytes)),
+            (
+                crate::SIGNING_INPUT_MARKER_FILE.to_string(),
+                sha256_uri(&marker_bytes),
+            ),
+        ]);
+        closure.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut hasher = Sha256::new();
+        for (path, digest) in closure {
+            hasher.update(path.as_bytes());
+            hasher.update([0]);
+            hasher.update(digest.as_bytes());
+            hasher.update([b'\n']);
+        }
+        Ok(crate::ReviewedLaneBindingV1 {
+            lane_scoped_reviewed_input_digest: lane_digest,
+            signing_input_closure_digest: format!("sha256:{}", hex::encode(hasher.finalize())),
+            interfaces: match lane {
+                crate::ApprovedLaneV1::RelayPublic => crate::CrossLaneInterfaceDigestsV1::default(),
+                crate::ApprovedLaneV1::RelayConsultation | crate::ApprovedLaneV1::Notary => {
+                    crate::CrossLaneInterfaceDigestsV1 {
+                        consultation_relay_notary: consultation_interface.clone(),
+                    }
+                }
+            },
+        })
+    };
+    Ok(crate::ReviewedBuildUpdateV1 {
+        relay_public: Some(binding(
+            crate::ApprovedLaneV1::RelayPublic,
+            &identities[0],
+            &compiled.relay_private,
+        )?),
+        relay_consultation: Some(binding(
+            crate::ApprovedLaneV1::RelayConsultation,
+            &identities[1],
+            &compiled.relay_consultation_private,
+        )?),
+        notary: Some(binding(
+            crate::ApprovedLaneV1::Notary,
+            &identities[2],
+            &compiled.notary_private,
+        )?),
+    })
+}
+
+fn validate_reviewed_sha256(value: &str, label: &str) -> Result<()> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        bail!("{label} must use the sha256 URI form");
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{label} must contain one lowercase SHA-256 digest");
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_compiled_project(
     root: &Path,
@@ -593,6 +1039,37 @@ fn write_compiled_project(
     environment: &str,
     artifact_inputs: &[ArtifactInputDigest],
     signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+) -> Result<ProjectArtifactManifestRef> {
+    let emitted_lanes = signing_input_identities
+        .iter()
+        .map(|identity| identity.lane)
+        .collect::<Vec<_>>();
+    write_compiled_project_selected(
+        root,
+        output,
+        compiled,
+        runtime_identity,
+        project,
+        environment,
+        artifact_inputs,
+        signing_input_identities,
+        &emitted_lanes,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_compiled_project_selected(
+    root: &Path,
+    output: &Path,
+    compiled: &CompiledProject,
+    runtime_identity: Option<crate::RuntimeIdentity>,
+    project: &str,
+    environment: &str,
+    artifact_inputs: &[ArtifactInputDigest],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    emitted_lanes: &[registry_platform_config::ProductAcceptanceLaneV1],
+    reviewed_build: Option<&ReviewedBuildRecordV1>,
 ) -> Result<ProjectArtifactManifestRef> {
     if compiled.relay_private.is_empty()
         || compiled.relay_consultation_private.is_empty()
@@ -661,6 +1138,9 @@ fn write_compiled_project(
         ),
         (&signing_input_identities[2], &compiled.notary_private),
     ] {
+        if !emitted_lanes.contains(&identity.lane) {
+            continue;
+        }
         let lane_root = temporary
             .join("signing-inputs")
             .join(product_acceptance_lane_name(identity.lane));
@@ -693,6 +1173,15 @@ fn write_compiled_project(
     }
     let artifact_manifest =
         write_artifact_manifest(&temporary, project, environment, artifact_inputs)?;
+    if let Some(reviewed_build) = reviewed_build {
+        write_private_file(
+            &temporary.join(REVIEWED_BUILD_RECORD_FILE),
+            &canonical_json_line(
+                &serde_json::to_value(reviewed_build)
+                    .context("failed to serialize reviewed-build record")?,
+            )?,
+        )?;
+    }
 
     let backup = expected_parent.join(format!(".{name}.previous-{}", std::process::id()));
     if backup.exists() {

@@ -103,6 +103,7 @@ fn sign_product_baseline(
         lane,
         input,
         anchor,
+        preceding_approved_set: None,
         keys: vec![format!("file:{}", private_key.display())],
         output_dir: signed.clone(),
     })
