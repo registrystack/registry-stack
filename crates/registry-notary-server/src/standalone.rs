@@ -4,13 +4,14 @@
 mod runtime;
 
 pub use runtime::{
-    compile_notary_runtime, compile_notary_runtime_with_provenance, find_credential,
+    compile_notary_runtime, compile_notary_runtime_with_provenance,
+    emit_prepare_state_store_mutation_intent_audit, find_credential,
     notary_admin_router_from_runtime, notary_public_router_from_runtime,
     notary_routers_from_runtime, notary_shared_router_from_runtime, standalone_router,
     verify_relay_from_config, EvidenceIssuerRegistry, NotaryActivationCode,
     NotaryActivationCodeDefinition, NotaryActivationCodeLifecycle, NotaryActivationFailure,
-    NotaryRouters, NotaryRuntimeSnapshot, ResolvedCredential, StandaloneServerError,
-    NOTARY_ACTIVATION_CODE_DEFINITIONS,
+    NotaryRouters, NotaryRuntimeSnapshot, PrepareStateStoreAuditEvidence, ResolvedCredential,
+    StandaloneServerError, NOTARY_ACTIVATION_CODE_DEFINITIONS,
 };
 
 #[cfg(feature = "registry-notary-cel")]

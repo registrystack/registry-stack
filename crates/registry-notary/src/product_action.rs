@@ -84,6 +84,12 @@ async fn prepare_product_state_store_at(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let verified = verify_notary_product_bundle(bundle_dir, anchor_path)?;
     let config = load_verified_notary_config_read_only(&verified)?;
+    let audit_evidence = prepare_state_store_audit_evidence(&verified)?;
+    registry_notary_server::emit_prepare_state_store_mutation_intent_audit(
+        &config.audit,
+        audit_evidence,
+    )
+    .await?;
     prepare_postgres_state_store(
         &config.state,
         StateInstallArgs {
@@ -95,6 +101,28 @@ async fn prepare_product_state_store_at(
     .await?;
     println!("registry-notary prepare_state_store complete");
     Ok(())
+}
+
+fn prepare_state_store_audit_evidence(
+    verified: &VerifiedConfigBundle,
+) -> Result<registry_notary_server::PrepareStateStoreAuditEvidence, Box<dyn std::error::Error>> {
+    let anchor_digest = registry_platform_config::trust_anchor_digest(&verified.trust_anchor)
+        .map_err(|_| {
+            Box::new(BundleVerificationFailure::from(
+                BundleVerificationCode::REJECTED_VALIDATION,
+            )) as Box<dyn std::error::Error>
+        })?;
+    Ok(registry_notary_server::PrepareStateStoreAuditEvidence {
+        acceptance_identity: verified.manifest.acceptance_identity.clone(),
+        bundle_id: verified.manifest.bundle_id.clone(),
+        bundle_manifest_hash: verified.manifest_hash.clone(),
+        sequence: verified.manifest.sequence,
+        signer_kids: verified.signer_kids.clone(),
+        previous_config_hash: verified.manifest.previous_config_hash.clone(),
+        config_hash: verified.manifest.config_hash.clone(),
+        anchor_digest,
+        anchor_version: verified.trust_anchor.version,
+    })
 }
 
 async fn initialize_product_state() -> Result<(), Box<dyn std::error::Error>> {
@@ -155,6 +183,18 @@ fn closed_artifact_exists(path: &Path) -> Result<bool, Box<dyn std::error::Error
 mod tests {
     use super::*;
     use crate::test_support::*;
+
+    fn postgres_product_config(audit_path: &Path) -> String {
+        notary_bundle_runtime_config()
+            .replace("state:\n  storage: in_memory", "state:\n  storage: postgresql")
+            .replace(
+                "audit:\n  sink: stdout\n  hash_secret_env: TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+                &format!(
+                    "audit:\n  sink: file\n  path: {}\n  hash_secret_env: TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+                    audit_path.display()
+                ),
+            )
+    }
 
     #[test]
     fn closed_product_actions_parse_with_release_lock_names() {
@@ -229,7 +269,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn preparation_does_not_access_acceptance_state_issuer_signer_or_source() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var(
+            "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+            "registry-notary-product-action-audit-secret-32-bytes",
+        );
         let tmp = tempfile::tempdir().expect("tempdir");
         let fixture = write_signed_notary_bundle(&tmp);
 
@@ -255,5 +301,76 @@ mod tests {
                 "preparation accessed a non-database input"
             );
         }
+        std::env::remove_var("TEST_NOTARY_LOADER_AUDIT_HASH_SECRET");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn preparation_writes_pending_intent_before_database_failure() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var(
+            "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+            "registry-notary-product-action-audit-secret-32-bytes",
+        );
+        std::env::remove_var(PRODUCT_MIGRATION_URL_ENV);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let audit_path = tmp.path().join("audit.jsonl");
+        let fixture =
+            write_signed_notary_bundle_with_config(&tmp, postgres_product_config(&audit_path));
+
+        prepare_product_state_store_at(&fixture.bundle_dir, &fixture.anchor_path)
+            .await
+            .expect_err("missing database credential fails after the checked intent audit");
+
+        let records = std::fs::read_to_string(&audit_path).expect("intent audit is retained");
+        let record: Value = serde_json::from_str(records.lines().next().expect("one audit record"))
+            .expect("audit record parses");
+        assert_eq!(
+            record["record"]["path"],
+            "/__events/product_action.mutation_intent"
+        );
+        assert_eq!(record["record"]["config"]["action"], "prepare_state_store");
+        assert_eq!(record["record"]["config"]["apply_result"], "pending");
+        assert_eq!(record["record"]["config"]["applied"], false);
+        assert!(
+            !fixture.state_path.exists(),
+            "database preparation must not acquire anti-rollback authority"
+        );
+
+        std::env::remove_var("TEST_NOTARY_LOADER_AUDIT_HASH_SECRET");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn preparation_audit_failure_aborts_before_database_access() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var(
+            "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+            "registry-notary-product-action-audit-secret-32-bytes",
+        );
+        std::env::remove_var(PRODUCT_MIGRATION_URL_ENV);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let audit_path = tmp.path().join("audit-target-is-a-directory");
+        std::fs::create_dir(&audit_path).expect("invalid audit target directory");
+        let fixture =
+            write_signed_notary_bundle_with_config(&tmp, postgres_product_config(&audit_path));
+
+        let error = prepare_product_state_store_at(&fixture.bundle_dir, &fixture.anchor_path)
+            .await
+            .expect_err("audit failure aborts preparation");
+
+        assert!(
+            matches!(
+                error.downcast_ref::<registry_notary_server::StandaloneServerError>(),
+                Some(registry_notary_server::StandaloneServerError::Audit(_))
+            ),
+            "audit failure must be returned before the missing database credential: {error}"
+        );
+        assert!(
+            !fixture.state_path.exists(),
+            "failed preparation must not mutate anti-rollback state"
+        );
+
+        std::env::remove_var("TEST_NOTARY_LOADER_AUDIT_HASH_SECRET");
     }
 }

@@ -153,6 +153,56 @@ fn governed_acceptance_audit_persists_complete_validated_recovery_evidence() {
         Some(intent.anchor_digest.as_str())
     );
     assert_eq!(audit.anchor_version, Some(intent.anchor_version));
+    assert_eq!(audit.apply_result, "pending");
+    assert!(!audit.applied);
+}
+
+#[tokio::test]
+async fn governed_acceptance_commit_failure_never_records_applied_audit() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let loaded = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect("governed bundle prepares without mutating state");
+    let acceptance = loaded
+        .pending_bundle_acceptance
+        .expect("pending acceptance is available");
+    let candidate = loaded
+        .verified_acceptance_state
+        .expect("verified acceptance state is available");
+    let store = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path);
+    let plan = store
+        .plan_initialize(&candidate)
+        .expect("initialization plan is read-only");
+    let mut observed = None;
+
+    let error = store
+        .commit_acceptance(plan, |intent| {
+            observed = Some(
+                governed_bundle_acceptance_audit(&acceptance, &intent)
+                    .expect("checked intent audit builds"),
+            );
+            std::fs::write(&fixture.state_path, b"concurrent-state")
+                .expect("concurrent state creation forces commit failure");
+            async { Ok::<(), std::convert::Infallible>(()) }
+        })
+        .await
+        .expect_err("state commit fails after the checked audit callback");
+
+    assert!(matches!(
+        error,
+        registry_platform_ops::AntiRollbackStoreError::InvalidState(_)
+    ));
+    let audit = observed.expect("the pre-mutation audit was recorded");
+    assert_eq!(audit.apply_result, "pending");
+    assert!(
+        !audit.applied,
+        "failed state commit must have no applied audit"
+    );
 }
 
 #[test]
