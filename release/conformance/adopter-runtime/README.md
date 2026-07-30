@@ -11,12 +11,14 @@ constraints that must be proved before renderer implementation:
 - the ordinary model excludes preparation and initialization services;
 - initialization appears only when its separate model is explicitly selected;
 - an unrelated parent service can join the public edge network;
-- parent services cannot join the private network or private namespace;
+- parent services cannot join the private network through its key or effective
+  name, or share any private member's service namespace;
+- parent services cannot consume renderer-owned secrets or durable volumes;
 - an included product service cannot be changed by the parent;
 - short include syntax and explicit `project_directory` resolve product-owned
   relative paths identically.
 
-Compose permits a parent file to express the three forbidden merges. The
+Compose permits a parent file to express these forbidden merges. The
 verifier policy rejects the normalized effective model before execution. The
 negative fixtures prove those policy rejections; they do not claim that
 Compose itself enforces Registry Stack ownership.

@@ -62,6 +62,67 @@ class AdopterComposeContractTests(unittest.TestCase):
                 expected_parent="parent-private-client",
             )
 
+    def test_parent_boundary_rejects_any_private_service_namespace(self) -> None:
+        model = json.loads(json.dumps(self.baseline))
+        model["services"]["parent-private-client"] = {
+            "network_mode": "service:registry-notary"
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "private namespace"):
+            CHECKER.assert_parent_boundary(
+                model,
+                self.baseline,
+                expected_parent="parent-private-client",
+            )
+
+    def test_parent_boundary_resolves_private_network_alias(self) -> None:
+        baseline = json.loads(json.dumps(self.baseline))
+        baseline["networks"] = {
+            "registry-private": {"name": "registry-adopter-probe-private"}
+        }
+        model = json.loads(json.dumps(baseline))
+        model["networks"]["parent-alias"] = {
+            "name": "registry-adopter-probe-private"
+        }
+        model["services"]["parent-private-client"] = {
+            "networks": {"parent-alias": None}
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "private network"):
+            CHECKER.assert_parent_boundary(
+                model,
+                baseline,
+                expected_parent="parent-private-client",
+            )
+
+    def test_parent_boundary_rejects_renderer_owned_resources(self) -> None:
+        baseline = json.loads(json.dumps(self.baseline))
+        baseline["secrets"] = {
+            "registry-notary-signing-key": {
+                "name": "registry-adopter-probe_registry-notary-signing-key"
+            }
+        }
+        baseline["volumes"] = {
+            "registry-notary-state": {
+                "name": "registry-adopter-probe_registry-notary-state"
+            }
+        }
+        model = json.loads(json.dumps(baseline))
+        model["services"]["parent-private-client"] = {
+            "secrets": [{"source": "registry-notary-signing-key"}],
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "registry-notary-state",
+                    "target": "/state",
+                }
+            ],
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "renderer-owned secret"):
+            CHECKER.assert_parent_boundary(
+                model,
+                baseline,
+                expected_parent="parent-private-client",
+            )
+
     def test_negative_fixture_rejects_mixed_private_boundaries(self) -> None:
         model = json.loads(json.dumps(self.baseline))
         model["services"]["parent-private-client"] = {

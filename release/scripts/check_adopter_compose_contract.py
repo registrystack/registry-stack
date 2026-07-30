@@ -505,6 +505,28 @@ def assert_parent_boundary(
             "unexpected parent-owned service set: "
             + ", ".join(sorted(parent_services))
         )
+    protected_secret_names = {
+        definition.get("name")
+        for definition in baseline.get("secrets", {}).values()
+        if isinstance(definition, dict)
+    } - {None}
+    protected_volume_names = {
+        definition.get("name")
+        for definition in baseline.get("volumes", {}).values()
+        if isinstance(definition, dict)
+    } - {None}
+    private_network_definition = baseline.get("networks", {}).get(PRIVATE_NETWORK, {})
+    private_network_name = (
+        private_network_definition.get("name")
+        if isinstance(private_network_definition, dict)
+        else None
+    )
+    private_namespace_members = {
+        "registry-private-namespace",
+        "registry-postgres",
+        "registry-relay-consultation",
+        "registry-notary",
+    }
     for name in parent_services:
         service = services[name]
         networks = service.get("networks", {})
@@ -514,10 +536,45 @@ def assert_parent_boundary(
             network_names = set(networks)
         else:
             network_names = set()
-        if PRIVATE_NETWORK in network_names:
+        effective_network_names = {
+            model.get("networks", {}).get(network, {}).get("name")
+            for network in network_names
+            if isinstance(model.get("networks", {}).get(network), dict)
+        } - {None}
+        if (
+            PRIVATE_NETWORK in network_names
+            or private_network_name in effective_network_names
+        ):
             raise ContractError(f"parent service {name} joined the private network")
-        if service.get("network_mode") == PRIVATE_NAMESPACE:
+        network_mode = service.get("network_mode")
+        shared_service = (
+            network_mode.removeprefix("service:")
+            if isinstance(network_mode, str) and network_mode.startswith("service:")
+            else None
+        )
+        if shared_service in private_namespace_members:
             raise ContractError(f"parent service {name} joined the private namespace")
+        consumed_secret_names = {
+            model.get("secrets", {}).get(secret.get("source"), {}).get("name")
+            for secret in service.get("secrets", [])
+            if isinstance(secret, dict)
+            and isinstance(model.get("secrets", {}).get(secret.get("source")), dict)
+        } - {None}
+        if consumed_secret_names.intersection(protected_secret_names):
+            raise ContractError(
+                f"parent service {name} consumed a renderer-owned secret"
+            )
+        consumed_volume_names = {
+            model.get("volumes", {}).get(mount.get("source"), {}).get("name")
+            for mount in service.get("volumes", [])
+            if isinstance(mount, dict)
+            and mount.get("type") == "volume"
+            and isinstance(model.get("volumes", {}).get(mount.get("source")), dict)
+        } - {None}
+        if consumed_volume_names.intersection(protected_volume_names):
+            raise ContractError(
+                f"parent service {name} consumed a renderer-owned volume"
+            )
 
 
 def assert_edge_parent(model: dict[str, Any]) -> None:
@@ -633,6 +690,28 @@ def assert_negative_boundary(
     raise ContractError(f"negative fixture was accepted: {expected_reason}")
 
 
+def assert_parent_rejected(
+    model: dict[str, Any],
+    baseline: dict[str, Any],
+    expected_message: str,
+) -> None:
+    try:
+        assert_parent_boundary(
+            model,
+            baseline,
+            expected_parent="parent-private-client",
+        )
+    except ContractError as error:
+        if expected_message not in str(error):
+            raise ContractError(
+                f"negative fixture failed for the wrong reason: {error}"
+            ) from error
+        return
+    raise ContractError(
+        f"negative fixture was accepted instead of reporting: {expected_message}"
+    )
+
+
 def validate_plan(
     plan_path: Path,
 ) -> tuple[
@@ -646,6 +725,19 @@ def validate_plan(
         raise ContractError(f"invalid deployment-plan probe: {error}") from error
     if plan.get("schema") != "io.registrystack.deployment-plan.probe.v1":
         raise ContractError("deployment-plan probe has the wrong schema")
+    expected_root_fields = {
+        "schema",
+        "single_instance",
+        "workloads",
+        "initialization_actions",
+        "private_co_location_groups",
+        "recovery_consistency_groups",
+        "exposure_requirements",
+    }
+    if set(plan) != expected_root_fields:
+        raise ContractError("deployment-plan probe has unsupported root fields")
+    if plan.get("single_instance") is not True:
+        raise ContractError("deployment-plan probe must remain single-instance")
     workloads = plan.get("workloads")
     if not isinstance(workloads, list) or len(workloads) != len(PRODUCT_SERVICES):
         raise ContractError("deployment-plan probe must describe all five workloads")
@@ -654,6 +746,33 @@ def validate_plan(
         raise ContractError("deployment-plan probe workload inventory is incomplete")
     for workload_id, expected in EXPECTED_PLAN_WORKLOADS.items():
         workload = workload_by_id[workload_id]
+        expected_workload_fields = {
+            "id",
+            "kind",
+            "image_identity",
+            "secret_consumers",
+            "state_roles",
+            "endpoint_classes",
+            "network_relationships",
+            "dependencies",
+            "health_semantics",
+            "restart_action",
+            "reactivation_action",
+        }
+        if workload.get("kind") == "product":
+            expected_workload_fields.update(
+                {"product_lane", "action", "immutable_inputs", "mount_roles"}
+            )
+        elif workload.get("kind") == "supporting":
+            expected_workload_fields.add("recipe")
+        if set(workload) != expected_workload_fields:
+            unexpected = set(workload).difference(expected_workload_fields)
+            missing = expected_workload_fields.difference(workload)
+            raise ContractError(
+                f"deployment-plan probe has unsupported fields for {workload_id}: "
+                f"unexpected={','.join(sorted(unexpected)) or 'none'}; "
+                f"missing={','.join(sorted(missing)) or 'none'}"
+            )
         for field, expected_value in expected.items():
             if workload.get(field) != expected_value:
                 raise ContractError(
@@ -765,6 +884,12 @@ def validate_plan(
     initialization_actions = plan.get("initialization_actions")
     if not isinstance(initialization_actions, list):
         raise ContractError("deployment-plan probe omits initialization actions")
+    if any(
+        not isinstance(action, dict)
+        or set(action) != {"id", "workload", "action"}
+        for action in initialization_actions
+    ):
+        raise ContractError("deployment-plan probe initialization fields are wrong")
     actual_initialization_actions = tuple(
         (action.get("id"), action.get("workload"), action.get("action"))
         for action in initialization_actions
@@ -809,11 +934,20 @@ def validate_plan(
         "metrics": "loopback-only",
         "posture": "loopback-only",
     }
-    if not isinstance(exposure_requirements, list) or {
+    if (
+        not isinstance(exposure_requirements, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"endpoint_class", "exposure"}
+            for item in exposure_requirements
+        )
+        or {
         item.get("endpoint_class"): item.get("exposure")
         for item in exposure_requirements
         if isinstance(item, dict)
-    } != expected_exposure_requirements:
+        }
+        != expected_exposure_requirements
+    ):
         raise ContractError("deployment-plan probe endpoint inventory is incomplete")
     forbidden_keys = {
         "command",
@@ -934,6 +1068,38 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         "negative-cross-owner-mutation/compose.yaml",
     )
     assert_negative_boundary(cross_owner, baseline, "cross-owner-mutation")
+    private_alias = _compose_config(
+        compose_command,
+        fixture_root,
+        "negative-private-network-alias/compose.yaml",
+    )
+    assert_parent_rejected(private_alias, baseline, "joined the private network")
+    private_service = _compose_config(
+        compose_command,
+        fixture_root,
+        "negative-private-service-namespace/compose.yaml",
+    )
+    assert_parent_rejected(private_service, baseline, "joined the private namespace")
+    owned_resources = _compose_config(
+        compose_command,
+        fixture_root,
+        "negative-owned-resources/compose.yaml",
+    )
+    assert_parent_rejected(
+        owned_resources,
+        baseline,
+        "consumed a renderer-owned secret",
+    )
+    owned_volume = _compose_config(
+        compose_command,
+        fixture_root,
+        "negative-owned-volume/compose.yaml",
+    )
+    assert_parent_rejected(
+        owned_volume,
+        baseline,
+        "consumed a renderer-owned volume",
+    )
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
