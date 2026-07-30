@@ -1,6 +1,13 @@
 services:
   registry-postgres:
-    entrypoint: [docker-entrypoint.sh]
+    entrypoint:
+      - /bin/bash
+      - -ceu
+      - |-
+        pgdata="$${PGDATA:-/var/lib/postgresql/data}"
+        test -z "$$(find "$$pgdata" -mindepth 1 -maxdepth 1 -print -quit)" || { echo 'PostgreSQL data directory is not empty; refusing explicit initialization' >&2; exit 1; }
+        exec /usr/local/bin/docker-entrypoint.sh "$@"
+      - --
 
   registry-postgres-bootstrap:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

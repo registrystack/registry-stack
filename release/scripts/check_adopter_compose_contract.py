@@ -89,6 +89,18 @@ ORDINARY_COMMANDS = {
     ],
     "registry-notary": ["product-action", "serve"],
 }
+POSTGRESQL_INITIALIZATION_ENTRYPOINT = [
+    "/bin/bash",
+    "-ceu",
+    (
+        'pgdata="$${PGDATA:-/var/lib/postgresql/data}"\n'
+        'test -z "$$(find "$$pgdata" -mindepth 1 -maxdepth 1 -print -quit)" '
+        "|| { echo 'PostgreSQL data directory is not empty; refusing explicit "
+        "initialization' >&2; exit 1; }\n"
+        'exec /usr/local/bin/docker-entrypoint.sh "$@"'
+    ),
+    "--",
+]
 ORDINARY_DEPENDENCIES = {
     "registry-postgres": {
         "registry-postgresql-stage-secrets": "service_completed_successfully"
@@ -977,7 +989,8 @@ def assert_initialization_model(
         services["registry-postgres"]
     )
     if (
-        postgres_delta != {"entrypoint": ["docker-entrypoint.sh"]}
+        postgres_delta
+        != {"entrypoint": POSTGRESQL_INITIALIZATION_ENTRYPOINT}
         or removed_postgres_fields
     ):
         raise ContractError("PostgreSQL initialization is not an explicit delta")

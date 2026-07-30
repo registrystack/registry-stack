@@ -218,9 +218,9 @@ def ordinary_model() -> dict:
 
 def initialization_model(ordinary: dict) -> dict:
     initialized = copy.deepcopy(ordinary)
-    initialized["services"]["registry-postgres"]["entrypoint"] = [
-        "docker-entrypoint.sh"
-    ]
+    initialized["services"]["registry-postgres"]["entrypoint"] = list(
+        CHECKER.POSTGRESQL_INITIALIZATION_ENTRYPOINT
+    )
     initialized["services"]["registry-postgres-bootstrap"] = {
         **postgresql_hardening(),
         "image": expected_images()["registry-postgres"],
