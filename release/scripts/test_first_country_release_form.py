@@ -31,6 +31,14 @@ def load_module():
     return module
 
 
+def fixture_text(identifier: str) -> str:
+    return hashlib.sha256(f"first-country-fixture:{identifier}".encode()).hexdigest()
+
+
+def fixture_bytes(identifier: str) -> bytes:
+    return fixture_text(identifier).encode()
+
+
 class FirstCountryReleaseFormTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -544,7 +552,9 @@ class FirstCountryReleaseFormTest(TestCase):
             ".registry-stack/build/local/artifact-manifest.json": "artifacts\n",
             "data/public_works_projects.xlsx": "workbook\n",
             ".registry-stack/runtime/local/compose.yaml": "services: {}\n",
-            ".registry-stack/runtime/local/secrets/local.env": "secret\n",
+            ".registry-stack/runtime/local/secrets/local.env": (
+                fixture_text("runtime-local-env") + "\n"
+            ),
         }
         for relative, contents in files.items():
             path = self.root / relative
@@ -1174,11 +1184,14 @@ class FirstCountryReleaseFormTest(TestCase):
         for file_id, source_names in self.module.GOVERNED_OPERATOR_SOURCES.items():
             required_keys = ["KEEP"] if file_id == "postgresql-bootstrap-environment" else []
             file_format = "dotenv" if file_id.endswith("environment") else "opaque"
+            dotenv_value = fixture_bytes(f"{file_id}-dotenv")
+            ignored_value = fixture_bytes(f"{file_id}-ignored")
+            opaque_value = fixture_bytes(f"{file_id}-opaque")
             for source_name in source_names:
                 (credentials / source_name).write_bytes(
-                    b"KEEP=private\nEXTRA=not-copied\n"
+                    b"KEEP=" + dotenv_value + b"\nEXTRA=" + ignored_value + b"\n"
                     if file_format == "dotenv"
-                    else b"private\n"
+                    else opaque_value + b"\n"
                 )
             files.append(
                 {
@@ -1206,7 +1219,12 @@ class FirstCountryReleaseFormTest(TestCase):
 
         self.assertEqual(copied, len(self.module.GOVERNED_OPERATOR_SOURCES))
         filtered = package / "operator/postgresql-bootstrap-environment"
-        self.assertEqual(filtered.read_bytes(), b"KEEP=private\n")
+        self.assertEqual(
+            filtered.read_bytes(),
+            b"KEEP="
+            + fixture_bytes("postgresql-bootstrap-environment-dotenv")
+            + b"\n",
+        )
         if os.name == "posix":
             self.assertEqual(filtered.stat().st_mode & 0o777, 0o600)
 
@@ -1594,13 +1612,13 @@ class FirstCountryReleaseFormTest(TestCase):
     ) -> None:
         logs = self.root / "logs"
         logs.mkdir()
-        match_key = "match-key-sentinel"
-        no_match_key = "no-match-key-sentinel"
+        matching_bearer = fixture_text("records-matching-bearer")
+        nonmatching_bearer = fixture_text("records-nonmatching-bearer")
         match_row = {
-            "project_id": "private-project-value",
-            "district_code": "private-district-value",
-            "sector": "private-sector-value",
-            "status": "private-status-value",
+            "project_id": fixture_text("records-project"),
+            "district_code": fixture_text("records-district"),
+            "sector": fixture_text("records-sector"),
+            "status": fixture_text("records-status"),
         }
         responses = [
             subprocess.CompletedProcess(
@@ -1621,8 +1639,8 @@ class FirstCountryReleaseFormTest(TestCase):
                 project=self.root,
                 env={},
                 logs=logs,
-                match_key=match_key,
-                no_match_key=no_match_key,
+                match_key=matching_bearer,
+                no_match_key=nonmatching_bearer,
             )
 
         self.assertEqual(run.call_count, 2)
@@ -1630,18 +1648,18 @@ class FirstCountryReleaseFormTest(TestCase):
         no_match_command = run.call_args_list[1].args[0]
         match_headers = run.call_args_list[0].kwargs["input"]
         no_match_headers = run.call_args_list[1].kwargs["input"]
-        self.assertIn(f"Authorization: Bearer {match_key}", match_headers)
-        self.assertIn(f"Authorization: Bearer {no_match_key}", no_match_headers)
+        self.assertIn(f"Authorization: Bearer {matching_bearer}", match_headers)
+        self.assertIn(f"Authorization: Bearer {nonmatching_bearer}", no_match_headers)
         self.assertIn(f"Data-Purpose: {self.module.RECORDS_PURPOSE}", match_headers)
         self.assertIn(f"Data-Purpose: {self.module.RECORDS_PURPOSE}", no_match_headers)
-        self.assertNotIn(match_key, " ".join(match_command))
-        self.assertNotIn(no_match_key, " ".join(no_match_command))
+        self.assertNotIn(matching_bearer, " ".join(match_command))
+        self.assertNotIn(nonmatching_bearer, " ".join(no_match_command))
         self.assertEqual(match_command[-1], self.module.RECORDS_URL)
         self.assertEqual(no_match_command[-1], self.module.RECORDS_URL)
         self.assertNotIn("?", self.module.RECORDS_URL)
         retained = (logs / "allowed.log").read_text(encoding="utf-8")
-        for secret in [match_key, no_match_key, *match_row.values()]:
-            self.assertNotIn(secret, retained)
+        for sensitive_text in [matching_bearer, nonmatching_bearer, *match_row.values()]:
+            self.assertNotIn(sensitive_text, retained)
         self.assertEqual(
             json.loads(retained),
             [
@@ -1692,19 +1710,21 @@ class FirstCountryReleaseFormTest(TestCase):
 
     def test_env_redaction_collects_credentials_not_public_runtime_values(self) -> None:
         env_file = self.root / "postgres.env"
+        postgres_material = fixture_bytes("postgres-env-material")
+        audit_material = fixture_bytes("audit-env-material")
         env_file.write_bytes(
             b"POSTGRES_USER=registryctl_bootstrap\n"
             b"PGDATA=/var/lib/postgresql/data/pgdata\n"
             b"REGISTRYCTL_LOCAL_WORKLOAD_PUBLIC_JWK=public-jwk\n"
             b"REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH=public-fingerprint\n"
-            b"POSTGRES_PASSWORD=private-password\n"
-            b"REGISTRY_RELAY_AUDIT_HASH_SECRET=private-audit-secret\n"
+            b"POSTGRES_PASSWORD=" + postgres_material + b"\n"
+            b"REGISTRY_RELAY_AUDIT_HASH_SECRET=" + audit_material + b"\n"
         )
 
         values = self.module.credential_env_values(env_file)
 
-        self.assertIn(b"private-password", values)
-        self.assertIn(b"private-audit-secret", values)
+        self.assertIn(postgres_material, values)
+        self.assertIn(audit_material, values)
         self.assertNotIn(b"registryctl_bootstrap", values)
         self.assertNotIn(b"/var/lib/postgresql/data/pgdata", values)
         self.assertNotIn(b"public-jwk", values)
@@ -1715,27 +1735,30 @@ class FirstCountryReleaseFormTest(TestCase):
     ) -> None:
         secrets = self.root / "secrets"
         secrets.mkdir()
+        relay_material = fixture_text("relay-raw-material")
+        workload_material = fixture_text("relay-workload-material")
         (secrets / "local.env").write_text(
-            "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW=private-key\n",
+            f"REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW={relay_material}\n",
             encoding="utf-8",
         )
         (secrets / "relay-workload-token").write_text(
-            "private-token\n",
+            workload_material + "\n",
             encoding="utf-8",
         )
 
         values = self.module.available_secret_values(secrets)
 
-        self.assertIn(b"private-key", values)
-        self.assertIn(b"private-token", values)
+        self.assertIn(relay_material.encode(), values)
+        self.assertIn(workload_material.encode(), values)
 
     def test_local_evidence_credentials_must_be_distinct(self) -> None:
         local_env = self.root / "local.env"
+        shared_value = fixture_text("shared-local-env")
         local_env.write_text(
             "\n".join(
                 [
-                    f"{self.module.MATCH_KEY_ENV}=same-key",
-                    f"{self.module.NO_MATCH_KEY_ENV}=same-key",
+                    f"{self.module.MATCH_KEY_ENV}={shared_value}",
+                    f"{self.module.NO_MATCH_KEY_ENV}={shared_value}",
                 ]
             )
             + "\n",
@@ -1749,13 +1772,19 @@ class FirstCountryReleaseFormTest(TestCase):
     ) -> None:
         credentials = self.root / "credentials"
         credentials.mkdir(mode=0o700)
+        api_material = fixture_bytes("recursive-api-env")
+        tls_material = fixture_bytes("recursive-tls-key")
+        signing_material = fixture_bytes("recursive-signing-key")
+        public_jwk_material = fixture_bytes("recursive-public-jwk")
+        certificate_material = fixture_bytes("recursive-public-certificate")
+        unlisted_certificate_material = fixture_bytes("recursive-unlisted-certificate")
         values = {
-            "relay-public-serve.env": b"API_SECRET=private-relay-env\n",
-            "relay-public-tls.key": b"private-tls-key\n",
-            "relay-public.private.jwk": b"private-signing-key\n",
-            "relay-public.public.jwk": b"public-signing-key\n",
-            "relay-public-tls.crt": b"public-certificate\n",
-            "unlisted.crt": b"unlisted-certificate-material\n",
+            "relay-public-serve.env": b"API_SECRET=" + api_material + b"\n",
+            "relay-public-tls.key": tls_material + b"\n",
+            "relay-public.private.jwk": signing_material + b"\n",
+            "relay-public.public.jwk": public_jwk_material + b"\n",
+            "relay-public-tls.crt": certificate_material + b"\n",
+            "unlisted.crt": unlisted_certificate_material + b"\n",
         }
         for name, value in values.items():
             path = credentials / name
@@ -1764,26 +1793,29 @@ class FirstCountryReleaseFormTest(TestCase):
 
         observed = self.module.recursive_secret_values(credentials)
 
-        self.assertIn(b"private-relay-env", observed)
-        self.assertIn(b"private-tls-key", observed)
-        self.assertIn(b"private-signing-key", observed)
-        self.assertIn(b"unlisted-certificate-material", observed)
-        self.assertNotIn(b"public-signing-key", observed)
-        self.assertNotIn(b"public-certificate", observed)
+        self.assertIn(api_material, observed)
+        self.assertIn(tls_material, observed)
+        self.assertIn(signing_material, observed)
+        self.assertIn(unlisted_certificate_material, observed)
+        self.assertNotIn(public_jwk_material, observed)
+        self.assertNotIn(certificate_material, observed)
 
     def test_dev_credentials_reject_non_private_and_symlinked_files(self) -> None:
         credentials = self.root / "credentials"
         credentials.mkdir(mode=0o700)
-        private = credentials / "relay-public-serve.env"
-        private.write_text("API_SECRET=private\n", encoding="utf-8")
-        private.chmod(0o644)
+        operator_env = credentials / "relay-public-serve.env"
+        operator_env.write_text(
+            f"API_SECRET={fixture_text('dev-credential-env')}\n",
+            encoding="utf-8",
+        )
+        operator_env.chmod(0o644)
         with self.assertRaisesRegex(
             self.module.ReleaseFormError, "not owner-only"
         ):
             self.module.validate_dev_credentials(credentials)
 
-        private.chmod(0o600)
-        (credentials / "linked-private-key").symlink_to(private)
+        operator_env.chmod(0o600)
+        (credentials / "linked-private-key").symlink_to(operator_env)
         with self.assertRaisesRegex(
             self.module.ReleaseFormError, "regular and non-symlink"
         ):
