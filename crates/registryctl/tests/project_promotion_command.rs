@@ -26,6 +26,7 @@ struct SignedProductBaseline {
 
 struct SignedBaselines {
     relay: SignedProductBaseline,
+    relay_consultation: SignedProductBaseline,
     notary: SignedProductBaseline,
 }
 
@@ -93,6 +94,13 @@ fn signed_baselines(project: &Path, temporary: &Path) -> SignedBaselines {
     let output = build_project_output(project);
     SignedBaselines {
         relay: sign_product_baseline(&output, temporary, "registry-relay", "relay", "relay"),
+        relay_consultation: sign_product_baseline(
+            &output,
+            temporary,
+            "registry-relay",
+            "relay-consultation",
+            "relay-consultation",
+        ),
         notary: sign_product_baseline(&output, temporary, "registry-notary", "notary", "notary"),
     }
 }
@@ -105,6 +113,8 @@ fn promotion_options(project: &Path, baselines: &SignedBaselines) -> ProjectProm
         anchor: None,
         relay_against: Some(baselines.relay.bundle.clone()),
         relay_anchor: Some(baselines.relay.anchor.clone()),
+        relay_consultation_against: Some(baselines.relay_consultation.bundle.clone()),
+        relay_consultation_anchor: Some(baselines.relay_consultation.anchor.clone()),
         notary_against: Some(baselines.notary.bundle.clone()),
         notary_anchor: Some(baselines.notary.anchor.clone()),
     }
@@ -121,6 +131,8 @@ fn legacy_promotion_options(
         anchor: Some(baseline.anchor.clone()),
         relay_against: None,
         relay_anchor: None,
+        relay_consultation_against: None,
+        relay_consultation_anchor: None,
         notary_against: None,
         notary_anchor: None,
     }
@@ -146,6 +158,18 @@ fn run_promote(project: &Path, baselines: &SignedBaselines, format: &str) -> std
                 .anchor
                 .to_str()
                 .expect("Relay anchor path is UTF-8"),
+            "--relay-consultation-against",
+            baselines
+                .relay_consultation
+                .bundle
+                .to_str()
+                .expect("consultation Relay bundle path is UTF-8"),
+            "--relay-consultation-anchor",
+            baselines
+                .relay_consultation
+                .anchor
+                .to_str()
+                .expect("consultation Relay anchor path is UTF-8"),
             "--notary-against",
             baselines
                 .notary
@@ -361,6 +385,8 @@ fn promotion_requires_a_verified_reviewed_baseline_without_exposing_project_valu
         anchor: None,
         relay_against: None,
         relay_anchor: None,
+        relay_consultation_against: None,
+        relay_consultation_anchor: None,
         notary_against: None,
         notary_anchor: None,
     })
@@ -553,6 +579,21 @@ fn combined_topology_requires_separate_product_owned_baselines() {
     let missing_relay = run_promote_legacy(&project, &baselines.notary, "json");
     assert_conservative_blocked_cli(&missing_relay, &forbidden);
 
+    let missing_consultation = promote_registry_project(&ProjectPromotionOptions {
+        project_directory: project.clone(),
+        environment: "local".to_owned(),
+        against: None,
+        anchor: None,
+        relay_against: Some(baselines.relay.bundle.clone()),
+        relay_anchor: Some(baselines.relay.anchor.clone()),
+        relay_consultation_against: None,
+        relay_consultation_anchor: None,
+        notary_against: Some(baselines.notary.bundle.clone()),
+        notary_anchor: Some(baselines.notary.anchor.clone()),
+    })
+    .expect("missing consultation baseline fails closed as a report");
+    assert_conservative_blocked_report(&missing_consultation, &forbidden);
+
     let wrong_owner = promote_registry_project(&ProjectPromotionOptions {
         project_directory: project.clone(),
         environment: "local".to_owned(),
@@ -560,6 +601,8 @@ fn combined_topology_requires_separate_product_owned_baselines() {
         anchor: None,
         relay_against: Some(baselines.notary.bundle.clone()),
         relay_anchor: Some(baselines.notary.anchor.clone()),
+        relay_consultation_against: Some(baselines.relay_consultation.bundle.clone()),
+        relay_consultation_anchor: Some(baselines.relay_consultation.anchor.clone()),
         notary_against: Some(baselines.relay.bundle.clone()),
         notary_anchor: Some(baselines.relay.anchor.clone()),
     })
@@ -639,6 +682,10 @@ fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
 
     let mut legacy_v2 = approval.clone();
     legacy_v2["schema"] = serde_json::json!("registry.project.approval-state.v2");
+    legacy_v2["generated_closure_digests"]
+        .as_object_mut()
+        .expect("v2 closure set is an object")
+        .remove("relay_consultation");
     let mut legacy_v2_bytes =
         serde_json::to_vec_pretty(&legacy_v2).expect("v2 approval state serializes");
     legacy_v2_bytes.push(b'\n');

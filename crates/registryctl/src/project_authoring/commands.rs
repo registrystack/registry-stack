@@ -2071,7 +2071,10 @@ fn validate_promotion_baseline_options(options: &ProjectPromotionOptions) -> Res
 }
 
 fn promotion_baseline_supplied(options: &ProjectPromotionOptions) -> bool {
-    options.against.is_some() || options.relay_against.is_some() || options.notary_against.is_some()
+    options.against.is_some()
+        || options.relay_against.is_some()
+        || options.relay_consultation_against.is_some()
+        || options.notary_against.is_some()
 }
 
 fn unresolved_promotion_baseline_report() -> Result<ProjectPromotionReportV1> {
@@ -2255,15 +2258,40 @@ fn promotion_compatibility(
         closures
             .get(name)
             .is_some_and(|digest| digest.is_string() == required && (required || digest.is_null()))
+    }) && closures.get("relay_consultation").is_some_and(|digest| {
+        digest.is_null()
+            || (digest.is_string()
+                && current
+                    .products
+                    .contains(&PromotionProjectedProduct::Relay))
     }) {
-        let baseline_products = baselines
+        let consultation_required = closures
+            .get("relay_consultation")
+            .is_some_and(Value::is_string)
+            || baselines.iter().any(|baseline| {
+                baseline
+                    .approval_state
+                    .pointer("/generated_closure_digests/relay_consultation")
+                    .is_some_and(Value::is_string)
+            });
+        let mut required_lanes = current
+            .products
             .iter()
-            .map(verified_baseline_product)
-            .collect::<Result<BTreeSet<_>>>()?;
-        let current_products = current.products.iter().copied().collect::<BTreeSet<_>>();
-        if baselines.is_empty() || baseline_products == current_products {
+            .map(|product| match product {
+                PromotionProjectedProduct::Relay => VerifiedBaselineLane::Relay,
+                PromotionProjectedProduct::Notary => VerifiedBaselineLane::Notary,
+            })
+            .collect::<BTreeSet<_>>();
+        if consultation_required {
+            required_lanes.insert(VerifiedBaselineLane::RelayConsultation);
+        }
+        let baseline_lanes = baselines
+            .iter()
+            .map(|baseline| baseline.lane)
+            .collect::<BTreeSet<_>>();
+        if baselines.is_empty() || baseline_lanes == required_lanes {
             PromotionCompatibilityState::Compatible
-        } else if baseline_products.is_subset(&current_products) {
+        } else if baseline_lanes.is_subset(&required_lanes) {
             PromotionCompatibilityState::Missing
         } else {
             PromotionCompatibilityState::Incompatible
@@ -2342,20 +2370,6 @@ fn promotion_compatibility(
     })
 }
 
-fn verified_baseline_product(baseline: &VerifiedBaseline) -> Result<PromotionProjectedProduct> {
-    match baseline
-        .verified_manifest
-        .get("product")
-        .and_then(Value::as_str)
-    {
-        Some("registry-relay") => Ok(PromotionProjectedProduct::Relay),
-        Some("registry-notary") => Ok(PromotionProjectedProduct::Notary),
-        _ => Err(anyhow!(
-            "verified promotion baseline has an unsupported product"
-        )),
-    }
-}
-
 fn promotion_projection_from_approval_state(
     approval_state: &Value,
     require_current_field_knowledge: bool,
@@ -2404,6 +2418,7 @@ mod promotion_adapter_tests {
             "compiler_version": env!("CARGO_PKG_VERSION"),
             "generated_closure_digests": {
                 "relay": relay,
+                "relay_consultation": Value::Null,
                 "notary": notary,
             },
             "promotion_projection": projection,
@@ -2413,6 +2428,7 @@ mod promotion_adapter_tests {
     fn verified_baselines(approval_state: Value) -> Vec<VerifiedBaseline> {
         vec![
             VerifiedBaseline {
+                lane: VerifiedBaselineLane::Relay,
                 approval_state: approval_state.clone(),
                 approval_state_digest:
                     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -2423,6 +2439,7 @@ mod promotion_adapter_tests {
                         .to_string(),
             },
             VerifiedBaseline {
+                lane: VerifiedBaselineLane::Notary,
                 approval_state,
                 approval_state_digest:
                     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -2716,6 +2733,8 @@ mod promotion_adapter_tests {
             anchor: None,
             relay_against: Some(bundle.clone()),
             relay_anchor: None,
+            relay_consultation_against: None,
+            relay_consultation_anchor: None,
             notary_against: None,
             notary_anchor: None,
         };
@@ -3264,7 +3283,13 @@ fn build_registry_project_inner(
         &loaded,
         BaselineSetCompleteness::CompleteTopologyWhenPresent,
     )
-    .map_err(|_| anyhow!("could not establish verified build baselines"))?;
+    .map_err(|error| {
+        if error.is::<LegacyRelayConsultationBaselineMigrationRequired>() {
+            error
+        } else {
+            anyhow!("could not establish verified build baselines")
+        }
+    })?;
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
     let artifact_inputs = validate_project_workbook_inputs(&loaded, &compiled)?;

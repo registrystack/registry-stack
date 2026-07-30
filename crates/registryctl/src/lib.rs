@@ -189,7 +189,7 @@ const CANONICAL_LOCAL_ENVIRONMENT: &str = "local";
 const CANONICAL_BUILD_ROOT: &str = ".registry-stack/build/local";
 const CANONICAL_RELAY_CONFIG: &str = ".registry-stack/build/local/private/relay/config/relay.yaml";
 const CANONICAL_CONSULTATION_RELAY_CONFIG: &str =
-    ".registry-stack/build/local/private/relay/config/relay-consultation.yaml";
+    ".registry-stack/build/local/private/relay-consultation/config/relay.yaml";
 const CANONICAL_COMPILED_NOTARY_CONFIG: &str =
     ".registry-stack/build/local/private/notary/config/notary.yaml";
 const CANONICAL_ARTIFACT_MANIFEST: &str = ".registry-stack/build/local/artifact-manifest.json";
@@ -3766,6 +3766,11 @@ fn publish_canonical_runtime(
         &credentials.client_env_file(),
     )?;
     let notary_manifest = if let Some(notary) = credentials.notary.as_ref() {
+        copy_private_runtime_tree(
+            &project_dir
+                .join(".registry-stack/build/local/private/relay-consultation/config/artifacts"),
+            &staging.path().join("private/relay/config/artifacts"),
+        )?;
         for relative in [
             "private",
             "private/db",

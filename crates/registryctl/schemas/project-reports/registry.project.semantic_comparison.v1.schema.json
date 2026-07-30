@@ -55,7 +55,7 @@
     },
     "required_actions": {
       "type": "array",
-      "maxItems": 9,
+      "maxItems": 10,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/required_action"
@@ -425,6 +425,7 @@
         "review_semantic_changes",
         "run_affected_fixtures",
         "regenerate_generated_artifacts",
+        "review_sign_activate_relay_consultation_input",
         "resign_relay_bundle",
         "resign_notary_bundle",
         "reactivate_relay_configuration",

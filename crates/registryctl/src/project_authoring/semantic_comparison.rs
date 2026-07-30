@@ -127,6 +127,9 @@ pub enum SemanticComparisonRequiredAction {
     ReviewSemanticChanges,
     RunAffectedFixtures,
     RegenerateGeneratedArtifacts,
+    /// Independently review, sign, and activate the generated
+    /// `private/relay-consultation` input.
+    ReviewSignActivateRelayConsultationInput,
     ResignRelayBundle,
     ResignNotaryBundle,
     ReactivateRelayConfiguration,
@@ -524,18 +527,30 @@ struct SnapshotField {
 #[derive(Clone, Copy)]
 struct ComparisonProductTopology {
     relay: bool,
+    relay_consultation: bool,
     notary: bool,
 }
 
 impl ComparisonProductTopology {
     fn from_loaded(loaded: &LoadedRegistryProject) -> Self {
         let (relay, notary) = project_product_topology(&loaded.project);
-        Self { relay, notary }
+        let relay_consultation = relay
+            && loaded
+                .project
+                .services
+                .values()
+                .any(|service| !service.consultations.is_empty());
+        Self {
+            relay,
+            relay_consultation,
+            notary,
+        }
     }
 
     const fn union(self, other: Self) -> Self {
         Self {
             relay: self.relay || other.relay,
+            relay_consultation: self.relay_consultation || other.relay_consultation,
             notary: self.notary || other.notary,
         }
     }
@@ -620,7 +635,7 @@ fn compare_loaded_projects(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let required_actions = required_actions(&changes);
+    let required_actions = required_actions(&changes, product_topology.relay_consultation);
     let equivalent = changes.is_empty();
     Ok(ProjectSemanticComparisonReportV1 {
         schema_version: ProjectSemanticComparisonSchemaVersion::V1,
@@ -1444,6 +1459,7 @@ fn requirements_for_consumers(
 
 fn required_actions(
     changes: &[ProjectSemanticComparisonChange],
+    has_consultation_relay_input: bool,
 ) -> Vec<SemanticComparisonRequiredAction> {
     let mut actions = BTreeSet::new();
     if !changes.is_empty() {
@@ -1500,6 +1516,17 @@ fn required_actions(
             SemanticComparisonRestartRequirement::None => {}
         }
     }
+    if has_consultation_relay_input
+        && changes.iter().any(|change| {
+            matches!(
+                change.requirements.signing,
+                SemanticComparisonSigningRequirement::RelayBundle
+                    | SemanticComparisonSigningRequirement::RelayAndNotaryBundles
+            )
+        })
+    {
+        actions.insert(SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput);
+    }
     actions.into_iter().collect()
 }
 
@@ -1536,12 +1563,13 @@ fn affected_subject_inventory(
             baseline.project.services.keys().cloned(),
         )?,
     );
+    let consultations = union_count(
+        consultation_subjects(current).into_iter(),
+        consultation_subjects(baseline).into_iter(),
+    )?;
     counts.insert(
         SemanticComparisonAffectedSubjectKind::Consultation,
-        union_count(
-            consultation_subjects(current).into_iter(),
-            consultation_subjects(baseline).into_iter(),
-        )?,
+        consultations,
     );
     let claims = union_count(
         claim_subjects(current).into_iter(),
@@ -1549,7 +1577,10 @@ fn affected_subject_inventory(
     )?;
     counts.insert(SemanticComparisonAffectedSubjectKind::Claim, claims);
     counts.insert(SemanticComparisonAffectedSubjectKind::Disclosure, claims);
-    counts.insert(SemanticComparisonAffectedSubjectKind::ProductInput, 2);
+    counts.insert(
+        SemanticComparisonAffectedSubjectKind::ProductInput,
+        if consultations > 0 { 3 } else { 2 },
+    );
     counts.insert(SemanticComparisonAffectedSubjectKind::GeneratedArtifact, 8);
     Ok(counts
         .into_iter()

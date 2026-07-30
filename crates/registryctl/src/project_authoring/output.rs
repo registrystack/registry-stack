@@ -106,7 +106,10 @@ mod project_execution_context_tests {
 }
 
 fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> {
-    if compiled.relay_private.is_empty() && compiled.notary_private.is_empty() {
+    if compiled.relay_private.is_empty()
+        && compiled.relay_consultation_private.is_empty()
+        && compiled.notary_private.is_empty()
+    {
         bail!("generated deployment has no product configuration");
     }
     if !compiled.relay_private.is_empty() {
@@ -115,16 +118,17 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
             .get(Path::new("config/relay.yaml"))
             .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
         validate_generated_relay(relay_config, &compiled.relay_private, "config/relay.yaml")?;
-        if let Some(consultation_config) = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
-        {
-            validate_generated_relay(
-                consultation_config,
-                &compiled.relay_private,
-                "config/relay-consultation.yaml",
-            )?;
-        }
+    }
+    if !compiled.relay_consultation_private.is_empty() {
+        let relay_config = compiled
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
+            .ok_or_else(|| anyhow!("generated Relay consultation config is absent"))?;
+        validate_generated_relay(
+            relay_config,
+            &compiled.relay_consultation_private,
+            "config/relay.yaml",
+        )?;
     }
     if !compiled.notary_private.is_empty() {
         validate_generated_notary(compiled)?;
@@ -622,6 +626,13 @@ fn write_compiled_project(
         write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
         write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
     }
+    if !compiled.relay_consultation_private.is_empty() {
+        let relay_root = temporary.join("private/relay-consultation");
+        create_dir_owner_only(&relay_root)?;
+        write_file_map(&relay_root, &compiled.relay_consultation_private)?;
+        write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
+        write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
+    }
     if !compiled.notary_private.is_empty() {
         let notary_root = temporary.join("private/notary");
         create_dir_owner_only(&notary_root)?;
@@ -635,9 +646,16 @@ fn write_compiled_project(
     if let Some(identity) = runtime_identity {
         // The temporary build root is freshly created owner-only state and is
         // not published until the rename below. Privileged ownership changes
-        // are confined to the two config trees mounted into containers, so a
+        // are confined to the selected config trees mounted into containers, so a
         // failure leaves the prior published build untouched.
-        for relative in ["private/relay/config", "private/notary/config"] {
+        for relative in [
+            "private/relay/config",
+            "private/relay-consultation/config",
+            "private/notary/config",
+        ] {
+            if !temporary.join(relative).exists() {
+                continue;
+            }
             assign_unpublished_runtime_input_owner(&temporary.join(relative), identity)?;
         }
     }
@@ -792,6 +810,8 @@ struct ApprovedBaselineSetPaths<'a> {
     anchor: Option<&'a Path>,
     relay_against: Option<&'a Path>,
     relay_anchor: Option<&'a Path>,
+    relay_consultation_against: Option<&'a Path>,
+    relay_consultation_anchor: Option<&'a Path>,
     notary_against: Option<&'a Path>,
     notary_anchor: Option<&'a Path>,
 }
@@ -803,6 +823,8 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             anchor,
             relay_against: None,
             relay_anchor: None,
+            relay_consultation_against: None,
+            relay_consultation_anchor: None,
             notary_against: None,
             notary_anchor: None,
         }
@@ -817,6 +839,10 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             anchor: options.anchor.as_deref(),
             relay_against: baselines.and_then(|set| set.relay_against.as_deref()),
             relay_anchor: baselines.and_then(|set| set.relay_anchor.as_deref()),
+            relay_consultation_against: baselines
+                .and_then(|set| set.relay_consultation_against.as_deref()),
+            relay_consultation_anchor: baselines
+                .and_then(|set| set.relay_consultation_anchor.as_deref()),
             notary_against: baselines.and_then(|set| set.notary_against.as_deref()),
             notary_anchor: baselines.and_then(|set| set.notary_anchor.as_deref()),
         }
@@ -828,6 +854,8 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             anchor: options.anchor.as_deref(),
             relay_against: options.relay_against.as_deref(),
             relay_anchor: options.relay_anchor.as_deref(),
+            relay_consultation_against: options.relay_consultation_against.as_deref(),
+            relay_consultation_anchor: options.relay_consultation_anchor.as_deref(),
             notary_against: options.notary_against.as_deref(),
             notary_anchor: options.notary_anchor.as_deref(),
         }
@@ -840,38 +868,83 @@ enum BaselineSetCompleteness {
     CompleteTopologyWhenPresent,
 }
 
+#[derive(Debug)]
+struct LegacyRelayConsultationBaselineMigrationRequired;
+
+impl std::fmt::Display for LegacyRelayConsultationBaselineMigrationRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "legacy v1-v3 approved Relay baselines cannot establish split Relay consultation \
+             lineage; re-review the project and sign separate Relay public and consultation \
+             baselines before rebuilding",
+        )
+    }
+}
+
+impl std::error::Error for LegacyRelayConsultationBaselineMigrationRequired {}
+
+impl VerifiedBaselineLane {
+    fn product(self) -> &'static str {
+        match self {
+            Self::Relay | Self::RelayConsultation => "registry-relay",
+            Self::Notary => "registry-notary",
+        }
+    }
+
+    fn closure(self) -> &'static str {
+        match self {
+            Self::Relay => "relay",
+            Self::RelayConsultation => "relay_consultation",
+            Self::Notary => "notary",
+        }
+    }
+}
+
 impl VerifiedBaselineSet {
     fn is_empty(&self) -> bool {
-        self.relay.is_none() && self.notary.is_none()
+        self.relay.is_none() && self.relay_consultation.is_none() && self.notary.is_none()
     }
 
     fn iter(&self) -> impl Iterator<Item = &VerifiedBaseline> {
-        [self.relay.as_ref(), self.notary.as_ref()]
+        [
+            self.relay.as_ref(),
+            self.relay_consultation.as_ref(),
+            self.notary.as_ref(),
+        ]
             .into_iter()
             .flatten()
     }
 
     fn common(&self) -> Option<&VerifiedBaseline> {
-        self.relay.as_ref().or(self.notary.as_ref())
+        self.relay
+            .as_ref()
+            .or(self.relay_consultation.as_ref())
+            .or(self.notary.as_ref())
     }
 
     fn predecessor_manifest_identities(&self) -> Value {
         json!({
             "relay": self.relay.as_ref().map(|baseline| &baseline.verified_manifest),
+            "relay_consultation": self.relay_consultation.as_ref().map(|baseline| &baseline.verified_manifest),
             "notary": self.notary.as_ref().map(|baseline| &baseline.verified_manifest),
         })
     }
 
     fn insert(&mut self, baseline: VerifiedBaseline) -> Result<()> {
-        match verified_baseline_product(&baseline)? {
-            PromotionProjectedProduct::Relay if self.relay.is_none() => {
+        match baseline.lane {
+            VerifiedBaselineLane::Relay if self.relay.is_none() => {
                 self.relay = Some(baseline);
             }
-            PromotionProjectedProduct::Notary if self.notary.is_none() => {
+            VerifiedBaselineLane::RelayConsultation if self.relay_consultation.is_none() => {
+                self.relay_consultation = Some(baseline);
+            }
+            VerifiedBaselineLane::Notary if self.notary.is_none() => {
                 self.notary = Some(baseline);
             }
-            PromotionProjectedProduct::Relay | PromotionProjectedProduct::Notary => {
-                bail!("approved baseline set contains a duplicate product")
+            VerifiedBaselineLane::Relay
+            | VerifiedBaselineLane::RelayConsultation
+            | VerifiedBaselineLane::Notary => {
+                bail!("approved baseline set contains a duplicate product lane")
             }
         }
         Ok(())
@@ -901,12 +974,21 @@ fn validate_approved_baseline_set_paths(paths: ApprovedBaselineSetPaths<'_>) -> 
         paths.relay_anchor,
     )?;
     validate_named_baseline_pair(
+        "--relay-consultation-against",
+        paths.relay_consultation_against,
+        "--relay-consultation-anchor",
+        paths.relay_consultation_anchor,
+    )?;
+    validate_named_baseline_pair(
         "--notary-against",
         paths.notary_against,
         "--notary-anchor",
         paths.notary_anchor,
     )?;
-    if paths.against.is_some() && (paths.relay_against.is_some() || paths.notary_against.is_some())
+    if paths.against.is_some()
+        && (paths.relay_against.is_some()
+            || paths.relay_consultation_against.is_some()
+            || paths.notary_against.is_some())
     {
         bail!("--against cannot be combined with product-specific baselines");
     }
@@ -920,25 +1002,27 @@ fn load_verified_approved_baseline_set(
 ) -> Result<VerifiedBaselineSet> {
     validate_approved_baseline_set_paths(paths)?;
     let mut baselines = VerifiedBaselineSet::default();
-    if let Some(baseline) = load_verified_baseline(paths.against, paths.anchor, loaded)? {
+    if let Some(baseline) = load_verified_baseline(paths.against, paths.anchor, loaded, None)? {
         baselines.insert(baseline)?;
     } else {
-        for (against, anchor, expected_product) in [
+        for (against, anchor, lane) in [
             (
                 paths.relay_against,
                 paths.relay_anchor,
-                PromotionProjectedProduct::Relay,
+                VerifiedBaselineLane::Relay,
+            ),
+            (
+                paths.relay_consultation_against,
+                paths.relay_consultation_anchor,
+                VerifiedBaselineLane::RelayConsultation,
             ),
             (
                 paths.notary_against,
                 paths.notary_anchor,
-                PromotionProjectedProduct::Notary,
+                VerifiedBaselineLane::Notary,
             ),
         ] {
-            if let Some(baseline) = load_verified_baseline(against, anchor, loaded)? {
-                if verified_baseline_product(&baseline)? != expected_product {
-                    bail!("product-specific approved baseline has the wrong product");
-                }
+            if let Some(baseline) = load_verified_baseline(against, anchor, loaded, Some(lane))? {
                 baselines.insert(baseline)?;
             }
         }
@@ -956,7 +1040,33 @@ fn load_verified_approved_baseline_set(
         let products = project_promotion_products(environment);
         let requires_relay = products.contains(&PromotionProjectedProduct::Relay);
         let requires_notary = products.contains(&PromotionProjectedProduct::Notary);
+        let requires_relay_consultation =
+            project_requires_relay_consultation_baseline(loaded)
+                || baselines.common().is_some_and(|baseline| {
+                    baseline
+                        .approval_state
+                        .pointer("/generated_closure_digests/relay_consultation")
+                        .is_some_and(Value::is_string)
+                });
+        if requires_relay_consultation
+            && baselines.relay_consultation.is_none()
+            && baselines.common().is_some_and(|baseline| {
+                matches!(
+                    baseline.approval_state.get("schema").and_then(Value::as_str),
+                    Some(
+                        APPROVAL_STATE_SCHEMA_V1
+                            | APPROVAL_STATE_SCHEMA_V2
+                            | APPROVAL_STATE_SCHEMA_V3
+                    )
+                )
+            })
+        {
+            return Err(anyhow::Error::new(
+                LegacyRelayConsultationBaselineMigrationRequired,
+            ));
+        }
         if baselines.relay.is_some() != requires_relay
+            || baselines.relay_consultation.is_some() != requires_relay_consultation
             || baselines.notary.is_some() != requires_notary
         {
             bail!("approved baseline set is incomplete for the selected product topology");
@@ -965,10 +1075,19 @@ fn load_verified_approved_baseline_set(
     Ok(baselines)
 }
 
+fn project_requires_relay_consultation_baseline(loaded: &LoadedRegistryProject) -> bool {
+    loaded
+        .project
+        .services
+        .values()
+        .any(|service| !service.consultations.is_empty())
+}
+
 fn load_verified_baseline(
     against: Option<&Path>,
     anchor: Option<&Path>,
     loaded: &LoadedRegistryProject,
+    expected_lane: Option<VerifiedBaselineLane>,
 ) -> Result<Option<VerifiedBaseline>> {
     let (Some(bundle), Some(anchor)) = (against, anchor) else {
         return Ok(None);
@@ -979,10 +1098,12 @@ fn load_verified_baseline(
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("verified baseline requires an explicit environment"))?;
-    if !matches!(
-        verified.manifest.product.as_str(),
-        "registry-relay" | "registry-notary"
-    ) || verified.manifest.environment != environment
+    let lane = expected_lane.unwrap_or(match verified.manifest.product.as_str() {
+        "registry-relay" => VerifiedBaselineLane::Relay,
+        "registry-notary" => VerifiedBaselineLane::Notary,
+        _ => bail!("verified baseline manifest has an unsupported product"),
+    });
+    if verified.manifest.product != lane.product() || verified.manifest.environment != environment
     {
         bail!("verified baseline manifest is not bound to this product environment");
     }
@@ -1005,9 +1126,21 @@ fn load_verified_baseline(
     }
     if !matches!(
         approval_state.get("schema").and_then(Value::as_str),
-        Some(APPROVAL_STATE_SCHEMA_V1 | APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA)
+        Some(
+            APPROVAL_STATE_SCHEMA_V1
+                | APPROVAL_STATE_SCHEMA_V2
+                | APPROVAL_STATE_SCHEMA_V3
+                | APPROVAL_STATE_SCHEMA
+        )
     ) {
         bail!("baseline approval state has the wrong schema");
+    }
+    if lane == VerifiedBaselineLane::RelayConsultation
+        && approval_state.get("schema").and_then(Value::as_str) != Some(APPROVAL_STATE_SCHEMA)
+    {
+        return Err(anyhow::Error::new(
+            LegacyRelayConsultationBaselineMigrationRequired,
+        ));
     }
     for value in [&review, &approval_state] {
         if value.get("registry").and_then(Value::as_str)
@@ -1036,6 +1169,20 @@ fn load_verified_baseline(
     if approval_state.get("entity_materializations") != review.get("entity_materializations") {
         bail!("verified baseline review and approval state disagree on entity materializations");
     }
+    if approval_state.get("schema").and_then(Value::as_str) == Some(APPROVAL_STATE_SCHEMA) {
+        let has_consultations = review
+            .get("consultations")
+            .and_then(Value::as_object)
+            .is_some_and(|consultations| !consultations.is_empty());
+        let has_consultation_closure = approval_state
+            .pointer("/generated_closure_digests/relay_consultation")
+            .is_some_and(Value::is_string);
+        if has_consultations != has_consultation_closure {
+            bail!(
+                "verified baseline review and approval state disagree on the Relay consultation input"
+            );
+        }
+    }
     let disclosure_profiles: DisclosureReviewProfiles = serde_json::from_value(
         review
             .get("disclosure_profiles")
@@ -1054,8 +1201,9 @@ fn load_verified_baseline(
     {
         bail!("verified baseline approval state does not bind the review disclosure profiles");
     }
-    validate_verified_product_closure(&approval_state, &verified.manifest)?;
+    validate_verified_product_closure(&approval_state, &verified.manifest, lane)?;
     Ok(Some(VerifiedBaseline {
+        lane,
         approval_state,
         approval_state_digest: sha256_uri(&approval_state_bytes),
         verified_manifest: serde_json::to_value(verified.manifest)
@@ -1089,18 +1237,16 @@ fn read_verified_bundle_payload(
 fn validate_verified_product_closure(
     approval_state: &Value,
     manifest: &registry_platform_config::ConfigBundleManifest,
+    lane: VerifiedBaselineLane,
 ) -> Result<()> {
-    let product = match manifest.product.as_str() {
-        "registry-relay" => "relay",
-        "registry-notary" => "notary",
-        _ => bail!("verified baseline manifest has an unsupported product"),
-    };
+    if manifest.product != lane.product() {
+        bail!("verified baseline manifest has the wrong product for its selected lane");
+    }
+    let closure = lane.closure();
     let expected = approval_state
-        .pointer(&format!("/generated_closure_digests/{product}"))
+        .pointer(&format!("/generated_closure_digests/{closure}"))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow!("verified baseline approval state lacks its {product} closure digest")
-        })?;
+        .ok_or_else(|| anyhow!("verified baseline approval state lacks its selected closure"))?;
     let mut files = manifest
         .files
         .iter()
@@ -1114,7 +1260,7 @@ fn validate_verified_product_closure(
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
     if digest_json(&Value::Array(files))? != expected {
-        bail!("verified baseline product closure does not match its signed approval state");
+        bail!("verified baseline lane closure does not match its signed approval state");
     }
     Ok(())
 }
@@ -1216,6 +1362,20 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             "baseline",
             "entity_materializations",
         ][..],
+        APPROVAL_STATE_SCHEMA_V3 => &[
+            "schema",
+            "registry",
+            "environment",
+            "compiler_version",
+            "report_digest",
+            "authored_input_digest",
+            "semantic_digests",
+            "disclosure_digest",
+            "promotion_projection",
+            "generated_closure_digests",
+            "baseline",
+            "entity_materializations",
+        ][..],
         APPROVAL_STATE_SCHEMA => &[
             "schema",
             "registry",
@@ -1266,7 +1426,10 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
         validate_review_sha256(semantic.get(field), field, false)?;
     }
     let promotion_products =
-        if matches!(schema, APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA) {
+        if matches!(
+            schema,
+            APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA_V3 | APPROVAL_STATE_SCHEMA
+        ) {
             let promotion_projection: ProjectPromotionProjectionV1 =
                 serde_json::from_value(state.get("promotion_projection").cloned().ok_or_else(
                     || anyhow!("baseline approval state lacks promotion_projection"),
@@ -1278,11 +1441,16 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
         } else {
             None
         };
+    let closure_fields = if schema == APPROVAL_STATE_SCHEMA {
+        &["reviewable", "relay", "relay_consultation", "notary"][..]
+    } else {
+        &["reviewable", "relay", "notary"][..]
+    };
     let closure = exact_review_object(
         state
             .get("generated_closure_digests")
             .ok_or_else(|| anyhow!("baseline approval state lacks generated_closure_digests"))?,
-        &["reviewable", "relay", "notary"],
+        closure_fields,
         "baseline approval generated_closure_digests",
     )?;
     validate_review_sha256(closure.get("reviewable"), "reviewable", false)?;
@@ -1290,6 +1458,25 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
         if !closure.get(field).is_some_and(Value::is_null) {
             validate_review_sha256(closure.get(field), field, false)?;
         }
+    }
+    if schema == APPROVAL_STATE_SCHEMA
+        && !closure
+            .get("relay_consultation")
+            .is_some_and(Value::is_null)
+    {
+        validate_review_sha256(
+            closure.get("relay_consultation"),
+            "relay_consultation",
+            false,
+        )?;
+    }
+    if schema == APPROVAL_STATE_SCHEMA
+        && closure
+            .get("relay_consultation")
+            .is_some_and(Value::is_string)
+        && !closure.get("relay").is_some_and(Value::is_string)
+    {
+        bail!("baseline approval Relay consultation closure requires the Relay product closure");
     }
     if let Some(products) = promotion_products.as_ref() {
         for (field, product) in [
@@ -1312,6 +1499,9 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("baseline approval state environment must be a string"))?,
         promotion_products.as_deref(),
+        closure
+            .get("relay_consultation")
+            .is_some_and(Value::is_string),
     )?;
     if !state
         .get("entity_materializations")
@@ -1414,6 +1604,7 @@ fn validate_approval_baseline(
     schema: &str,
     environment: &str,
     promotion_products: Option<&[PromotionProjectedProduct]>,
+    consultation_closure: bool,
 ) -> Result<()> {
     let Some(value) = value else {
         bail!("baseline approval state lacks baseline");
@@ -1421,7 +1612,7 @@ fn validate_approval_baseline(
     if value.is_null() {
         return Ok(());
     }
-    if schema == APPROVAL_STATE_SCHEMA {
+    if matches!(schema, APPROVAL_STATE_SCHEMA_V3 | APPROVAL_STATE_SCHEMA) {
         let baseline = exact_review_object(
             value,
             &["verified_manifests"],
@@ -1431,22 +1622,46 @@ fn validate_approval_baseline(
             baseline
                 .get("verified_manifests")
                 .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifests"))?,
-            &["relay", "notary"],
+            if schema == APPROVAL_STATE_SCHEMA {
+                &["relay", "relay_consultation", "notary"]
+            } else {
+                &["relay", "notary"]
+            },
             "baseline approval verified_manifests",
         )?;
         let mut present = 0_usize;
-        for (field, expected_product, projected_product) in [
-            ("relay", "registry-relay", PromotionProjectedProduct::Relay),
+        for (field, expected_product, projected_product, required) in [
+            (
+                "relay",
+                "registry-relay",
+                PromotionProjectedProduct::Relay,
+                promotion_products
+                    .is_some_and(|products| products.contains(&PromotionProjectedProduct::Relay)),
+            ),
+            (
+                "relay_consultation",
+                "registry-relay",
+                PromotionProjectedProduct::Relay,
+                consultation_closure,
+            ),
             (
                 "notary",
                 "registry-notary",
                 PromotionProjectedProduct::Notary,
+                promotion_products
+                    .is_some_and(|products| products.contains(&PromotionProjectedProduct::Notary)),
             ),
         ] {
+            if schema == APPROVAL_STATE_SCHEMA_V3 && field == "relay_consultation" {
+                continue;
+            }
             let Some(value) = manifests.get(field) else {
                 bail!("baseline approval state lacks a product manifest identity");
             };
             if value.is_null() {
+                if required {
+                    bail!("baseline approval product manifest identity set is incomplete");
+                }
                 continue;
             }
             let manifest: registry_platform_config::ConfigBundleManifest =
@@ -1458,16 +1673,15 @@ fn validate_approval_baseline(
             if manifest.product != expected_product || manifest.environment != environment {
                 bail!("baseline approval product manifest identity has the wrong product");
             }
-            if !promotion_products.is_some_and(|products| products.contains(&projected_product)) {
+            if !required
+                || !promotion_products.is_some_and(|products| products.contains(&projected_product))
+            {
                 bail!("baseline approval product manifest identity is outside project topology");
             }
             present += 1;
         }
         if present == 0 {
             bail!("baseline approval state has no predecessor product manifest identity");
-        }
-        if promotion_products.is_some_and(|products| products.len() != present) {
-            bail!("baseline approval product manifest identity set is incomplete");
         }
     } else {
         // v1 and v2 recorded one predecessor manifest because build accepted

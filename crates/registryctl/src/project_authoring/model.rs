@@ -230,15 +230,18 @@ pub struct ProjectBuildOptions {
 
 /// Product-labelled approved baselines for a project build.
 ///
-/// Relay and Notary remain independently signed product inputs. A combined
-/// project comparison therefore supplies both pairs, while a single-product
-/// project supplies only its product pair. The legacy `against` and `anchor`
-/// fields on [`ProjectBuildOptions`] remain available for single-product
-/// callers.
+/// Public Relay, consultation Relay, and Notary are independently signed
+/// inputs. A consultation project supplies both Relay pairs, plus Notary when
+/// that product is projected. Legacy v1-v3 combined Relay baselines cannot
+/// prove the split consultation lineage and require re-review as v4 baselines.
+/// The legacy `against` and `anchor` fields on [`ProjectBuildOptions`] remain
+/// available for single-lane callers.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectBuildBaselineSetOptions {
     pub relay_against: Option<PathBuf>,
     pub relay_anchor: Option<PathBuf>,
+    pub relay_consultation_against: Option<PathBuf>,
+    pub relay_consultation_anchor: Option<PathBuf>,
     pub notary_against: Option<PathBuf>,
     pub notary_anchor: Option<PathBuf>,
 }
@@ -262,12 +265,16 @@ pub struct ProjectCapabilityOptions {
 pub struct ProjectPromotionOptions {
     pub project_directory: PathBuf,
     pub environment: String,
-    /// One verified product baseline for Relay-only or Notary-only projects.
-    /// Combined projects should use the product-specific pairs below.
+    /// One verified product baseline for single-lane Relay or Notary projects.
+    /// Multi-lane projects should use the lane-specific pairs below. Legacy
+    /// v1-v3 combined Relay baselines require re-review before they can be used
+    /// for the split public and consultation Relay lanes.
     pub against: Option<PathBuf>,
     pub anchor: Option<PathBuf>,
     pub relay_against: Option<PathBuf>,
     pub relay_anchor: Option<PathBuf>,
+    pub relay_consultation_against: Option<PathBuf>,
+    pub relay_consultation_anchor: Option<PathBuf>,
     pub notary_against: Option<PathBuf>,
     pub notary_anchor: Option<PathBuf>,
 }
@@ -2296,6 +2303,7 @@ struct LoadedIntegration {
 struct CompiledProject {
     reviewable: BTreeMap<PathBuf, Box<[u8]>>,
     relay_private: BTreeMap<PathBuf, Box<[u8]>>,
+    relay_consultation_private: BTreeMap<PathBuf, Box<[u8]>>,
     notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
     approval_state: Value,
@@ -2316,15 +2324,24 @@ struct FixtureProfile {
 
 #[derive(Clone)]
 struct VerifiedBaseline {
+    lane: VerifiedBaselineLane,
     approval_state: Value,
     approval_state_digest: String,
     verified_manifest: Value,
     review_digest: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum VerifiedBaselineLane {
+    Relay,
+    RelayConsultation,
+    Notary,
+}
+
 #[derive(Default)]
 struct VerifiedBaselineSet {
     relay: Option<VerifiedBaseline>,
+    relay_consultation: Option<VerifiedBaseline>,
     notary: Option<VerifiedBaseline>,
 }
 

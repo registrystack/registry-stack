@@ -14,6 +14,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Project builds with consultation profiles now emit a separate
+  `private/relay-consultation` signing input whose primary configuration is
+  `config/relay.yaml`. Public and consultation Relay instances receive only
+  their applicable artifacts, operations, and secret references, while one
+  approval-state v4 record independently binds both generated closures.
+  Approved-baseline builds accept the consultation instance through its own
+  `--relay-consultation-against` and `--relay-consultation-anchor` lane.
+  Legacy v1-v3 combined Relay baselines require project re-review and newly
+  signed public and consultation Relay baselines before lineage continues.
 - Added a compact `oid4vci.representative_issuance` authoring block.
   Registryctl validates generic requester and target bindings, derives the
   proof dependency, ceremony, exact delegated closure, status endpoint, and

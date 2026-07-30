@@ -109,13 +109,18 @@ fn execute_all_fixtures_with_coverage_observations(
         return Ok((Vec::new(), Vec::new(), Vec::new(), call_budget_actual));
     }
     let relay_config = compiled
-        .relay_private
-        .get(Path::new("config/relay-consultation.yaml"))
+        .relay_consultation_private
+        .get(Path::new("config/relay.yaml"))
         .or_else(|| compiled.relay_private.get(Path::new("config/relay.yaml")))
         .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
+    let relay_files = if compiled.relay_consultation_private.is_empty() {
+        &compiled.relay_private
+    } else {
+        &compiled.relay_consultation_private
+    };
     let relay_fixture = compile_generated_relay_fixture(
         relay_config,
-        &compiled.relay_private,
+        relay_files,
         Some(execution_context.worker_program()),
     )?;
     let mut reports = Vec::new();
@@ -2320,7 +2325,7 @@ fn platform_call_budget_result(
         return Ok(None);
     }
     let compiled_script_call_bounds = compiled
-        .relay_private
+        .relay_consultation_private
         .iter()
         .filter(|(path, _)| path.to_string_lossy().contains("private-bindings"))
         .filter_map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).ok())

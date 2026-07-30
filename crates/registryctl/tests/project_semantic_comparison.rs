@@ -10,9 +10,9 @@ use registryctl::{
     compare_registry_projects_semantically, init_registry_project, FieldSensitivity,
     ProjectEnvironmentSemanticComparisonOptions, ProjectInitOptions,
     ProjectSemanticComparisonOptions, ProjectStarter, ProjectStarterSemanticComparisonOptions,
-    SemanticComparisonActivationRequirement, SemanticComparisonAssurance,
-    SemanticComparisonChangeSource, SemanticComparisonConsumer, SemanticComparisonDimension,
-    SemanticComparisonDirection, SemanticComparisonEquivalence,
+    SemanticComparisonActivationRequirement, SemanticComparisonAffectedSubjectKind,
+    SemanticComparisonAssurance, SemanticComparisonChangeSource, SemanticComparisonConsumer,
+    SemanticComparisonDimension, SemanticComparisonDirection, SemanticComparisonEquivalence,
     SemanticComparisonGeneratedArtifact, SemanticComparisonRequiredAction,
     SemanticComparisonRestartRequirement, SemanticComparisonReviewPlanState,
     SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
@@ -317,11 +317,21 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
         SemanticComparisonRestartRequirement::RegistryRelayAndNotary
     );
     assert_eq!(
+        registry_id_change
+            .affected_subjects
+            .iter()
+            .find(|subject| subject.kind == SemanticComparisonAffectedSubjectKind::ProductInput)
+            .expect("product input inventory is reported")
+            .count,
+        3
+    );
+    assert_eq!(
         report.required_actions,
         vec![
             SemanticComparisonRequiredAction::ReviewSemanticChanges,
             SemanticComparisonRequiredAction::RunAffectedFixtures,
             SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
+            SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput,
             SemanticComparisonRequiredAction::ResignRelayBundle,
             SemanticComparisonRequiredAction::ResignNotaryBundle,
             SemanticComparisonRequiredAction::ReactivateRelayConfiguration,
@@ -381,6 +391,9 @@ fn product_removal_comparison_keeps_removed_product_actions() {
     assert!(report
         .required_actions
         .contains(&SemanticComparisonRequiredAction::RestartRegistryNotary));
+    assert!(report
+        .required_actions
+        .contains(&SemanticComparisonRequiredAction::ReviewSignActivateRelayConsultationInput));
 }
 
 #[test]
