@@ -309,6 +309,15 @@ pub fn load_trust_anchor(path: &Path) -> Result<ConfigTrustAnchor, ConfigBundleE
     Ok(anchor)
 }
 
+pub fn load_anchor_transition(path: &Path) -> Result<AnchorTransitionV1, ConfigBundleError> {
+    let bytes = read_limited_with_permissions(
+        path,
+        MAX_ANCHOR_TRANSITION_BYTES as u64,
+        ArtifactPermissions::AnchorTransition,
+    )?;
+    parse_anchor_transition(&bytes)
+}
+
 pub fn parse_anchor_transition(bytes: &[u8]) -> Result<AnchorTransitionV1, ConfigBundleError> {
     if bytes.len() > MAX_ANCHOR_TRANSITION_BYTES {
         return Err(ConfigBundleError::InvalidAnchorTransition("document size"));
@@ -971,6 +980,7 @@ fn read_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ConfigBundleErro
 #[derive(Clone, Copy)]
 enum ArtifactPermissions {
     TrustAnchor,
+    AnchorTransition,
     BreakGlassOverride,
 }
 
@@ -1057,6 +1067,9 @@ fn validate_artifact_file_permissions(
     if mode & 0o022 != 0 {
         let reason = match permissions {
             ArtifactPermissions::TrustAnchor => "trust anchor must not be group/world writable",
+            ArtifactPermissions::AnchorTransition => {
+                "anchor transition must not be group/world writable"
+            }
             ArtifactPermissions::BreakGlassOverride => {
                 "break-glass override must not be group/world writable"
             }
@@ -1068,6 +1081,11 @@ fn validate_artifact_file_permissions(
         ArtifactPermissions::TrustAnchor if owner != 0 && owner != current_euid() => {
             return Err(ConfigBundleError::InvalidPermissions(
                 "trust anchor owner must be root or current service user",
+            ));
+        }
+        ArtifactPermissions::AnchorTransition if owner != 0 && owner != current_euid() => {
+            return Err(ConfigBundleError::InvalidPermissions(
+                "anchor transition owner must be root or current service user",
             ));
         }
         ArtifactPermissions::BreakGlassOverride if owner != 0 => {
@@ -1827,6 +1845,85 @@ mod tests {
         assert_eq!(
             parse_anchor_transition(&oversized),
             Err(ConfigBundleError::InvalidAnchorTransition("document size"))
+        );
+    }
+
+    #[test]
+    fn loads_bounded_valid_anchor_transition_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+
+        assert_eq!(
+            load_anchor_transition(&path).expect("loaded transition"),
+            transition
+        );
+    }
+
+    #[test]
+    fn anchor_transition_loader_rejects_oversized_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        fs::write(&path, vec![b' '; MAX_ANCHOR_TRANSITION_BYTES + 1])
+            .expect("write oversized transition");
+
+        assert!(matches!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::Io(message)) if message.contains("size cap")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchor_transition_loader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("transition-target.json");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &target,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+        symlink(&target, &path).expect("transition symlink");
+
+        assert!(matches!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::Io(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchor_transition_loader_rejects_group_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+        let mut permissions = fs::metadata(&path)
+            .expect("transition metadata")
+            .permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&path, permissions).expect("set transition permissions");
+
+        assert_eq!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::InvalidPermissions(
+                "anchor transition must not be group/world writable"
+            ))
         );
     }
 
