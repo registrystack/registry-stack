@@ -662,6 +662,10 @@ impl RegistryNotaryRuntime {
         .await
     }
 
+    // These values are validated and derived together before any Relay or
+    // state-plane side effects. Keeping them explicit makes that boundary
+    // visible at the handoff to registry-backed batch execution.
+    #[allow(clippy::too_many_arguments)]
     async fn batch_evaluate_registry_backed(
         &self,
         evidence: Arc<EvidenceConfig>,

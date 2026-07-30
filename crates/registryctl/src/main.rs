@@ -1610,12 +1610,12 @@ fn render_check_report(
                 {
                     continue;
                 }
-                match project_fields
+                if project_fields
                     .get(consultation_count_path.as_str())
                     .and_then(|field| classifier_public_count(field))
+                    .is_some()
                 {
-                    Some(_) => relay_backed += 1,
-                    None => {}
+                    relay_backed += 1;
                 }
             }
             writeln!(

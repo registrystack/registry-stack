@@ -44,6 +44,7 @@ relay_port="${NOTARY_CONFORMANCE_RELAY_PORT:-$((54000 + ($$ % 1000)))}"
 unsupported_postgres_image="postgres:15.18-alpine"
 unsupported_postgres_container="${postgres_container}-unsupported"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/notary-postgres-conformance.XXXXXX")"
+work_dir="$(cd "${work_dir}" && pwd -P)"
 notary_pid_a=""
 notary_pid_b=""
 lost_ack_pid=""
@@ -405,15 +406,15 @@ evidence:
   service_id: notary-postgres-conformance
   api_base_url: http://localhost
   inline_batch_limit: 1
-  allowed_purposes: [conformance]
+  allowed_purposes: [benefit-status-verification]
   machine_quota:
     enabled: true
     subjects_per_minute: 2
   relay:
     base_url: http://127.0.0.1:${relay_port}
+    allow_insecure_localhost: true
     workload_client_id: registry-notary
     token_file: ${work_dir}/relay-token
-    allowed_private_cidrs: [127.0.0.0/8]
   claims:
     - id: conformance-eligible
       title: Conformance eligible
@@ -430,12 +431,10 @@ evidence:
               person_id: target.id
             outputs:
               registration_status: { type: string, nullable: false, max_bytes: 32 }
-              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
-              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: boolean
         nullable: false
-      purpose: conformance
+      purpose: benefit-status-verification
       required_scopes: [notary:conformance]
       rule:
         type: consultation_matched
@@ -454,7 +453,7 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 YAML
 
-printf '%s\n' 'conformance-relay-token' >"${work_dir}/relay-token"
+printf '%s\n' 'eyJhbGciOiJub25lIn0.e30.c2ln' >"${work_dir}/relay-token"
 chmod 600 "${work_dir}/relay-token"
 
 NOTARY_CONFORMANCE_RELAY_PORT="${relay_port}" \
@@ -526,6 +525,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "id": "synthetic.snapshot.person-status",
                     "revision": 1,
                 },
+                "snapshot": {
+                    "generation_id": "conformance-v1",
+                    "published_at": now,
+                },
             },
         })
 
@@ -543,11 +546,14 @@ while [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' \
   sleep 0.1
 done
 
-"${notary_bin}" --config "${config_path}" state install \
+if ! "${notary_bin}" --config "${config_path}" state install \
   --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \
   --owner-role registry_notary_owner \
   --runtime-role registry_notary_runtime \
-  >"${work_dir}/state-install.log" 2>&1 || fail "schema installation failed"
+  >"${work_dir}/state-install.log" 2>&1; then
+  sed -n '1,160p' "${work_dir}/state-install.log" >&2
+  fail "schema installation failed"
+fi
 "${notary_bin}" --config "${config_path}" state doctor \
   >"${work_dir}/state-doctor.log" 2>&1 || fail "schema attestation failed"
 
@@ -700,7 +706,7 @@ write_batch_request() {
     claims: ["conformance-eligible"],
     disclosure: "predicate",
     format: "application/vnd.registry-notary.claim-result+json",
-    purpose: "conformance"
+    purpose: "benefit-status-verification"
   }' >"${output}"
 }
 
@@ -1116,7 +1122,7 @@ render_status="$(curl --silent --show-error --max-time 30 \
   --output "${work_dir}/render-upgraded.json" --write-out '%{http_code}' \
   --header "x-api-key: ${api_key}" \
   --header 'content-type: application/json' \
-  --data '{"format":"application/vnd.registry-notary.claim-result+json","disclosure":"predicate","claims":["conformance-eligible"],"purpose":"conformance"}' \
+  --data '{"format":"application/vnd.registry-notary.claim-result+json","disclosure":"predicate","claims":["conformance-eligible"],"purpose":"benefit-status-verification"}' \
   "${url_a}/v1/evaluations/${evaluation_id}/render" 2>>"${work_dir}/curl.log")" \
   || fail "persisted evaluation render request failed"
 [[ "${render_status}" == "200" ]] || fail "persisted evaluation was unavailable after the minor upgrade"

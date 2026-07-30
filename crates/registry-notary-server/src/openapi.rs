@@ -744,7 +744,7 @@ fn build_openapi_document() -> Value {
                         {
                             "name": "Idempotency-Key",
                             "in": "header",
-                            "required": true,
+                            "required": false,
                             "description": "Required for every batch. The value is caller-bound and may contain 1 to 256 bytes.",
                             "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
                         }
