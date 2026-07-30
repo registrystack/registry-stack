@@ -515,9 +515,15 @@ async fn materialize_oid4vci_transaction(
     .map_err(|_| Oid4vciWireError::InvalidProof)?;
     state.metrics.record_replay("oid4vci_nonce", "consumed");
     if principal.is_subject_access() {
+        let stored_principal_hash = evaluation
+            .subject_access
+            .as_ref()
+            .filter(|metadata| metadata.access_mode == AccessMode::DelegatedAttestation)
+            .map(|metadata| &metadata.principal_hash);
         check_oid4vci_subject_access_rate_limit(
             state,
             principal,
+            stored_principal_hash,
             Some(validated_proof.holder_id.as_str()),
         )
         .await
@@ -1149,11 +1155,14 @@ pub(in crate::api) fn ensure_optional_entity_matches_subject(
 pub(in crate::api) async fn check_oid4vci_subject_access_rate_limit(
     state: &RegistryNotaryApiState,
     principal: &EvidencePrincipal,
+    stored_principal_hash: Option<&Hashed<registry_notary_core::PrincipalIdentifier>>,
     holder_id: Option<&str>,
 ) -> Result<(), SubjectAccessRateLimitError> {
-    let principal_hash = state
-        .subject_access_rate_keys
-        .principal(&principal.principal_id)?;
+    let principal_hash = oid4vci_rate_limit_principal_hash(
+        &state.subject_access_rate_keys,
+        &principal.principal_id,
+        stored_principal_hash,
+    )?;
     let holder_hash = holder_id
         .map(|holder_id| state.subject_access_rate_keys.holder(holder_id))
         .transpose()?;
@@ -1161,4 +1170,32 @@ pub(in crate::api) async fn check_oid4vci_subject_access_rate_limit(
         .subject_access_rate_limiter
         .check_credential_issuance(&principal_hash, holder_hash.as_ref())
         .await
+}
+
+fn oid4vci_rate_limit_principal_hash(
+    keys: &SubjectAccessRateLimitKeys,
+    principal_id: &str,
+    stored_principal_hash: Option<&Hashed<registry_notary_core::PrincipalIdentifier>>,
+) -> Result<Hashed<registry_notary_core::PrincipalIdentifier>, SubjectAccessRateLimitError> {
+    stored_principal_hash
+        .cloned()
+        .map_or_else(|| keys.principal(principal_id), Ok)
+}
+
+#[cfg(test)]
+mod rate_limit_principal_tests {
+    use super::*;
+
+    #[test]
+    fn delegated_wallet_handle_reuses_the_authenticated_principal_bucket() {
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let ordinary = oid4vci_rate_limit_principal_hash(&keys, "representative-1", None).unwrap();
+        let delegated =
+            oid4vci_rate_limit_principal_hash(&keys, ordinary.as_str(), Some(&ordinary)).unwrap();
+        let double_hashed =
+            oid4vci_rate_limit_principal_hash(&keys, ordinary.as_str(), None).unwrap();
+
+        assert_eq!(delegated.as_str(), ordinary.as_str());
+        assert_ne!(double_hashed.as_str(), ordinary.as_str());
+    }
 }

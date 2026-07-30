@@ -1634,11 +1634,12 @@ pub(in crate::api) async fn oid4vci_offer_callback(
             .await
             .is_err()
         {
-            return preauth_server_error(
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
                 "GET",
                 &stored.credential_configuration_id,
+                AccessMode::DelegatedAttestation,
             )
             .await;
         }
@@ -3202,22 +3203,6 @@ async fn preauth_denied_for_access_mode(
     response
 }
 
-pub(in crate::api) async fn preauth_server_error(
-    preauth: &PreAuthRuntime,
-    path: &str,
-    method: &str,
-    credential_configuration_id: &str,
-) -> Response {
-    preauth_server_error_for_access_mode(
-        preauth,
-        path,
-        method,
-        credential_configuration_id,
-        AccessMode::SubjectBound,
-    )
-    .await
-}
-
 async fn preauth_server_error_for_access_mode(
     preauth: &PreAuthRuntime,
     path: &str,
@@ -3478,10 +3463,12 @@ pub(in crate::api) fn hex_nibble(byte: u8) -> Result<u8, TokenWireError> {
 fn capped_access_token_window(
     now: i64,
     access_token_ttl_seconds: u64,
-    code_expires_at: i64,
+    expires_at_cap: Option<i64>,
 ) -> Option<(i64, i64)> {
     let ttl = i64::try_from(access_token_ttl_seconds).ok()?;
-    let expires_at = now.checked_add(ttl)?.min(code_expires_at);
+    let expires_at = expires_at_cap
+        .map(|cap| now.checked_add(ttl).map(|expiry| expiry.min(cap)))
+        .unwrap_or_else(|| now.checked_add(ttl))?;
     (expires_at > now).then_some((now, expires_at))
 }
 
@@ -3503,10 +3490,14 @@ mod replay_scope_tests {
     }
 
     #[test]
-    fn access_token_window_uses_a_fresh_time_and_requires_future_expiry() {
-        assert_eq!(capped_access_token_window(100, 300, 120), Some((100, 120)));
-        assert_eq!(capped_access_token_window(120, 300, 120), None);
-        assert_eq!(capped_access_token_window(121, 300, 120), None);
+    fn access_token_window_preserves_ordinary_ttl_and_caps_representative_proof() {
+        assert_eq!(capped_access_token_window(100, 300, None), Some((100, 400)));
+        assert_eq!(
+            capped_access_token_window(100, 300, Some(120)),
+            Some((100, 120))
+        );
+        assert_eq!(capped_access_token_window(120, 300, Some(120)), None);
+        assert_eq!(capped_access_token_window(121, 300, Some(120)), None);
     }
 
     #[test]
