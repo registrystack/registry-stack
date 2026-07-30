@@ -1883,6 +1883,71 @@
         "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
       ],
       "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "internal",
+      "method": "GET",
+      "path": "/healthz",
+      "feature": null,
+      "audience": "health",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "demo",
+      "data_classification": "operational",
+      "notes": "Synthetic development source health probe on the private container listener; the development renderer does not publish this listener.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/synthetic_source.rs::tls_material_serves_health_and_secret_failures_are_value_free"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "internal",
+      "method": "GET",
+      "path": "/__registry/counters",
+      "feature": null,
+      "audience": "internal",
+      "auth": "bearer",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "demo",
+      "data_classification": "operational",
+      "notes": "Synthetic development source effect counters require the fixed control bearer and remain confined to the unpublished private container listener.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/synthetic_source.rs::invalid_credentials_and_control_access_are_value_free",
+        "src/synthetic_source.rs::counter_probe_uses_only_fixed_tls_control_material_and_emits_exact_json"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "internal",
+      "method": "POST",
+      "path": "/oauth/token",
+      "feature": null,
+      "audience": "internal",
+      "auth": "internal",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "demo",
+      "data_classification": "credential",
+      "notes": "Synthetic development OAuth fixture accepts only its compiler-owned client-credential request contract on the unpublished private container listener.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/synthetic_source.rs::oauth_request_encoding_accepts_only_the_selected_closed_shape",
+        "src/synthetic_source.rs::invalid_credentials_and_control_access_are_value_free"
+      ],
+      "waiver": null
     }
   ]
 }
