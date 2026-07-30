@@ -22,7 +22,6 @@ async function withIsolatedProjectCatalog(run) {
     const sources = new Set([
       ...catalog.workspaces.map((workspace) => workspace.source),
       'crates/registryctl/assets/project-starters/bounded-http',
-      'crates/registryctl/assets/project-starters/spreadsheet',
     ]);
     for (const source of sources) {
       const destination = resolve(root, source);
@@ -38,7 +37,7 @@ async function withIsolatedProjectCatalog(run) {
 test('classifies every golden and derives topology from committed workspace content', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
 
-  assert.equal(journeys.length, 15);
+  assert.equal(journeys.length, 14);
   assert.deepEqual(
     journeys.map(({ id, classification, topology }) => ({ id, classification, topology })),
     [
@@ -56,31 +55,25 @@ test('classifies every golden and derives topology from committed workspace cont
       { id: 'relay-only-records', classification: 'maintained', topology: 'relay-only' },
       { id: 'snapshot', classification: 'maintained', topology: 'combined' },
       { id: 'snapshot-with-records', classification: 'maintained', topology: 'combined' },
-      { id: 'spreadsheet', classification: 'maintained', topology: 'combined' },
     ],
   );
 });
 
-test('derives all advertised starter selections from committed workspaces', async () => {
+test('derives the advertised HTTP starter from committed workspace content', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
   assert.deepEqual(
     starters.map(({ starter, integration, fixture }) => ({ starter, integration, fixture })),
     [
       { starter: 'http', integration: 'person-record', fixture: 'active-person' },
-      {
-        starter: 'spreadsheet',
-        integration: 'project-record-snapshot',
-        fixture: 'match',
-      },
     ],
   );
 });
 
-test('emits the canonical 1.0 authoring and development sequence for two templates', async () => {
+test('emits the canonical 1.0 authoring and development sequence for HTTP', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
-  assert.equal(starters.length, 2);
+  assert.equal(starters.length, 1);
   for (const starter of starters) {
     assert.deepEqual(starter.capabilities, [
       'init',
@@ -143,7 +136,6 @@ test('internal workspaces never emit a public template command', async () => {
       'openspp-exact',
       'snapshot',
       'snapshot-with-records',
-      'spreadsheet',
     ],
   );
 });
@@ -281,7 +273,7 @@ test('does not publish legacy fixture starter markers as templates', async () =>
     const starters = await buildProjectStarterMatrix(root);
     assert.deepEqual(
       starters.map(({ starter }) => starter),
-      ['http', 'spreadsheet'],
+      ['http'],
     );
   });
 });
@@ -295,6 +287,6 @@ test('keeps generated template commands on the 1.0 command hierarchy', async () 
   );
   assert.doesNotMatch(commands, /registryctl init --from/);
   assert.match(commands, /registryctl -C http-project tooling editor/);
-  assert.match(commands, /registryctl -C spreadsheet-project review compare/);
   assert.match(commands, /registryctl -C http-project dev smoke/);
+  assert.doesNotMatch(commands, /--template spreadsheet/);
 });

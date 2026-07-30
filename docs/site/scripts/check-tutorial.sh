@@ -164,12 +164,9 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"author-registry-project:15"
-	"configure-project-script-adapter:13"
-	"publish-spreadsheet-secured-registry-api:14"
-	"use-your-spreadsheet:11"
-	"verify-claim-registry-api:15"
-	"verify-opencrvs-claims:12"
+	"author-registry-project:35"
+	"configure-project-script-adapter:22"
+	"verify-opencrvs-claims:18"
 )
 
 count_sh_command_lines() {

@@ -18,14 +18,6 @@ const publicTemplates = [
     project_dir: 'http-project',
     focused_fixture_file: 'active.yaml',
   },
-  {
-    id: 'spreadsheet',
-    label: 'Spreadsheet',
-    summary: 'One reviewed workbook with a strict entity and minimized evidence projection.',
-    source: 'crates/registryctl/assets/project-starters/spreadsheet',
-    project_dir: 'spreadsheet-project',
-    focused_fixture_file: 'match.yaml',
-  },
 ];
 const publicTemplateOrder = publicTemplates.map(({ id }) => id);
 const safeCliTokenPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;

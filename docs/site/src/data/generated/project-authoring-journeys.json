@@ -348,44 +348,5 @@
       "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records check --environment local --explain",
       "registryctl -C crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records build --environment local"
     ]
-  },
-  {
-    "id": "spreadsheet",
-    "label": "Spreadsheet",
-    "summary": "One reviewed workbook with a strict entity and minimized evidence projection.",
-    "source": "crates/registryctl/assets/project-starters/spreadsheet",
-    "project_dir": "spreadsheet-project",
-    "focused_fixture_file": "match.yaml",
-    "classification": "maintained",
-    "topology": "combined",
-    "starter": "spreadsheet",
-    "environment": "local",
-    "check_explain": true,
-    "capabilities": [
-      "init",
-      "editor",
-      "trace",
-      "watch",
-      "test",
-      "check",
-      "compare",
-      "build",
-      "dev"
-    ],
-    "integration": "project-record-snapshot",
-    "fixture": "match",
-    "commands": [
-      "registryctl init spreadsheet-project --template spreadsheet",
-      "registryctl -C spreadsheet-project tooling editor",
-      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --trace",
-      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --watch",
-      "registryctl -C spreadsheet-project test",
-      "registryctl -C spreadsheet-project check --environment local --explain",
-      "registryctl -C spreadsheet-project review compare --environment local",
-      "registryctl -C spreadsheet-project build --environment local",
-      "registryctl -C spreadsheet-project dev --detach",
-      "registryctl -C spreadsheet-project dev smoke",
-      "registryctl -C spreadsheet-project dev down"
-    ]
   }
 ]

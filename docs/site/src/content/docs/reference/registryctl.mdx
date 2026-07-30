@@ -58,11 +58,14 @@ Human prose is not a machine contract.
 ## `init`
 
 ```text
-registryctl init <project-directory> --template <http|spreadsheet>
+registryctl init <project-directory> --template http
 ```
 
 `init` is offline and copies a template embedded in the installed release.
-The destination must be absent.
+The destination may be absent or a pre-existing empty real directory.
+Registryctl validates the project and editor setup in private staging before publishing
+the complete project. A staging failure leaves an absent destination absent and a
+pre-existing empty destination empty.
 OAuth-backed Rhai adapts the HTTP project; OpenCRVS, DHIS2, FHIR, and other systems are not init
 templates.
 
@@ -147,19 +150,18 @@ registryctl deploy verify \
   --package <directory>
 registryctl deploy verify \
   --package <directory> \
-  --approved-set <file> \
-  --parent-compose <file>
+  --approved-set <file>
 ```
 
-`--parent-compose` is repeatable in effective-model order.
 Generation consumes one verified three-lane approved set and the signed release lock installed
 with Registryctl.
 It does not sign bundles, create production secrets, initialize product state, or activate a
 deployment.
 
-Verification reports ownership (`managed`, `adapted`, or `invalid`), freshness (`current`,
-`stale`, or `not_applicable`), scope (`package` or `package_and_parent`), and whether in-place
+Verification reports package ownership, freshness, closure integrity, and whether in-place
 regeneration is safe.
+It verifies the generated package only.
+An operator-owned Compose application or include graph remains outside that result.
 Generation and verification are offline.
 
 ## `doctor`

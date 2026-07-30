@@ -1,6 +1,6 @@
 ---
 title: Recover, restart, upgrade, and roll back
-description: Choose the correct recovery path for configuration restart, pre-1.0 project cutover, product state, software upgrade, and rollback.
+description: Choose the generated-package path for restart, pre-1.0 cutover, product update, abort, or state recovery.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,81 +13,93 @@ locale: en
 standards_referenced: []
 ---
 
-Use this decision procedure before restarting a product, migrating authored configuration or
-durable state, restoring a backup, upgrading software, or rolling back a failed change.
-The detailed backup, database, and release runbooks remain authoritative.
+Use this decision procedure before restarting a generated deployment, carrying reviewed
+pre-1.0 intent into a 1.0 project, updating a product or image, or restoring durable
+state. The verified package and its `generated/RUNBOOK.md` define the supported runtime
+path.
+
+Rollback means a manual abort before a target product accepts a newer sequence. After
+the first successful target acceptance advances durable anti-rollback state, rollback
+is unsupported.
 
 ## Prerequisites
 
-- Pin the current and target software by release or image digest.
-- Preserve the complete current recovery set before a stateful change.
-- Know whether Relay consultation PostgreSQL state and Notary PostgreSQL state are enabled.
-- Keep traffic blocked while a target process or restored database is being attested.
-- Read every intervening release note and migration instruction in order.
+- Retain the exact current generated package, its approved set, and its externally
+  recorded closure digest.
+- Read the current and candidate `generated/RUNBOOK.md` files.
+- Prepare a fresh candidate with a verified target Registryctl binary, matching release
+  lock, reviewed approved set, and the same signed project and environment identity.
+- Preserve the complete `relay-public-state` and `consultation-state` recovery
+  consistency groups affected by the change.
+- Keep external traffic blocked while state and candidate services are verified.
+- Record the last accepted lane, instance, stream, and sequence identities outside the
+  host being changed.
 
 ## Ownership and trust boundary
 
-Relay owns its cache, consultation schemas, serving fence, materialization publication history,
-audit chain, and product configuration state.
-Notary owns its correctness schemas, signing providers, status and replay state, audit chain, and
-product configuration state.
-The products do not share schemas, runtime roles, keyrings, trust anchors, bundles, or
-anti-rollback files.
+Registryctl generates and verifies `generated/`. It does not activate the package,
+coordinate backups, admit traffic, or decide recovery.
 
-The deployment operator owns coordinated recovery points and traffic admission.
-Registry Stack 1.0 does not automate migration from a pre-1.0 project.
-Later 1.x authored-contract changes must follow the release-specific guidance published after 1.0.
-Neither path migrates Relay or Notary runtime databases.
+The deployment operator owns `binding.yaml`, `operator/`, package retention, the
+complete recovery groups, traffic removal, and the manual abort decision. Relay,
+Notary, and PostgreSQL remain in the generated package's declared recovery groups. Do
+not copy product state, trust anchors, bundles, audit state, or anti-rollback files
+between lanes or instance identities.
+
+Registry Stack 1.0 does not automate migration from a pre-1.0 project. A new 1.0 project
+must carry only reviewed authored intent.
 
 {/* Evidence: docs/site/src/content/docs/operate/backup-and-restore.mdx,
     docs/site/src/content/docs/operate/upgrade-and-rollback.mdx,
-    crates/registry-relay/docs/ops.md,
-    products/notary/docs/postgresql-state-operations.md. */}
+    crates/registryctl/src/deployment.rs,
+    crates/registryctl/src/project_authoring/commands.rs. */}
 
 ## Choose the operation
 
-- Use a restart when secret-plane material changed but the configured references and software
-  contract remain valid.
-- Use the [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) to carry reviewed authored
-  intent into a separate 1.0 project.
-- Use release-specific 1.x guidance for authored-contract changes after 1.0.
-- Use the Notary state installer and doctor for the exact released Notary schema path.
-- Use Relay `consultation bootstrap-state` to install or attest its exact compiled consultation
-  schema.
-- Use the upgrade procedure for a software or schema change.
-- Use restore only with a complete, matching, isolated recovery set.
-- Use rollback after target traffic only when the target release proves a safe state conversion.
+- For an ordinary restart, verify the exact current package and follow its ordinary
+  stop, `verify_state`, and start commands.
+- For pre-1.0 authored intent, create a separate 1.0 project and follow the
+  [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/).
+- For a product, image, or signed-lane update, generate and verify a fresh candidate
+  package. Do not edit the current Compose model in place.
+- For state recovery, restore one complete recovery consistency group at the same or
+  newer accepted sequence.
+- For a candidate failure before target acceptance, manually abort to the intact current
+  package.
+- For a failure after target acceptance, complete forward, restore coherent same-or-newer
+  state, or replace the affected instance identity.
 
-Relay bootstrap is a clean-or-attested installer, not a general migration framework.
+Do not invoke product initialization, schema installation, or state bootstrap commands
+directly as an update shortcut. Use only the locked Compose actions and order in the
+candidate's generated runbook.
 
 ## Preserve the recovery set
 
-Follow [Back up and restore a deployment](../../backup-and-restore/) before changing the running
-deployment.
-Preserve:
+Follow [Back up and restore a deployment](../../backup-and-restore/) before changing the
+running deployment.
 
-- Generated secrets and product configuration.
-- Separate signed bundles, trust anchors, and anti-rollback state.
-- Relay source inputs, cache, audit, and complete consultation database when enabled.
-- Notary audit, complete database, role provisioning, and sensitive-state key version.
-- Software identities, PostgreSQL major versions, retained key material, and audit watermarks.
+The `relay-public-state` group preserves the public Relay lane, its package, approved
+set, bundle, anchor, audit and anti-rollback state, source and materialization state,
+and exact instance, stream, and accepted sequence.
 
-Do not print secret values while recording hashes, owners, modes, and versions.
+The `consultation-state` group preserves consultation Relay, Notary, PostgreSQL, their
+package and signed inputs, audit and anti-rollback state, complete databases, role and
+key-lifecycle records, and exact instance, stream, and accepted sequences.
+
+Quiesce the complete selected group before snapshot or restore. A partial file copy,
+schema-only dump, or list of unrelated hashes is not a recovery point.
 
 ## Cut over pre-1.0 authored intent
 
-Keep the pre-1.0 source project unchanged.
-Create a separate 1.0 project with one of the two public templates:
+Keep the pre-1.0 source project unchanged. Create a separate 1.0 HTTP project:
 
 ```sh
 registryctl init <candidate-directory> --template http
-# or
-registryctl init <candidate-directory> --template spreadsheet
 ```
 
-Copy only reviewed authored intent into the candidate.
-Do not copy generated output, compatibility shims, or removed command assumptions.
-Then validate the 1.0 project:
+Copy only reviewed authored intent into the candidate. Do not copy generated output,
+runtime state, compatibility shims, or removed command assumptions. Then validate the
+1.0 project:
 
 ```sh
 registryctl -C <candidate-directory> test
@@ -95,80 +107,99 @@ registryctl -C <candidate-directory> check --explain
 registryctl -C <candidate-directory> build
 ```
 
-Registry Stack 1.0 provides no automated pre-1.0 migration command or removed-command aliases.
-Follow the [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) for the complete review and
-evidence procedure.
+Registry Stack 1.0 provides no automated pre-1.0 migration command or removed-command
+aliases. Follow the
+[pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) for the full review boundary.
 
 ## Stage a restart or upgrade
 
-1. Run offline project tests, check, build, product doctor, and product bundle-verification gates
-   with the target binaries.
-2. Quiesce writers and prevent another product instance from acquiring the active fence.
-3. For Relay consultation state, run the target release's documented
-   `registry-relay consultation bootstrap-state` command with the recorded inputs.
-   Continue only when the exact schema and role capability attest.
-4. For Notary state, run the target release's `state install` as the migration role, then
-   `state doctor` as the runtime role.
-   Do not run old and target Notary writers concurrently across a schema change.
-5. Start one Relay without traffic.
-   Require health, readiness, audit, posture, and a bounded canary.
-6. Start one Notary against that Relay.
-   Require the complete Relay consultation contract, health, readiness, audit, posture, and a
-   bounded evidence canary.
-7. Admit traffic only after both product boundaries pass.
+For an ordinary restart, use the exact current package. For an update, follow
+[Upgrade and recover a deployment](../../upgrade-and-rollback/) to copy the intact
+current package into an isolated candidate and regenerate that candidate from the
+target approved set.
 
-Use [Upgrade and roll back](../../upgrade-and-rollback/) for the exact release procedure and the
-[Notary PostgreSQL operations guide](../../../products/registry-notary/postgresql-state-operations/)
-for role, migration, pruning, and stale-restore controls.
+1. Verify current and candidate packages against their approved sets and externally
+   recorded closure digests.
+2. Render both effective Compose models without resolving environment values.
+3. Verify operator files, every current and candidate bundle and anchor, and all three
+   current `verify_state` actions.
+4. Quiesce each affected recovery group and close its pre-change recovery record.
+5. Stop the current package with its generated Compose `down` command.
+6. From the candidate, stage operator secrets and run all three read-only
+   `verify_state` actions before ordinary startup.
+7. When a private-lane contract changed, start and verify PostgreSQL and consultation
+   Relay before Notary or any externally reachable dependant.
+8. Start the remaining candidate services with the generated Compose `up --detach
+   --wait --wait-timeout 120` command.
+9. Keep traffic blocked until product canaries, audit continuity, and every affected
+   target sequence are verified.
+
+The first successful target product acceptance that advances durable anti-rollback
+state is the manual abort boundary. Do not configure an automated rollback across it.
+Retain the candidate's `generated.previous/` and the intact current package until every
+affected lane reports the target accepted sequence and the retention decision is
+recorded.
 
 ## Expected evidence
 
 Retain:
 
-- Verified current and target software identities.
-- The complete recovery-set inventory and checksums.
-- The pre-1.0 source-to-candidate review and 1.0 validation results when applicable.
-- Relay bootstrap or Notary state-install and doctor results.
-- Separate product bundle verification and anti-rollback sequences.
-- Health, readiness, audit, posture, and canary results before traffic admission.
-- Start, stop, restore, and traffic-admission timestamps.
+- Current and target Registryctl, release-lock, approved-set, and package closure
+  identities.
+- The complete recovery-group inventory, shared recovery point, and integrity record.
+- Current and candidate package verification results and value-free Compose render
+  checks.
+- Separate bundle, anchor, operator-file, and `verify_state` results for all three lanes.
+- Stop, staged-start, complete-start, canary, audit, target-acceptance, and traffic
+  admission timestamps.
+- The pre-1.0 source-to-candidate review when that cutover applies.
+
+Do not record secret values, source-returned values, credentials, restricted rows, or
+key material in general logs.
 
 ## What this proves
 
-The pre-1.0 cutover record proves which reviewed authored intent moved into the separate 1.0
-candidate, while test, check, and build prove that candidate against the 1.0 authoring contract.
-Database attestation proves the exact schema, role, and capability boundary checked by the product.
-Bundle verification proves the product configuration closure.
-Staged runtime checks prove the tested target process and dependency path.
+Package verification proves the generated closure, release projection, and structural
+operator-file boundary. The three `verify_state` actions prove the read-only state
+checks encoded by the released products. A closed recovery record binds the stores and
+accepted identities selected for recovery. Staged canaries prove only the exercised
+paths before traffic admission.
 
-These gates do not prove backup freshness, every acknowledged write, country acceptance, full live
-interoperability, or a safe downgrade across an undocumented state change.
-`/healthz` proves process liveness only.
+These checks do not prove backup freshness, coverage of every acknowledged write,
+country acceptance, full live interoperability, or safe rollback after target
+acceptance. Health and readiness do not prove that a restored database reached the last
+external audit watermark.
 
 ## Roll back or recover
 
-Before target traffic, stop the target and restore the complete previous-release set.
-Never start an old binary against a newer unapproved schema or copy anti-rollback state between
-release lineages.
+Before the manual abort boundary, stop the candidate and restart the still-intact
+current package. Verify its external closure digest, operator files, Compose model, and
+all three current `verify_state` actions before its ordinary start.
 
-After target traffic writes correctness state, fix forward by default.
-Restore a pre-upgrade database only when no acknowledged target write can be lost or a
-release-specific recovery procedure proves the conversion.
-Keep a potentially stale restore offline until write-ahead-log or point-in-time recovery reaches
-the last acknowledged write and external audit watermark.
+After target acceptance, never start the older closure or restore a pre-update accepted
+sequence. Choose one of these manual recovery paths:
 
-Do not delete schemas, audit history, or anti-rollback state to make a target boot.
+1. Complete the forward update after correcting the operator-controlled dependency.
+2. Restore a complete recovery group at the same or newer accepted sequence, then run
+   all three read-only `verify_state` actions.
+3. Provision a new instance identity, review and sign every affected lane, generate a
+   new package, and follow first installation.
+
+An anti-rollback rejection is a correct fail-closed result. Do not delete, edit, copy,
+or reinitialize anti-rollback state to make an older package start.
 
 ## Escalate
 
-Escalate to both product owners when a combined topology lacks a coordinated recovery point.
-Escalate to the database owner when role object identities, schema fingerprints, key versions, or
-acknowledged-write coverage cannot be proved.
-Escalate to the release owner when no explicit migration or rollback path covers the source and
-target versions.
+Escalate to both product owners when the combined topology lacks a complete recovery
+group or the candidate runbook does not cover the intended transition.
+Escalate to the database owner when role identities, accepted-write coverage, or the
+shared recovery point cannot be proved.
+Escalate to the release owner when the current or candidate package, approved set,
+release lock, or externally recorded closure cannot be verified.
 
 ## Next
 
 - [Inspect and diagnose the deployment](../inspect-and-diagnose/)
 - [Refresh and recover a materialization](../refresh-and-recover-materialization/)
 - [Review retention and persistent state](../../retention-and-persistent-state/)
+- [Upgrade and recover a deployment](../../upgrade-and-rollback/)

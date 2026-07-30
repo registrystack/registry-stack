@@ -1,6 +1,6 @@
 ---
 title: Run the generated single-node Compose package
-description: Generate, verify, run, include, and adapt the governed Registry Stack Compose package without editing product configuration.
+description: Generate, verify, initialize, and run the governed package, then include it under explicit operator ownership when needed.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,24 +14,24 @@ standards_referenced: []
 ---
 
 Use this guide to hand independently approved Registry Relay and Registry Notary bundles to a
-single-node Docker Compose deployment, either alone or as a module in an existing application.
+single-node Docker Compose deployment, then include that package in an operator-owned application
+when needed.
 The generated package remains portable after handoff and can run with Docker Compose without
 Registryctl.
 
 ## When to use this
 
-Use the managed package when:
+Use the generated package when:
 
 - One Docker host runs one public Relay, one private consultation Relay, one Notary, and the
   release-owned PostgreSQL state plane
 - Docker Compose 2.35.0 or later is available
 - Each product lane has an independently signed bundle and trust anchor
-- An existing application may need to reach public Registry Stack services on `registry-edge`
 
-The managed profile does not provide high availability, Kubernetes, an external database, or
-direct non-loopback host publishing.
-Use an operator override or export a separate adapted package when the managed choices do not fit.
-Registryctl reports the reduced verification claim instead of blocking Docker.
+The package does not provide high availability, Kubernetes, an external database, or direct
+non-loopback host publishing.
+Create a separate operator-owned Compose model when the generated choices do not fit.
+Registryctl does not verify or manage that model.
 
 ## Before you start
 
@@ -45,6 +45,8 @@ You need:
 
 The approved set is compatibility evidence and a portable locator.
 It is not a fourth signature, trust root, or product activation authority.
+If you have unsigned output from `registryctl build`, complete
+[Approve the initial product baseline](../approve-initial-baseline/) first.
 
 Run the host checks from the authored project, or select it with the global `-C` option:
 
@@ -68,7 +70,7 @@ registryctl deploy generate \
 
 The first generation creates a safe `binding.yaml` and transfers that file to the operator.
 Registryctl owns `generated/`.
-The operator owns `binding.yaml`, `operator/`, and the optional `operator-override.yaml`.
+The operator owns `binding.yaml` and `operator/`.
 
 The package has this shape:
 
@@ -104,16 +106,16 @@ Read `generated/RUNBOOK.md`.
 Place each required secret and certificate at the package-relative path that the runbook lists.
 Use owner-only file modes.
 
-Edit `binding.yaml` only when the visible managed defaults need to change.
+Edit `binding.yaml` only when the visible generated defaults need to change.
 The binding can select loopback ports, package-relative secret and certificate locators, durable
-state locations, an existing edge network, resource limits, restart policy, and value-free
-logging policy.
+state locations, an existing edge network, resource limits, restart policy, and value-free logging
+policy.
 
 Do not edit files under `generated/`.
 Do not edit generated Relay or Notary configuration.
 The signed product bundles remain the configuration authority.
 
-## Verify the managed package
+## Verify the generated package
 
 Verify the package before initialization:
 
@@ -121,16 +123,15 @@ Verify the package before initialization:
 registryctl deploy verify --package ./registry-stack
 ```
 
-The report identifies:
+The package-only report identifies:
 
-- Ownership as `managed`, `adapted`, or `invalid`
+- Ownership as `managed` or `invalid`
 - Freshness as `current`, `stale`, or `not_applicable`
 - Verification scope as `package`
 - Whether in-place regeneration is safe
-- Each file that established an adapted state
+- Any generated-package violation
 
-Package-only verification does not inspect an external reverse proxy or parent Compose
-application.
+Package-only verification does not inspect or certify an application that includes the package.
 
 ## Initialize each product once
 
@@ -143,40 +144,24 @@ Change to the package directory:
 cd registry-stack
 ```
 
-First validate the initialization model:
+Run the complete first-installation block from `generated/RUNBOOK.md` exactly once:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  -f generated/compose.initialize.yaml \
-  config --no-interpolate --no-env-resolution --quiet
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-prepare-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-initialize
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-initialize
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-initialize
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
-Then run every `prepare-state` and `initialize` command in the exact order printed in
-`generated/RUNBOOK.md`:
-
-```sh
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-relay-public-prepare-state
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-relay-consultation-prepare-state
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-notary-prepare-state
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-relay-public-initialize
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-relay-consultation-initialize
-docker compose --env-file generated/compose.empty.env \
-  -f generated/compose.yaml -f generated/compose.initialize.yaml \
-  run --rm registry-notary-initialize
-```
-
+The secret stager checks and copies the operator files consumed at runtime.
+The PostgreSQL bootstrap runs before product state preparation.
 Preparation creates or migrates only the owning product's database schema and roles.
 Initialization verifies the bundle and anchor, records acceptance audit, and creates only the
 owning product's absent anti-rollback state.
@@ -186,71 +171,55 @@ Do not reset state to make an older bundle start.
 
 ## Run the package standalone
 
-Validate the ordinary model:
+Run the ordinary start-and-stop block from `generated/RUNBOOK.md`:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  config --no-interpolate --no-env-resolution --quiet
-```
-
-Start and inspect the services:
-
-```sh
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up -d
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public 'product-action' 'relay-public' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation 'product-action' 'relay-consultation' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary 'product-action' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down
 ```
 
 The public Relay and Notary application ports bind to host loopback.
 The consultation Relay, administration, and posture endpoints have no host port.
-Metrics use separate configured loopback listeners.
-
-Stop the ordinary services without deleting durable volumes:
-
-```sh
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down
-```
+The three `verify_state` actions check accepted product state before ordinary startup.
+`up --wait` waits for the generated health conditions.
+`down` stops ordinary services without deleting durable volumes.
 
 Internet exposure and Transport Layer Security (TLS) termination remain operator concerns.
-A same-host proxy outside a verified parent Compose model is not part of the Registryctl
-verification claim.
+An application that includes the package remains outside the Registryctl package verification
+claim.
 
 ## Include the package in an existing application
 
-Add the generated package to the parent `compose.yaml` without copying or merging its services:
+An operator can add the generated package to an application `compose.yaml` without copying or
+merging its services:
 
 ```yaml
 include:
   - ./registry-stack/generated/compose.yaml
 ```
 
-Parent services may depend on `registry-relay-public` or `registry-notary` and join
-`registry-edge`.
-They must not join `registry-private`, share the consultation Relay's network namespace, mount a
-product secret or state path, or replace a Registry Stack image, command, entrypoint, or security
-setting.
-
-Verify the parent and package together:
+Verify the generated package before composing it into the application:
 
 ```sh
-registryctl deploy verify \
-  --package ./registry-stack \
-  --parent-compose ./compose.yaml
+registryctl deploy verify --package ./registry-stack
+docker compose --env-file ./registry-stack/generated/compose.empty.env -f ./compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```
 
-The successful scope is `package_and_parent`.
-Registryctl parses only a finite local include graph, uses a controlled empty environment file,
-and asks Compose for a normalized model without interpolation or environment resolution.
+Registryctl verifies only the generated package.
+The application operator owns the include graph, additional services, external Transport Layer
+Security (TLS), hostnames, edge request admission, network access, and compatibility with the
+generated package.
+The package verification result does not extend to the application model.
 
-An institution-owned proxy can join `registry-edge` in that parent model.
-The proxy owns external TLS, hostnames, and edge request admission.
-Relay and Notary still enforce their own authentication, authorization, purpose, disclosure, and
-audit contracts.
+## Customize the generated package
 
-## Customize the managed package
-
-Use `binding.yaml` for supported managed choices.
+Use `binding.yaml` for supported generated choices.
 After editing it, rerun generation against the same output directory:
 
 ```sh
@@ -263,29 +232,9 @@ registryctl deploy verify --package ./registry-stack
 Registryctl preserves the operator-owned binding and directories, replaces only the verified
 generator-owned closure, and reports the package as current after successful regeneration.
 
-For an edge case outside the binding schema, create `operator-override.yaml`.
-Every standalone command must add the override after the base file:
-
-```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  -f operator-override.yaml \
-  config --no-interpolate --no-env-resolution --quiet
-```
-
-An intact generated closure plus one verified override is `adapted` and can remain safe for
-in-place regeneration.
-Registryctl preserves the override and does not claim the package is managed.
-
-If you edit a generated file, translate to another orchestrator, or use behavior the verifier
-cannot model, generate a fresh managed package into another directory.
-Keep the adapted package for operator-owned use.
-Registryctl does not merge arbitrary YAML or overwrite that package.
-
-Manual edits remain available for operator edge cases.
-Registryctl reports the resulting ownership boundary and never prevents Docker Compose from
-running an operator-owned package.
+If the binding schema cannot express the required deployment, keep the verified generated package
+intact and create a separate operator-owned deployment artifact.
+Registryctl does not verify or overwrite that artifact.
 
 Changing a product image, command, entrypoint, verified bundle or anchor mount, anti-rollback
 state ownership, private endpoint exposure, user, capabilities, or privilege restriction is
@@ -297,7 +246,7 @@ invalid, not an adaptation.
 | --- | --- | --- |
 | Generation refuses a non-empty output | The directory is not an intact verified package. | Select an absent or empty directory, or restore the complete verified package. |
 | Verification reports `managed` and `stale` | A managed input changed after generation. | Regenerate the generator-owned closure before startup. |
-| Verification reports `adapted` | An operator override or unsupported model changed the ownership boundary. | Read the named files and guarantees, then use Docker under operator ownership or generate a separate managed package. |
+| The generated binding cannot express the required deployment | The deployment is outside the package profile. | Keep the generated package intact and create a separately governed operator-owned artifact. |
 | Verification reports `invalid` | A hard product, secret, state, network, or privilege invariant failed. | Restore the generated boundary. Do not downgrade the failure to an override. |
 | Ordinary startup reports missing state | The one-time initialization was not completed or durable state was lost. | Complete first installation, or restore the exact recovery consistency group. Do not reinitialize an existing identity. |
-| The parent proxy cannot reach a public service | The proxy is not on `registry-edge` or uses the wrong generated service name. | Correct the parent model and rerun parent-scoped verification. |
+| An including application cannot reach a public service | The operator-owned include graph or network wiring is incomplete. | Correct the application model and rerun the application's Compose validation. |

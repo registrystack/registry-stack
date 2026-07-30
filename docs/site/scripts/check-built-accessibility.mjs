@@ -11,9 +11,7 @@ const interactiveRoles = new Set([
 const criticalPaths = [
   'index.html',
   'start/when-to-use/index.html',
-  'tutorials/publish-spreadsheet-secured-registry-api/index.html',
-  'tutorials/use-your-spreadsheet/index.html',
-  'tutorials/verify-claim-registry-api/index.html',
+  'tutorials/author-registry-project/index.html',
   'verify/index.html',
   'generated-artifacts/index.html',
   'operate/index.html',

@@ -273,7 +273,13 @@ export function assertProjectReports(testOutput, checkOutput, buildOutput, expec
   }
 }
 
-export function writeEvidenceManifest(directory, mode, registryctlVersion, retainedProject = null) {
+export function writeEvidenceManifest(
+  directory,
+  mode,
+  registryctlVersion,
+  retainedProject = null,
+  retainedOauthProject = null,
+) {
   mkdirSync(directory, { recursive: true });
   const manifest = {
     schema_version: 'registryctl.tutorial_reader_journeys.v1',
@@ -296,14 +302,15 @@ export function writeEvidenceManifest(directory, mode, registryctlVersion, retai
       },
       {
         id: 'opencrvs-events-api',
-        source: 'maintained-synthetic-example',
+        source: 'public-docs-overlay-v1',
         covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
         reports: ['opencrvs/test.json', 'opencrvs/check.json', 'opencrvs/build.json'],
       },
     ],
     release_boundary:
       'Installer, release lock, doctor, and disposable development runtime evidence are separate.',
-    retained_project: retainedProject,
+    retained_project: retainedProject || null,
+    retained_oauth_project: retainedOauthProject || null,
   };
   writeFileSync(
     resolve(directory, 'manifest.json'),
@@ -385,11 +392,11 @@ async function main([command, ...args]) {
     }
     case 'write-evidence-manifest': {
       invariant(
-        args.length === 3 || args.length === 4,
-        'usage: write-evidence-manifest <directory> <source|sealed> <registryctl-version> [retained-project]',
+        args.length >= 3 && args.length <= 5,
+        'usage: write-evidence-manifest <directory> <source|sealed> <registryctl-version> [retained-project] [retained-oauth-project]',
       );
       invariant(args[1] === 'source' || args[1] === 'sealed', 'invalid evidence mode');
-      writeEvidenceManifest(args[0], args[1], args[2], args[3] ?? null);
+      writeEvidenceManifest(args[0], args[1], args[2], args[3] ?? null, args[4] ?? null);
       return;
     }
     default:

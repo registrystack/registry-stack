@@ -25,8 +25,7 @@ and construction of a smaller output object.
 Keep the ordinary HTTP capability when fixed mapping is sufficient.
 Rhai does not grant another destination, credential, request, or output authority.
 
-Registryctl 1.0 provides `http` and `spreadsheet` templates.
-OAuth-backed Rhai is an adaptation of `http`, not another template.
+OAuth-backed Rhai is an adaptation of the `http` starter, not another template.
 
 ## Before you start
 
@@ -43,6 +42,37 @@ You also need a reviewed non-production source contract and wholly synthetic obs
 each accepted and rejected result.
 Review [Configure OAuth client credentials](../../configure/oauth-client-credentials/) for the
 token request, response profile, private binding, and rotation contract before adding Rhai.
+
+To exercise a complete maintained OAuth and Rhai adaptation before authoring your own, remove the
+starter integration and apply the versioned public overlay:
+
+```sh
+rm -r integrations/person-record
+curl -fsS \
+  https://docs.registrystack.org/examples/registryctl/opencrvs-events-api-overlay-v1.sh \
+  -o opencrvs-events-api-overlay-v1.sh
+sh opencrvs-events-api-overlay-v1.sh
+rm opencrvs-events-api-overlay-v1.sh
+registryctl test
+registryctl check --explain
+registryctl build
+```
+
+The overlay reports:
+
+```text
+Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay.
+```
+
+The public overlay contains the integration, environment, Rhai script, evidence service, and every
+positive and negative fixture.
+The documentation gate applies that same overlay to a fresh HTTP starter, inspects the human
+`check --explain` plan, tests all fixtures, and builds all three product-lane inputs.
+Use the [synthetic OpenCRVS Events API-shaped search](../verify-opencrvs-claims/) to review every
+maintained file and the limits of that evidence.
+
+For an institution-owned source, start again from an unmodified HTTP project and continue with the
+reviewed source contract in the following steps.
 
 ## Declare the OAuth and script boundary
 
@@ -251,10 +281,9 @@ The consultation Relay owns the OAuth destination, credential consumers, Rhai sc
 authority, and minimized `active` output.
 Notary owns claims and disclosure, and receives no OAuth credential or source origin.
 
-For an exact maintained execution of the no-expiry branch, use the
+For the exact maintained execution of the no-expiry branch, use the
 [synthetic OpenCRVS Events API-shaped search](../verify-opencrvs-claims/).
-Its integration, environment fragments, Rhai adapter, service, and match test are checked
-directly against the maintained project that the documentation gate executes.
+Its public overlay is the project that the documentation gate executes.
 
 ## Troubleshooting
 

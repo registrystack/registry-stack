@@ -18,14 +18,11 @@ with one reviewed integration.
 Registry Stack does not infer access policy, safe fields, or evidence claims
 from source data.
 
-## Choose a starting template
+## Start from the HTTP project
 
-Registryctl 1.0 publishes two initialization templates:
-
-| Template | Starting source | Use it when |
-| --- | --- | --- |
-| `http` | One bounded synthetic HTTP interaction | You will connect an HTTP API or add a reviewed Rhai adapter |
-| `spreadsheet` | One synthetic `.xlsx` workbook | You will bind one strictly described worksheet |
+Registryctl 1.0 publishes the `http` initialization template.
+It contains one bounded synthetic HTTP interaction that you can replace with a reviewed HTTP or
+Rhai integration.
 
 Domain systems such as OpenCRVS, DHIS2, and Fast Healthcare Interoperability
 Resources (FHIR) remain authored integrations.
@@ -48,8 +45,6 @@ They never authorize a live network request.
   for bounded multi-call HTTP acquisition
 - [Review integration patterns](../explanation/integration-patterns/) for
   HTTP, script, snapshot, and domain-system boundaries
-- [Use your own spreadsheet](../tutorials/use-your-spreadsheet/) for one
-  reviewed workbook
 
 ## Next
 

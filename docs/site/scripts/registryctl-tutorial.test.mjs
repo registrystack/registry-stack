@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -13,6 +14,7 @@ import {
   assertTutorialLayout,
   extractFencedBlocks,
   parseJsonOutput,
+  writeEvidenceManifest,
 } from './registryctl-tutorial.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
@@ -145,41 +147,67 @@ test('accepts matching test, check, and build reports with derived security evid
   );
 });
 
-test('reader gate uses 1.0 commands and leaves runtime evidence to the release workflow', () => {
+test('evidence manifest records distinct retained HTTP and OAuth projects', (t) => {
+  const root = mkdtempSync(resolve(tmpdir(), 'registryctl-tutorial-manifest-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const reports = resolve(root, 'reports');
+  const retainedHttp = resolve(root, 'reader-http-project');
+  const retainedOauth = resolve(root, 'reader-opencrvs-project');
+
+  writeEvidenceManifest(reports, 'sealed', '1.0.0', retainedHttp, retainedOauth);
+  const manifest = JSON.parse(readFileSync(resolve(reports, 'manifest.json'), 'utf8'));
+
+  assert.equal(manifest.mode, 'sealed');
+  assert.equal(manifest.retained_project, retainedHttp);
+  assert.equal(manifest.retained_oauth_project, retainedOauth);
+});
+
+test('reader gate uses current commands, a public overlay, and leaves runtime evidence to release', () => {
   const script = read('scripts/check-registryctl-tutorials.sh');
 
   assert.match(script, /init "\$HTTP_PROJECT" --template http >"\$REPORT_ROOT\/http\/init\.txt"/);
+  assert.match(script, /init "\$OPENCRVS_PROJECT" --template http/);
+  assert.match(script, /sh "\$OPENCRVS_OVERLAY"/);
   assert.match(script, /-C "\$project_directory" test --format json/);
   assert.match(script, /-C "\$project_directory" check --format json/);
   assert.match(script, /-C "\$project_directory" build --format json/);
   assert.match(script, /opencrvs-events-api/);
+  assert.match(script, /jsonplaceholder-todo-live-overlay-v1\.sh/);
+  assert.match(script, /test --environment local/);
+  assert.match(script, /check \\\n\t--environment public-demo --explain/);
+  assert.match(script, /public-demo-missing/);
+  assert.match(script, /public-todo/);
+  assert.match(script, /todo-verification/);
   assert.match(script, /assert-fence-file-equals/);
   assert.match(script, /assert-fence-equals/);
   assert.match(script, /oauth2_bearer_no_expiry/);
   assert.match(script, /REGISTRYCTL_BIN must be an absolute installed-binary path/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_EVIDENCE_DIR/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_PROJECT_DIR/);
+  assert.match(script, /REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR/);
+  assert.match(script, /OPENCRVS_PROJECT="\$\{RETAINED_OAUTH_PROJECT:-\$WORK_ROOT\/opencrvs-reader\}"/);
+  assert.match(script, /"\$RETAINED_OAUTH_PROJECT"/);
   assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
-  assert.doesNotMatch(script, /registryctl preflight|init --from|docker build|fake image|v0\.15\.2/);
+  assert.doesNotMatch(
+    script,
+    /OPENCRVS_FIXTURE|cp -R|registryctl preflight|init --from|docker build|fake image|v0\.15\.2/,
+  );
+  assert.doesNotMatch(script, /registryctl 1\.0 reader journeys/);
 });
 
-test('current reader pages use only the two public templates and current command roots', () => {
+test('current HTTP reader pages keep one starter and current command roots', () => {
   const pages = [
     read('src/content/docs/tutorials/author-registry-project.mdx'),
     read('src/content/docs/tutorials/configure-project-script-adapter.mdx'),
-    read('src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
-    read('src/content/docs/tutorials/use-your-spreadsheet.mdx'),
-    read('src/content/docs/tutorials/verify-claim-registry-api.mdx'),
-    read('src/content/docs/tutorials/deploy-standalone-with-own-data.mdx'),
-    read('src/content/docs/reference/registryctl.mdx'),
+    read('src/content/docs/tutorials/verify-opencrvs-claims.mdx'),
   ];
   const currentText = pages.join('\n');
 
   assert.match(currentText, /--template http/);
-  assert.match(currentText, /--template spreadsheet/);
   assert.match(currentText, /registryctl dev smoke/);
   assert.match(currentText, /registryctl check/);
   assert.match(currentText, /registryctl build/);
+  assert.doesNotMatch(currentText, /--template spreadsheet/);
   assert.doesNotMatch(
     currentText,
     /registryctl (?:preflight|start|stop|restart|smoke|add notary)|init --from|test --live|Bruno/,

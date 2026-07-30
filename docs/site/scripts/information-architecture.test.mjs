@@ -128,7 +128,8 @@ test('keeps removed command mappings on the cutover page only', () => {
   assert.match(cutoverSource, /`registryctl start`/);
   assert.match(cutoverSource, /`registryctl dev`/);
   assert.match(cutoverSource, /Bruno generation/);
-  assert.match(cutoverSource, /The only public 1\.0 templates are `http` and `spreadsheet`/);
+  assert.match(cutoverSource, /The public 1\.0 starter is `http`/);
+  assert.doesNotMatch(cutoverSource, /--template spreadsheet/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {

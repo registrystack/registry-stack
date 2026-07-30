@@ -201,6 +201,81 @@ For this combined project, that directory contains signing inputs for `relay-pub
 activate a product.
 The public Relay, consultation Relay, and Notary remain independently approved.
 
+## Optional: exercise a public no-credential source
+
+This continuation is an explicit network test, not part of the authoritative offline fixture
+gate.
+It creates a separate project and maps one tiny public JSON API through the bounded HTTP path.
+The `public-demo` and `public-demo-missing` environments are adopter-owned source bindings with
+`source_mode: operator_bound`.
+The integration declares `auth: { type: none }`, so there is no source credential or secret
+binding.
+
+From the parent of `my-registry`, create the separate demonstration project:
+
+```sh
+registryctl init public-json-live-demo --template http
+cd public-json-live-demo
+rm -r integrations/person-record
+curl -fsS \
+  https://docs.registrystack.org/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh \
+  -o jsonplaceholder-todo-live-overlay-v1.sh
+sh jsonplaceholder-todo-live-overlay-v1.sh
+rm jsonplaceholder-todo-live-overlay-v1.sh
+registryctl test --environment local
+registryctl check --environment public-demo --explain
+registryctl check --environment public-demo-missing --explain
+```
+
+`registryctl test --environment local` remains offline.
+Its completed, missing, ambiguous, authorization, and minimization cases are wholly synthetic
+and remain the authoritative project-contract evidence.
+The two `check` commands verify the explicit environment bindings without contacting the public
+API.
+
+Run the success path against public todo `4`:
+
+```sh
+registryctl dev --environment public-demo --detach
+registryctl dev --environment public-demo smoke
+registryctl dev --environment public-demo down
+```
+
+Then run the negative control against absent todo `999999`:
+
+```sh
+registryctl dev --environment public-demo-missing --detach
+registryctl dev --environment public-demo-missing smoke
+registryctl dev --environment public-demo-missing down
+```
+
+Both smoke reports must pass.
+Operator-bound source counters are `unobserved` because Registryctl has no authority to inspect
+the external service.
+The negative environment selects the synthetic `no-todo` expectation and makes the bounded live
+request to `/todos/999999`, which the public service currently returns as `404`.
+
+The public service is [JSONPlaceholder](https://jsonplaceholder.typicode.com/).
+Its availability, response stability, retention, and operation are outside Registry Stack's
+trust boundary.
+This demonstration is not an institutional registry, interoperability result, source-owner
+approval, or production evidence.
+Keep the source version `unverified`, and do not infer compatibility from a passing run.
+
+Remove the demonstration project after the two controls:
+
+```sh
+cd ..
+rm -r public-json-live-demo
+cd my-registry
+```
+
+Maintainers can execute the exact network-dependent sequence with
+`scripts/check-registryctl-public-source-live.sh`.
+The gate is skipped unless `REGISTRYCTL_PUBLIC_SOURCE_LIVE=1`, and can retain its value-free
+Registryctl reports plus the two public responses when
+`REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR` names an evidence directory.
+
 ## What you built
 
 You tested a bounded HTTP integration, ran the real Relay and Notary path against a fixed

@@ -267,3 +267,49 @@ test('materialization recovery documents the exact fail-closed and recovery boun
   );
   assert.match(backup, /A list of unrelated artifact hashes is not evidence/i);
 });
+
+test('backup and update use only the generated 1.0 deployment lifecycle', async () => {
+  const backup = await readSitePage('operate/backup-and-restore.mdx');
+  const update = await readSitePage('operate/upgrade-and-rollback.mdx');
+  const source = [backup, update].join('\n');
+
+  assert.doesNotMatch(
+    source,
+    /\bregistryctl\s+(?:start|stop|smoke|init|add)\b/i,
+  );
+  assert.match(backup, /Keep Registryctl out of backup automation/i);
+  assert.match(backup, /`relay-public-state`/);
+  assert.match(backup, /`consultation-state`/);
+  assert.match(backup, /operator owns those controls and the recovery decision/i);
+  assert.match(update, /fresh, verified generated package/i);
+  assert.match(update, /`generated\/RUNBOOK\.md`/);
+  assert.match(update, /`generated\.previous\/`/);
+  assert.match(update, /rollback is unsupported/i);
+  assert.match(update, /Do not configure an automated rollback/i);
+
+  for (const page of [backup, update]) {
+    assert.match(page, /generated\/compose\.empty\.env/);
+    assert.match(page, /generated\/compose\.yaml/);
+    assert.match(page, /'verify_state'/);
+    assert.match(page, /\n\s+down\n/);
+    assert.match(page, /\n\s+up --detach --wait --wait-timeout 120/);
+  }
+});
+
+test('advanced recovery preserves the generated-package acceptance boundary', async () => {
+  const recovery = await readPage(
+    'recover-upgrade-migrate-and-rollback.mdx',
+  );
+
+  assert.match(recovery, /fresh candidate/i);
+  assert.match(recovery, /generated\/RUNBOOK\.md/);
+  assert.match(recovery, /`relay-public-state`/);
+  assert.match(recovery, /`consultation-state`/);
+  assert.match(recovery, /rollback\s+is unsupported/i);
+  assert.match(recovery, /Do not configure an automated rollback/i);
+  assert.doesNotMatch(
+    recovery,
+    /registry-relay consultation bootstrap-state|registry-notary[^.\n]*state install/i,
+  );
+  assert.doesNotMatch(recovery, /Use rollback after target traffic/i);
+});

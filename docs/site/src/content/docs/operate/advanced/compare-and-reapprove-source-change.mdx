@@ -34,7 +34,7 @@ Registryctl computes the affected set from the reviewed authored and generated c
 The country implementer owns authored project changes.
 Independent lane owners retain signing authority for their product lanes.
 The approved-set owner assembles verified lane outputs, and the deployment operator owns package
-binding, adaptation, activation, state, and recovery.
+binding, integration into an operator Compose model, activation, state, and recovery.
 
 Registryctl computes affected lanes, but it does not approve a semantic change, sign for a lane
 owner, or activate a product.
@@ -46,7 +46,7 @@ Keep:
 - The current authored project unchanged in version control or a separate review copy
 - The current `approved-set.v1.json`
 - The deployed package and its complete `generated/` closure
-- The operator-owned `binding.yaml`, `operator/`, and optional `operator-override.yaml`
+- The operator-owned `binding.yaml` and `operator/` files
 - The product-lane-specific anti-rollback state and recovery evidence
 
 Do not modify the only copy of the approved project or package.
@@ -64,8 +64,7 @@ registryctl deploy verify \
 
 Proceed only when the report identifies the expected package, ownership state, and approved-set
 digest.
-Resolve a stale, adapted, or invalid result before combining that condition with an evidence
-change.
+Resolve a stale or invalid result before combining that condition with an evidence change.
 
 ## Make the authored evidence change
 
@@ -196,7 +195,7 @@ registryctl deploy verify \
   --approved-set ./approved-set.next.v1.json
 ```
 
-Registryctl preserves `binding.yaml`, `operator/`, and `operator-override.yaml`.
+Registryctl preserves `binding.yaml` and the operator-owned files under `operator/`.
 It stages the new `generated/` closure and retains one verified
 `generated.previous/` closure until the update runbook confirms the new accepted sequence.
 
@@ -229,7 +228,7 @@ After the update:
 3. Check value-free health and readiness.
 4. Exercise an authorized synthetic evaluation with an operator-owned request file.
 5. Confirm the changed claim and minimized output without recording source values.
-6. Confirm the parent Compose file is unchanged.
+6. Confirm the operator-owned application and include graph remain separate from the package.
 
 Remove `generated.previous/` only when the generated runbook says the new acceptance is complete.
 
@@ -255,7 +254,7 @@ reviewed against the selected approved set, signed by each affected lane owner, 
 compatible approved set, and packaged under the reported ownership boundary.
 
 It does not prove live-source interoperability, correctness for an untested source version,
-country acceptance, or an operator adaptation the verifier cannot model.
+country acceptance, or an operator-owned application outside the verified package.
 
 ## Roll back or recover
 
@@ -265,18 +264,17 @@ After acceptance, continue forward or restore a coherent recovery consistency gr
 or newer accepted sequence.
 Do not reset anti-rollback state or automatically activate an older bundle.
 
-For an orchestration edge case outside the managed renderer:
+For an orchestration edge case outside the generated package:
 
-If the managed renderer cannot express an orchestration need:
+If the package binding cannot express an orchestration need:
 
-1. Keep the managed package unchanged.
-2. Copy or export a separate package for operator adaptation.
-3. Apply a Compose override or translate the deployment plan.
-4. Run `registryctl deploy verify` to learn which invariants remain established.
-5. Operate the adapted package with Docker or the target orchestrator under operator ownership.
+1. Keep the verified package unchanged.
+2. Include its generated Compose model from a separate operator-owned application.
+3. Run `registryctl deploy verify` against the package itself.
+4. Validate and operate the application under operator ownership.
 
-Registryctl does not merge arbitrary YAML, overwrite an adapted package, or claim managed
-freshness for behavior it cannot model.
+Registryctl does not merge or verify the application Compose model.
+Its package result does not extend to application services or the include graph.
 
 ## Escalate
 
@@ -296,14 +294,14 @@ Stop the update and involve the owning product and security reviewers when:
 | Comparison marks an unexpected lane affected | A lane-scoped input or cross-lane interface changed. | Inspect the value-free change classes and the corresponding authored files before signing. |
 | Build emits no replacement | The normalized reviewed closure is unchanged. | Do not invent a signing or deployment update. Retain the approved set. |
 | Assembly rejects a carried-forward lane | Its identity, closure, anchor, or interface no longer matches the next set. | Rebuild and sign every genuinely affected lane. |
-| Regeneration reports an adapted package | An operator-owned or generator-owned file changed the ownership boundary. | Follow the reported in-place safety decision or generate into a separate directory. |
+| Package verification reports `invalid` | A generated or operator file no longer matches the package closure. | Restore the verified package or regenerate it from the same approved set before proceeding. |
 | Product state rejects the update | The lane identity, sequence, configuration hash, or pinned anchor does not advance the accepted state. | Restore the pre-acceptance package or construct a reviewed forward update. Do not reset anti-rollback state. |
 
 ## Next
 
-- [Run the generated Compose package](../single-node-compose-behind-proxy/) for the complete
+- [Run the generated Compose package](../../single-node-compose-behind-proxy/) for the complete
   package ownership and initialization procedure.
-- [Inspect and diagnose a deployment](./inspect-and-diagnose/) when readiness or state evidence
+- [Inspect and diagnose a deployment](../inspect-and-diagnose/) when readiness or state evidence
   fails.
-- [Rotate credentials and trust](./rotate-credentials-and-trust/) when the change includes
+- [Rotate credentials and trust](../rotate-credentials-and-trust/) when the change includes
   source credentials, caller keys, signing keys, certificates, or anchors.

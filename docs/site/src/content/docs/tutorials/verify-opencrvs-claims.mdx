@@ -48,13 +48,29 @@ documentation before any interoperability test.
 
 ## Before you start
 
-Create the HTTP project and apply the generic OAuth and Rhai structure from
-[Add OAuth-backed Rhai adaptation](../configure-project-script-adapter/):
+Create the HTTP project, remove its starter integration, and apply the versioned public example:
 
 ```sh
 registryctl init opencrvs-events-api --template http
 cd opencrvs-events-api
+rm -r integrations/person-record
+curl -fsS \
+  https://docs.registrystack.org/examples/registryctl/opencrvs-events-api-overlay-v1.sh \
+  -o opencrvs-events-api-overlay-v1.sh
+sh opencrvs-events-api-overlay-v1.sh
+rm opencrvs-events-api-overlay-v1.sh
 ```
+
+The overlay reports:
+
+```text
+Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay.
+```
+
+The overlay is a released documentation asset, not a third Registryctl template.
+It contains every authored file and fixture used by this page.
+The documentation gate applies the same overlay to a fresh `http` starter without reading or
+copying a source-tree fixture.
 
 Keep every identifier, credential, token, and source response synthetic.
 The maintained executable example uses registry id `synthetic-opencrvs-events-api`, integration
@@ -63,8 +79,7 @@ These names identify the synthetic project only.
 
 ## Declare the synthetic event lookup
 
-Rename the integration directory to `integrations/birth-event-search`, then replace
-`integration.yaml` with:
+The overlay creates `integrations/birth-event-search/integration.yaml` with this exact contract:
 
 ```yaml
 version: 1
@@ -116,7 +131,7 @@ The product and version fields record review context.
 They do not select an executor or grant source access.
 The allow policy and environment binding own that authority.
 
-In `registry-stack.yaml`, change the integration entry to:
+The overlay replaces the integration entry in `registry-stack.yaml` with:
 
 ```yaml
 integrations:
@@ -126,7 +141,7 @@ integrations:
 
 ## Bind OAuth and source origins
 
-Replace the integration binding in `environments/local.yaml`:
+The overlay binds the integration in `environments/local.yaml`:
 
 ```yaml
 integrations:
@@ -143,7 +158,7 @@ integrations:
         generation: 1
 ```
 
-Select the maintained synthetic scenario in the same file:
+The same file selects the maintained synthetic scenario:
 
 ```yaml
 development:
@@ -159,7 +174,7 @@ Rhai and Notary receive no client secret, token, or token response.
 
 ## Map the minimized outputs
 
-Create `integrations/birth-event-search/adapter.rhai`:
+The overlay creates `integrations/birth-event-search/adapter.rhai`:
 
 ```rhai
 fn consult(ctx) {
@@ -215,7 +230,7 @@ source-only metadata.
 
 ## Keep one consultation-backed claim
 
-In `registry-stack.yaml`, replace the existing evidence service with:
+The overlay replaces the starter evidence service in `registry-stack.yaml` with:
 
 ```yaml
 services:
@@ -249,7 +264,7 @@ There is no self-attested, source-free, or caller-defined fallback.
 
 ## Author the synthetic match fixture
 
-Replace `integrations/birth-event-search/fixtures/match.yaml` with:
+The exact `integrations/birth-event-search/fixtures/match.yaml` file is:
 
 ```yaml
 name: birth-event-match
@@ -310,9 +325,9 @@ expect:
     birth-event-registered: true
 ```
 
-Add synthetic test files for no match, ambiguity, source rejection, subject mismatch, malformed
-source response, timeout, OAuth redirect, OAuth media type, token type, extra-member, and expiry
-rejection.
+The public overlay also contains the exact synthetic fixtures for no match, ambiguity, source
+rejection, subject mismatch, malformed source response, timeout, OAuth redirect, OAuth media type,
+token type, extra-member, and expiry rejection.
 The complete test also derives authorization-before-source and output-minimization cases.
 
 ## Prove the offline cases

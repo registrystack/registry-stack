@@ -21,20 +21,18 @@ Relay consultation.
 ## When to use this
 
 Use the `http` template for a bounded HTTP source.
-Use the `spreadsheet` template for a reviewed XLSX source.
 OAuth and Rhai adapt the HTTP project and do not introduce another template or runtime.
 
-Use a separate manual design review when the source cannot fit the bounded HTTP, Rhai, snapshot,
-or spreadsheet capabilities.
+Use a separate manual design review when the source cannot fit the bounded HTTP or Rhai
+capabilities.
 Registryctl does not infer source authority, identity mappings, or disclosure policy.
 
 ## Before you start
 
 You need:
 
-- A project created with `registryctl init <directory> --template http` or
-  `--template spreadsheet`
-- A source-owner-approved non-production endpoint or workbook derivative
+- A project created with `registryctl init <directory> --template http`
+- A source-owner-approved non-production endpoint
 - A stable subject identifier and exact mapping from the request to one consultation input
 - The smallest typed output required by each claim
 - Synthetic observations for match, no match, and every meaningful failure
@@ -179,8 +177,8 @@ inspect the redacted plan, and build separate unsigned product inputs. Package, 
 activate each product input through its Config Bundle workflow.
 
 The generated Compose package is portable and operator-adaptable.
-Registryctl can certify only the managed or verified override-adapted boundary it understands.
-Manual orchestration changes remain operator-owned.
+Registryctl verifies only its generated package.
+An application Compose file or include graph remains operator-owned.
 
 ## Troubleshooting
 
@@ -190,12 +188,11 @@ Manual orchestration changes remain operator-owned.
 | A claim lacks a consultation root | The claim has no Registry Stack evidence source. | Add one exact Relay consultation or remove the claim. |
 | A secret appears in an authored or generated file | A secret value crossed its ownership boundary. | Stop, remove the exposed material, rotate it, and report the failure through the security process. |
 | A fixture passes but the live source differs | Synthetic and interoperability evidence have been confused. | Keep the version `unverified` and run a separately authorized compatibility review. |
-| The managed Compose model cannot express an operator need | The orchestration change is outside the binding schema. | Use an operator override or adapt a separate exported package and accept the reported ownership state. |
+| The generated Compose package cannot express an operator need | The orchestration change is outside the binding schema. | Keep the verified package intact and compose it into a separate operator-owned application. |
 
 ## Next
 
 - [Build and run an HTTP registry project](../author-registry-project/) for the bounded HTTP
   authoring path.
-- [Use your own spreadsheet](../use-your-spreadsheet/) for a reviewed XLSX source.
 - [Compare and approve an evidence change](../../operate/advanced/compare-and-reapprove-source-change/)
   when changing a governed deployment.
