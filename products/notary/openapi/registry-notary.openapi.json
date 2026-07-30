@@ -3110,7 +3110,7 @@
     },
     "/oid4vci/credential": {
       "post": {
-        "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Source-free and legacy evaluations are not issuable. Delegated issuance is accepted only for a credential configuration using the digitally authenticated representative ceremony. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Delegated issuance is accepted only for a credential configuration using the digitally authenticated representative ceremony. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
         "operationId": "issueOid4vciCredential",
         "requestBody": {
           "content": {
@@ -3218,7 +3218,7 @@
     },
     "/oid4vci/offer/callback": {
       "get": {
-        "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, and validates the id_token. For an ordinary credential configuration, it completes the exact registry-backed Relay evaluation and only then mints one single-use pre-authorized_code bound to that immutable transaction. For a representative configuration, it reserves a fresh single-use target-selection state and returns a no-store form; POST /oid4vci/offer/representative completes the proof-bounded evaluation. Denied, unavailable, malformed, source-free, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+        "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, and validates the id_token. For an ordinary credential configuration, it completes the exact registry-backed Relay evaluation and only then mints one single-use pre-authorized_code bound to that immutable transaction. For a representative configuration, it reserves a fresh single-use target-selection state and returns a no-store form; POST /oid4vci/offer/representative completes the proof-bounded evaluation. Denied, unavailable, malformed, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
         "operationId": "completeOid4vciOffer",
         "parameters": [
           {
@@ -4069,10 +4069,10 @@
         "operationId": "batchEvaluateClaims",
         "parameters": [
           {
-            "description": "Required for every registry-backed batch. The value is caller-bound and may contain 1 to 256 bytes.",
+            "description": "Required for every batch. The value is caller-bound and may contain 1 to 256 bytes.",
             "in": "header",
             "name": "Idempotency-Key",
-            "required": false,
+            "required": true,
             "schema": {
               "maxLength": 256,
               "minLength": 1,
@@ -4180,7 +4180,7 @@
                 }
               }
             },
-            "description": "Invalid request, including a registry-backed batch without a valid Idempotency-Key or an item that fails whole-batch preflight"
+            "description": "Invalid request, including a batch without a valid Idempotency-Key or an item that fails whole-batch preflight"
           },
           "401": {
             "content": {
@@ -4280,7 +4280,7 @@
                   "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
-                  "title": "Self-attestation rate limited",
+                  "title": "Subject access rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
@@ -4288,7 +4288,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded"
+            "description": "Subject-access request is rate limited, or the machine evaluation quota was exceeded"
           },
           "503": {
             "content": {
@@ -4591,7 +4591,7 @@
     },
     "/v1/credentials": {
       "post": {
-        "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable through this direct route. Representative issuance uses the separately configured OpenID4VCI ceremony.",
+        "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Representative issuance uses the separately configured OpenID4VCI ceremony.",
         "operationId": "issueCredential",
         "requestBody": {
           "content": {
@@ -4739,7 +4739,7 @@
                   "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
-                  "title": "Self-attestation rate limited",
+                  "title": "Subject access rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
@@ -4747,7 +4747,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited"
+            "description": "Subject-access request is rate limited"
           },
           "503": {
             "content": {
@@ -5013,7 +5013,7 @@
                   "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
-                  "title": "Self-attestation rate limited",
+                  "title": "Subject access rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
@@ -5021,7 +5021,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded"
+            "description": "Subject-access request is rate limited, or the machine evaluation quota was exceeded"
           },
           "503": {
             "content": {
@@ -5226,7 +5226,7 @@
                   "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
-                  "title": "Self-attestation rate limited",
+                  "title": "Subject access rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
@@ -5234,7 +5234,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited"
+            "description": "Subject-access request is rate limited"
           },
           "503": {
             "content": {

@@ -15,8 +15,8 @@ standards_referenced:
 
 Use this guide when you operate CSV, XLSX, Parquet, or PostgreSQL data and need a protected
 read-only Registry Relay API. This page covers Relay only. Add Registry Notary through a Registry
-Stack project when you need registry-backed claims, or deploy Notary alone for source-free and
-self-attested claims.
+Stack project when you need claims derived from compiler-pinned Relay
+consultations.
 
 ## When to use this
 
@@ -146,7 +146,7 @@ records the authorized request without the raw credential or sensitive lookup va
 
 Do not add a direct source connection to Registry Notary. A combined Registry Stack project
 compiles the source integration and consultation into Relay, then compiles Notary claims against
-the pinned Relay contract. A Notary-only project contains source-free or self-attested claims.
+the pinned Relay contract. A Notary-only project may contain no claims.
 
 Follow [Author an HTTP Registry Stack project](../author-registry-project/) to run offline fixtures,
 inspect the redacted plan, and build separate unsigned product inputs. Package, sign, verify, and

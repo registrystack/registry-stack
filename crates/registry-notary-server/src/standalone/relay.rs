@@ -279,11 +279,7 @@ fn activation_plans(
     config: &StandaloneRegistryNotaryConfig,
 ) -> Result<Option<RelayActivationPlans<'_>>, StandaloneServerError> {
     let connection = config.evidence.relay.as_ref();
-    let mut registry_claims = config
-        .evidence
-        .claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_registry_backed());
+    let mut registry_claims = config.evidence.claims.iter();
     let first = registry_claims.next();
     let (connection, first) = match (connection, first) {
         (None, None) => return Ok(None),
@@ -372,34 +368,6 @@ evidence:
             token_file.display(),
         ))
         .expect("test Notary config parses")
-    }
-
-    #[tokio::test]
-    async fn source_free_config_rejects_an_unused_relay_connection() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let config = config_with_claim(
-            r#"    - id: source-free
-      title: Source free
-      version: "1"
-      subject_type: person
-      evidence_mode:
-        type: self_attested
-      value:
-        type: boolean
-      rule:
-        type: cel
-        expression: "true""#,
-            &directory.path().join("relay.jwt"),
-        );
-
-        let error = activate_relay_from_config(&config)
-            .await
-            .expect_err("unused Relay configuration is rejected");
-
-        assert!(matches!(
-            error,
-            StandaloneServerError::InvalidRelayActivationPlan
-        ));
     }
 
     #[tokio::test]

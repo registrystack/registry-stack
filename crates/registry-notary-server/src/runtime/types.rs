@@ -100,14 +100,8 @@ pub(super) struct CelEvaluationContext<'a> {
     pub(super) evidence: &'a EvidenceConfig,
     pub(super) claim: &'a ClaimDefinition,
     pub(super) expression: &'a str,
-    pub(super) bindings: &'a CelBindingsConfig,
-    pub(super) claims: &'a BTreeMap<String, ClaimResultInternal>,
     pub(super) consultation_outputs: &'a BTreeMap<String, Value>,
     pub(super) variables: &'a registry_notary_core::RequestVariables,
-    pub(super) subject: Option<&'a SubjectRequest>,
-    pub(super) target: &'a EvidenceEntity,
-    pub(super) purpose: &'a str,
-    pub(super) today: String,
     #[cfg(feature = "registry-notary-cel")]
     pub(super) worker: Option<&'a CelWorker>,
     #[cfg(feature = "registry-notary-cel")]

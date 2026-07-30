@@ -19,35 +19,28 @@ from your own application workflow.
 
 | Need | Example | Where it comes from |
 | --- | --- | --- |
-| Service base URL | `https://self-attested-notary.lab.registrystack.org` | Hosted lab manifest or Registry Notary operator |
-| Auth credential | `SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN` | Hosted lab manifest or Registry Notary operator |
-| Claim id | `applicant-declaration` | `list_claims` or operator docs |
-| Target identifier | `applicant_id` and `demo-applicant` | Your application or case record |
-| Purpose | `application-processing` | Your product, policy, or workflow |
+| Service base URL | `https://notary.example.gov` | Registry Notary operator |
+| Auth credential | `REGISTRY_NOTARY_CLIENT_TOKEN` | Registry Notary operator |
+| Claim id | `person-is-alive` | `list_claims` or operator docs |
+| Target identifier | `person_id` and a locally valid identifier | Your application or case record |
+| Purpose | `service-delivery` | Your product, policy, or workflow |
 
 Use `list_claims` first when you are unsure which claim ids your credential can
 see. A later `403` on evaluation usually means the credential lacks the
 `required_scope` for one of the requested claims.
 
-The quickstart uses the public hosted lab backend so the examples are runnable
-as written. The lab publishes current demo service URLs and caller credentials
-at `https://lab.registrystack.org/api/lab.json`. These are public demo
-credentials, not production secret-handling guidance.
-
-Read the `self-attested-evidence` entry from `lab.json` and export the values manually:
+Export the values provided by the deployment operator:
 
 ```bash
-export REGISTRY_NOTARY_BASE_URL="<service_url from the self-attested-evidence entry>"
-export REGISTRY_NOTARY_API_KEY="<token from the self-attested-evidence entry>"
-export REGISTRY_NOTARY_PURPOSE="<default_purpose from the self-attested-evidence entry>"
+export REGISTRY_NOTARY_BASE_URL="<service URL>"
+export REGISTRY_NOTARY_API_KEY="<client token>"
+export REGISTRY_NOTARY_PURPOSE="<allowed purpose>"
 ```
-
-The lab UI at `https://lab.registrystack.org` shows the same values.
 
 ### Key terms
 
 - **Claim:** A named question Notary can evaluate, such as
-  `applicant-declaration`.
+  `person-is-alive`.
 - **Target:** The person, organization, or record being evaluated.
 - **Requester:** The actor asking for the evaluation.
 - **Relationship:** Why the requester may ask about the target, such as `self`.
@@ -121,10 +114,10 @@ npm run check:types --prefix bindings/node
 
 ## First evaluation
 
-This quickstart asks the retained Notary-only lab service to evaluate the
-`applicant-declaration` claim for `demo-applicant`. Use it when your application
-already knows the target identifier and wants a minimized self-attested claim
-result without consulting Relay or a registry source.
+This quickstart asks a configured Notary service to evaluate the
+`person-is-alive` claim for a target identifier. Notary authorizes the request,
+executes the claim's compiler-pinned Relay consultation, and returns only the
+configured minimized result.
 
 The examples set `default_purpose` or `defaultPurpose` on the client. You can
 also set purpose per call when different workflows share the same client.
@@ -152,12 +145,12 @@ try:
         "target": {
             "type": "Person",
             "identifiers": [{
-                "scheme": "applicant_id",
-                "value": "demo-applicant",
+                "scheme": "person_id",
+                "value": "example-person",
             }],
         },
         "relationship": {"type": "self"},
-        "claims": ["applicant-declaration"],
+        "claims": ["person-is-alive"],
         "disclosure": "predicate",
         "purpose": os.environ["REGISTRY_NOTARY_PURPOSE"],
     })
@@ -183,10 +176,10 @@ Python also has a shorter helper for the common one-target case:
 
 ```python
 result = client.evaluate(
-    target_id="demo-applicant",
-    identifier_scheme="applicant_id",
+    target_id="example-person",
+    identifier_scheme="person_id",
     target_type="Person",
-    claims=["applicant-declaration"],
+    claims=["person-is-alive"],
 )
 ```
 
@@ -217,10 +210,10 @@ try {
   const result = await client.evaluate({
     target: {
       type: "Person",
-      identifiers: [{ scheme: "applicant_id", value: "demo-applicant" }],
+      identifiers: [{ scheme: "person_id", value: "example-person" }],
     },
     relationship: { type: "self" },
-    claims: ["applicant-declaration"],
+    claims: ["person-is-alive"],
     disclosure: "predicate",
     purpose: process.env.REGISTRY_NOTARY_PURPOSE,
   });
@@ -246,10 +239,10 @@ wire JSON and receive snake_case response JSON.
 const result = await client.evaluateRequest({
   target: {
     type: "Person",
-    identifiers: [{ scheme: "applicant_id", value: "demo-applicant" }],
+    identifiers: [{ scheme: "person_id", value: "example-person" }],
   },
   relationship: { type: "self" },
-  claims: ["applicant-declaration"],
+  claims: ["person-is-alive"],
   disclosure: "predicate",
   purpose: process.env.REGISTRY_NOTARY_PURPOSE,
 });
@@ -274,15 +267,15 @@ let claims = client.list_claims(Default::default()).await?;
 
 let response = client
     .evaluate_target("Person")
-    .target_identifier("applicant_id", "demo-applicant")
+    .target_identifier("person_id", "example-person")
     .relationship("self")
-    .claims(["applicant-declaration"])
+    .claims(["person-is-alive"])
     .disclosure("predicate")
     .purpose(purpose.clone())
     .send()
     .await?;
 
-if let Some(result) = response.body.result_for("applicant-declaration") {
+if let Some(result) = response.body.result_for("person-is-alive") {
     println!("satisfied: {:?}", result.satisfied);
 }
 ```
@@ -325,7 +318,7 @@ different target or acting on behalf of someone else. Use `relationship` to
 explain the permission context, such as `self`, `guardian`, `case_worker`, or a
 deployment-specific value.
 
-For token-bound self-attestation flows, omit identity fields and let the server
+For token-bound subject access flows, omit identity fields and let the server
 derive the requester, target, and `self` relationship from the verified token
 binding:
 
@@ -776,8 +769,9 @@ them, and note that Rust redacts credential bodies from `Debug`.
 The evaluation must be newly created from non-delegated registry-backed claims
 and retain an exact compiler pin for every claim in each selected root's
 dependency closure, plus one execution record for every unique Relay
-consultation ULID. Source-free, delegated, and older stored evaluations remain
-renderable but are not issuable. Re-evaluate after upgrading before calling
+consultation ULID. Delegated and older stored evaluations remain renderable but
+are not issuable unless the configured representative ceremony applies.
+Re-evaluate after upgrading before calling
 either the direct issuance or OID4VCI credential endpoint.
 
 ```python

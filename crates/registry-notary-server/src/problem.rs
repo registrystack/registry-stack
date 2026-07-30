@@ -72,10 +72,10 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::MissingCredential => "Missing credential",
         EvidenceError::MultipleCredentials => "Multiple credentials",
         EvidenceError::ScopeDenied { .. } => "Scope denied",
-        EvidenceError::SubjectAccessDenied { .. } => "Self-attestation denied",
-        EvidenceError::SubjectAccessRateLimited => "Self-attestation rate limited",
+        EvidenceError::SubjectAccessDenied { .. } => "Subject access denied",
+        EvidenceError::SubjectAccessRateLimited => "Subject access rate limited",
         EvidenceError::SubjectAccessInvalidToken | EvidenceError::SubjectAccessAssuranceDenied => {
-            "Self-attestation denied"
+            "Subject access denied"
         }
         EvidenceError::MachineQuotaExceeded { .. } => "Machine quota exceeded",
         _ => "Evidence error",

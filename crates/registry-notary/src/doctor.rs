@@ -581,12 +581,7 @@ pub(crate) fn local_env_diagnostics(
     env_report: &EnvFileReport,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    if config
-        .evidence
-        .claims
-        .iter()
-        .any(|claim| claim.evidence_mode.is_registry_backed())
-    {
+    if !config.evidence.claims.is_empty() {
         diagnostics.push(relay_token_file_diagnostic(config));
     }
     for credential in config
@@ -877,12 +872,7 @@ pub(crate) fn vc_diagnostics(
 
 pub(crate) async fn live_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    if config
-        .evidence
-        .claims
-        .iter()
-        .any(|claim| claim.evidence_mode.is_registry_backed())
-    {
+    if !config.evidence.claims.is_empty() {
         diagnostics.push(match verify_relay_from_config(config).await {
             Ok(true) => {
                 Diagnostic::ok("Relay workload credential and pinned consultation profile verified")

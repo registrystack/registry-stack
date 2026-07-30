@@ -12,7 +12,8 @@ may activate at most one logical Relay and one logical Notary, with identical
 replicas and coordinated replacement generations permitted.
 
 - A Relay-only deployment exposes governed source capabilities without Notary.
-- A Notary-only deployment supports source-free self-attested evidence.
+- A Notary deployment may start without claims, but it cannot evaluate evidence
+  until it is connected to its project's Relay.
 - A combined deployment lets Notary derive claims from its project's single Relay.
 
 When both products are present, Notary receives no registry destination or
@@ -49,13 +50,13 @@ Notary never treats a Relay failure as `no_match`. Ambiguity, denial, source,
 verification, availability, or contract failure aborts the affected
 consultation group. Raw Relay errors are not exposed as claim values.
 
-## Source-free and delegated evidence
+## Subject and delegated access
 
-`self_attested` evidence performs no Relay or source I/O. Its rules and
-dependency closure must remain source-free. Delegated authorization is a
-separate Notary authorization decision, not a consumer decision. Where a
-delegated relationship is proved by Relay, Notary still pins the exact
-consultation and performs all authorization checks before invoking it.
+OIDC identity and delegated authorization decide who may request evidence and
+for which subject. They are not evidence sources. Every resulting claim still
+derives from a compiler-pinned Relay consultation. Where a delegated
+relationship is proved by Relay, Notary pins the exact proof and evidence
+consultations and performs all authorization checks before invoking them.
 
 ## Product boundaries
 

@@ -2,7 +2,6 @@
 //! Standalone Registry Notary routes.
 
 mod admin;
-mod attestation_policy;
 mod audit;
 mod catalog;
 mod credentials;
@@ -12,9 +11,9 @@ mod probes;
 mod request;
 mod state;
 mod status;
+mod subject_access_policy;
 
 use admin::*;
-use attestation_policy::*;
 use audit::*;
 use catalog::*;
 use credentials::*;
@@ -23,6 +22,7 @@ use oid4vci::*;
 use probes::*;
 use request::*;
 use status::*;
+use subject_access_policy::*;
 
 pub(crate) use admin::{ConfigApplyPosture, ConfigEmergencyPosture};
 pub(crate) use audit::{evidence_error_response, evidence_error_response_with_request_id};

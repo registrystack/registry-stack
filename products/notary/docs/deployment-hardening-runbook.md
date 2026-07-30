@@ -30,7 +30,7 @@ address protections. Use TLS in deployed environments.
 - Configure one supported caller authentication mode and fail closed on missing
   credentials.
 - Review purpose, legal basis, scopes, relationship, and disclosure together.
-- For self-attestation, pin issuer, audience, client, algorithm, token lifetime,
+- For subject access, pin issuer, audience, client, algorithm, token lifetime,
   and exact subject binding.
 - For delegated requests, require exact authorization details and proof policy
   before any Relay call.

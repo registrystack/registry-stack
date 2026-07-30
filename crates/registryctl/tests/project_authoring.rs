@@ -1936,52 +1936,6 @@ fn signed_dci_rejects_wrong_jwks_algorithm_and_key_use() {
 }
 
 #[test]
-fn relay_only_and_notary_only_projects_complete_their_applicable_journeys() {
-    let relay_root = tempfile::tempdir().expect("Relay-only temporary directory");
-    let relay = copy_project("relay-only-records", relay_root.path());
-    test_registry_project(&ProjectTestOptions {
-        project_directory: relay.clone(),
-        environment: None,
-        live: false,
-    })
-    .expect("Relay-only project tests");
-    check_registry_project(&ProjectCheckOptions {
-        project_directory: relay.clone(),
-        environment: "local".to_string(),
-        explain: true,
-        against: None,
-        anchor: None,
-    })
-    .expect("Relay-only project explains");
-    build_registry_project(&ProjectBuildOptions {
-        project_directory: relay,
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect("Relay-only project builds");
-
-    let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
-    let notary = copy_project("notary-only-evaluation", notary_root.path());
-    let check = check_registry_project(&ProjectCheckOptions {
-        project_directory: notary.clone(),
-        environment: "local".to_string(),
-        explain: true,
-        against: None,
-        anchor: None,
-    })
-    .expect("Notary-only project explains");
-    assert!(check.explanation.is_some());
-    build_registry_project(&ProjectBuildOptions {
-        project_directory: notary,
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect("Notary-only project builds");
-}
-
-#[test]
 fn authored_rhai_script_compiles_under_the_production_surface() {
     let script = std::fs::read_to_string(
         golden("dhis2-script").join("integrations/health-record/adapter.rhai"),
@@ -3359,44 +3313,6 @@ fn capability_inventory_separates_static_support_from_runtime_and_image_evidence
     let decoded: registryctl::ProjectCapabilityInventoryReportV1 =
         serde_json::from_value(report_value).expect("real command report passes strict ingress");
     assert_eq!(decoded, report);
-}
-
-#[test]
-fn capability_inventory_attributes_only_registry_backed_claims_to_the_source() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("custom-system", temporary.path());
-    let project_path = project.join("registry-stack.yaml");
-    let mut document = read_yaml(&project_path);
-    document["services"]["household-eligibility"]["claims"]["applicant-declaration"] =
-        serde_norway::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
-            .expect("source-free claim");
-    write_yaml(&project_path, &document);
-
-    let report = inspect_project_capabilities(&ProjectCapabilityOptions {
-        project_directory: project,
-        environment: "local".to_owned(),
-    })
-    .expect("mixed registry-backed and source-free evidence inventories");
-    let http = report
-        .capabilities
-        .iter()
-        .find(|record| record.capability == registryctl::CapabilityId::SourceHttp)
-        .expect("HTTP capability is inventoried");
-    assert_eq!(http.used_by.services, 1);
-    assert_eq!(http.used_by.consultations, 1);
-    assert_eq!(
-        http.used_by.claims, 3,
-        "the source-free claim must not inherit the service's HTTP consultation"
-    );
-    let notary = report
-        .capabilities
-        .iter()
-        .find(|record| record.capability == registryctl::CapabilityId::RegistryNotaryProduct)
-        .expect("Notary product capability is inventoried");
-    assert_eq!(
-        notary.used_by.claims, 4,
-        "Notary still owns evaluation of every claim"
-    );
 }
 
 #[test]
@@ -6016,7 +5932,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "e43844d2ee179f57034bad37d64cb14853459d5e10e5e2b8bc011a46f4072e5c",
+        "d0060b908dcaa84607d385c0ec882d16f87c7b3eaf5922d4ef5b48df72324f52",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6552,45 +6468,6 @@ fn records_and_snapshot_share_one_generated_materialization() {
 }
 
 #[test]
-fn relay_only_and_notary_only_projects_emit_only_selected_products() {
-    for (project_name, present, absent) in [
-        ("relay-only-records", "relay", "notary"),
-        ("notary-only-evaluation", "notary", "relay"),
-    ] {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = copy_project(project_name, temporary.path());
-        let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-            against: None,
-            anchor: None,
-        })
-        .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
-        let output = resolve_build_output(&project, build.output.expect("build output"));
-        assert!(
-            output.join("private").join(present).is_dir(),
-            "{project_name}"
-        );
-        assert!(
-            !output.join("private").join(absent).exists(),
-            "{project_name} emitted unselected {absent} configuration"
-        );
-        let approval_state: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(
-                output
-                    .join("private")
-                    .join(present)
-                    .join("approval/project-state.json"),
-            )
-            .expect("approval state reads"),
-        )
-        .expect("approval state parses");
-        assert!(approval_state["generated_closure_digests"][present].is_string());
-        assert!(approval_state["generated_closure_digests"][absent].is_null());
-    }
-}
-
-#[test]
 fn materialization_size_boundary_accepts_integer_ceiling_and_rejects_human_above() {
     let at_boundary = tempfile::tempdir().expect("boundary temporary directory");
     let boundary_project = copy_project("snapshot-exact", at_boundary.path());
@@ -6929,88 +6806,6 @@ fn issuance_accepts_a_full_verification_method_kid() {
 }
 
 #[test]
-fn source_free_credential_profiles_fail_check_and_build() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = create_source_free_evaluation_project(temporary.path());
-    add_source_free_credential_capability(&project);
-
-    let check_error = check_registry_project(&ProjectCheckOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect_err("check must reject a source-free credential profile");
-    assert_authoring_diagnostic(&check_error, "registryctl.authoring.project.invalid");
-
-    let build_error = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect_err("build must reject a source-free credential profile");
-    assert!(
-        format!("{build_error:#}")
-            .contains("credential profiles require registry-backed claim evidence"),
-        "{build_error:#}"
-    );
-}
-
-#[test]
-fn credential_profiles_reject_mixed_registry_backed_and_source_free_evidence() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("custom-system", temporary.path());
-    let project_path = project.join("registry-stack.yaml");
-    let mut document = read_yaml(&project_path);
-    let service = &mut document["services"]["household-eligibility"];
-    service["claims"]["applicant-declaration"] =
-        serde_norway::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
-            .expect("source-free claim");
-    service["credential_profiles"]["household-eligibility"]["claims"]
-        .as_sequence_mut()
-        .expect("credential profile claims")
-        .push(serde_norway::Value::String(
-            "applicant-declaration".to_string(),
-        ));
-    write_yaml(&project_path, &document);
-
-    let error = check_registry_project(&ProjectCheckOptions {
-        project_directory: project,
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect_err("mixed registry-backed and source-free credential evidence must fail");
-    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
-}
-
-#[test]
-fn oid4vci_rejects_source_free_credential_selection() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = create_source_free_evaluation_project(temporary.path());
-    add_source_free_credential_capability(&project);
-    author_oid4vci_binding(
-        &project,
-        "applicant-evaluation",
-        "application-declaration",
-        "example_person_id",
-    );
-
-    let error = check_registry_project(&ProjectCheckOptions {
-        project_directory: project,
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect_err("OID4VCI must not select source-free credential evidence");
-    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
-}
-
-#[test]
 fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
@@ -7204,7 +6999,6 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
         notary["subject_access"]["allowed_operations"]["evaluate"].as_bool(),
         Some(false)
     );
-    assert!(notary.get("self_attestation").is_none());
     assert_eq!(
         notary["oid4vci"]["credential_endpoint"].as_str(),
         Some("https://notary.example.invalid/oid4vci/credential")
@@ -7229,26 +7023,6 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
             .as_str(),
         Some("evidence:household:read")
     );
-
-    let plain_root = tempfile::tempdir().expect("plain temporary directory");
-    let plain = create_source_free_evaluation_project(plain_root.path());
-    let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: plain.clone(),
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect("ordinary API-key Notary still builds");
-    let output = resolve_build_output(&plain, build.output.expect("plain build output"));
-    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
-    assert!(notary["auth"].get("mode").is_none());
-    assert_eq!(
-        notary["auth"]["api_keys"][0]["id"].as_str(),
-        Some("application-service")
-    );
-    assert!(notary.get("oid4vci").is_none());
-    assert!(notary.get("subject_access").is_none());
-    assert!(notary.get("self_attestation").is_none());
 }
 
 #[test]
@@ -7794,204 +7568,6 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
                 "registryctl.authoring.environment.invalid"
             },
         );
-    }
-}
-
-#[test]
-fn combined_project_without_relay_consultations_needs_no_notary_relay_workload() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("relay-only-records", temporary.path());
-    let project_path = project.join("registry-stack.yaml");
-    let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["applicant-declaration"] = serde_norway::from_str(
-        r#"kind: evidence
-version: 1
-purpose: application-processing
-legal_basis: application-processing
-consent: not_required
-access: { scopes: ["evidence:declaration:read"] }
-claims:
-  applicant-declaration:
-    cel: "true"
-    value: { type: boolean }
-    disclosure: predicate
-credential_profiles: {}
-"#,
-    )
-    .expect("source-free evaluation service");
-    write_yaml(&project_path, &authored_project);
-
-    let environment_path = project.join("environments/local.yaml");
-    let mut environment = read_yaml(&environment_path);
-    environment["callers"] = serde_norway::from_str(
-        "application-service:\n  api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }\n  scopes: ['evidence:declaration:read']\n",
-    )
-    .expect("Notary caller binding");
-    environment["deployment"]["notary"] =
-        serde_norway::from_str("service: declaration-notary\n").expect("Notary deployment");
-    write_yaml(&environment_path, &environment);
-
-    let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect("combined records and evaluation project builds without a Relay consultation");
-    let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
-    assert!(relay.get("consultation").is_none());
-    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
-    assert!(notary["evidence"].get("relay").is_none());
-    assert!(notary["evidence"].get("signing_keys").is_none());
-}
-
-#[test]
-fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing_keys() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = create_source_free_evaluation_project(temporary.path());
-
-    let check = check_registry_project(&ProjectCheckOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect("evaluation-only Notary project checks without issuance");
-    assert_eq!(check.status, "valid");
-    let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect("evaluation-only Notary project builds without issuance");
-    let output = resolve_build_output(&project, build.output.expect("build output"));
-    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
-    assert_eq!(notary["state"]["storage"].as_str(), Some("in_memory"));
-    assert!(notary["evidence"].get("relay").is_none());
-    assert!(notary["evidence"].get("signing_keys").is_none());
-    assert!(notary["evidence"]["credential_profiles"]
-        .as_mapping()
-        .is_some_and(serde_norway::Mapping::is_empty));
-    assert!(notary.get("oid4vci").is_none());
-    let rendered = serde_norway::to_string(&notary).expect("Notary-only config serializes");
-    for forbidden in [
-        "redis:",
-        "direct_source:",
-        "source_credential:",
-        "credential_endpoint:",
-    ] {
-        assert!(!rendered.contains(forbidden), "{forbidden}");
-    }
-
-    let missing_issuance_root = tempfile::tempdir().expect("temporary directory");
-    let missing_issuance = copy_project("custom-system", missing_issuance_root.path());
-    let missing_issuance_environment = missing_issuance.join("environments/local.yaml");
-    let mut environment = read_yaml(&missing_issuance_environment);
-    environment
-        .as_mapping_mut()
-        .expect("environment mapping")
-        .remove(serde_norway::Value::String("issuance".to_string()));
-    write_yaml(&missing_issuance_environment, &environment);
-    let error = check_registry_project(&ProjectCheckOptions {
-        project_directory: missing_issuance,
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect_err("credential profiles without issuance must fail");
-    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
-
-    let unexpected_issuance_root = tempfile::tempdir().expect("temporary directory");
-    let unexpected_issuance = copy_project("custom-system", unexpected_issuance_root.path());
-    let project_path = unexpected_issuance.join("registry-stack.yaml");
-    let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["household-eligibility"]["credential_profiles"] =
-        serde_norway::from_str("{}\n").expect("empty credential profiles");
-    write_yaml(&project_path, &authored_project);
-    let error = check_registry_project(&ProjectCheckOptions {
-        project_directory: unexpected_issuance,
-        environment: "local".to_string(),
-        explain: false,
-        against: None,
-        anchor: None,
-    })
-    .expect_err("issuance without credential profiles must fail");
-    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
-}
-
-#[test]
-fn source_free_string_claim_bound_is_preserved_in_generated_notary_config() {
-    use registry_notary_core::StandaloneRegistryNotaryConfig;
-
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = create_source_free_evaluation_project(temporary.path());
-    let project_path = project.join("registry-stack.yaml");
-    let mut authored = read_yaml(&project_path);
-    let claim = &mut authored["services"]["applicant-evaluation"]["claims"]["application-complete"];
-    claim["cel"] = serde_norway::Value::String(r#""Ficción""#.to_string());
-    claim["value"] = serde_norway::from_str("type: string\nmax_bytes: 37\n")
-        .expect("bounded string value contract");
-    write_yaml(&project_path, &authored);
-
-    let options = ProjectBuildOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    };
-    let first = build_registry_project(&options).expect("bounded source-free project builds");
-    let output = resolve_build_output(&project, first.output.expect("build output"));
-    let notary_path = output.join("private/notary/config/notary.yaml");
-    let first_bytes = std::fs::read(&notary_path).expect("generated Notary config reads");
-    let generated: StandaloneRegistryNotaryConfig = serde_norway::from_slice(&first_bytes)
-        .expect("generated Notary config parses through its production model");
-    generated
-        .validate()
-        .expect("generated bounded source-free config validates");
-    let claim = generated
-        .evidence
-        .claims
-        .iter()
-        .find(|claim| claim.id == "application-complete")
-        .expect("generated source-free string claim");
-    assert_eq!(claim.value.value_type, "string");
-    assert_eq!(claim.value.max_bytes, Some(37));
-
-    build_registry_project(&options).expect("bounded source-free project rebuilds");
-    assert_eq!(
-        first_bytes,
-        std::fs::read(&notary_path).expect("regenerated Notary config reads"),
-        "the generated bound is byte-exact across rebuilds"
-    );
-}
-
-#[test]
-fn source_free_string_claim_rejects_out_of_range_bounds() {
-    for max_bytes in [0_u32, 65_537] {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = create_source_free_evaluation_project(temporary.path());
-        let project_path = project.join("registry-stack.yaml");
-        let mut authored = read_yaml(&project_path);
-        let claim =
-            &mut authored["services"]["applicant-evaluation"]["claims"]["application-complete"];
-        claim["cel"] = serde_norway::Value::String(r#""bounded""#.to_string());
-        claim["value"] = serde_norway::from_str(&format!("type: string\nmax_bytes: {max_bytes}\n"))
-            .expect("string value contract");
-        write_yaml(&project_path, &authored);
-
-        let error = check_registry_project(&ProjectCheckOptions {
-            project_directory: project,
-            environment: "local".to_string(),
-            explain: false,
-            against: None,
-            anchor: None,
-        })
-        .expect_err("out-of-range string claim max_bytes must fail project validation");
-        assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
     }
 }
 
@@ -9521,38 +9097,6 @@ fn copy_project(name: &str, temporary: &Path) -> PathBuf {
     let destination = temporary.join(name);
     copy_tree(&golden(name), &destination);
     destination
-}
-
-fn create_source_free_evaluation_project(temporary: &Path) -> PathBuf {
-    copy_project("notary-only-evaluation", temporary)
-}
-
-fn add_source_free_credential_capability(project: &Path) {
-    let project_path = project.join("registry-stack.yaml");
-    let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["applicant-evaluation"]["credential_profiles"] =
-        serde_norway::from_str(
-            r#"application-declaration:
-  format: dc+sd-jwt
-  type: https://credentials.invalid/application-declaration/v1
-  validity: 5m
-  claims: [application-complete]
-"#,
-        )
-        .expect("source-free credential profile");
-    write_yaml(&project_path, &authored_project);
-
-    let environment_path = project.join("environments/local.yaml");
-    let mut environment = read_yaml(&environment_path);
-    environment["issuance"] = serde_norway::from_str(
-        r#"issuer: did:web:evaluation-notary.invalid
-signing_kid: project-issuer-key
-signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-generation: 1
-"#,
-    )
-    .expect("source-free issuance binding");
-    write_yaml(&environment_path, &environment);
 }
 
 fn author_oid4vci_binding(project: &Path, service: &str, profile: &str, id_type: &str) {

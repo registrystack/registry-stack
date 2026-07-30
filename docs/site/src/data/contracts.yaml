@@ -54,7 +54,7 @@
     before signing. Transaction code is required by default. An explicit
     no-PIN profile has a maximum 300-second bearer-offer window. There is no
     wallet-facing authorization-code grant, public nonce route, response next
-    nonce, source-free issuance, ES256 holder proof, PAR, DPoP, wallet
+    nonce, issuance from caller-provided evidence, ES256 holder proof, PAR, DPoP, wallet
     attestation, EUDI, or HAIP claim. External wallet and verifier evidence is
     candidate-only until recorded against a frozen artifact.
 - id: registry-notary.federated-evaluation

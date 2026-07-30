@@ -40,7 +40,7 @@ scenario patterns](notary-scenario-patterns.md).
 | --- | --- |
 | Source registry | Operational system of record. It is not exposed directly to consumers |
 | Registry Relay | Read-only gateway and metadata publisher for source registry data |
-| Registry Notary | Evaluates reusable Relay-backed or source-free evidence claims, signs results, issues credentials only from exact Relay-backed evaluation provenance, enforces evidence policy, and emits audit. Source-free results cannot authorize issuance |
+| Registry Notary | Evaluates reusable claims from compiler-pinned Relay consultations, signs results, issues credentials only from exact Relay-backed evaluation provenance, enforces evidence policy, and emits audit |
 | Registry Manifest | Public metadata and discovery artifact for capabilities, profiles, and evidence offerings |
 | Registry Platform | Shared crypto, HTTP, OIDC, SD-JWT, DID/JWK, replay, and audit primitives |
 | Service portal or case system | Acts as an evidence consumer; the operating institution remains the decision owner |
@@ -64,10 +64,10 @@ does not recompute that decision as consumer policy.
 | 4 | Health facility service available | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
 | 5 | Farmer registration and landholding evidence | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
 | 6 | Livestock identity and movement-status evidence | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
-| 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound Notary client ships |
-| 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound Notary client ships |
+| 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Planned | Inbound federation can evaluate an admitted Relay-backed claim, but no outbound Notary client ships |
+| 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Planned | Inbound federation can evaluate an admitted Relay-backed claim, but no outbound Notary client ships |
 | 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | No outbound Notary client or peer-result composition runtime ships yet; you cannot compose signed peer results across authorities in one flow |
-| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound client or demo wiring ships |
+| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Planned | Inbound federation can evaluate an admitted Relay-backed claim, but no outbound client or demo wiring ships |
 | 11 | Citizen presents civil-status proof to a benefits service | User-presented proof | Planned | No proof profiles or verifier runtime ship yet; you cannot accept this user-presented civil-status proof |
 | 12 | Farmer presents landholding or farmer-registration proof | User-presented proof | Planned | No proof profiles or status/freshness policy ship yet; you cannot accept a user-presented landholding or farmer-registration proof |
 | 13 | Health worker presents professional credential for workforce assignment | User-presented proof | Planned | No proof profiles or issuer trust policy ship yet; you cannot accept the presented professional evidence |

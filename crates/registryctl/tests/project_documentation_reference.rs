@@ -437,7 +437,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID
     );
     assert_eq!(coverage.coverage.schema_count, 7);
-    assert_eq!(coverage.coverage.path_count, 1817);
+    assert_eq!(coverage.coverage.path_count, 1811);
     assert_eq!(
         coverage.coverage.by_schema,
         [
@@ -447,7 +447,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             (ConfigurationSchemaKind::Fixture, 63),
             (ConfigurationSchemaKind::Entity, 35),
             (ConfigurationSchemaKind::Relay, 584),
-            (ConfigurationSchemaKind::Notary, 538),
+            (ConfigurationSchemaKind::Notary, 532),
         ]
         .into_iter()
         .collect()
@@ -456,9 +456,9 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         coverage.coverage.by_path_kind,
         [
             (FieldPathKind::Root, 7),
-            (FieldPathKind::Property, 1_446),
+            (FieldPathKind::Property, 1_441),
             (FieldPathKind::MapKey, 26),
-            (FieldPathKind::MapValue, 49),
+            (FieldPathKind::MapValue, 48),
             (FieldPathKind::ArrayItem, 178),
             (FieldPathKind::Branch, 111),
         ]
@@ -466,12 +466,12 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         .collect(),
         "the exact reviewed structural taxonomy remains release-gated"
     );
-    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1817);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1811);
     assert_eq!(
         coverage.reviewed_intent_assignment_covered_count + coverage.missing_intent.len(),
         coverage.reviewed_intent_assignment_required_count
     );
-    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1817);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1811);
     assert!(
         coverage.distinct_reviewed_intent_count < coverage.reviewed_intent_assignment_covered_count,
         "assignment coverage must not imply one unique explanation per path"
@@ -488,12 +488,12 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             coverage.distinct_reviewed_intents_reused_count,
             coverage.reviewed_intent_assignments_using_reused_intent_count,
         ),
-        (622, 86, 1_281),
+        (621, 86, 1_276),
         "the exact intent-text reuse baseline must change intentionally with reviewed documentation"
     );
     assert_eq!(
         coverage.coverage.by_intent_profile.values().sum::<usize>(),
-        1122,
+        1116,
         "every Relay and Notary path, including both roots, records its exact reviewed profile"
     );
     assert_eq!(
@@ -636,7 +636,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
                 })
                 .count(),
         ),
-        (523, 313, 0, 981),
+        (521, 313, 0, 977),
         "the exact empty-string semantic coverage prevents constrained strings from regressing to allowed"
     );
     assert_eq!(

@@ -1053,7 +1053,6 @@ struct ClaimDeclaration {
 #[serde(rename_all = "snake_case")]
 enum ClaimEvidence {
     RegistryBacked,
-    SelfAttested,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]

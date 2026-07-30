@@ -58,7 +58,7 @@ updated policy documents without touching deployment config.
   <img src="../../images/registry-architecture-flow.svg"
        alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
             metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
-            Registry Notary evaluates Relay-backed or self-attested claims and issues credentials
+            Registry Notary evaluates claims from compiler-pinned Relay consultations and issues credentials
             only from exact Relay-backed evaluation provenance.
             The separate Solmara Lab adopter project wires published runtime images into demo
             topologies." />
@@ -117,8 +117,8 @@ the source's policy.
    endpoints through configured auth.
 5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
    and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
-   outputs. Registry Notary evaluates registry-backed evidence claims from those Relay outputs, or
-   evaluates source-free and self-attested evidence claims without Relay. It renders evaluation
+   outputs. Registry Notary evaluates evidence claims from those Relay outputs. Caller identity
+   and authorization details can authorize or parameterize a request but cannot supply evidence. It renders evaluation
    results as
    `application/vnd.registry-notary.claim-result+json`
    or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes stored

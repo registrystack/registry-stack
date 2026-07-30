@@ -124,9 +124,9 @@ use transport::*;
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REQUEST_URI_BYTES: usize = 8 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
-const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
+const SUBJECT_ACCESS_CORS_METHODS: &str = "GET,POST,OPTIONS";
 const OIDC_ID_TOKEN_HEADER: &str = "x-registry-notary-oidc-id-token";
-const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
+const SUBJECT_ACCESS_CORS_DEFAULT_HEADERS: &str =
     "authorization,content-type,x-registry-notary-oidc-id-token";
 const DEPLOYMENT_PROFILE_REQUIRED_ACTION: &str =
     "set deployment.profile: local for development, or production/evidence_grade for deployment";

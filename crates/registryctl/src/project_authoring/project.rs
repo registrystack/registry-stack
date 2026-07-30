@@ -1789,27 +1789,6 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                         bail!("registry-backed claims require a Relay consultation");
                     }
                 }
-                ClaimEvidence::SelfAttested => {
-                    if claim.output.is_some() {
-                        bail!("source-free claims cannot reference Relay outputs");
-                    }
-                    if claim.value.is_none() {
-                        bail!("source-free claims require an explicit value contract");
-                    }
-                    let roots = cel_member_roots(
-                        claim
-                            .cel
-                            .as_deref()
-                            .expect("claim source shape was checked"),
-                    )?;
-                    if service
-                        .consultations
-                        .keys()
-                        .any(|name| roots.contains(name.as_str()))
-                    {
-                        bail!("source-free claims cannot depend on Relay consultations");
-                    }
-                }
             }
             if let Some(value) = &claim.value {
                 if value.value_type == OutputType::String {
@@ -1840,11 +1819,11 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                     .claims
                     .get(claim_id)
                     .ok_or_else(|| anyhow!("credential references an unknown claim"))?;
-                if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-                    bail!(
-                        "credential profile {service_id}.{credential_id} selects source-free claim {claim_id}; credential profiles require registry-backed claim evidence"
-                    );
-                }
+                inferred_claim_evidence(service, claim).with_context(|| {
+                    format!(
+                        "credential profile {service_id}.{credential_id} requires claim {claim_id} to reference a declared Relay consultation"
+                    )
+                })?;
             }
         }
     }
@@ -1864,17 +1843,15 @@ fn inferred_claim_evidence(
         .map(cel_member_roots)
         .transpose()?
         .unwrap_or_default();
-    Ok(
-        if service
-            .consultations
-            .keys()
-            .any(|name| roots.contains(name.as_str()))
-        {
-            ClaimEvidence::RegistryBacked
-        } else {
-            ClaimEvidence::SelfAttested
-        },
-    )
+    if service
+        .consultations
+        .keys()
+        .any(|name| roots.contains(name.as_str()))
+    {
+        Ok(ClaimEvidence::RegistryBacked)
+    } else {
+        bail!("every claim must derive from one declared Relay consultation")
+    }
 }
 
 fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {

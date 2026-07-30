@@ -154,7 +154,7 @@ pub enum AccessMode {
     #[default]
     MachineClient,
     SubjectBound,
-    DelegatedAttestation,
+    DelegatedSubjectAccess,
 }
 
 impl AccessMode {
@@ -164,7 +164,7 @@ impl AccessMode {
             Self::Unknown => "unknown",
             Self::MachineClient => "machine_client",
             Self::SubjectBound => "subject_bound",
-            Self::DelegatedAttestation => "delegated_attestation",
+            Self::DelegatedSubjectAccess => "delegated_subject_access",
         }
     }
 
@@ -174,7 +174,7 @@ impl AccessMode {
             "unknown" => Some(Self::Unknown),
             "machine_client" => Some(Self::MachineClient),
             "subject_bound" => Some(Self::SubjectBound),
-            "delegated_attestation" => Some(Self::DelegatedAttestation),
+            "delegated_subject_access" => Some(Self::DelegatedSubjectAccess),
             _ => None,
         }
     }
@@ -582,7 +582,7 @@ pub enum EvaluationCapability {
         allowed_claim_ids: BTreeSet<BoundedClaimId>,
         subject_binding_hash: Hashed<SubjectBinding>,
     },
-    DelegatedAttestation {
+    DelegatedSubjectAccess {
         proof_claim_id: BoundedClaimId,
         #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
         allowed_claim_ids: BTreeSet<BoundedClaimId>,
@@ -598,7 +598,7 @@ impl EvaluationCapability {
         match self {
             Self::Machine { .. } => AccessMode::MachineClient,
             Self::SubjectBound { .. } => AccessMode::SubjectBound,
-            Self::DelegatedAttestation { .. } => AccessMode::DelegatedAttestation,
+            Self::DelegatedSubjectAccess { .. } => AccessMode::DelegatedSubjectAccess,
         }
     }
 
@@ -607,7 +607,7 @@ impl EvaluationCapability {
         match self {
             Self::Machine { scopes } => scopes.contains(scope),
             Self::SubjectBound { .. } => false,
-            Self::DelegatedAttestation { .. } => false,
+            Self::DelegatedSubjectAccess { .. } => false,
         }
     }
 
@@ -627,14 +627,14 @@ impl EvaluationCapability {
                         .iter()
                         .any(|allowed| allowed.as_str() == claim_id)
             }
-            Self::DelegatedAttestation { .. } => false,
+            Self::DelegatedSubjectAccess { .. } => false,
         }
     }
 
     #[must_use]
     pub fn allows_delegated_claim(&self, claim_id: &str) -> bool {
         match self {
-            Self::DelegatedAttestation {
+            Self::DelegatedSubjectAccess {
                 proof_claim_id,
                 allowed_claim_ids,
                 ..
@@ -651,7 +651,7 @@ impl EvaluationCapability {
     #[must_use]
     pub fn required_delegated_proof_for_claim(&self, claim_id: &str) -> Option<&str> {
         match self {
-            Self::DelegatedAttestation {
+            Self::DelegatedSubjectAccess {
                 proof_claim_id,
                 allowed_claim_ids,
                 ..
@@ -669,7 +669,7 @@ impl EvaluationCapability {
     #[must_use]
     pub fn is_delegated_proof_claim(&self, claim_id: &str) -> bool {
         match self {
-            Self::DelegatedAttestation { proof_claim_id, .. } => {
+            Self::DelegatedSubjectAccess { proof_claim_id, .. } => {
                 proof_claim_id.as_str() == claim_id
             }
             Self::Machine { .. } | Self::SubjectBound { .. } => false,
@@ -1841,7 +1841,7 @@ impl EvidencePrincipal {
     pub const fn is_subject_access(&self) -> bool {
         matches!(
             self.access_mode,
-            AccessMode::SubjectBound | AccessMode::DelegatedAttestation
+            AccessMode::SubjectBound | AccessMode::DelegatedSubjectAccess
         )
     }
 

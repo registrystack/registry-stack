@@ -245,8 +245,9 @@ response while the public evaluation API migrates to `target`, `items`, and
 ```
 
 The serving Notary verifies the JWT and applies local peer policy before claim
-evaluation. Federation profiles are source-free and cannot select a
-`registry_backed` claim.
+evaluation. Federation profiles must select a `registry_backed` claim. The
+verified request `jti` becomes the Relay audit correlation id so the federated
+request, local evaluation, and consultation can be reconciled.
 
 `jti` must be a ULID string. Test fixtures should use deterministic ULIDs so
 replay tests can assert exact values.
@@ -442,7 +443,8 @@ The serving Notary must process requests in this order. The federation evaluatio
    size.
 9. Resolve the profile to its public `ruleset`.
 10. Map `ruleset` to local private claim configuration.
-11. Evaluate the admitted source-free claim.
+11. Evaluate the admitted registry-backed claim using `jti` as the Relay audit
+    correlation id.
 12. If the claim result `issued_at` is stale, prepare a signed evaluation error.
 13. Write the audit event.
 14. Return signed response JWT or signed evaluation error.

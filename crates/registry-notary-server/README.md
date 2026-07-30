@@ -10,7 +10,7 @@ consultations, renderers, and credential issuance wiring.
   consultation coalescing.
 - Hash-pinned, semantically verified Relay consultations for registry-backed
   evidence.
-- Source-free self-attested evidence and delegated evaluation.
+- Subject-bound and delegated subject access to Relay-backed evidence.
 - API-key and bearer-token auth through `registry-platform` primitives.
 - Redacted audit event emission.
 - JSON, SD-JWT VC, and credential response renderers.

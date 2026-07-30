@@ -11,7 +11,7 @@ use super::{
 #[tokio::test]
 pub(super) async fn oid4vci_metadata_is_public_but_legacy_offer_and_nonce_are_not() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -76,7 +76,7 @@ pub(super) async fn oid4vci_metadata_is_public_but_legacy_offer_and_nonce_are_no
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -167,7 +167,7 @@ pub(super) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct()
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -228,7 +228,7 @@ pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_c
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -279,7 +279,7 @@ pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s(
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_proxy() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -340,7 +340,7 @@ pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_s
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -371,7 +371,7 @@ pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -435,7 +435,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_public_and_matches_confi
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_public_404s() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -486,7 +486,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_p
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_is_disabled() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -517,7 +517,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_authenticated() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -555,7 +555,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_auth
 #[tokio::test]
 pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -615,7 +615,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
 #[tokio::test]
 pub(super) async fn public_probe_routes_remain_public_except_metrics() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -684,7 +684,7 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
 #[tokio::test]
 pub(super) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let manifest: ExposureManifest = serde_json::from_str(include_str!(
         "../../../../products/notary/security/exposure-manifest.json"
@@ -747,7 +747,7 @@ pub(super) async fn service_document_advertises_credential_status_when_enabled()
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -797,7 +797,7 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
 
     let tmp = TempDir::new().expect("tempdir");
     let enabled_audit_path = tmp.path().join("enabled-audit.jsonl");
-    let mut enabled_config = notary_only_config(
+    let mut enabled_config = registry_backed_config(
         "http://127.0.0.1:1",
         enabled_audit_path
             .to_str()
@@ -837,7 +837,7 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
     missing_admin_scope.assert_status(StatusCode::FORBIDDEN);
 
     let disabled_audit_path = tmp.path().join("disabled-audit.jsonl");
-    let mut disabled_config = notary_only_config(
+    let mut disabled_config = registry_backed_config(
         "http://127.0.0.1:1",
         disabled_audit_path
             .to_str()
@@ -891,8 +891,8 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
         "TEST_EVIDENCE_ADMIN_KEY_HASH",
         "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
     );
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK_2", TEST_HOLDER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK_2", TEST_HOLDER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -936,14 +936,14 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
     config.evidence.signing_keys.insert(
         "issuer-one-key".to_string(),
         local_jwk_signing_key(
-            "TEST_SELF_ATTESTATION_ISSUER_JWK",
+            "TEST_CREDENTIAL_ISSUER_JWK",
             "did:web:issuer-one.example#key-1",
         ),
     );
     config.evidence.signing_keys.insert(
         "issuer-two-key".to_string(),
         local_jwk_signing_key(
-            "TEST_SELF_ATTESTATION_ISSUER_JWK_2",
+            "TEST_CREDENTIAL_ISSUER_JWK_2",
             "did:web:issuer-two.example#key-1",
         ),
     );
@@ -1028,7 +1028,7 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
 #[tokio::test]
 pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed_body() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1057,7 +1057,7 @@ pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1302,7 +1302,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1403,7 +1403,7 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
 #[tokio::test]
 pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let userinfo_hits = Arc::new(AtomicUsize::new(0));

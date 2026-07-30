@@ -39,8 +39,8 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1817,
-    "reference_count": 505,
+    "path_count": 1811,
+    "reference_count": 503,
     "by_schema": {
       "project": 220,
       "environment": 206,
@@ -48,29 +48,29 @@
       "fixture": 63,
       "entity": 35,
       "relay": 584,
-      "notary": 538
+      "notary": 532
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1446,
+      "property": 1441,
       "map_key": 26,
-      "map_value": 49,
+      "map_value": 48,
       "array_item": 178,
       "branch": 111
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1175,
+      "internal": 1170,
       "sensitive": 403,
       "secret_reference": 41,
       "redacted_fixture": 51,
-      "structural": 131
+      "structural": 130
     },
     "by_intent_source": {
       "schema_description": 524,
       "reviewed_override": 262,
       "structural_taxonomy": 131,
-      "reviewed_profile": 900
+      "reviewed_profile": 894
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -90,9 +90,8 @@
       "notary_evidence_claims_evidence_mode_consultations_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
-      "notary_evidence_claims_rule_bindings_claims_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 97,
+      "notary_evidence_internal": 92,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 40,
       "notary_evidence_signing_keys_open_map": 1,
@@ -149,10 +148,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1817,
-  "reviewed_intent_assignment_covered_count": 1817,
-  "distinct_reviewed_intent_count": 622,
+  "reviewed_intent_assignment_required_count": 1811,
+  "reviewed_intent_assignment_covered_count": 1811,
+  "distinct_reviewed_intent_count": 621,
   "distinct_reviewed_intents_reused_count": 86,
-  "reviewed_intent_assignments_using_reused_intent_count": 1281,
+  "reviewed_intent_assignments_using_reused_intent_count": 1276,
   "missing_intent": []
 }

@@ -12,7 +12,7 @@
 //! The counter is a fixed window keyed by the resolved client address
 //! string (the same trust-proxy-aware resolution the audit middleware
 //! uses, via [`crate::net::resolve_remote_addr`]), mirroring the
-//! structure of `registry-notary-server`'s self-attestation rate limiter.
+//! structure of `registry-notary-server`'s subject-access rate limiter.
 //! The map is bounded so that a flood of spoofed addresses cannot grow it
 //! without bound.
 

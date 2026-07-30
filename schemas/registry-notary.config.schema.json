@@ -5,7 +5,7 @@
         "unknown",
         "machine_client",
         "subject_bound",
-        "delegated_attestation"
+        "delegated_subject_access"
       ],
       "type": "string"
     },
@@ -109,43 +109,6 @@
       },
       "type": "object"
     },
-    "CelBindingsConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "claims": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ClaimBindingConfig"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "vars": {
-          "additionalProperties": true,
-          "default": {},
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "ClaimBindingConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "binding_type": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "claim": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "claim"
-      ],
-      "type": "object"
-    },
     "ClaimDefinition": {
       "additionalProperties": false,
       "properties": {
@@ -186,7 +149,7 @@
         },
         "evidence_mode": {
           "$ref": "#/$defs/ClaimEvidenceMode",
-          "description": "Sealed provenance choice. This field is intentionally required so an\nomitted connection can never turn a registry-backed claim into a\nsource-free claim."
+          "description": "Sealed registry provenance configuration. This field is intentionally\nrequired so every claim names its compiler-pinned Relay consultation."
         },
         "formats": {
           "default": [
@@ -2634,13 +2597,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "bindings": {
-              "$ref": "#/$defs/CelBindingsConfig",
-              "default": {
-                "claims": {},
-                "vars": {}
-              }
-            },
             "expression": {
               "type": "string"
             },
@@ -2677,19 +2633,6 @@
           "required": [
             "type",
             "consultations"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "self_attested",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
           ],
           "type": "object"
         }

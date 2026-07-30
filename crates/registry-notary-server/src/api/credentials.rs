@@ -169,7 +169,7 @@ pub(super) async fn issue_credential(
     if evaluation
         .subject_access
         .as_ref()
-        .is_some_and(|metadata| metadata.access_mode == AccessMode::DelegatedAttestation)
+        .is_some_and(|metadata| metadata.access_mode == AccessMode::DelegatedSubjectAccess)
     {
         return credential_denial_response_for_evaluation(
             &state,
@@ -338,7 +338,7 @@ pub(super) async fn issue_credential(
                     .bucket()
                     .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok());
             }
-            override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            override_subject_access_audit_access_mode(&mut response, principal.access_mode());
             attach_zero_relay_no_forward_audit(&mut response);
             return response;
         }
@@ -545,7 +545,7 @@ pub(super) async fn issue_credential(
         ) {
             return evidence_error_response(error);
         }
-        override_attestation_audit_access_mode(&mut response, metadata.access_mode);
+        override_subject_access_audit_access_mode(&mut response, metadata.access_mode);
     } else {
         attach_evidence_audit_with_purposes(
             &mut response,

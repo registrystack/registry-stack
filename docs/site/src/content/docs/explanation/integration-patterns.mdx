@@ -43,9 +43,9 @@ Clinical health systems can expose bounded outputs through a reviewed FHIR integ
 public-health program systems such as DHIS2 can use Relay's product-neutral, reviewed Rhai script
 capability, and social protection, agriculture, education, and civil registration systems can keep
 their own authoritative stores.
-A Registry Stack project can deploy Relay only, Notary only, or both products.
-Relay-only projects expose governed source capabilities. Notary-only projects evaluate source-free
-or self-attested claims, but those claims are not issuable. In a combined project, Relay keeps source credentials and returns only
+A Registry Stack project can deploy Relay only, Notary without configured
+claims, or both products. Relay-only projects expose governed source
+capabilities. In a combined project, Relay keeps source credentials and returns only
 reviewed typed consultation outputs for Notary to turn into configured claims. Consuming systems
 such as a social-protection management information system do not become raw-record readers.
 
@@ -65,7 +65,7 @@ Notary is running.
        alt="Country evidence mesh: civil registration, clinical health over FHIR API,
             public health through DHIS2 via a reviewed Rhai script, social protection, agriculture,
             and education systems keep their source data. Registry Stack projects can deploy Relay
-            only, evaluation-only source-free Notary, or both. Relay returns governed typed outputs,
+            only, an empty Notary control plane, or both. Relay returns governed typed outputs,
             combined projects turn consultation outputs into minimized claims and credentials, and the social protection MIS
             owns the eligibility decision and reads the registry it owns directly." />
 </figure>

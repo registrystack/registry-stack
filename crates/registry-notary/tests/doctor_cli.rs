@@ -248,6 +248,16 @@ fn write_config_with_claim_formats(tmp: &TempDir, claim_id: &str, formats: &[&st
     let mut config: registry_notary_core::StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&std::fs::read_to_string(&path).expect("config reads"))
             .expect("config parses");
+    config.evidence.relay = Some(
+        serde_norway::from_str(
+            r#"
+base_url: https://relay.internal.example
+workload_client_id: registry-notary
+token_file: /run/secrets/registry-notary-relay.jwt
+"#,
+        )
+        .expect("Relay config parses"),
+    );
     let mut claim: registry_notary_core::ClaimDefinition = serde_norway::from_str(&format!(
         r#"
 id: {claim_id}
@@ -255,10 +265,17 @@ title: Claim format validation
 version: "1.0"
 subject_type: person
 evidence_mode:
-  type: self_attested
+  type: registry_backed
+  consultations:
+    test_source:
+      profile:
+        id: example.test-source.exact
+        contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      inputs:
+        subject_id: target.id
 rule:
-  type: cel
-  expression: "true"
+  type: consultation_matched
+  consultation: test_source
 "#,
     ))
     .expect("claim YAML parses");

@@ -237,7 +237,7 @@ impl ConfigBuilder {
     }
 
     fn relay_section(&self) -> String {
-        if !self.credential_signer {
+        if !self.credential_signer && !self.federation_signer {
             return String::new();
         }
         let token_path = Path::new(&self.audit_path)
@@ -256,9 +256,11 @@ impl ConfigBuilder {
         )
     }
 
-    fn claim_section(&self) -> &'static str {
-        if self.credential_signer {
-            return concat!(
+    fn claim_section(&self) -> String {
+        if !self.credential_signer && !self.federation_signer {
+            return String::new();
+        }
+        let mut claim = concat!(
                 "    - id: farmed-land-size\n",
                 "      title: Farmed land size\n",
                 "      version: 2026-05\n",
@@ -286,28 +288,15 @@ impl ConfigBuilder {
                 "        allowed: [value, redacted]\n",
                 "      formats:\n",
                 "        - application/vnd.registry-notary.claim-result+json\n",
+            )
+        .to_string();
+        if self.credential_signer {
+            claim.push_str(concat!(
                 "      credential_profiles:\n",
                 "        - gates_sd_jwt\n",
-            );
+            ));
         }
-        concat!(
-            "    - id: farmed-land-size\n",
-            "      title: Farmed land size\n",
-            "      version: 2026-05\n",
-            "      subject_type: person\n",
-            "      evidence_mode:\n",
-            "        type: self_attested\n",
-            "      value:\n",
-            "        type: boolean\n",
-            "      rule:\n",
-            "        type: cel\n",
-            "        expression: \"true\"\n",
-            "      disclosure:\n",
-            "        default: value\n",
-            "        allowed: [value, redacted]\n",
-            "      formats:\n",
-            "        - application/vnd.registry-notary.claim-result+json\n",
-        )
+        claim
     }
 
     fn federation_section(&self) -> &'static str {
@@ -439,7 +428,7 @@ async fn fetch_posture_for_tier(config: StandaloneRegistryNotaryConfig, tier: &s
         .expect("runtime compiles for posture")
         .activate()
         .await
-        .expect("source-free runtime activates");
+        .expect("runtime without claims activates");
     let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
@@ -460,7 +449,7 @@ async fn fetch_default_and_restricted_posture(
         .expect("runtime compiles for posture")
         .activate()
         .await
-        .expect("source-free runtime activates");
+        .expect("runtime without claims activates");
     let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let default = server
@@ -495,7 +484,7 @@ fn registry_backed_config(tmp: &tempfile::TempDir) -> StandaloneRegistryNotaryCo
         allow_insecure_localhost: true,
         max_in_flight: 8,
     });
-    config.evidence.claims[0] = serde_norway::from_str(
+    config.evidence.claims = vec![serde_norway::from_str(
         r#"
 id: farmed-land-size
 title: Farmed land size
@@ -528,7 +517,7 @@ formats:
   - application/vnd.registry-notary.claim-result+json
 "#,
     )
-    .expect("Registry-backed claim parses");
+    .expect("Registry-backed claim parses")];
     config
 }
 
@@ -547,7 +536,7 @@ fn expect_compile_rejected(
 }
 
 #[tokio::test]
-async fn source_free_standalone_router_builds_without_relay_activation() {
+async fn standalone_router_builds_without_claims_or_relay_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: local\n")
@@ -555,7 +544,7 @@ async fn source_free_standalone_router_builds_without_relay_activation() {
 
     let _router = standalone_router(config)
         .await
-        .expect("source-free router verifies its audit chain and builds");
+        .expect("router without claims verifies its audit chain and builds");
 }
 
 #[tokio::test]
@@ -859,7 +848,9 @@ async fn production_federation_signer_is_reported_by_surface() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).await.expect("production federation signer config starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("production federation signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -1084,7 +1075,8 @@ async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
             .activate()
             .await
             .expect("signed evidence-grade runtime activates");
-    let routers = notary_routers_from_runtime(runtime).expect("source-free runtime is serve-ready");
+    let routers =
+        notary_routers_from_runtime(runtime).expect("runtime without claims is serve-ready");
     let server = TestServer::builder().http_transport().build(routers.public);
     let admin_server = TestServer::builder().http_transport().build(routers.admin);
 

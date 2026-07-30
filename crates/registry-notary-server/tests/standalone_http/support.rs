@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Registry Notary tests that do not link Registry Relay.
+//! Standalone Registry Notary HTTP test support.
 
 pub(super) use axum::body::Bytes;
 pub(super) use axum::extract::{Request, State};
@@ -13,16 +13,16 @@ pub(super) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 pub(super) use registry_notary_core::{
-    ConfigTrustConfig, CredentialProfileConfig, EvidenceCredentialConfig, EvidenceOidcAuthConfig,
-    Oid4vciConfig, RegistryNotaryAdminListenerMode, SigningKeyConfig, SigningKeyProviderConfig,
-    SigningKeyStatus, StandaloneRegistryNotaryConfig, SubjectAccessClaimSource,
-    SD_JWT_VC_SIGNING_ALG,
+    ClaimEvidenceMode, ConfigTrustConfig, CredentialProfileConfig, EvidenceCredentialConfig,
+    EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode, RelayConsultationInput,
+    SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    SubjectAccessClaimSource, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::{Oid4vciCredentialClaimConfig, RuleConfig};
 pub(super) use registry_notary_server::{
     compile_notary_runtime, notary_routers_from_runtime, notary_shared_router_from_runtime,
-    openapi_document, StandaloneServerError,
+    openapi_document, NotaryRuntimeSnapshot, StandaloneServerError,
 };
 pub(super) use registry_platform_audit::{
     verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
@@ -167,6 +167,24 @@ async fn test_relay_execute(State(state): State<TestRelayState>, request: Reques
         .expect("Notary sends a canonical evaluation id")
         .to_string();
     let acquired_at = registry_notary_server::format_time(OffsetDateTime::now_utc());
+    let outputs = state.contract["spec"]["output"]
+        .as_object()
+        .expect("test Relay output contract is an object")
+        .iter()
+        .map(|(name, contract)| {
+            let value = match contract["type"].as_str() {
+                Some("boolean") => json!(true),
+                Some("date") => json!("2016-01-15"),
+                Some("integer") => json!(1),
+                Some("string") if name == "given_name" => json!("Miguel"),
+                Some("string") => json!("ACTIVE"),
+                Some("object") => json!({}),
+                Some("array") => json!([]),
+                _ => Value::Null,
+            };
+            (name.clone(), value)
+        })
+        .collect::<serde_json::Map<_, _>>();
     Json(json!({
         "schema": "registry.relay.consultation-result.v1",
         "consultation_id": Ulid::new().to_string(),
@@ -176,11 +194,7 @@ async fn test_relay_execute(State(state): State<TestRelayState>, request: Reques
             "contract_hash": state.contract_hash,
         },
         "outcome": "match",
-        "outputs": {
-            "active": true,
-            "birth_date": "2016-01-15",
-            "given_name": "Miguel",
-        },
+        "outputs": outputs,
         "provenance": {
             "acquired_at": acquired_at,
             "source_observed_at": null,
@@ -247,20 +261,10 @@ fn test_relay_token() -> String {
 }
 
 pub(super) async fn standalone_router(
-    mut config: StandaloneRegistryNotaryConfig,
+    config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
     let admin_listener_mode = config.server.admin_listener.mode;
-    let relay_contract = if config.subject_access.delegation.enabled {
-        representative_test_relay_contract()
-    } else {
-        test_relay_contract()
-    };
-    if let Some(relay) = config.evidence.relay.as_mut() {
-        std::fs::write(&relay.token_file, test_relay_token())
-            .expect("test Relay workload token writes");
-        relay.base_url = start_test_relay(relay_contract).await;
-    }
-    let runtime = compile_notary_runtime(config)?.activate().await?;
+    let runtime = activate_test_runtime(config).await?;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -270,6 +274,83 @@ pub(super) async fn standalone_router(
         }
     }
 }
+
+pub(super) async fn activate_test_runtime(
+    mut config: StandaloneRegistryNotaryConfig,
+) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
+    let relay_contract = if config.subject_access.delegation.enabled {
+        representative_test_relay_contract()
+    } else {
+        test_relay_contract()
+    };
+    let mut relay_contract = relay_contract_for_config(&config, relay_contract);
+    let contract_hash = relay_contract_hash(&relay_contract);
+    for claim in &mut config.evidence.claims {
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+            continue;
+        };
+        for consultation in consultations.values_mut() {
+            if consultation.profile.id == TEST_RELAY_PROFILE_ID {
+                consultation
+                    .profile
+                    .contract_hash
+                    .clone_from(&contract_hash);
+            }
+        }
+    }
+    if let Some(relay) = config.evidence.relay.as_mut() {
+        std::fs::write(&relay.token_file, test_relay_token())
+            .expect("test Relay workload token writes");
+        relay.base_url = start_test_relay(std::mem::take(&mut relay_contract)).await;
+    }
+    compile_notary_runtime(config)?.activate().await
+}
+
+fn relay_contract_for_config(
+    config: &StandaloneRegistryNotaryConfig,
+    mut contract: Value,
+) -> Value {
+    let Some((purpose, inputs, outputs)) = config.evidence.claims.iter().find_map(|claim| {
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+            return None;
+        };
+        consultations
+            .values()
+            .find(|consultation| consultation.profile.id == TEST_RELAY_PROFILE_ID)
+            .and_then(|consultation| {
+                Some((
+                    claim.purpose.clone()?,
+                    consultation.inputs.keys().cloned().collect::<Vec<_>>(),
+                    consultation.outputs.clone(),
+                ))
+            })
+    }) else {
+        return contract;
+    };
+
+    contract["spec"]["authorization"]["purposes"] = json!([purpose]);
+    contract["spec"]["inputs"] = Value::Object(
+        inputs
+            .into_iter()
+            .map(|name| {
+                (
+                    name,
+                    json!({
+                        "role": "selector",
+                        "type": "string",
+                        "maxLength": 256,
+                        "x-registry-max-bytes": 256,
+                        "x-registry-canonicalization": "identity"
+                    }),
+                )
+            })
+            .collect(),
+    );
+    contract["spec"]["output"] =
+        serde_json::to_value(outputs).expect("test Relay outputs serialize");
+    contract
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct ExposureManifest {
     pub(super) endpoints: Vec<ExposureEndpoint>,
@@ -532,11 +613,12 @@ pub(super) fn sample_manifest_path(path: &str) -> String {
         .replace("{*vct_path}", "civil-status")
 }
 
-pub(super) fn notary_only_config(
+pub(super) fn registry_backed_config(
     _base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
+    let contract_hash = test_relay_contract_hash();
     let raw = format!(
         r#"
 deployment:
@@ -560,6 +642,11 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  relay:
+    base_url: http://127.0.0.1:1
+    workload_client_id: registry-notary
+    token_file: "{audit_path}.relay-token"
+    allow_insecure_localhost: true
   allowed_purposes:
     - https://purpose.example.test/eligibility
   claims:
@@ -568,15 +655,26 @@ evidence:
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: {TEST_RELAY_PROFILE_ID}
+              contract_hash: {contract_hash}
+            inputs:
+              subject_id: target.id
+            outputs:
+              active: {{ type: boolean, nullable: true }}
       value:
         type: boolean
+        nullable: true
       purpose: https://purpose.example.test/eligibility
       required_scopes:
         - farmer_registry:evidence_verification
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_output
+        consultation: person_status
+        output: active
       disclosure:
         default: predicate
         allowed: [predicate, redacted]
@@ -584,5 +682,5 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("Notary-only config deserializes")
+    serde_norway::from_str(&raw).expect("registry-backed Notary config deserializes")
 }

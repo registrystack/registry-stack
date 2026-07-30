@@ -157,12 +157,7 @@ impl StandaloneRegistryNotaryConfig {
         self.evidence.validate_batch_limits()?;
         if let Some(relay) = &self.evidence.relay {
             relay.validate()?;
-            if !self
-                .evidence
-                .claims
-                .iter()
-                .any(|claim| claim.evidence_mode.is_registry_backed())
-            {
+            if self.evidence.claims.is_empty() {
                 return Err(EvidenceConfigError::InvalidRelayConfig {
                     reason: "evidence.relay requires at least one registry_backed claim"
                         .to_string(),
@@ -358,10 +353,6 @@ impl StandaloneRegistryNotaryConfig {
                 )?;
             }
         }
-        validate_self_attested_dependency_modes(
-            &self.evidence.claims,
-            &self.subject_access.delegation,
-        )?;
         validate_relay_activation_shape(&self.evidence.claims)?;
         self.subject_access.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
@@ -702,9 +693,7 @@ impl StandaloneRegistryNotaryConfig {
 ///
 /// A credential profile is a signing capability. Keeping this validation at
 /// the shared root prevents direct issuance, subject-access issuance, and
-/// OID4VCI from interpreting a one-sided or source-free binding differently.
-/// Source-free claims remain valid evaluation inputs when neither side grants
-/// them credential capability.
+/// OID4VCI from interpreting a one-sided binding differently.
 fn validate_credential_claim_bindings(
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
@@ -719,13 +708,6 @@ fn validate_credential_claim_bindings(
                         "credential profile '{profile_id}' allowed_claims references unknown claim '{claim_id}'"
                     ),
                 })?;
-            if !claim.evidence_mode.is_registry_backed() {
-                return Err(EvidenceConfigError::InvalidCredentialClaimBinding {
-                    reason: format!(
-                        "credential profile '{profile_id}' allowed_claims references source-free claim '{claim_id}'; credential claims must be registry_backed"
-                    ),
-                });
-            }
             if !claim
                 .credential_profiles
                 .iter()
@@ -756,13 +738,6 @@ fn validate_credential_claim_bindings(
                             "credential profile '{profile_id}' claim '{claim_id}' dependency closure references unknown claim '{dependency_id}'"
                         ),
                     })?;
-                if !dependency.evidence_mode.is_registry_backed() {
-                    return Err(EvidenceConfigError::InvalidCredentialClaimBinding {
-                        reason: format!(
-                            "credential profile '{profile_id}' claim '{claim_id}' dependency closure contains source-free claim '{dependency_id}'; credential roots and all dependencies must be registry_backed"
-                        ),
-                    });
-                }
                 if dependency.purpose != claim.purpose {
                     return Err(EvidenceConfigError::InvalidCredentialClaimBinding {
                         reason: format!(
@@ -777,14 +752,6 @@ fn validate_credential_claim_bindings(
 
     for claim in &evidence.claims {
         for profile_id in &claim.credential_profiles {
-            if !claim.evidence_mode.is_registry_backed() {
-                return Err(EvidenceConfigError::InvalidCredentialClaimBinding {
-                    reason: format!(
-                        "source-free claim '{}' references credential profile '{profile_id}'; source-free claims may be evaluated but cannot have credential capability",
-                        claim.id
-                    ),
-                });
-            }
             let profile = evidence
                 .credential_profiles
                 .get(profile_id)

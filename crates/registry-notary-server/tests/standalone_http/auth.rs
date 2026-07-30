@@ -39,7 +39,7 @@ async fn assert_ambiguous_primary_headers_are_candidate_neutral(
     );
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -118,7 +118,7 @@ pub(super) async fn additive_api_key_and_oidc_authenticate_on_the_same_router() 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -226,7 +226,7 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = registry_backed_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -296,7 +296,7 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
 #[tokio::test]
 pub(super) async fn jwks_is_public_and_contains_no_private_members() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -327,7 +327,7 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -368,7 +368,7 @@ pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode
     let evaluate = server
         .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
-        .add_header("x-request-id", "req-self-attest-1")
+        .add_header("x-request-id", "req-subject-access-1")
         .json(&json!({
             "claims": ["person-is-alive"],
             "disclosure": "value",
@@ -378,7 +378,7 @@ pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode
     evaluate.assert_status_ok();
     let evaluate_body: Value = evaluate.json();
     assert_eq!(evaluate_body["results"][0]["value"], json!(true));
-    // Self-attestation flows produce results under the canonical evaluation
+    // Subject-access flows produce results under the canonical evaluation
     // policy, so generated_by carries the policy triple.
     let generated_by = &evaluate_body["results"][0]["provenance"]["generated_by"];
     assert_eq!(generated_by["policy_id"], json!("subject-access"));
@@ -397,7 +397,7 @@ pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode
     let render = server
         .post(&format!("/v1/evaluations/{evaluation_id}/render"))
         .add_header("authorization", authorization)
-        .add_header("x-request-id", "req-self-attest-1")
+        .add_header("x-request-id", "req-subject-access-1")
         .json(&json!({
             "disclosure": "value",
             "format": "application/vnd.registry-notary.claim-result+json"

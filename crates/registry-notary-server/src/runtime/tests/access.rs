@@ -2,7 +2,7 @@
 
 #[test]
 fn claim_scopes_are_enforced_by_notary() {
-    let mut claim = test_claim("selected", Vec::new(), false);
+    let mut claim = test_claim("selected", Vec::new());
     claim.required_scopes = vec!["registry:consult:dhis2".to_string()];
     let denied = machine_principal();
 
@@ -21,7 +21,7 @@ fn claim_scopes_are_enforced_by_notary() {
 
 #[tokio::test]
 async fn batch_subject_purpose_conflict_rejects_batch_default() {
-    let mut claim = test_claim("selected", Vec::new(), true);
+    let mut claim = test_claim("selected", Vec::new());
     claim.operations.batch_evaluate.enabled = true;
     claim.operations.batch_evaluate.max_subjects = 2;
     let mut evidence_config = (*test_evidence(vec![claim])).clone();
@@ -57,7 +57,10 @@ async fn batch_subject_purpose_conflict_rejects_batch_default() {
             &store,
             &machine_principal(),
             request,
-            BatchEvaluateOptions::default(),
+            BatchEvaluateOptions {
+                idempotency_key: Some("purpose-conflict"),
+                ..BatchEvaluateOptions::default()
+            },
         )
         .await
         .expect_err("batch item purpose must not conflict with batch default");

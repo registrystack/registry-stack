@@ -57,7 +57,7 @@
       "label": "Registry Notary OID4VCI routes",
       "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/api.rs"
     },
-    "consumer_note": "Registry Notary advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Credential configurations accept non-delegated registry-backed claims only, and issuance verifies the stored transaction plus exact dependency-closure Relay execution provenance before signing. Transaction code is required by default. An explicit no-PIN profile has a maximum 300-second bearer-offer window. There is no wallet-facing authorization-code grant, public nonce route, response next nonce, source-free issuance, ES256 holder proof, PAR, DPoP, wallet attestation, EUDI, or HAIP claim. External wallet and verifier evidence is candidate-only until recorded against a frozen artifact."
+    "consumer_note": "Registry Notary advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Credential configurations accept non-delegated registry-backed claims only, and issuance verifies the stored transaction plus exact dependency-closure Relay execution provenance before signing. Transaction code is required by default. An explicit no-PIN profile has a maximum 300-second bearer-offer window. There is no wallet-facing authorization-code grant, public nonce route, response next nonce, issuance from caller-provided evidence, ES256 holder proof, PAR, DPoP, wallet attestation, EUDI, or HAIP claim. External wallet and verifier evidence is candidate-only until recorded against a frozen artifact."
   },
   {
     "id": "registry-notary.federated-evaluation",

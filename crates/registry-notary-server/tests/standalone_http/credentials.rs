@@ -10,7 +10,7 @@ use super::{
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_registry_dependency_journey_evaluates_and_issues_over_http() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -101,7 +101,7 @@ pub(super) async fn direct_registry_dependency_journey_evaluates_and_issues_over
 #[tokio::test]
 pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -344,7 +344,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -461,7 +461,7 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_denial_code() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -597,7 +597,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -847,7 +847,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -999,7 +999,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1132,7 +1132,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1253,7 +1253,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1437,7 +1437,7 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
 #[tokio::test]
 pub(super) async fn subject_access_subject_mismatch_audit_names_token_claim_not_value() {
     set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_CREDENTIAL_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");

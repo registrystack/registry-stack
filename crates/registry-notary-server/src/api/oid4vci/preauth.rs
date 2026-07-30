@@ -1089,7 +1089,7 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
                 relationship,
                 target,
             )?);
-        principal.access_mode = AccessMode::DelegatedAttestation;
+        principal.access_mode = AccessMode::DelegatedSubjectAccess;
         let mut request = EvaluateRequest {
             requester: None,
             target: Some(EvidenceEntity::from_subject_request(
@@ -1112,7 +1112,7 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: None,
         };
-        derive_delegated_attestation_request_context(
+        derive_delegated_subject_access_request_context(
             &state.subject_access,
             evidence,
             &state.subject_access_rate_keys,
@@ -1122,7 +1122,7 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
         request
     } else {
         if representative_target.is_some()
-            || requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation
+            || requested_subject_access_mode(&principal) == AccessMode::DelegatedSubjectAccess
         {
             return Err(EvidenceError::SubjectAccessInvalidToken);
         }
@@ -1617,7 +1617,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 path,
                 "GET",
                 &stored.credential_configuration_id,
-                AccessMode::DelegatedAttestation,
+                AccessMode::DelegatedSubjectAccess,
             )
             .await;
         };
@@ -1645,7 +1645,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 path,
                 "GET",
                 &stored.credential_configuration_id,
-                AccessMode::DelegatedAttestation,
+                AccessMode::DelegatedSubjectAccess,
             )
             .await;
         }
@@ -1659,7 +1659,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                     &stored.credential_configuration_id,
                 )
                 .ok(),
-                access_mode: Some(AccessMode::DelegatedAttestation),
+                access_mode: Some(AccessMode::DelegatedSubjectAccess),
                 ..PreAuthAuditFields::default()
             },
         );
@@ -1717,7 +1717,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             None,
             SubjectAccessDenialCode::RateLimited,
             Oid4vciWireError::RateLimited,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     }
@@ -1760,7 +1760,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
                 None,
                 SubjectAccessDenialCode::OperationDenied,
                 Oid4vciWireError::ServerError,
-                AccessMode::DelegatedAttestation,
+                AccessMode::DelegatedSubjectAccess,
             )
             .await;
         }
@@ -1773,7 +1773,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             Some(&stored.credential_configuration_id),
             SubjectAccessDenialCode::InvalidToken,
             Oid4vciWireError::InvalidRequest,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     };
@@ -1793,7 +1793,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             Some(&stored.credential_configuration_id),
             SubjectAccessDenialCode::InvalidToken,
             Oid4vciWireError::InvalidRequest,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     }
@@ -1810,7 +1810,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             Some(&stored.credential_configuration_id),
             SubjectAccessDenialCode::InvalidToken,
             Oid4vciWireError::InvalidRequest,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     };
@@ -1822,7 +1822,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             Some(&stored.credential_configuration_id),
             SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
             Oid4vciWireError::AccessDenied,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     }
@@ -1837,7 +1837,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
                 Some(&stored.credential_configuration_id),
                 SubjectAccessDenialCode::InvalidToken,
                 Oid4vciWireError::InvalidToken,
-                AccessMode::DelegatedAttestation,
+                AccessMode::DelegatedSubjectAccess,
             )
             .await;
         }
@@ -1853,7 +1853,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
                 path,
                 "POST",
                 &stored.credential_configuration_id,
-                AccessMode::DelegatedAttestation,
+                AccessMode::DelegatedSubjectAccess,
             )
             .await;
         }
@@ -1871,7 +1871,7 @@ pub(in crate::api) async fn oid4vci_offer_representative(
             Some(&stored.credential_configuration_id),
             SubjectAccessDenialCode::RateLimited,
             Oid4vciWireError::RateLimited,
-            AccessMode::DelegatedAttestation,
+            AccessMode::DelegatedSubjectAccess,
         )
         .await;
     }
@@ -1897,7 +1897,7 @@ async fn complete_oid4vci_offer(
     representative_target: Option<String>,
 ) -> Response {
     let access_mode = if representative_target.is_some() {
-        AccessMode::DelegatedAttestation
+        AccessMode::DelegatedSubjectAccess
     } else {
         AccessMode::SubjectBound
     };
@@ -2165,7 +2165,7 @@ fn wallet_token_subject(
     if metadata.access_mode != access_mode {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
-    if access_mode == AccessMode::DelegatedAttestation {
+    if access_mode == AccessMode::DelegatedSubjectAccess {
         if !metadata.principal_hash.as_str().starts_with("hmac-sha256:")
             || !metadata
                 .subject_binding_hash
@@ -2519,7 +2519,7 @@ pub(in crate::api) async fn oid4vci_token(
                             .delegation
                             .relationship(&representative.relationship)
                             .ok_or(EvidenceError::EvaluationBindingMismatch)?;
-                        if metadata.access_mode != AccessMode::DelegatedAttestation
+                        if metadata.access_mode != AccessMode::DelegatedSubjectAccess
                             || metadata
                                 .relationship_type
                                 .as_ref()
@@ -2787,7 +2787,7 @@ pub(in crate::api) const fn issuance_authority_access_mode(
 ) -> AccessMode {
     match authority {
         IssuanceAuthority::SubjectAccess if representative_issuance => {
-            AccessMode::DelegatedAttestation
+            AccessMode::DelegatedSubjectAccess
         }
         IssuanceAuthority::SubjectAccess => AccessMode::SubjectBound,
         IssuanceAuthority::RegistryClient { .. } => AccessMode::MachineClient,
@@ -3177,7 +3177,7 @@ async fn preauth_denied_after_invalid_client_attempt(
         credential_configuration_id,
         SubjectAccessDenialCode::InvalidToken,
         wire_error,
-        AccessMode::DelegatedAttestation,
+        AccessMode::DelegatedSubjectAccess,
     )
     .await
 }

@@ -380,7 +380,7 @@ pub(super) fn credential_denial_response_for_evaluation(
         ) {
             return evidence_error_response(error);
         }
-        override_attestation_audit_access_mode(&mut response, evaluation.access_mode());
+        override_subject_access_audit_access_mode(&mut response, evaluation.access_mode());
     } else {
         attach_evidence_audit_with_purposes(
             &mut response,
@@ -625,7 +625,7 @@ pub(super) fn attach_subject_access_success_audit(
     });
 }
 
-pub(super) fn override_attestation_audit_access_mode(
+pub(super) fn override_subject_access_audit_access_mode(
     response: &mut Response,
     access_mode: AccessMode,
 ) {

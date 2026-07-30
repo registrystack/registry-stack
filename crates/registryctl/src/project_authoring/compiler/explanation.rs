@@ -624,7 +624,6 @@ fn add_project_topology_fields(
             // does not assert live Relay activation or interoperability.
             let evidence = match inferred_claim_evidence(service, claim)? {
                 ClaimEvidence::RegistryBacked => "registry_backed",
-                ClaimEvidence::SelfAttested => "self_attested",
             };
             add_derived_scalar(
                 builder,
@@ -1847,26 +1846,6 @@ mod explanation_tests {
         )
         .expect("second report serializes");
         assert_eq!(serialized_once, serialized_twice);
-    }
-
-    #[test]
-    fn source_free_cel_explanation_remains_self_attested() {
-        let loaded = load_registry_project(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/project-authoring/notary-only-evaluation"),
-            Some("local"),
-        )
-        .expect("source-free Notary project loads");
-        let report =
-            generated_explanation(&loaded, "local").expect("source-free explanation generates");
-
-        assert_eq!(
-            project_public_text(
-                &report,
-                "/services/applicant-evaluation/claims/application-complete/evidence"
-            ),
-            "self_attested"
-        );
     }
 
     #[test]

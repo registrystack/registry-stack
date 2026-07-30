@@ -105,13 +105,13 @@ fn apply_subject_access_wallet_cors_headers(
     headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static(SELF_ATTESTATION_CORS_METHODS),
+        HeaderValue::from_static(SUBJECT_ACCESS_CORS_METHODS),
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         requested_headers
             .cloned()
-            .unwrap_or_else(|| HeaderValue::from_static(SELF_ATTESTATION_CORS_DEFAULT_HEADERS)),
+            .unwrap_or_else(|| HeaderValue::from_static(SUBJECT_ACCESS_CORS_DEFAULT_HEADERS)),
     );
     if allow_credentials {
         headers.insert(

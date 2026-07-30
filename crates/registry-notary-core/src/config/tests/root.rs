@@ -525,11 +525,27 @@ id: {id}
 title: Test Claim
 version: "1.0"
 subject_type: person
+purpose: test-purpose
+required_scopes:
+  - registry:consult:test-source
 evidence_mode:
-  type: self_attested
+  type: registry_backed
+  consultations:
+    test_source:
+      profile:
+        id: example.test-source.exact
+        contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      inputs:
+        subject_id: target.id
+      outputs:
+        registration_found:
+          type: boolean
+          nullable: false
 rule:
-  type: cel
-  expression: "true"
+  type: consultation_matched
+  consultation: test_source
+value:
+  type: boolean
 "#
     ))
     .expect("minimal claim is valid YAML")
@@ -554,7 +570,6 @@ pub(super) fn string_claim_value_max_bytes_accepts_the_closed_platform_range() {
         claim.value.max_bytes = Some(max_bytes);
         claim.rule = RuleConfig::Cel {
             expression: r#""value""#.to_string(),
-            bindings: CelBindingsConfig::default(),
         };
         config.evidence.claims.push(claim);
         config
@@ -956,11 +971,6 @@ token_file: /run/secrets/registry-notary-relay.jwt
     dependent.title = "Dependent date of birth".to_string();
     dependent.purpose = Some("dependent_attestation".to_string());
     dependent.depends_on = vec!["guardian-link".to_string()];
-    dependent.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    dependent.rule = RuleConfig::Cel {
-        expression: "true".to_string(),
-        bindings: Default::default(),
-    };
     dependent.credential_profiles.clear();
 
     config.evidence.claims.push(proof);

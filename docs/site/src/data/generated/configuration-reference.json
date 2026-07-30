@@ -38,8 +38,8 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1817,
-    "reference_count": 505,
+    "path_count": 1811,
+    "reference_count": 503,
     "by_schema": {
       "project": 220,
       "environment": 206,
@@ -47,29 +47,29 @@
       "fixture": 63,
       "entity": 35,
       "relay": 584,
-      "notary": 538
+      "notary": 532
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1446,
+      "property": 1441,
       "map_key": 26,
-      "map_value": 49,
+      "map_value": 48,
       "array_item": 178,
       "branch": 111
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1175,
+      "internal": 1170,
       "sensitive": 403,
       "secret_reference": 41,
       "redacted_fixture": 51,
-      "structural": 131
+      "structural": 130
     },
     "by_intent_source": {
       "schema_description": 524,
       "reviewed_override": 262,
       "structural_taxonomy": 131,
-      "reviewed_profile": 900
+      "reviewed_profile": 894
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -89,9 +89,8 @@
       "notary_evidence_claims_evidence_mode_consultations_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
-      "notary_evidence_claims_rule_bindings_claims_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 97,
+      "notary_evidence_internal": 92,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 40,
       "notary_evidence_signing_keys_open_map": 1,
@@ -451,7 +450,7 @@
         "pointer": "/$defs/claimValue/properties/max_bytes",
         "path_kind": "property"
       },
-      "purpose": "Bounds the encoded size of a source-free claim value.",
+      "purpose": "Bounds the encoded size of a claim value.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -545,7 +544,7 @@
         "pointer": "/$defs/claimValue/properties/nullable",
         "path_kind": "property"
       },
-      "purpose": "States whether the source-free claim value may be null.",
+      "purpose": "States whether the claim value may be null.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -631,7 +630,7 @@
         "pointer": "/$defs/claimValue/properties/type",
         "path_kind": "property"
       },
-      "purpose": "Declares the boolean, integer, string, or date type of a source-free claim value.",
+      "purpose": "Declares the boolean, integer, string, or date type of a claim value.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -2222,7 +2221,7 @@
         "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/properties/cel",
         "path_kind": "property"
       },
-      "purpose": "Provides the CEL expression used for a source-free evaluation-only evidence claim.",
+      "purpose": "Provides the CEL expression used to derive a claim from declared Relay consultation outputs.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -2484,7 +2483,7 @@
         "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/properties/value",
         "path_kind": "property"
       },
-      "purpose": "Explicit claim value type, nullability, and encoded-size bound for source-free evaluation. A source-free claim cannot be selected by a credential profile.",
+      "purpose": "Explicit claim value type, nullability, and encoded-size bound for a claim derived from declared Relay consultation outputs.",
       "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -2863,7 +2862,7 @@
         "pointer": "/$defs/evidenceService/properties/credential_profiles",
         "path_kind": "property"
       },
-      "purpose": "Credential profiles may select only claims backed by an exact Relay consultation. Source-free claim evaluation cannot be exposed as credential capability.",
+      "purpose": "Credential profiles may select only claims backed by an exact Relay consultation.",
       "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -18161,7 +18160,7 @@
         "pointer": "/$defs/service/oneOf/0",
         "path_kind": "branch"
       },
-      "purpose": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Source-free claims remain evaluation-only and cannot be selected by a credential profile.",
+      "purpose": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Every claim derives from at least one declared Relay consultation.",
       "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -113275,399 +113274,6 @@
     {
       "address": {
         "schema": "notary",
-        "pointer": "/$defs/CelBindingsConfig/properties/claims",
-        "key_path": "evidence.claims[].rule.bindings.claims",
-        "path_kind": "property"
-      },
-      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_internal",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "object"
-        ],
-        "composed": false
-      },
-      "requiredness": "optional",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "schema_default",
-        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "internal",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "object"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "notary",
-        "pointer": "/$defs/CelBindingsConfig/properties/claims/additionalProperties",
-        "key_path": "evidence.claims[].rule.bindings.claims.*",
-        "path_kind": "map_value"
-      },
-      "purpose": "Each reviewed key names a CEL claim binding and each value selects the approved evidence claim exposed to that binding.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_claims_rule_bindings_claims_open_map",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "object"
-        ],
-        "local_reference": "#/$defs/ClaimBindingConfig",
-        "composed": false
-      },
-      "requiredness": "not_applicable",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "not_applicable"
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "structural",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "arbitrary_map_keys_not_fixed_properties"
-      ],
-      "constraints": [
-        {
-          "keyword": "required",
-          "value": [
-            "claim"
-          ]
-        },
-        {
-          "keyword": "type",
-          "value": "object"
-        }
-      ],
-      "local_reference": {
-        "schema": "notary",
-        "pointer": "/$defs/ClaimBindingConfig"
-      }
-    },
-    {
-      "address": {
-        "schema": "notary",
-        "pointer": "/$defs/CelBindingsConfig/properties/vars",
-        "key_path": "evidence.claims[].rule.bindings.vars",
-        "path_kind": "property"
-      },
-      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_internal",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "object"
-        ],
-        "composed": false
-      },
-      "requiredness": "optional",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "schema_default",
-        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "internal",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "object"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "notary",
-        "pointer": "/$defs/ClaimBindingConfig/properties/binding_type",
-        "key_path": "evidence.claims[].rule.bindings.claims.*.binding_type",
-        "path_kind": "property"
-      },
-      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_internal",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "null",
-          "string"
-        ],
-        "composed": false
-      },
-      "requiredness": "optional",
-      "null_behavior": "conditional",
-      "empty_behavior": "allowed",
-      "default": {
-        "behavior": "schema_default",
-        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "internal",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": [
-            "string",
-            "null"
-          ]
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "notary",
-        "pointer": "/$defs/ClaimBindingConfig/properties/claim",
-        "key_path": "evidence.claims[].rule.bindings.claims.*.claim",
-        "path_kind": "property"
-      },
-      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_internal",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "string"
-        ],
-        "composed": false
-      },
-      "requiredness": "required",
-      "null_behavior": "rejected",
-      "empty_behavior": "allowed",
-      "default": {
-        "behavior": "no_schema_default"
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "internal",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "string"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "notary",
         "pointer": "/$defs/ClaimDefinition/properties/cccev",
         "key_path": "evidence.claims[].cccev",
         "path_kind": "property"
@@ -114207,13 +113813,8 @@
         {
           "keyword": "required",
           "value": [
-            [
-              "type",
-              "consultations"
-            ],
-            [
-              "type"
-            ]
+            "type",
+            "consultations"
           ]
         },
         {
@@ -121626,7 +121227,7 @@
             "unknown",
             "machine_client",
             "subject_bound",
-            "delegated_attestation"
+            "delegated_subject_access"
           ]
         },
         {
@@ -121718,7 +121319,7 @@
             "unknown",
             "machine_client",
             "subject_bound",
-            "delegated_attestation"
+            "delegated_subject_access"
           ]
         },
         {
@@ -146748,87 +146349,6 @@
     {
       "address": {
         "schema": "notary",
-        "pointer": "/$defs/RuleConfig/oneOf/2/properties/bindings",
-        "key_path": "evidence.claims[].rule.bindings",
-        "path_kind": "property"
-      },
-      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_evidence_internal",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "object"
-        ],
-        "local_reference": "#/$defs/CelBindingsConfig",
-        "composed": false
-      },
-      "requiredness": "optional",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "schema_default",
-        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
-      },
-      "environment_behavior": "bound_by_environment",
-      "sensitivity": "internal",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "object"
-        }
-      ],
-      "local_reference": {
-        "schema": "notary",
-        "pointer": "/$defs/CelBindingsConfig"
-      }
-    },
-    {
-      "address": {
-        "schema": "notary",
         "pointer": "/$defs/RuleConfig/oneOf/2/properties/expression",
         "key_path": "evidence.claims[].rule.expression",
         "path_kind": "property"
@@ -147134,10 +146654,7 @@
       "constraints": [
         {
           "keyword": "const",
-          "value": [
-            "registry_backed",
-            "self_attested"
-          ]
+          "value": "registry_backed"
         },
         {
           "keyword": "type",

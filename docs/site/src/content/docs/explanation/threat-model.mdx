@@ -82,12 +82,12 @@ auditing separately.
             OIDC, and every claim- or record-bearing route is authenticated before
             responding. Registry Relay owns registry source access, credentials, product-neutral
             HTTP and script adaptation, snapshots, and minimized consultation outputs. Registry
-            Notary consumes only compiler-pinned Relay consultations for registry-backed claims,
-            or configured self-attestation inputs for Notary-only claims. Federation with a peer
+            Notary consumes compiler-pinned Relay consultations for every claim. Subject
+            access may authorize and bind a request but never provides evidence. Federation with a peer
             Notary is static-peer only, not a dynamic trust
             mesh; it requires a verified peer-signed JWS, and peer identity, signature,
             freshness, single use, purpose, profile, and audience are verified before any
-            Relay consultation or claim evaluation. Delegated self-attestation is a distinct trust context from peer
+            Relay consultation or claim evaluation. Delegated subject access is a distinct trust context from peer
             federation: it delegates no trust to a peer Notary and stays inside the citizen
             or OIDC trust context." />
 </figure>
@@ -118,7 +118,7 @@ snapshot capability.
 between two Notary services, and it is **static-peer only**: only configured static peers are
 admitted. It is not a dynamic trust mesh.
 
-**Delegated self-attestation.** Delegated self-attestation is a distinct trust context from
+**Delegated subject access.** Delegated subject access is a distinct trust context from
 peer federation; the two are distinct trust contexts. It does not delegate trust to a peer
 Notary; it stays inside the citizen / OIDC trust context.
 
@@ -172,15 +172,16 @@ leakage, and privacy regressions that expose raw subject identifiers.
   a bearer-style credential profile, and `registry-notary doctor` warns on that choice.
   Binding applies only to an issued credential; the plain evaluation result is not a
   credential and is never holder-bound.
-- Self-attested data crossing a trust gate: Self-attestation and delegated
-  self-attestation derive subject, requester, and relationship from the authenticated
+- Caller-provided data crossing an evidence trust gate: Subject access and delegated
+  subject access derive subject, requester, and relationship from the authenticated
   principal and scoped authorization details; caller-supplied `requester`, `relationship`, and
   `on_behalf_of` fields are rejected before any Relay consultation or claim evaluation, and
   self-asserted target fields do not satisfy trusted-principal gates.
-- Source-free evaluation promoted to credential evidence: Credential-capable profiles and
-  OID4VCI configurations accept only non-delegated registry-backed claims. Source-free,
-  delegated, legacy, missing, stale, or modified evaluation provenance fails before signer
-  access.
+- Authorization context promoted to claim evidence: Configuration accepts only
+  registry-backed claims. Caller identity and authorization details cannot
+  become claim values. Delegated evaluations without the representative
+  ceremony, legacy, missing, stale, or modified evaluation provenance fails
+  before signer access.
 - Stolen issuer-initiated offer: A transaction code is required by default and is transferred
   separately from the offer. Codes are single-use, wrong PIN attempts are bounded, and invalid
   redemptions are rate limited. An explicit no-PIN compatibility profile has a maximum
@@ -266,7 +267,7 @@ conformance claim:
 - A full credential issuer: The OID4VCI surface is a registry-backed, issuer-initiated
   pre-authorized subset, not a full issuer or general external-wallet interoperability.
   Notary advertises `openid4vci.support: not_full_issuer`. It does not claim wallet-facing
-  authorization code, a public nonce endpoint, response next nonce, source-free issuance,
+  authorization code, a public nonce endpoint, response next nonce, issuance from caller-provided evidence,
   ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation.
 - Certified standards compliance: Aligning with a standard is not conforming to it:
   speaking the shape of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, W3C DID, or the rest does

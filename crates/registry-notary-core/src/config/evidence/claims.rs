@@ -36,9 +36,8 @@ pub struct ClaimDefinition {
     pub title: String,
     pub version: String,
     pub subject_type: String,
-    /// Sealed provenance choice. This field is intentionally required so an
-    /// omitted connection can never turn a registry-backed claim into a
-    /// source-free claim.
+    /// Sealed registry provenance configuration. This field is intentionally
+    /// required so every claim names its compiler-pinned Relay consultation.
     pub evidence_mode: ClaimEvidenceMode,
     #[serde(default)]
     pub value: ClaimValueConfig,
@@ -77,7 +76,13 @@ pub enum ClaimEvidenceMode {
     RegistryBacked {
         consultations: BTreeMap<String, RelayConsultationConfig>,
     },
-    SelfAttested,
+    /// Uninhabited internal variant that keeps downstream destructuring
+    /// refutable without adding another wire-level evidence mode.
+    #[doc(hidden)]
+    #[serde(skip)]
+    Impossible {
+        impossible: std::convert::Infallible,
+    },
 }
 
 impl<'de> Deserialize<'de> for ClaimEvidenceMode {
@@ -89,7 +94,6 @@ impl<'de> Deserialize<'de> for ClaimEvidenceMode {
             SealedClaimEvidenceMode::RegistryBacked { consultations } => {
                 Ok(Self::RegistryBacked { consultations })
             }
-            SealedClaimEvidenceMode::SelfAttested {} => Ok(Self::SelfAttested),
         }
     }
 }
@@ -101,7 +105,6 @@ enum SealedClaimEvidenceMode {
     RegistryBacked {
         consultations: BTreeMap<String, RelayConsultationConfig>,
     },
-    SelfAttested {},
 }
 
 impl JsonSchema for ClaimEvidenceMode {
@@ -119,18 +122,8 @@ impl ClaimEvidenceMode {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::RegistryBacked { .. } => "registry_backed",
-            Self::SelfAttested => "self_attested",
+            Self::Impossible { impossible } => match *impossible {},
         }
-    }
-
-    #[must_use]
-    pub const fn is_registry_backed(&self) -> bool {
-        matches!(self, Self::RegistryBacked { .. })
-    }
-
-    #[must_use]
-    pub const fn is_self_attested(&self) -> bool {
-        matches!(self, Self::SelfAttested)
     }
 }
 
@@ -522,17 +515,11 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                         );
                     }
                 }
-                RuleConfig::Cel { bindings, .. } => {
+                RuleConfig::Cel { .. } => {
                     if consultation.outputs.is_empty() {
                         return invalid_claim_evidence_mode(
                             claim,
                             "registry_backed supports only consultation_matched and consultation_output rules in v1 unless a complete typed consultation output schema is declared",
-                        );
-                    }
-                    if !bindings.claims.is_empty() || !bindings.vars.is_empty() {
-                        return invalid_claim_evidence_mode(
-                            claim,
-                            "registry_backed CEL receives only its consultation outputs and declared service request variables",
                         );
                     }
                     if !matches!(
@@ -547,15 +534,7 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                 }
             }
         }
-        ClaimEvidenceMode::SelfAttested => match &claim.rule {
-            RuleConfig::Cel { .. } => {}
-            RuleConfig::ConsultationOutput { .. } | RuleConfig::ConsultationMatched { .. } => {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "self_attested rules cannot name a Relay consultation",
-                );
-            }
-        },
+        ClaimEvidenceMode::Impossible { impossible } => match *impossible {},
     }
     Ok(())
 }
@@ -583,63 +562,13 @@ pub(in crate::config) fn validate_claim_value_config(
     Ok(())
 }
 
-pub(in crate::config) fn validate_self_attested_dependency_modes(
-    claims: &[ClaimDefinition],
-    delegation: &SubjectAccessDelegationConfig,
-) -> Result<(), EvidenceConfigError> {
-    for claim in claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_self_attested())
-    {
-        let mut pending: Vec<&str> = claim.depends_on.iter().map(String::as_str).collect();
-        let mut visited = HashSet::new();
-        while let Some(dependency_id) = pending.pop() {
-            if !visited.insert(dependency_id) {
-                continue;
-            }
-            let Some(dependency) = claims
-                .iter()
-                .find(|candidate| candidate.id == dependency_id)
-            else {
-                continue;
-            };
-            if !dependency.evidence_mode.is_self_attested() {
-                let delegated_proof_edge = dependency.evidence_mode.is_registry_backed()
-                    && delegation.allowed_relationships.iter().any(|relationship| {
-                        relationship.proof_claim == dependency.id
-                            && relationship
-                                .allowed_claims
-                                .iter()
-                                .any(|allowed| allowed == &claim.id)
-                            && claim
-                                .depends_on
-                                .iter()
-                                .any(|direct| direct == dependency_id)
-                    });
-                if delegated_proof_edge {
-                    continue;
-                }
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "self_attested dependency closure may contain only self_attested claims except its configured direct delegated Relay proof",
-                );
-            }
-            pending.extend(dependency.depends_on.iter().map(String::as_str));
-        }
-    }
-    Ok(())
-}
-
 pub(in crate::config) fn validate_relay_activation_shape(
     claims: &[ClaimDefinition],
 ) -> Result<(), EvidenceConfigError> {
     let mut outputs_by_client = BTreeMap::new();
-    for claim in claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_registry_backed())
-    {
+    for claim in claims {
         let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
-            unreachable!("registry-backed claims were filtered above");
+            unreachable!("registry_backed is the only configured evidence mode");
         };
         let (_, consultation) = consultations
             .first_key_value()
@@ -1035,8 +964,6 @@ pub enum RuleConfig {
     },
     Cel {
         expression: String,
-        #[serde(default)]
-        bindings: CelBindingsConfig,
     },
 }
 
@@ -1109,23 +1036,6 @@ pub(in crate::config) fn invalid_claim_semantics<T>(
         claim: claim.to_string(),
         reason: reason.into(),
     })
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CelBindingsConfig {
-    #[serde(default)]
-    pub claims: BTreeMap<String, ClaimBindingConfig>,
-    #[serde(default)]
-    pub vars: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ClaimBindingConfig {
-    pub claim: String,
-    #[serde(default)]
-    pub binding_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

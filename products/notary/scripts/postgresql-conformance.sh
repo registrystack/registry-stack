@@ -40,6 +40,7 @@ postgres_port="${NOTARY_POSTGRES_PORT:-$((30000 + ($$ % 8000)))}"
 notary_port_a="${NOTARY_CONFORMANCE_PORT_A:-$((41000 + ($$ % 4000)))}"
 notary_port_b="${NOTARY_CONFORMANCE_PORT_B:-$((45000 + ($$ % 4000)))}"
 notary_negative_port="${NOTARY_CONFORMANCE_NEGATIVE_PORT:-$((50000 + ($$ % 4000)))}"
+relay_port="${NOTARY_CONFORMANCE_RELAY_PORT:-$((54000 + ($$ % 1000)))}"
 unsupported_postgres_image="postgres:15.18-alpine"
 unsupported_postgres_container="${postgres_container}-unsupported"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/notary-postgres-conformance.XXXXXX")"
@@ -47,6 +48,7 @@ notary_pid_a=""
 notary_pid_b=""
 lost_ack_pid=""
 negative_listener_pid=""
+relay_pid=""
 
 fail() {
   echo "notary PostgreSQL conformance failed: $1" >&2
@@ -78,6 +80,7 @@ cleanup() {
   stop_process "${notary_pid_b}"
   stop_process "${lost_ack_pid}"
   stop_process "${negative_listener_pid}"
+  stop_process "${relay_pid}"
   docker rm -f "${unsupported_postgres_container}" >/dev/null 2>&1
   docker rm -f "${postgres_container}" >/dev/null 2>&1
   docker volume rm -f "${postgres_data_volume}" "${postgres_cert_volume}" >/dev/null 2>&1
@@ -122,9 +125,9 @@ PY
 idempotency_key_a="conformance-a-${run_id}"
 idempotency_key_b="conformance-b-${run_id}"
 idempotency_key_c="conformance-c-${run_id}"
-target_a="synthetic-subject-a-${run_id}"
-target_b="synthetic-subject-b-${run_id}"
-target_c="synthetic-subject-c-${run_id}"
+target_a="per-0001"
+target_b="per-0002"
+target_c="per-0003"
 
 echo "notary PostgreSQL ${postgresql_major} conformance: preparing isolated cluster"
 
@@ -406,22 +409,37 @@ evidence:
   machine_quota:
     enabled: true
     subjects_per_minute: 2
+  relay:
+    base_url: http://127.0.0.1:${relay_port}
+    workload_client_id: registry-notary
+    token_file: ${work_dir}/relay-token
+    allowed_private_cidrs: [127.0.0.0/8]
   claims:
     - id: conformance-eligible
       title: Conformance eligible
       version: "1"
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: synthetic.snapshot.person-status.exact
+              contract_hash: sha256:62132bbde55fcc9885753b322b4b978cf72cd038f773906fb16b98d0c0917786
+            inputs:
+              person_id: target.id
+            outputs:
+              registration_status: { type: string, nullable: false, max_bytes: 32 }
+              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
+              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: boolean
         nullable: false
       purpose: conformance
       required_scopes: [notary:conformance]
       rule:
-        type: cel
-        expression: "true"
-        bindings: {}
+        type: consultation_matched
+        consultation: person_status
       operations:
         evaluate:
           enabled: true
@@ -435,6 +453,95 @@ evidence:
       formats:
         - application/vnd.registry-notary.claim-result+json
 YAML
+
+printf '%s\n' 'conformance-relay-token' >"${work_dir}/relay-token"
+chmod 600 "${work_dir}/relay-token"
+
+NOTARY_CONFORMANCE_RELAY_PORT="${relay_port}" \
+NOTARY_CONFORMANCE_RELAY_CONTRACT="${PWD}/crates/registry-relay/profiles/synthetic-snapshot-exact-person-status/public-contract.json" \
+python3 -c '
+import datetime
+import http.server
+import json
+import os
+import secrets
+import time
+
+contract_hash = "sha256:62132bbde55fcc9885753b322b4b978cf72cd038f773906fb16b98d0c0917786"
+with open(os.environ["NOTARY_CONFORMANCE_RELAY_CONTRACT"], encoding="utf-8") as source:
+    contract = json.load(source)
+
+alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+def ulid():
+    value = (int(time.time() * 1000) << 80) | secrets.randbits(80)
+    encoded = []
+    for _ in range(26):
+        encoded.append(alphabet[value & 31])
+        value >>= 5
+    return "".join(reversed(encoded))
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, _format, *_args):
+        return
+
+    def send_json(self, value):
+        body = json.dumps(value, separators=(",", ":")).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path != "/v1/consultations/synthetic.snapshot.person-status.exact":
+            self.send_error(404)
+            return
+        self.send_json({"contract_hash": contract_hash, "contract": contract})
+
+    def do_POST(self):
+        if self.path != "/v1/consultations/synthetic.snapshot.person-status.exact/execute":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("content-length", "0"))
+        if length:
+            self.rfile.read(length)
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        self.send_json({
+            "schema": "registry.relay.consultation-result.v1",
+            "consultation_id": ulid(),
+            "notary_evaluation_id": self.headers["registry-notary-evaluation-id"],
+            "profile": {
+                "id": "synthetic.snapshot.person-status.exact",
+                "contract_hash": contract_hash,
+            },
+            "outcome": "match",
+            "outputs": {"registration_status": "active"},
+            "provenance": {
+                "acquired_at": now,
+                "source_observed_at": now,
+                "source_revision": "conformance-v1",
+                "acquisition_class": "materialized_snapshot",
+                "integration": {
+                    "id": "synthetic.snapshot.person-status",
+                    "revision": 1,
+                },
+            },
+        })
+
+http.server.ThreadingHTTPServer(
+    ("127.0.0.1", int(os.environ["NOTARY_CONFORMANCE_RELAY_PORT"])), Handler
+).serve_forever()
+' >"${work_dir}/relay.log" 2>&1 &
+relay_pid=$!
+relay_deadline=$((SECONDS + 10))
+while [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  "http://127.0.0.1:${relay_port}/v1/consultations/synthetic.snapshot.person-status.exact" \
+  2>>"${work_dir}/curl.log" || true)" != "200" ]]; do
+  kill -0 "${relay_pid}" 2>/dev/null || fail "conformance Relay fixture exited"
+  (( SECONDS < relay_deadline )) || fail "conformance Relay fixture did not become ready"
+  sleep 0.1
+done
 
 "${notary_bin}" --config "${config_path}" state install \
   --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \

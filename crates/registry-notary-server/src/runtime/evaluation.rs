@@ -39,23 +39,6 @@ fn clear_batch_runtime_audit(response: &mut BatchEvaluateResponse) {
     }
 }
 
-pub(crate) fn registry_backed_batch_requested(
-    evidence: &EvidenceConfig,
-    request: &BatchEvaluateRequest,
-) -> Result<bool, EvidenceError> {
-    let claim_versions = requested_claim_versions(&request.claims)?;
-    let levels = build_claim_levels(evidence, &request.claims, &claim_versions)?;
-    let mut registry_backed = false;
-    for claim_id in levels.iter().flatten() {
-        let claim = find_claim_for_selection(evidence, claim_id, &claim_versions)?;
-        match claim.evidence_mode {
-            ClaimEvidenceMode::RegistryBacked { .. } => registry_backed = true,
-            ClaimEvidenceMode::SelfAttested => {}
-        }
-    }
-    Ok(registry_backed)
-}
-
 impl Default for RegistryNotaryRuntime {
     fn default() -> Self {
         Self::new()
@@ -630,11 +613,9 @@ impl RegistryNotaryRuntime {
         if request.items.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
         }
-        let registry_backed_batch = registry_backed_batch_requested(&evidence, &request)?;
-        if registry_backed_batch
-            && options
-                .idempotency_key
-                .is_none_or(|key| key.is_empty() || key.len() > 256)
+        if options
+            .idempotency_key
+            .is_none_or(|key| key.is_empty() || key.len() > 256)
         {
             return Err(EvidenceError::ConsultationInvalidRequest);
         }
@@ -663,268 +644,24 @@ impl RegistryNotaryRuntime {
             &subject_purposes,
             &claim_versions,
         )?;
-        if registry_backed_batch {
-            return self
-                .batch_evaluate_registry_backed(
-                    evidence,
-                    store,
-                    principal,
-                    request,
-                    options
-                        .idempotency_key
-                        .ok_or(EvidenceError::ConsultationInvalidRequest)?,
-                    request_hash,
-                    scoped_key.ok_or(EvidenceError::ConsultationInvalidRequest)?,
-                    evaluation_capability,
-                    subject_purposes,
-                    claim_versions,
-                    options.owner_quota,
-                )
-                .await;
-        }
-        let batch_id = Ulid::new().to_string();
-        let claims = request_claim_ids.clone();
-        let subject_count = request.items.len();
-        let mut items: Vec<Option<BatchItemResponse>> = (0..subject_count).map(|_| None).collect();
-        let mut succeeded = 0usize;
-        let mut failed = 0usize;
-        let subject_concurrency = Arc::new(Semaphore::new(evidence.concurrency.subjects));
-        #[cfg(feature = "registry-notary-cel")]
-        let cel_concurrency = self
-            .cel_worker
-            .as_ref()
-            .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
-        let disclosure = requested_disclosure(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            &request.disclosure,
-        )?;
-        validate_requested_disclosure_before_source(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            disclosure,
-        )?;
-        let reservation_key = scoped_key.or_else(|| {
-            store
-                .uses_postgresql()
-                .then(|| format!("notary-internal-batch:{batch_id}"))
-        });
-        let mut idempotency_owner = if let Some(key) = reservation_key {
-            match store
-                .reserve_idempotent_batch(
-                    key,
-                    request_hash.clone(),
-                    &principal.principal_id,
-                    options.owner_quota,
-                )
-                .await?
-            {
-                BatchIdempotencyReservation::Replay(mut response) => {
-                    clear_batch_runtime_audit(&mut response);
-                    return Ok(response);
-                }
-                BatchIdempotencyReservation::Owner(owner) => Some(owner),
-            }
-        } else {
-            None
-        };
-        let quota_charged_by_reservation = idempotency_owner
-            .as_ref()
-            .is_some_and(BatchIdempotencyOwner::quota_charged);
-        if let Some((quota, cost)) = options
-            .owner_quota
-            .filter(|_| !quota_charged_by_reservation)
-        {
-            let quota_enabled = idempotency_owner.is_some() && quota.is_enabled();
-            if let Err(error) = quota.check_and_consume(&principal.principal_id, cost).await {
-                if let Some(owner) = idempotency_owner.take() {
-                    owner.abandon_uncharged()?;
-                }
-                return Err(EvidenceError::MachineQuotaExceeded {
-                    retry_after_seconds: error.retry_after_seconds,
-                });
-            }
-            if let Some(owner) = idempotency_owner.as_mut().filter(|_| quota_enabled) {
-                owner.mark_quota_charged()?;
-            }
-        }
-        let mut retained_evaluations = Vec::new();
-        let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
-            JoinSet::new();
-        for (input_index, item) in request.items.clone().into_iter().enumerate() {
-            let runtime = self.clone();
-            let evidence = Arc::clone(&evidence);
-            let permit_semaphore = Arc::clone(&subject_concurrency);
-            let claims_list = request.claims.clone();
-            let disclosure = request.disclosure.clone();
-            let format = request.format.clone();
-            let purpose_for_task = subject_purposes[input_index].clone();
-            let auth_profile_id = principal.auth_profile_id;
-            let principal_id = principal.principal_id.clone();
-            let principal_scopes = principal.scopes.clone();
-            let principal_authorization_details = principal.authorization_details.clone();
-            let evaluation_capability = evaluation_capability.clone();
-            #[cfg(feature = "registry-notary-cel")]
-            let cel_concurrency = cel_concurrency.as_ref().map(Arc::clone);
-            join_set.spawn(async move {
-                let _permit = match permit_semaphore.acquire_owned().await {
-                    Ok(permit) => permit,
-                    Err(_) => return (input_index, Err(EvidenceError::RuleEvaluationFailed)),
-                };
-                let eval = EvaluateRequest {
-                    requester: item.requester,
-                    target: Some(item.target),
-                    relationship: item.relationship,
-                    on_behalf_of: item.on_behalf_of,
-                    variables: Default::default(),
-                    claims: claims_list,
-                    disclosure,
-                    format,
-                    purpose: Some(purpose_for_task.clone()),
-                };
-                let principal = EvidencePrincipal {
-                    auth_profile_id,
-                    principal_id,
-                    scopes: principal_scopes,
-                    access_mode: registry_notary_core::AccessMode::MachineClient,
-                    verified_claims: None,
-                    authorization_details: principal_authorization_details,
-                };
-                let result = runtime
-                    .evaluate_subject_for_batch(
-                        evidence,
-                        &principal,
-                        evaluation_capability,
-                        eval,
-                        purpose_for_task.as_str(),
-                        #[cfg(feature = "registry-notary-cel")]
-                        cel_concurrency,
-                    )
-                    .await;
-                (input_index, result)
-            });
-        }
-        // Collect results and surface panics as request-level errors. Drop
-        // semantics for `JoinSet` cancel remaining tasks if we early-return.
-        while let Some(joined) = join_set.join_next().await {
-            let (input_index, result) = match joined {
-                Ok(pair) => pair,
-                Err(join_error) if join_error.is_panic() => {
-                    tracing::error!(
-                        target: "registry_notary_server::runtime",
-                        error = %join_error,
-                        "subject task panicked",
-                    );
-                    return Err(EvidenceError::RuleEvaluationFailed);
-                }
-                Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
-            };
-            match result {
-                Ok(results) => {
-                    let evaluation_id = results.first().map(|result| result.evaluation_id.clone());
-                    let claim_results = results
-                        .iter()
-                        .map(|result| batch_claim_result(&evidence, result))
-                        .collect::<Result<Vec<_>, EvidenceError>>()?;
-                    // Retain per-subject evaluations on the calling task. An
-                    // idempotent batch publishes these and its completed
-                    // response together after all subjects finish.
-                    if !results.is_empty() {
-                        // Retention is a Notary storage lifecycle. It does not
-                        // inherit any evidence observation timestamp.
-                        let stored_at = OffsetDateTime::now_utc();
-                        retained_evaluations.push(registry_notary_core::StoredEvaluation {
-                            client_id: principal.principal_id.clone(),
-                            purpose: subject_purposes[input_index].clone(),
-                            claim_ids: request_claim_ids.clone(),
-                            claim_refs: request.claims.clone(),
-                            disclosure: stored_disclosure(&results),
-                            format: results
-                                .first()
-                                .map(|view| view.format.clone())
-                                .unwrap_or_default(),
-                            results: results.clone(),
-                            created_at: format_time(stored_at),
-                            expires_at: format_time(default_stored_evaluation_expires_at(
-                                stored_at,
-                            )),
-                            request_hash: request_hash.clone(),
-                            issuance_provenance: None,
-                            subject_access: None,
-                        });
-                    }
-                    succeeded += 1;
-                    let batch_item = &request.items[input_index];
-                    let target_ref =
-                        target_ref_view(&self.subject_access_rate_keys, &batch_item.target)?;
-                    let requester_ref = batch_item
-                        .requester
-                        .as_ref()
-                        .map(|requester| {
-                            entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
-                        })
-                        .transpose()?;
-                    items[input_index] = Some(BatchItemResponse {
-                        input_index,
-                        target_ref,
-                        requester_ref,
-                        evaluation_id,
-                        status: BatchItemStatus::Succeeded,
-                        claim_results,
-                        errors: Vec::new(),
-                        runtime_audit: Default::default(),
-                    });
-                }
-                Err(error) => {
-                    failed += 1;
-                    let batch_item = &request.items[input_index];
-                    let target_ref =
-                        target_ref_view(&self.subject_access_rate_keys, &batch_item.target)?;
-                    let requester_ref = batch_item
-                        .requester
-                        .as_ref()
-                        .map(|requester| {
-                            entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
-                        })
-                        .transpose()?;
-                    items[input_index] = Some(BatchItemResponse {
-                        input_index,
-                        target_ref,
-                        requester_ref,
-                        evaluation_id: None,
-                        status: BatchItemStatus::Failed,
-                        claim_results: Vec::new(),
-                        errors: vec![batch_item_error(&error)],
-                        runtime_audit: Default::default(),
-                    });
-                }
-            }
-        }
-        let items: Vec<BatchItemResponse> = items
-            .into_iter()
-            .map(|slot| slot.ok_or(EvidenceError::RuleEvaluationFailed))
-            .collect::<Result<Vec<_>, _>>()?;
-        let response = BatchEvaluateResponse {
-            batch_id,
-            status: BatchStatus::Completed,
-            claims,
-            items,
-            summary: BatchSummary { succeeded, failed },
-        };
-        match idempotency_owner {
-            Some(owner) => owner.complete(response, retained_evaluations).await,
-            None => {
-                for evaluation in retained_evaluations {
-                    store.insert(evaluation).await?;
-                }
-                Ok(response)
-            }
-        }
+        self.batch_evaluate_registry_backed(
+            evidence,
+            store,
+            principal,
+            request,
+            options
+                .idempotency_key
+                .ok_or(EvidenceError::ConsultationInvalidRequest)?,
+            request_hash,
+            scoped_key.ok_or(EvidenceError::ConsultationInvalidRequest)?,
+            evaluation_capability,
+            subject_purposes,
+            claim_versions,
+            options.owner_quota,
+        )
+        .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn batch_evaluate_registry_backed(
         &self,
         evidence: Arc<EvidenceConfig>,
@@ -1262,102 +999,6 @@ impl RegistryNotaryRuntime {
         })
     }
 
-    /// Like `evaluate` but without writing the per-subject evaluation to the
-    /// store (the caller is responsible). Used by `batch_evaluate` so that
-    /// store inserts happen on the calling task that owns `&EvidenceStore`.
-    #[allow(clippy::too_many_arguments)]
-    async fn evaluate_subject_for_batch(
-        &self,
-        evidence: Arc<EvidenceConfig>,
-        principal: &EvidencePrincipal,
-        evaluation_capability: EvaluationCapability,
-        request: EvaluateRequest,
-        purpose_override: &str,
-        #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
-    ) -> Result<Vec<ClaimResultView>, EvidenceError> {
-        ensure_evaluation_capability_matches_principal(principal, &evaluation_capability)?;
-        if request.claims.is_empty() {
-            return Err(EvidenceError::InvalidRequest);
-        }
-        let claim_versions = requested_claim_versions(&request.claims)?;
-        for claim_id in &request.claims {
-            require_evaluation_capability(&evaluation_capability, claim_id)?;
-        }
-        for claim_ref in &request.claims {
-            let claim = find_claim_for_selection(&evidence, claim_ref, &claim_versions)?;
-            require_claim_access(principal, claim)?;
-        }
-        let format = request
-            .format
-            .clone()
-            .unwrap_or_else(|| FORMAT_CLAIM_RESULT_JSON.to_string());
-        for claim_ref in &request.claims {
-            require_claim_format(
-                find_claim_for_selection(&evidence, claim_ref, &claim_versions)?,
-                &format,
-            )?;
-        }
-        let disclosure = requested_disclosure(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            &request.disclosure,
-        )?;
-        validate_requested_disclosure_before_source(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            disclosure,
-        )?;
-        let levels = build_claim_levels(&evidence, &request.claims, &claim_versions)?;
-        if levels.iter().flatten().any(|claim_id| {
-            find_claim_for_selection(&evidence, claim_id, &claim_versions)
-                .is_ok_and(|claim| claim.evidence_mode.is_registry_backed())
-        }) {
-            return Err(EvidenceError::OperationUnsupported);
-        }
-        let evaluation_id = Ulid::new().to_string();
-        let now = OffsetDateTime::now_utc();
-        let internal = self
-            .evaluate_claims_dag(
-                Arc::clone(&evidence),
-                request
-                    .request_context()
-                    .ok_or(EvidenceError::InvalidRequest)?,
-                purpose_override.to_string(),
-                evaluation_id.clone(),
-                now,
-                claim_versions.clone(),
-                levels,
-                evaluation_capability,
-                None,
-                #[cfg(feature = "registry-notary-cel")]
-                cel_concurrency,
-                None,
-                // Batch evaluation is a machine-client flow with no named
-                // evaluation policy; the policy fields stay unset.
-                EvaluationPolicy::default(),
-            )
-            .await?;
-        request
-            .claims
-            .iter()
-            .map(|claim_id| {
-                let claim = find_claim_for_selection(&evidence, claim_id, &claim_versions)?;
-                let result = internal
-                    .get(claim_id.id.as_str())
-                    .ok_or(EvidenceError::RuleEvaluationFailed)?;
-                view_claim(
-                    &self.subject_access_rate_keys,
-                    result,
-                    claim,
-                    disclosure,
-                    &format,
-                )
-            })
-            .collect::<Result<Vec<_>, EvidenceError>>()
-    }
-
     /// Walk the claim `depends_on` DAG in topological levels, running all
     /// sibling claims at one level concurrently bounded by
     /// `concurrency.bindings`. Returns the populated `prior` map.
@@ -1492,7 +1133,7 @@ fn delegated_proof_first_levels(
     mut levels: Vec<Vec<String>>,
     capability: &EvaluationCapability,
 ) -> Result<Vec<Vec<String>>, EvidenceError> {
-    let EvaluationCapability::DelegatedAttestation { proof_claim_id, .. } = capability else {
+    let EvaluationCapability::DelegatedSubjectAccess { proof_claim_id, .. } = capability else {
         return Ok(levels);
     };
     let proof_claim_id = proof_claim_id.as_str();
@@ -1525,9 +1166,6 @@ fn validate_request_variables_before_relay(
     }
     for claim_id in levels.iter().flatten() {
         let claim = find_claim_for_selection(evidence, claim_id, claim_versions)?;
-        if !claim.evidence_mode.is_registry_backed() {
-            continue;
-        }
         let RuleConfig::Cel { expression, .. } = &claim.rule else {
             continue;
         };
@@ -1561,17 +1199,12 @@ fn preflight_claim_closure(
             return Err(EvidenceError::OperationUnsupported);
         }
         require_claim_access(principal, claim)?;
-        match &claim.evidence_mode {
-            ClaimEvidenceMode::RegistryBacked { .. } => {
-                require_relay_consultation_capability(evaluation_capability, &claim.id)?;
-                if !relay_is_activated {
-                    return Err(EvidenceError::EvidenceNotAvailable);
-                }
-                if claim.purpose.as_deref() != Some(purpose) {
-                    return Err(EvidenceError::PurposeNotAllowed);
-                }
-            }
-            ClaimEvidenceMode::SelfAttested => {}
+        require_relay_consultation_capability(evaluation_capability, &claim.id)?;
+        if !relay_is_activated {
+            return Err(EvidenceError::EvidenceNotAvailable);
+        }
+        if claim.purpose.as_deref() != Some(purpose) {
+            return Err(EvidenceError::PurposeNotAllowed);
         }
     }
     Ok(())
@@ -1654,7 +1287,7 @@ fn plan_relay_consultations(
     plan.map(Arc::new).map(Some).map_err(|_| {
         if matches!(
             evaluation_capability,
-            EvaluationCapability::DelegatedAttestation { .. }
+            EvaluationCapability::DelegatedSubjectAccess { .. }
         ) {
             delegated_proof_denied()
         } else {
@@ -1721,15 +1354,6 @@ fn stored_issuance_provenance(
     if closure.len() > MAX_CLAIM_DEPENDENCY_NODES_V1 {
         return Err(EvidenceError::RuleEvaluationFailed);
     }
-    for claim_id in &closure {
-        if !find_claim_for_selection(evidence, claim_id.as_str(), claim_versions)?
-            .evidence_mode
-            .is_registry_backed()
-        {
-            return Ok(None);
-        }
-    }
-
     let mut claims = Vec::with_capacity(closure.len());
     let mut consultations: BTreeMap<String, StoredIssuanceConsultationProvenance> = BTreeMap::new();
     for claim_id in closure {
@@ -1810,8 +1434,8 @@ fn default_stored_evaluation_expires_at(stored_at: OffsetDateTime) -> OffsetDate
 }
 
 /// Derive the evaluation policy identity for provenance from stored
-/// subject-access metadata. Self-attestation results are produced under the
-/// canonical `subject-access` evaluation policy; the version and hash come
+/// subject-access metadata. Subject-bound results use the canonical
+/// `subject-access` evaluation policy; the version and hash come
 /// from the metadata when present. Non-subject-access flows pass `None` and
 /// receive an empty policy.
 pub(super) fn evaluation_policy_from_subject_access(
@@ -1819,7 +1443,7 @@ pub(super) fn evaluation_policy_from_subject_access(
 ) -> EvaluationPolicy {
     match subject_access {
         Some(metadata) => EvaluationPolicy {
-            policy_id: Some(SELF_ATTESTATION_POLICY_ID.to_string()),
+            policy_id: Some(SUBJECT_ACCESS_POLICY_ID.to_string()),
             policy_version: metadata
                 .policy_version
                 .as_ref()
@@ -1834,7 +1458,7 @@ pub(super) fn evaluation_policy_from_subject_access(
 }
 
 /// Canonical evaluation `policy_id` for subject-access flows (D3).
-pub(super) const SELF_ATTESTATION_POLICY_ID: &str = "subject-access";
+pub(super) const SUBJECT_ACCESS_POLICY_ID: &str = "subject-access";
 
 pub(super) fn stored_evaluation_client_id(
     principal: &EvidencePrincipal,
@@ -1885,7 +1509,6 @@ pub(super) async fn evaluate_claim_task(
         own_issuance_provenance,
         relay_matched,
     ) = match &claim.evidence_mode {
-        ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new(), None, false),
         ClaimEvidenceMode::RegistryBacked { consultations } => {
             require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
             let (_, consultation) = consultations
@@ -1959,6 +1582,7 @@ pub(super) async fn evaluate_claim_task(
                 relay_outcome == RuntimeRelayOutcome::Match,
             )
         }
+        ClaimEvidenceMode::Impossible { impossible } => match *impossible {},
     };
     // Relay acquisition time pins the result to the consultation evidence.
     let issued_at = observed_at.unwrap_or(ctx.now);
@@ -1995,12 +1619,7 @@ pub(super) async fn evaluate_claim_task(
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }
-        RuleConfig::Cel {
-            expression,
-            bindings,
-        } => {
-            let snapshot = prior.lock().expect("prior mutex is not poisoned").clone();
-            let target_subject = ctx.context.target_subject();
+        RuleConfig::Cel { expression } => {
             #[cfg(feature = "registry-notary-cel")]
             let _cel_permit = if let Some(cel_concurrency) = ctx.cel_concurrency.as_ref() {
                 Some(
@@ -2016,14 +1635,8 @@ pub(super) async fn evaluate_claim_task(
                 evidence: &ctx.evidence,
                 claim: &claim,
                 expression,
-                bindings,
-                claims: &snapshot,
                 consultation_outputs: &consultation_outputs,
                 variables: &ctx.context.variables,
-                subject: target_subject.as_ref(),
-                target: &ctx.context.target,
-                purpose: ctx.purpose.as_str(),
-                today: ctx.now.date().to_string(),
                 #[cfg(feature = "registry-notary-cel")]
                 worker: ctx.cel_worker.as_deref(),
                 #[cfg(feature = "registry-notary-cel")]

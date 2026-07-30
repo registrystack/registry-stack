@@ -99,25 +99,24 @@
     "name": "Registry Notary",
     "repo_path": "../registry-notary",
     "target_repo_path": "../registry-notary",
-    "role": "Standalone service that evaluates Relay-backed or self-attested claims, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials only from exact Relay-backed evaluation provenance, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
+    "role": "Standalone service that evaluates claims from compiler-pinned Relay consultations, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials only from exact Relay-backed evaluation provenance, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
     "owns": [
       "Claim configuration and evaluation.",
       "Disclosure policy and redacted audit event semantics.",
       "Registry Notary API routes.",
       "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
       "Credential issuance workflow, exact Relay execution provenance verification, and claim-to-credential mapping. - Profiled OID4VCI issuer-initiated pre-authorized flow, transaction-bound holder proof, Type Metadata, credential endpoint, and issuer metadata. - Digitally authenticated representative OID4VCI issuance with a Relay-proven requester-to-target relationship.",
-      "Compiler-pinned Registry Relay consultation contracts for registry-backed claims.",
-      "Source-free and self-attested claim evaluation."
+      "Compiler-pinned Registry Relay consultation contracts for registry-backed claims."
     ],
     "does_not_own": [
       "Registry source access, credentials, protocol adaptation, or Registry Relay runtime internals.",
-      "Source-free, unconfigured delegated, or registry-backed evaluation-only credential issuance.",
+      "Credential issuance from claims without exact Relay evaluation provenance or from unconfigured delegated evaluations.",
       "Wallet-facing authorization-code, EUDI, HAIP, PAR, DPoP, wallet-attestation, or ES256-holder profiles.",
       "Portable metadata renderers owned by Registry Manifest.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.",
       "Browser inspection workflows outside the current formal v1 stack scope.",
-      "Credential issuance from source-free or self-attested evidence."
+      "Claim evidence supplied only by the caller or identity token."
     ],
     "source_docs": [
       {

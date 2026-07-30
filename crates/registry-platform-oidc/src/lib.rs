@@ -598,7 +598,7 @@ impl TokenVerifierConfig {
         Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
     }
 
-    /// Registry Notary self-attestation access-token verifier profile.
+    /// Registry Notary subject-access token verifier profile.
     pub fn registry_notary_access_profile(
         issuer: impl Into<String>,
         audiences: Vec<String>,

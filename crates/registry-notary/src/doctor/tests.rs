@@ -526,16 +526,35 @@ audit:
 evidence:
   enabled: true
   service_id: doctor-disclosure-test
+  allowed_purposes: [doctor-test]
+  relay:
+    base_url: https://relay.internal.example
+    workload_client_id: registry-notary
+    token_file: /run/secrets/registry-notary-relay.jwt
   claims:
-    - id: self-attested-test
-      title: Self-attested test
+    - id: registry-backed-test
+      title: Registry-backed test
       version: 2026-05
       subject_type: person
+      purpose: doctor-test
+      required_scopes: [registry_notary:credential_issue]
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          test_source:
+            profile:
+              id: example.test-source.exact
+              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            inputs:
+              subject_id: target.id
+            outputs:
+              active: { type: boolean, nullable: false }
+      value:
+        type: boolean
+        nullable: false
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_matched
+        consultation: test_source
       disclosure:
         default: value
         allowed: [redacted]
@@ -547,7 +566,7 @@ evidence:
         .expect_err("disclosure default outside allowed must fail at the doctor entrypoint");
     let message = err.to_string();
     assert!(
-        message.contains("self-attested-test") && message.contains("disclosure"),
+        message.contains("registry-backed-test") && message.contains("disclosure"),
         "doctor-facing error must name the offending claim id and field: {message}"
     );
 }

@@ -110,9 +110,10 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   The capability-discovery document (`/.well-known/evidence-service`) declares
   `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives
   there rather than in the OID4VCI credential-issuer metadata.
-- Source-free and delegated self-attestation are evaluation-only: Both
-  `/v1/credentials` and the OID4VCI credential endpoint reject source-free and
-  delegated evaluations in 1.0.
+- Delegated subject access is evaluation-only unless the credential
+  configuration explicitly selects the representative ceremony. Direct
+  `/v1/credentials` and other OID4VCI configurations reject delegated
+  evaluations.
   Configuration load rejects delegated relationship `credential_profiles` and credential-profile
   bindings on delegated claims. Remove that capability to keep delegated evaluation, or issue a
   separately modeled registry-backed, non-delegated claim.
@@ -189,7 +190,7 @@ Read them in full in the [Claim data model](../../spec/rs-dm-claim/) and [Manife
 model](../../spec/rs-dm-manifest/).
 
 - The `plugin` rule type is unavailable: The enum remains declared, but configuration validation
-  rejects it for both registry-backed and self-attested evidence modes. A conforming claim uses
+  rejects it. A conforming claim uses
   `consultation_output`, `consultation_matched`, or `cel` under the constraints of its evidence
   mode.
 - Claim evaluation formats are closed: A claim must include the canonical
