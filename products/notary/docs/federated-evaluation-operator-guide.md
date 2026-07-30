@@ -112,9 +112,12 @@ The local `peers` block is authoritative. Manifest metadata helps partners
 configure each other, but it does not grant access.
 
 `evaluation_scopes` are the scopes assigned to the authenticated federation
-principal when authorizing the selected local claim. They do not grant registry
-or Relay source access. `max_claim_result_age_seconds` bounds the age of the
-local claim result's `issued_at` timestamp.
+principal when authorizing the selected local claim. For every allowed profile,
+the list must include each `required_scopes` entry from the selected claim and
+its dependency closure. Registry Notary rejects incomplete peer policy at
+startup. These scopes do not grant registry or Relay source access.
+`max_claim_result_age_seconds` bounds the age of the local claim result's
+`issued_at` timestamp.
 
 The federation endpoint can select only a claim with
 `evidence_mode.type: registry_backed`. The verified federation request `jti`

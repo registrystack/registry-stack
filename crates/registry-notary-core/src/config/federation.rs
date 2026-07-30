@@ -214,11 +214,15 @@ impl FederationConfig {
                 validate_federation_https_url("federation.peers[].allowed_purposes[]", purpose)?;
             }
             for profile in &peer.allowed_profiles {
-                if !profile_ids.contains(profile.as_str()) {
-                    return invalid_federation(
-                        "federation.peers[].allowed_profiles must reference an evaluation profile",
-                    );
-                }
+                let profile_config = self
+                    .evaluation_profiles
+                    .iter()
+                    .find(|candidate| candidate.id == profile.as_str())
+                    .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                        reason: "federation.peers[].allowed_profiles must reference an evaluation profile"
+                            .to_string(),
+                    })?;
+                validate_federation_peer_profile_scopes(evidence, peer, profile_config)?;
             }
         }
         Ok(())
@@ -266,6 +270,44 @@ fn validate_federation_claim_inputs(
             return invalid_federation(format!(
                 "federation evaluation profile '{}' claim '{}' Relay inputs must derive from {}",
                 profile.id, claim.id, expected_path
+            ));
+        }
+        pending.extend(claim.depends_on.iter().map(String::as_str));
+    }
+    Ok(())
+}
+
+fn validate_federation_peer_profile_scopes(
+    evidence: &EvidenceConfig,
+    peer: &FederationPeerConfig,
+    profile: &FederationEvaluationProfileConfig,
+) -> Result<(), EvidenceConfigError> {
+    let available_scopes: HashSet<&str> =
+        peer.evaluation_scopes.iter().map(String::as_str).collect();
+    let mut pending = vec![profile.claim_id.as_str()];
+    let mut visited = HashSet::new();
+    while let Some(claim_id) = pending.pop() {
+        if !visited.insert(claim_id) {
+            continue;
+        }
+        let claim = evidence
+            .claims
+            .iter()
+            .find(|candidate| candidate.id == claim_id)
+            .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                reason: format!(
+                    "federation evaluation profile '{}' references an incomplete claim dependency closure",
+                    profile.id
+                ),
+            })?;
+        if let Some(scope) = claim
+            .required_scopes
+            .iter()
+            .find(|scope| !available_scopes.contains(scope.as_str()))
+        {
+            return invalid_federation(format!(
+                "federation peer '{}' evaluation_scopes must include required scope '{}' for profile '{}' claim '{}'",
+                peer.node_id, scope, profile.id, claim.id
             ));
         }
         pending.extend(claim.depends_on.iter().map(String::as_str));

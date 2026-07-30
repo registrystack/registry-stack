@@ -285,7 +285,7 @@ pub(super) fn valid_federation_config() -> StandaloneRegistryNotaryConfig {
                 "https://purpose.example.gov/social-protection/service-delivery".to_string(),
             ],
             allowed_profiles: vec!["disability_status_predicate".to_string()],
-            evaluation_scopes: vec!["civil_registry:evidence_verification".to_string()],
+            evaluation_scopes: vec!["registry:consult:test-source".to_string()],
             ..FederationPeerConfig::default()
         }],
         evaluation_profiles: vec![FederationEvaluationProfileConfig {
@@ -351,6 +351,25 @@ pub(super) fn federation_profile_rejects_relay_inputs_unavailable_from_subject()
 }
 
 #[test]
+pub(super) fn federation_peer_rejects_profile_with_missing_dependency_scope() {
+    let mut config = valid_federation_config();
+    let mut dependency = config.evidence.claims[0].clone();
+    dependency.id = "disability-status-dependency".to_string();
+    dependency.required_scopes = vec!["registry:consult:dependency".to_string()];
+    config.evidence.claims[0].depends_on = vec![dependency.id.clone()];
+    config.evidence.claims.push(dependency);
+
+    let reason = expect_federation_error(&config);
+
+    assert!(
+        reason.contains(
+            "evaluation_scopes must include required scope 'registry:consult:dependency'"
+        ),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
 pub(super) fn federation_signing_key_must_reference_active_named_signing_key() {
     let mut config = valid_federation_config();
     config.federation.signing.signing_key = "missing-key".to_string();
@@ -404,7 +423,7 @@ allowed_purposes:
 allowed_profiles:
   - disability_status_predicate
 evaluation_scopes:
-  - civil_registry:evidence_verification
+  - registry:consult:test-source
 "#,
     )
     .expect("private-network peer YAML parses");
