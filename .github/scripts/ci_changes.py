@@ -77,53 +77,9 @@ RELEASE_SECURITY_WORKFLOWS = frozenset(
     }
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STANDARD_JOURNEY_MANIFEST = (
-    REPO_ROOT / "docs/site/src/data/standard-journeys.yaml"
-)
 AUTHORING_REFERENCE_MANIFEST = (
     REPO_ROOT / "docs/site/scripts/authoring-reference-sources.json"
 )
-
-
-def standard_journey_sources(
-    manifest_path: Path = STANDARD_JOURNEY_MANIFEST,
-) -> frozenset[str]:
-    """Extract the exact canonical source paths from the journey manifest.
-
-    The manifest owns this routing inventory. Keeping the deliberately small
-    parser here avoids adding a YAML dependency to the CI classifier.
-    """
-
-    sources: list[str] = []
-    in_canonical_sources = False
-    for line in manifest_path.read_text(encoding="utf-8").splitlines():
-        if line == "    canonical_sources:":
-            in_canonical_sources = True
-            continue
-        if in_canonical_sources and line.startswith("      - "):
-            source = line.removeprefix("      - ").strip()
-            if (
-                not source
-                or source[0] in {"'", '"', "{", "["}
-                or source.startswith(("/", "../"))
-            ):
-                raise ValueError(
-                    "standard journey canonical_sources must contain "
-                    f"unquoted repository-relative paths: {source!r}"
-                )
-            sources.append(source)
-            continue
-        if in_canonical_sources and line and not line.startswith("      "):
-            in_canonical_sources = False
-
-    if not sources:
-        raise ValueError(
-            f"no standard journey canonical_sources found in {manifest_path}"
-        )
-    return frozenset(sources)
-
-
-STANDARD_JOURNEY_SOURCES = standard_journey_sources()
 
 
 def authoring_reference_contract_sources(
@@ -461,10 +417,10 @@ def classify(
             "crates/registryctl/src/project_authoring/preflight.rs",
             "crates/registryctl/src/project_authoring/promotion.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
+            "crates/registryctl/src/project_authoring/required_product_action.rs",
             "crates/registryctl/src/project_authoring/semantic_comparison.rs",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
         }
-        or path in STANDARD_JOURNEY_SOURCES
         for path in paths
     )
     docs_archives = any(

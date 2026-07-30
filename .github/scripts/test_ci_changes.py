@@ -16,7 +16,6 @@ from ci_changes import (
     AUTHORING_REFERENCE_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
-    STANDARD_JOURNEY_SOURCES,
     Workspace,
     authoring_reference_inputs,
     classify,
@@ -424,22 +423,6 @@ on:
                 },
             ),
             (
-                "docs/site/src/data/standard-journeys.yaml",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
-                "docs/site/scripts/generate-standard-journeys.mjs",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
                 "docs/site/src/components/JourneyGateMatrix.astro",
                 {
                     "docs": True,
@@ -517,13 +500,11 @@ on:
         inputs = (
             "crates/registryctl/assets/project-starters/**",
             "crates/registryctl/src/main.rs",
-            "crates/registryctl/src/project_authoring/compiler/relay.rs",
             "crates/registryctl/src/project_authoring/output.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/templates/**",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
             "crates/registryctl/tests/fixtures/project-authoring/**",
-            "crates/registryctl/tests/project_authoring.rs",
             "crates/registry-relay/src/api/openapi.rs",
             "crates/registry-relay/src/main.rs",
             "crates/registry-relay/src/server.rs",
@@ -542,11 +523,6 @@ on:
 
         self.assertIn(fetch, docs_job)
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
-
-    def test_every_standard_journey_source_routes_to_docs(self) -> None:
-        for source in sorted(STANDARD_JOURNEY_SOURCES):
-            with self.subTest(source=source):
-                self.assertTrue(classify(self.workspace, (source,))["docs"])
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):

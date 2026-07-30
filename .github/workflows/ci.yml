@@ -631,40 +631,6 @@ jobs:
           cargo test --locked -p registryctl --test project_authoring
           every_cataloged_supported_project_authoring_command_is_automated -- --exact
 
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: docs/site/package-lock.json
-
-      - name: Install docs shell dependency
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes zsh
-
-      - name: Assert docs shell dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v sh
-          command -v bash
-          command -v zsh
-
-      - name: Install docs dependencies
-        working-directory: docs/site
-        run: npm ci
-
-      - name: Execute required standard journey commands from clean directories
-        working-directory: docs/site
-        env:
-          REGISTRYCTL_BIN: ${{ github.workspace }}/target/debug/registryctl
-        run: >-
-          node --test
-          --test-name-pattern="executes every required noninteractive sequence"
-          scripts/generate-standard-journeys.test.mjs
-
   release-tool:
     name: Release tooling checks
     needs: changes

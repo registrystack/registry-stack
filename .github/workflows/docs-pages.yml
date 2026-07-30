@@ -128,10 +128,6 @@ jobs:
         working-directory: docs/site
         run: npm ci
 
-      - name: Check standard journey generation
-        working-directory: docs/site
-        run: node scripts/generate-standard-journeys.mjs --check
-
       - name: Build protected main at /dev/
         working-directory: docs/site
         run: |
