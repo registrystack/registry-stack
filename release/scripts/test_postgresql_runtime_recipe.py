@@ -140,30 +140,11 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
             model = {
                 "name": project,
                 "services": {
-                    "registry-private-namespace": {
-                        "image": image,
-                        "command": ["sleep", "infinity"],
-                        "networks": {
-                            "registry-private": {
-                                "aliases": ["registry-postgres"]
-                            }
-                        },
-                        "healthcheck": {
-                            "test": ["CMD-SHELL", "kill -0 1"],
-                            "interval": "1s",
-                            "timeout": "1s",
-                            "retries": 30,
-                        },
-                    },
                     "registry-postgres": {
                         **common,
                         "command": recipe["serve"]["command"],
-                        "network_mode": "service:registry-private-namespace",
+                        "networks": {"registry-private": {}},
                         "depends_on": {
-                            "registry-private-namespace": {
-                                "condition": "service_healthy",
-                                "required": True,
-                            },
                             "registry-runtime-stage-secrets": {
                                 "condition": "service_completed_successfully",
                                 "required": True,
@@ -301,7 +282,6 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                             "--wait",
                             "--wait-timeout",
                             "120",
-                            "registry-private-namespace",
                             "registry-postgres",
                         ],
                         cwd=root,
@@ -345,7 +325,21 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                 self.assertEqual(inspect["Config"]["User"], "999:999")
                 self.assertTrue(inspect["HostConfig"]["ReadonlyRootfs"])
                 self.assertIn("ALL", inspect["HostConfig"]["CapDrop"])
-                self.assertEqual(inspect["NetworkSettings"]["Ports"], {})
+                self.assertEqual(inspect["HostConfig"]["PortBindings"], {})
+                self.assertTrue(
+                    all(
+                        bindings is None
+                        for bindings in inspect["NetworkSettings"]["Ports"].values()
+                    )
+                )
+                self.assertEqual(
+                    inspect["HostConfig"]["NetworkMode"],
+                    f"{project}_registry-private",
+                )
+                self.assertEqual(
+                    set(inspect["NetworkSettings"]["Networks"]),
+                    {f"{project}_registry-private"},
+                )
                 stage_inspect = json.loads(
                     run(
                         [

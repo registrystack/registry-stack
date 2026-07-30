@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import platform
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -83,74 +84,15 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             return self.module.verify_asset_set(self.assets, self.tag)
 
-    def write_valid_report_evidence(self):
-        verified = self.verify_assets()
-        evidence = self.root / "evidence"
-        logs = evidence / "logs"
-        logs.mkdir(parents=True)
-        commands = []
-        for name in self.module.COMMAND_ORDER:
-            if name == "allowed":
-                contents = (
-                    json.dumps(self.module.ALLOWED_EVIDENCE, sort_keys=True) + "\n"
-                )
-            else:
-                contents = f"{name} completed\n"
-            log = logs / f"{name}.log"
-            log.write_text(contents, encoding="utf-8")
-            commands.append(
-                {
-                    "name": name,
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
-                }
-            )
-        report = {
-            "schema_version": self.module.SCHEMA,
-            "status": "passed",
-            "release_tag": self.tag,
-            "manifest_source_ref": "1" * 40,
-            "tag_target": "2" * 40,
-            "platform_asset": self.binary,
-            "asset_sha256": verified["assets"],
-            "release_image_lock_sha256": verified["assets"][self.lock],
-            "release_lock_sha256": verified["assets"][self.release_lock],
-            "relay_image": self.relay,
-            "notary_image": self.notary,
-            "postgresql_image": self.postgresql,
-            "staging_transport": None,
-            "notary_staging_transport": None,
-            "commands": commands,
-            "listeners": {
-                "relay": self.module.RELAY_LISTENER,
-                "notary": self.module.NOTARY_LISTENER,
-            },
-            "permissions": {
-                "runtime_secrets_directory": "0700",
-                **{name: "0600" for name in self.module.SECRET_FILES},
-            },
-            "runtime": {
-                "relay_config_sha256": "d" * 64,
-                "runtime_manifest_sha256": "e" * 64,
-                "compose_sha256": "f" * 64,
-                "notary_config_sha256": "a" * 64,
-                "topology": "combined_notary",
-                "workbook_classification": "operator_owned_source_data",
-            },
-            "smoke": json.loads(json.dumps(self.module.SMOKE_EVIDENCE)),
-            "redaction": {"status": "passed", "generated_files_scanned": 20},
-        }
-        path = evidence / "first-country-release-form.json"
-        path.write_text(json.dumps(report), encoding="utf-8")
-        return path, report, logs
 
     def write_valid_stable_report_evidence(self):
         verified = self.verify_assets()
         evidence = self.root / "stable-evidence"
         logs = evidence / "logs"
         reader = evidence / "reader-journeys"
+        public_source = evidence / "public-source-live"
         logs.mkdir(parents=True)
+        public_source.mkdir()
         (reader / "http").mkdir(parents=True)
         (reader / "opencrvs").mkdir()
         reader_manifest = {
@@ -163,7 +105,10 @@ class FirstCountryReleaseFormTest(TestCase):
                     "id": "http",
                     "source": "embedded-http-template",
                     "reports": [
-                        "http/init.json",
+                        "http/init.txt",
+                        "http/test.txt",
+                        "http/trace.txt",
+                        "http/build.txt",
                         "http/test.json",
                         "http/check.json",
                         "http/build.json",
@@ -171,7 +116,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 },
                 {
                     "id": "opencrvs-events-api",
-                    "source": "maintained-synthetic-example",
+                    "source": "public-docs-overlay-v1",
                     "covers": [
                         "oauth-client-credentials",
                         "bounded-http",
@@ -187,19 +132,14 @@ class FirstCountryReleaseFormTest(TestCase):
             ],
             "release_boundary": "sealed fixture",
             "retained_project": "[PRIVATE_PATH]",
+            "retained_oauth_project": "[PRIVATE_PATH]",
         }
         (reader / "manifest.json").write_text(
             json.dumps(reader_manifest), encoding="utf-8"
         )
-        for relative in (
-            "http/init.json",
-            "http/test.json",
-            "http/check.json",
-            "http/build.json",
-            "opencrvs/test.json",
-            "opencrvs/check.json",
-            "opencrvs/build.json",
-        ):
+        for relative in self.module.STABLE_READER_EVIDENCE_FILES - {
+            "manifest.json"
+        }:
             (reader / relative).write_text('{"status":"passed"}\n', encoding="utf-8")
         reader_summary = {
             "schema_version": "registryctl.tutorial_reader_journeys.v1",
@@ -209,6 +149,17 @@ class FirstCountryReleaseFormTest(TestCase):
             "projects": ["http", "opencrvs-events-api"],
             "evidence_sha256": self.module.closed_tree_digests(reader),
         }
+        for relative in self.module.PUBLIC_SOURCE_LIVE_EVIDENCE_FILES:
+            contents = (
+                "Development smoke: passed.\n"
+                "status=authorized; passed=true\n"
+                if relative.endswith("-smoke.txt")
+                else "public-source evidence\n"
+            )
+            (public_source / relative).write_text(contents, encoding="utf-8")
+        public_source_summary = self.module.stable_public_source_live_summary(
+            public_source
+        )
         doctor = {
             "schema_version": "registryctl.doctor.v1",
             "status": "ready",
@@ -226,6 +177,7 @@ class FirstCountryReleaseFormTest(TestCase):
             ),
         }
         status = {
+            "schema_version": "registryctl.dev_status.v1",
             "source_mode": "synthetic",
             "workloads": [
                 {"workload": name, "state": "running"}
@@ -243,7 +195,7 @@ class FirstCountryReleaseFormTest(TestCase):
                     "status": "authorized",
                     "token_counter_delta": 0,
                     "source_counter_delta": 1,
-                    "minimized_claim_ids": ["person_id"],
+                    "minimized_claim_ids": self.module.HTTP_MINIMIZED_CLAIMS,
                     "passed": True,
                 },
                 {
@@ -257,6 +209,7 @@ class FirstCountryReleaseFormTest(TestCase):
             ],
         }
         product_logs = {
+            "schema_version": "registryctl.dev_logs.v1",
             "products": [
                 {"workload": name, "available": True}
                 for name in sorted(
@@ -286,7 +239,48 @@ class FirstCountryReleaseFormTest(TestCase):
             },
             "permissions": {"runtime_root": "0700", "credentials": "0700"},
         }
+        oauth_smoke = json.loads(json.dumps(smoke))
+        oauth_smoke["project"] = "synthetic-opencrvs-events-api"
+        oauth_smoke["results"][0]["token_counter_delta"] = 1
+        oauth_smoke["results"][0][
+            "minimized_claim_ids"
+        ] = self.module.OAUTH_MINIMIZED_CLAIMS
+        governed_phase = {
+            "schema_version": "registryctl.deployment_generate.v1",
+            "approved_set_sha256": "sha256:" + "8" * 64,
+            "externally_recorded_closure_sha256": "sha256:" + "9" * 64,
+            "ownership": "managed",
+            "package_freshness": "current",
+            "verification_scope": "package",
+            "in_place_regeneration_safe": True,
+        }
+        governed = {
+            "schema_version": "registry-stack.governed-deployment-proof.v1",
+            "operator_file_count": len(self.module.GOVERNED_OPERATOR_SOURCES),
+            "initial": governed_phase,
+            "parent_include": "passed",
+            "explicit_initialization": "passed",
+            "ordinary_restart": "passed",
+            "backup_restore": "passed",
+            "anchor_rotation": "passed",
+            "compatible_update": {
+                **governed_phase,
+                "approved_set_sha256": "sha256:" + "a" * 64,
+                "externally_recorded_closure_sha256": "sha256:" + "b" * 64,
+            },
+            "failed_activation_recovery": "passed",
+            "rollback_rejection": "passed",
+            "isolated_teardown": "passed",
+        }
         normalized = {
+            "public_source_live": public_source_summary,
+            "oauth_dev_up": runtime,
+            "oauth_dev_smoke": oauth_smoke,
+            "oauth_dev_down": {
+                "outcome": "passed",
+                "runtime_state": "absent",
+            },
+            "dev_down": {"outcome": "passed", "runtime_state": "absent"},
             "doctor": doctor,
             "dev_status": status,
             "dev_smoke": smoke,
@@ -326,23 +320,22 @@ class FirstCountryReleaseFormTest(TestCase):
             "postgresql_image": self.postgresql,
             "commands": commands,
             "reader_journeys": reader_summary,
+            "public_source_live": public_source_summary,
+            "oauth_runtime": runtime,
+            "oauth_smoke": oauth_smoke,
             "doctor": doctor,
             "runtime": runtime,
             "dev_status": status,
             "smoke": smoke,
             "product_logs": product_logs,
+            "governed_deployment": governed,
             "redaction": {"status": "passed", "generated_files_scanned": 20},
         }
         path = evidence / "first-country-release-form.json"
         path.write_text(json.dumps(report), encoding="utf-8")
+        self.module.protect_evidence_tree(evidence)
         return path, report, logs
 
-    def verify_report(self, path: Path) -> None:
-        with (
-            mock.patch.object(platform, "system", return_value="Linux"),
-            mock.patch.object(platform, "machine", return_value="x86_64"),
-        ):
-            self.module.verify_legacy_report(path, self.assets, self.tag)
 
     def write_smoke_report(self, topology: str) -> Path:
         outcomes = dict(self.module.RELAY_SMOKE_OUTCOMES)
@@ -422,6 +415,9 @@ class FirstCountryReleaseFormTest(TestCase):
         }
         path = self.root / ".registry-stack/runtime/local/manifest.json"
         path.write_text(json.dumps(manifest), encoding="utf-8")
+        runtime = self.root / ".registry-stack/runtime/local"
+        (runtime / "secrets").chmod(0o700)
+        (runtime / "secrets/local.env").chmod(0o600)
         return path
 
     def test_closed_assets_bind_installer_binary_and_lock(self) -> None:
@@ -440,89 +436,54 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.verify_assets()
 
-    def test_v0_asset_set_keeps_legacy_image_lock_contract(self) -> None:
-        tag = "v0.15.2"
-        assets = self.root / "legacy-assets"
-        assets.mkdir()
-        binary = f"registryctl-{tag}-linux-amd64"
-        installer = f"registryctl-{tag}-install.sh"
-        lock_name = f"registryctl-{tag}-image-lock.json"
-        (assets / binary).write_text("legacy binary\n", encoding="utf-8")
-        (assets / installer).write_text("#!/bin/bash\n", encoding="utf-8")
-        lock = json.loads((self.assets / self.lock).read_text(encoding="utf-8"))
-        lock["release_tag"] = tag
-        (assets / lock_name).write_text(json.dumps(lock) + "\n", encoding="utf-8")
-        (assets / "SHA256SUMS").write_text(
-            "".join(
-                f"{hashlib.sha256((assets / name).read_bytes()).hexdigest()}  {name}\n"
-                for name in (installer, binary, lock_name)
-            ),
-            encoding="utf-8",
-        )
-        with (
-            mock.patch.object(platform, "system", return_value="Linux"),
-            mock.patch.object(platform, "machine", return_value="x86_64"),
-        ):
-            verified = self.module.verify_asset_set(assets, tag)
-        self.assertIsNone(verified["release_lock_name"])
-        self.assertNotIn(self.release_lock, verified["assets"])
 
-    def test_command_order_proves_relay_then_notary_continuation(self) -> None:
-        self.assertEqual(
-            self.module.COMMAND_ORDER,
-            (
-                "install",
-                "version",
-                "init",
-                "preflight",
-                "relay_start",
-                "relay_smoke",
-                "add_notary",
-                "combined_test",
-                "combined_restart",
-                "combined_smoke",
-                "denied",
-                "allowed",
-                "inspect",
-                "listeners",
-                "stop",
-            ),
+    def test_stable_command_order_covers_governed_release_lifecycle(self) -> None:
+        required = (
+            "reader_journeys",
+            "public_source_live",
+            "oauth_dev_up",
+            "oauth_dev_smoke",
+            "oauth_dev_down",
+            "dev_smoke",
+            "deploy_generate",
+            "dev_down",
+            "deploy_verify",
+            "parent_include_config",
+            "initialize_relay_public",
+            "initialize_relay_consultation",
+            "initialize_notary",
+            "governed_restart",
+            "backup_restore",
+            "rotate_relay_consultation",
+            "update_generate",
+            "failed_activation",
+            "failed_activation_recovery",
+            "rollback_rejected",
+            "isolated_teardown",
         )
-
-    def test_stable_command_order_uses_only_maintained_cli_surfaces(self) -> None:
         self.assertEqual(
-            self.module.STABLE_COMMAND_ORDER,
-            (
-                "install",
-                "version",
-                "reader_journeys",
-                "pull_relay",
-                "pull_notary",
-                "pull_postgresql",
-                "doctor",
-                "dev_up",
-                "dev_status",
-                "dev_smoke",
-                "dev_logs",
-                "inspect",
-                "dev_down",
-            ),
+            sorted(self.module.STABLE_COMMAND_ORDER),
+            sorted(set(self.module.STABLE_COMMAND_ORDER)),
         )
+        positions = [self.module.STABLE_COMMAND_ORDER.index(name) for name in required]
+        self.assertEqual(positions, sorted(positions))
         stable_source = SCRIPT.read_text(encoding="utf-8").split(
             "def run_stable_release_form", 1
-        )[1].split("def run_legacy_release_form", 1)[0]
-        for retired in (
-            '"start"',
-            '"restart"',
-            '"stop"',
-            '"add"',
-            '"--from"',
-            '"--project-dir"',
-        ):
-            self.assertNotIn(retired, stable_source)
+        )[1].split("def run_release_form", 1)[0]
+        self.assertIn('"--expected-closure-sha256"', stable_source)
+        self.assertNotIn('"--parent-compose"', stable_source)
+        self.assertIn(
+            '"REGISTRYCTL_PUBLIC_SOURCE_LIVE": "1"', stable_source
+        )
+        self.assertIn(
+            "check-registryctl-public-source-live.sh", stable_source
+        )
+        self.assertNotIn('"spreadsheet"', stable_source)
 
-    def test_stable_release_rejects_legacy_evidence_schema(self) -> None:
-        path, _, _ = self.write_valid_report_evidence()
+    def test_stable_release_rejects_pre_v3_evidence_schema(self) -> None:
+        path, report, _ = self.write_valid_stable_report_evidence()
+        report["schema_version"] = "registry-stack.first-country-release-form.v1"
+        path.write_text(json.dumps(report), encoding="utf-8")
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "maintained release-form"
@@ -532,11 +493,31 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.verify_report(path, self.assets, self.tag)
 
+    def test_pre_v1_release_form_is_not_supported(self) -> None:
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "v1 and later"
+        ):
+            self.module.verify_asset_set(self.assets, "v0.15.2")
+
     def test_stable_report_verifies_maintained_reader_and_runtime_evidence(
         self,
     ) -> None:
         path, _, _ = self.write_valid_stable_report_evidence()
         with (
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_stable_report_rejects_world_readable_evidence(self) -> None:
+        if os.name != "posix":
+            self.skipTest("POSIX mode contract")
+        path, _, _ = self.write_valid_stable_report_evidence()
+        path.chmod(0o644)
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "not owner-only"
+            ),
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
         ):
@@ -557,6 +538,133 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.verify_report(path, self.assets, self.tag)
 
+    def test_governed_summary_rejects_update_without_new_closure(self) -> None:
+        path, report, _ = self.write_valid_stable_report_evidence()
+        report["governed_deployment"]["compatible_update"][
+            "externally_recorded_closure_sha256"
+        ] = report["governed_deployment"]["initial"][
+            "externally_recorded_closure_sha256"
+        ]
+        path.write_text(json.dumps(report), encoding="utf-8")
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "did not change closure"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_deploy_verify_summary_accepts_simplified_ownership_report(self) -> None:
+        summary = self.module.stable_deploy_verify_summary(
+            {
+                "schema_id": "io.registrystack.deployment_ownership_report",
+                "schema_version": "1.0",
+                "ownership": "managed",
+                "package_freshness": "current",
+                "verification_scope": "package",
+                "violations": [],
+                "verified_guarantees": [
+                    "generator-owned closure matches its manifest",
+                    (
+                        "ordinary and initialization effective models match "
+                        "the generated package"
+                    ),
+                ],
+                "operator_owned_guarantees": [
+                    (
+                        "operator files satisfy the signed isolation, mode, owner, "
+                        "and consumer inventory"
+                    )
+                ],
+                "in_place_regeneration_safe": True,
+            }
+        )
+
+        self.assertEqual(summary["ownership"], "managed")
+        self.assertNotIn("adapted_files", summary)
+
+    def test_update_build_requires_consultation_and_notary_lanes(self) -> None:
+        report = {
+            "schema_version": "registryctl.reviewed_project_build_report.v1",
+            "affected_lanes": ["relay-consultation", "notary"],
+            "reviewed_build_record_digest": "sha256:" + "a" * 64,
+        }
+
+        self.assertEqual(
+            self.module.stable_update_build_summary(report)["affected_lanes"],
+            ["relay-consultation", "notary"],
+        )
+        report["affected_lanes"] = ["relay-public", "relay-consultation", "notary"]
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "did not affect exactly"
+        ):
+            self.module.stable_update_build_summary(report)
+
+    def test_operator_copy_filters_dotenv_to_the_signed_required_keys(self) -> None:
+        package = self.root / "package"
+        credentials = self.root / "credentials"
+        inventory = package / "generated/operator-files.v1.json"
+        inventory.parent.mkdir(parents=True)
+        credentials.mkdir()
+        files = []
+        for file_id, source_names in self.module.GOVERNED_OPERATOR_SOURCES.items():
+            required_keys = ["KEEP"] if file_id == "postgresql-bootstrap-environment" else []
+            file_format = "dotenv" if file_id.endswith("environment") else "opaque"
+            for source_name in source_names:
+                (credentials / source_name).write_bytes(
+                    b"KEEP=private\nEXTRA=not-copied\n"
+                    if file_format == "dotenv"
+                    else b"private\n"
+                )
+            files.append(
+                {
+                    "id": file_id,
+                    "path": f"operator/{file_id}",
+                    "consumers": ["fixture"],
+                    "format": file_format,
+                    "mode": "0600",
+                    "allowed_owners": ["root:root"],
+                    "required_keys": required_keys,
+                }
+            )
+        inventory.write_text(
+            json.dumps(
+                {
+                    "schema_id": "io.registrystack.deployment_operator_files",
+                    "schema_version": "1.0",
+                    "files": files,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        copied = self.module.copy_governed_operator_inputs(package, credentials)
+
+        self.assertEqual(copied, len(self.module.GOVERNED_OPERATOR_SOURCES))
+        filtered = package / "operator/postgresql-bootstrap-environment"
+        self.assertEqual(filtered.read_bytes(), b"KEEP=private\n")
+        if os.name == "posix":
+            self.assertEqual(filtered.stat().st_mode & 0o777, 0o600)
+
+    def test_lane_signing_keys_are_private_and_distinct(self) -> None:
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl is unavailable")
+        keys = self.module.create_lane_signing_keys(self.root / "keys")
+
+        self.assertEqual(set(keys), set(self.module.GOVERNED_LANES))
+        public_values = []
+        for private_path, public_path in keys.values():
+            private = json.loads(private_path.read_text(encoding="utf-8"))
+            public = json.loads(public_path.read_text(encoding="utf-8"))
+            self.assertEqual(private["x"], public["x"])
+            self.assertIn("d", private)
+            self.assertNotIn("d", public)
+            public_values.append(public["x"])
+            if os.name == "posix":
+                self.assertEqual(private_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(len(public_values), len(set(public_values)))
+
     def test_stable_smoke_requires_zero_denied_source_access(self) -> None:
         path, report, logs = self.write_valid_stable_report_evidence()
         report["smoke"]["results"][1]["source_counter_delta"] = 1
@@ -575,6 +683,73 @@ class FirstCountryReleaseFormTest(TestCase):
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "counters or minimized"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_oauth_smoke_requires_authorized_token_request(self) -> None:
+        path, report, logs = self.write_valid_stable_report_evidence()
+        report["oauth_smoke"]["results"][0]["token_counter_delta"] = 0
+        (logs / "oauth_dev_smoke.log").write_text(
+            json.dumps(report["oauth_smoke"], sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        command = next(
+            command
+            for command in report["commands"]
+            if command["name"] == "oauth_dev_smoke"
+        )
+        command["log_sha256"] = hashlib.sha256(
+            (logs / "oauth_dev_smoke.log").read_bytes()
+        ).hexdigest()
+        path.write_text(json.dumps(report), encoding="utf-8")
+
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "counters or minimized"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_oauth_teardown_requires_absent_runtime_state(self) -> None:
+        path, report, logs = self.write_valid_stable_report_evidence()
+        log = logs / "oauth_dev_down.log"
+        log.write_text(
+            json.dumps({"outcome": "passed", "runtime_state": "retained"}) + "\n",
+            encoding="utf-8",
+        )
+        command = next(
+            command
+            for command in report["commands"]
+            if command["name"] == "oauth_dev_down"
+        )
+        command["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
+        path.write_text(json.dumps(report), encoding="utf-8")
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "OAuth development teardown"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_public_source_live_requires_both_environment_smokes(self) -> None:
+        path, report, _ = self.write_valid_stable_report_evidence()
+        evidence = path.parent / "public-source-live"
+        (evidence / "public-demo-missing-smoke.txt").unlink()
+        report["public_source_live"]["evidence_sha256"].pop(
+            "public-demo-missing-smoke.txt"
+        )
+        path.write_text(json.dumps(report), encoding="utf-8")
+
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "evidence set is not closed"
             ),
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
@@ -619,30 +794,6 @@ class FirstCountryReleaseFormTest(TestCase):
         with self.assertRaisesRegex(self.module.ReleaseFormError, "non-symlink"):
             self.verify_assets()
 
-    def test_mismatched_staging_digest_fails_closed(self) -> None:
-        mismatch = "ghcr.io/registrystack/registry-relay-candidate@sha256:" + "b" * 64
-        with self.assertRaisesRegex(self.module.ReleaseFormError, "does not match"):
-            self.module.validate_relay_override(self.relay, mismatch)
-
-    def test_non_candidate_staging_repository_fails_closed(self) -> None:
-        override = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "private candidate repository"
-        ):
-            self.module.validate_relay_override(self.relay, override)
-
-    def test_mismatched_notary_staging_digest_fails_closed(self) -> None:
-        mismatch = (
-            "ghcr.io/registrystack/registry-notary-candidate@sha256:" + "d" * 64
-        )
-        with self.assertRaisesRegex(self.module.ReleaseFormError, "does not match"):
-            self.module.validate_notary_override(self.notary, mismatch)
-
-    def test_non_candidate_notary_staging_repository_fails_closed(self) -> None:
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "private candidate repository"
-        ):
-            self.module.validate_notary_override(self.notary, self.notary)
 
     def test_complete_runtime_rejects_cli_only_platforms(self) -> None:
         with (
@@ -1030,230 +1181,355 @@ class FirstCountryReleaseFormTest(TestCase):
         with self.assertRaisesRegex(self.module.ReleaseFormError, "must be distinct"):
             self.module.required_local_credentials(local_env)
 
-    def test_report_verifies_closed_sibling_evidence_logs(self) -> None:
-        path, _, _ = self.write_valid_report_evidence()
+    def test_recursive_secret_collection_uses_explicit_public_allowlist(
+        self,
+    ) -> None:
+        credentials = self.root / "credentials"
+        credentials.mkdir(mode=0o700)
+        values = {
+            "relay-public-serve.env": b"API_SECRET=private-relay-env\n",
+            "relay-public-tls.key": b"private-tls-key\n",
+            "relay-public.private.jwk": b"private-signing-key\n",
+            "relay-public.public.jwk": b"public-signing-key\n",
+            "relay-public-tls.crt": b"public-certificate\n",
+            "unlisted.crt": b"unlisted-certificate-material\n",
+        }
+        for name, value in values.items():
+            path = credentials / name
+            path.write_bytes(value)
+            path.chmod(0o600)
 
-        self.verify_report(path)
+        observed = self.module.recursive_secret_values(credentials)
 
-    def test_report_rejects_duplicate_json_keys(self) -> None:
-        path, _, _ = self.write_valid_report_evidence()
-        contents = path.read_text(encoding="utf-8")
-        path.write_text(
-            contents.replace(
-                '"status": "passed"',
-                '"status": "passed", "status": "passed"',
-                1,
+        self.assertIn(b"private-relay-env", observed)
+        self.assertIn(b"private-tls-key", observed)
+        self.assertIn(b"private-signing-key", observed)
+        self.assertIn(b"unlisted-certificate-material", observed)
+        self.assertNotIn(b"public-signing-key", observed)
+        self.assertNotIn(b"public-certificate", observed)
+
+    def test_dev_credentials_reject_non_private_and_symlinked_files(self) -> None:
+        credentials = self.root / "credentials"
+        credentials.mkdir(mode=0o700)
+        private = credentials / "relay-public-serve.env"
+        private.write_text("API_SECRET=private\n", encoding="utf-8")
+        private.chmod(0o644)
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "not owner-only"
+        ):
+            self.module.validate_dev_credentials(credentials)
+
+        private.chmod(0o600)
+        (credentials / "linked-private-key").symlink_to(private)
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "regular and non-symlink"
+        ):
+            self.module.validate_dev_credentials(credentials)
+
+    def test_release_environment_drops_all_unowned_control_variables(self) -> None:
+        observed = self.module.sealed_release_environment(
+            {
+                "PATH": "/usr/bin",
+                "CI": "1",
+                "REGISTRYCTL_ASSET_DIR": "/attacker",
+                "REGISTRYCTL_RELEASE_LOCK_BYPASS": "1",
+                "COMPOSE_PROJECT_NAME": "attacker",
+                "COMPOSE_FILE": "/attacker/compose.yaml",
+            }
+        )
+        self.assertEqual(observed, {"PATH": "/usr/bin", "CI": "1"})
+
+    def test_dev_status_and_logs_require_exact_current_schemas(self) -> None:
+        status = {
+            "schema_version": "registryctl.dev_status.v1",
+            "binding": {
+                "project": "fixture",
+                "environment": "local",
+                "project_root_digest": "sha256:" + "a" * 64,
+            },
+            "source_mode": "synthetic",
+            "request_command": "fixture",
+            "workloads": [
+                {"workload": name, "state": "running"}
+                for name in sorted(self.module.STABLE_WORKLOAD_IMAGES)
+            ],
+        }
+        logs = {
+            "schema_version": "registryctl.dev_logs.v1",
+            "binding": {
+                "project": "fixture",
+                "environment": "local",
+                "project_root_digest": "sha256:" + "a" * 64,
+            },
+            "products": [
+                {"workload": name, "available": True}
+                for name in sorted(
+                    {
+                        "relay-public",
+                        "relay-consultation",
+                        "notary",
+                        "synthetic-source",
+                    }
+                )
+            ],
+        }
+        self.assertEqual(
+            self.module.stable_status_summary(status)["schema_version"],
+            "registryctl.dev_status.v1",
+        )
+        self.assertEqual(
+            self.module.stable_logs_summary(logs)["schema_version"],
+            "registryctl.dev_logs.v1",
+        )
+        status["schema_version"] = "registryctl.dev_status.v0"
+        logs["schema_version"] = "registryctl.dev_logs.v0"
+        with self.assertRaises(self.module.ReleaseFormError):
+            self.module.stable_status_summary(status)
+        with self.assertRaises(self.module.ReleaseFormError):
+            self.module.stable_logs_summary(logs)
+
+    def test_governed_binding_uses_signed_identity_and_unique_volume_prefix(
+        self,
+    ) -> None:
+        bundle = self.root / "relay-public"
+        (bundle / "bundle").mkdir(parents=True)
+        manifest = {
+            "acceptance_identity": {
+                "trust_domain": "governed",
+                "project": "my-registry",
+                "environment": "local",
+                "lane": "relay-public",
+                "product": "registry-relay",
+                "stream": "local",
+                "instance": "relay-public",
+            }
+        }
+        (bundle / "bundle/manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        destination = self.root / "private/binding.json"
+
+        package_id, volume_prefix = self.module.governed_deployment_binding(
+            bundle, destination
+        )
+        binding = json.loads(destination.read_text(encoding="utf-8"))
+
+        identity_bytes = b'{"environment":"local","project":"my-registry"}'
+        self.assertEqual(
+            package_id,
+            "registry-" + hashlib.sha256(identity_bytes).hexdigest()[:24],
+        )
+        self.assertEqual(binding["package_id"], package_id)
+        self.assertEqual(binding["durable_volume_prefix"], volume_prefix)
+        self.assertEqual(
+            set(binding["secret_files"]),
+            set(self.module.GOVERNED_OPERATOR_SOURCES),
+        )
+        self.assertEqual(binding["ports"], {"relay_public": 4242, "notary": 4255})
+        if os.name == "posix":
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_governed_binding_rejects_preexisting_docker_resources(self) -> None:
+        empty = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess([], 0, "container-id\n", ""),
+                empty,
+                empty,
+            ],
+        ):
+            with self.assertRaisesRegex(
+                self.module.ReleaseFormError, "preexisting Docker resources"
+            ):
+                self.module.assert_governed_resources_absent(
+                    "registry-package",
+                    "release-volume",
+                    cwd=self.root,
+                    env={},
+                )
+
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            side_effect=[
+                empty,
+                empty,
+                subprocess.CompletedProcess(
+                    [], 0, "release-volume-postgresql-data\n", ""
+                ),
+            ],
+        ):
+            with self.assertRaisesRegex(
+                self.module.ReleaseFormError, "preexisting Docker resources"
+            ):
+                self.module.assert_governed_resources_absent(
+                    "registry-package",
+                    "release-volume",
+                    cwd=self.root,
+                    env={},
+                )
+
+    def test_rollback_evidence_requires_typed_rejection_for_both_lanes(
+        self,
+    ) -> None:
+        logs = self.root / "logs"
+        logs.mkdir(mode=0o700)
+        typed = json.dumps(
+            {
+                "result": "rejected_rollback",
+                "errors": [{"code": "rejected_rollback"}],
+            }
+        )
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess([], 1, typed),
+                subprocess.CompletedProcess([], 1, typed),
+            ],
+        ):
+            self.module.run_expected_rollbacks(
+                "rollback",
+                [("relay-consultation", ["relay"]), ("notary", ["notary"])],
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+        self.assertEqual(
+            json.loads((logs / "rollback.log").read_text(encoding="utf-8")),
+            {
+                "outcome": "rejected",
+                "classification": "rejected_rollback",
+                "lanes": ["relay-consultation", "notary"],
+            },
+        )
+
+        with (
+            mock.patch.object(
+                self.module.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [],
+                    1,
+                    json.dumps(
+                        {
+                            "result": "rejected",
+                            "errors": [{"code": "state_error"}],
+                        }
+                    ),
+                ),
             ),
-            encoding="utf-8",
-        )
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "not valid closed JSON"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_missing_evidence_log(self) -> None:
-        path, _, logs = self.write_valid_report_evidence()
-        (logs / "combined_smoke.log").unlink()
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "log set is not closed"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_extra_evidence_log(self) -> None:
-        path, _, logs = self.write_valid_report_evidence()
-        (logs / "unclaimed.log").write_text("unclaimed\n", encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "log set is not closed"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_forged_evidence_log_hash(self) -> None:
-        path, report, _ = self.write_valid_report_evidence()
-        report["commands"][0]["log_sha256"] = "0" * 64
-        path.write_text(json.dumps(report), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "log digest does not match"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_wrong_allowed_summary(self) -> None:
-        path, report, logs = self.write_valid_report_evidence()
-        allowed = json.loads((logs / "allowed.log").read_text(encoding="utf-8"))
-        allowed[0]["row_count"] = 2
-        (logs / "allowed.log").write_text(
-            json.dumps(allowed, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        allowed_command = next(
-            command for command in report["commands"] if command["name"] == "allowed"
-        )
-        allowed_command["log_sha256"] = hashlib.sha256(
-            (logs / "allowed.log").read_bytes()
-        ).hexdigest()
-        path.write_text(json.dumps(report), encoding="utf-8")
-
-        with self.assertRaisesRegex(self.module.ReleaseFormError, "exact value-free"):
-            self.verify_report(path)
-
-    def test_report_rejects_missing_notary_smoke_outcome(self) -> None:
-        path, report, _ = self.write_valid_report_evidence()
-        report["smoke"]["combined_notary"] = report["smoke"][
-            "combined_notary"
-        ][:-1]
-        path.write_text(json.dumps(report), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "does not prove"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_malformed_allowed_summary(self) -> None:
-        path, report, logs = self.write_valid_report_evidence()
-        (logs / "allowed.log").write_text("{not-json}\n", encoding="utf-8")
-        allowed_command = next(
-            command for command in report["commands"] if command["name"] == "allowed"
-        )
-        allowed_command["log_sha256"] = hashlib.sha256(
-            (logs / "allowed.log").read_bytes()
-        ).hexdigest()
-        path.write_text(json.dumps(report), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "not valid closed JSON"
-        ):
-            self.verify_report(path)
-
-    def test_report_rejects_value_bearing_allowed_summary(self) -> None:
-        path, report, logs = self.write_valid_report_evidence()
-        allowed = json.loads((logs / "allowed.log").read_text(encoding="utf-8"))
-        allowed[0]["record_values"] = {"project_id": "private-project-value"}
-        (logs / "allowed.log").write_text(
-            json.dumps(allowed, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        allowed_command = next(
-            command for command in report["commands"] if command["name"] == "allowed"
-        )
-        allowed_command["log_sha256"] = hashlib.sha256(
-            (logs / "allowed.log").read_bytes()
-        ).hexdigest()
-        path.write_text(json.dumps(report), encoding="utf-8")
-
-        with self.assertRaisesRegex(self.module.ReleaseFormError, "exact value-free"):
-            self.verify_report(path)
-
-    def test_report_rejects_reordered_or_failed_journey(self) -> None:
-        verified = self.verify_assets()
-        report = {
-            "schema_version": self.module.SCHEMA,
-            "status": "passed",
-            "release_tag": self.tag,
-            "manifest_source_ref": "1" * 40,
-            "tag_target": "2" * 40,
-            "platform_asset": self.binary,
-            "asset_sha256": verified["assets"],
-            "release_image_lock_sha256": verified["assets"][self.lock],
-            "release_lock_sha256": verified["assets"][self.release_lock],
-            "relay_image": self.relay,
-            "notary_image": self.notary,
-            "postgresql_image": self.postgresql,
-            "staging_transport": None,
-            "notary_staging_transport": None,
-            "commands": [
-                {
-                    "name": name,
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": "c" * 64,
-                }
-                for name in reversed(self.module.COMMAND_ORDER)
-            ],
-            "listeners": {
-                "relay": self.module.RELAY_LISTENER,
-                "notary": self.module.NOTARY_LISTENER,
-            },
-            "permissions": {
-                "runtime_secrets_directory": "0700",
-                **{name: "0600" for name in self.module.SECRET_FILES},
-            },
-            "runtime": {
-                "relay_config_sha256": "d" * 64,
-                "runtime_manifest_sha256": "e" * 64,
-                "compose_sha256": "f" * 64,
-                "notary_config_sha256": "a" * 64,
-                "topology": "combined_notary",
-                "workbook_classification": "operator_owned_source_data",
-            },
-            "smoke": json.loads(json.dumps(self.module.SMOKE_EVIDENCE)),
-            "redaction": {"status": "passed", "generated_files_scanned": 20},
-        }
-        path = self.root / "report.json"
-        path.write_text(json.dumps(report), encoding="utf-8")
-        with (
-            self.assertRaisesRegex(self.module.ReleaseFormError, "does not prove"),
-            mock.patch.object(platform, "system", return_value="Linux"),
-            mock.patch.object(platform, "machine", return_value="x86_64"),
-        ):
-            self.module.verify_legacy_report(path, self.assets, self.tag)
-
-    def test_report_rejects_unknown_field(self) -> None:
-        verified = self.verify_assets()
-        report = {
-            "schema_version": self.module.SCHEMA,
-            "status": "passed",
-            "release_tag": self.tag,
-            "manifest_source_ref": "1" * 40,
-            "tag_target": "2" * 40,
-            "platform_asset": self.binary,
-            "asset_sha256": verified["assets"],
-            "release_image_lock_sha256": verified["assets"][self.lock],
-            "release_lock_sha256": verified["assets"][self.release_lock],
-            "relay_image": self.relay,
-            "notary_image": self.notary,
-            "postgresql_image": self.postgresql,
-            "staging_transport": None,
-            "notary_staging_transport": None,
-            "commands": [
-                {
-                    "name": name,
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": "c" * 64,
-                }
-                for name in self.module.COMMAND_ORDER
-            ],
-            "listeners": {
-                "relay": self.module.RELAY_LISTENER,
-                "notary": self.module.NOTARY_LISTENER,
-            },
-            "permissions": {
-                "runtime_secrets_directory": "0700",
-                **{name: "0600" for name in self.module.SECRET_FILES},
-            },
-            "runtime": {
-                "relay_config_sha256": "d" * 64,
-                "runtime_manifest_sha256": "e" * 64,
-                "compose_sha256": "f" * 64,
-                "notary_config_sha256": "a" * 64,
-                "topology": "combined_notary",
-                "workbook_classification": "operator_owned_source_data",
-            },
-            "smoke": json.loads(json.dumps(self.module.SMOKE_EVIDENCE)),
-            "redaction": {"status": "passed", "generated_files_scanned": 20},
-            "unexpected": True,
-        }
-        path = self.root / "report-with-extra-field.json"
-        path.write_text(json.dumps(report), encoding="utf-8")
-        with (
             self.assertRaisesRegex(
-                self.module.ReleaseFormError, "fields are not closed"
+                self.module.ReleaseFormError, "typed rejected_rollback"
             ),
-            mock.patch.object(platform, "system", return_value="Linux"),
-            mock.patch.object(platform, "machine", return_value="x86_64"),
         ):
-            self.module.verify_legacy_report(path, self.assets, self.tag)
+            self.module.run_expected_rollbacks(
+                "invalid-rollback",
+                [("relay-consultation", ["relay"])],
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+
+    def test_backup_selects_exactly_seven_durable_volumes(self) -> None:
+        package = self.root / "package"
+        package.mkdir()
+        durable = {
+            "registry-postgres": {
+                "/var/lib/postgresql/data": "release-postgresql-data"
+            },
+            "registry-relay-public": {
+                "/var/lib/registry/state": "release-relay-public-state",
+                "/var/lib/registry/audit": "release-relay-public-audit",
+            },
+            "registry-relay-consultation": {
+                "/var/lib/registry/state": "release-relay-consultation-state",
+                "/var/lib/registry/audit": "release-relay-consultation-audit",
+            },
+            "registry-notary": {
+                "/var/lib/registry/state": "release-notary-state",
+                "/var/lib/registry/audit": "release-notary-audit",
+            },
+        }
+        services = {
+            service: {
+                "volumes": [
+                    {"type": "volume", "source": source, "target": target}
+                    for target, source in targets.items()
+                ]
+            }
+            for service, targets in durable.items()
+        }
+        services["registry-runtime-stage-secrets"] = {
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "release-stage-secrets",
+                    "target": "/registryctl-stage/output/fixture",
+                }
+            ]
+        }
+        sources = {
+            source for targets in durable.values() for source in targets.values()
+        }
+        document = {
+            "name": "governed-fixture",
+            "services": services,
+            "volumes": {
+                **{source: {"name": source} for source in sources},
+                "release-stage-secrets": {},
+            },
+        }
+
+        def completed(command, **_kwargs):
+            if "config" in command:
+                return subprocess.CompletedProcess(
+                    command, 0, json.dumps(document), ""
+                )
+            if command[:3] == ["docker", "volume", "ls"]:
+                return subprocess.CompletedProcess(
+                    command, 0, "\n".join(sorted(sources)) + "\n", ""
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        logs = self.root / "logs"
+        logs.mkdir(mode=0o700)
+        with mock.patch.object(
+            self.module.subprocess, "run", side_effect=completed
+        ):
+            self.module.backup_and_restore_governed_volumes(
+                package,
+                postgresql_image=self.postgresql,
+                backup_root=self.root / "backup",
+                env={},
+                logs=logs,
+            )
+        self.assertEqual(
+            json.loads((logs / "backup_restore.log").read_text(encoding="utf-8"))[
+                "consistency_group_volumes"
+            ],
+            7,
+        )
+
+        document["volumes"]["unexpected-durable"] = {}
+        with (
+            mock.patch.object(
+                self.module.subprocess, "run", side_effect=completed
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "unexpected durable volume"
+            ),
+        ):
+            self.module.backup_and_restore_governed_volumes(
+                package,
+                postgresql_image=self.postgresql,
+                backup_root=self.root / "second-backup",
+                env={},
+                logs=logs,
+            )
+
 
     def test_workflows_keep_candidate_and_released_install_proofs_separate(
         self,
@@ -1263,8 +1539,8 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertIn(
             "validate version-appropriate install inputs", candidate
         )
-        self.assertIn("if ((major == 0)); then", candidate)
-        self.assertIn("first-country-release-form.py run", candidate)
+        self.assertIn("if ((major >= 1)); then", candidate)
+        self.assertNotIn("first-country-release-form.py", candidate)
         self.assertIn("registry_release_lock.py create-payload", candidate)
         self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
         self.assertIn("if ((major >= 1)); then", release)
@@ -1272,6 +1548,8 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertIn("REGISTRYCTL_ASSET_DIR", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("--relay-image-override", release)
         self.assertNotIn("--notary-image-override", release)
+        self.assertNotIn("--relay-image-override", candidate)
+        self.assertNotIn("--notary-image-override", candidate)
         self.assertNotIn(
             "Verify candidate beginner journey on ${{ matrix.asset }}", candidate
         )

@@ -670,8 +670,6 @@ jobs:
               candidate/bundle-root/
           done
           cp candidate/security/advisory-verdict.json candidate/bundle-root/
-          relay_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-relay.digest")"
-          notary_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-notary.digest")"
           (
             cd candidate/bundle-root
             sha256sum \
@@ -682,18 +680,7 @@ jobs:
           )
           major="${{ needs.validate.outputs.version }}"
           major="${major%%.*}"
-          if ((major == 0)); then
-            python3 release/scripts/first-country-release-form.py run \
-              --asset-dir candidate/bundle-root \
-              --tag "${{ needs.validate.outputs.tag }}" \
-              --relay-image-override "${relay_candidate}" \
-              --notary-image-override "${notary_candidate}" \
-              --evidence-dir candidate/first-country
-            python3 release/scripts/first-country-release-form.py verify \
-              --asset-dir candidate/bundle-root \
-              --tag "${{ needs.validate.outputs.tag }}" \
-              --report candidate/first-country/first-country-release-form.json
-          else
+          if ((major >= 1)); then
             python3 release/scripts/registry_release_lock.py create-payload \
               --version "${{ needs.validate.outputs.version }}" \
               --manifest-source-ref "${{ needs.validate.outputs.source_sha }}" \

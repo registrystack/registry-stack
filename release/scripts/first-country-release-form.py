@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -18,8 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA = "registry-stack.first-country-release-form.v1"
-STABLE_SCHEMA = "registry-stack.first-country-release-form.v2"
+STABLE_SCHEMA = "registry-stack.first-country-release-form.v3"
 TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 RELAY_IMAGE = re.compile(
     r"^ghcr\.io/registrystack/registry-relay@sha256:([0-9a-f]{64})$"
@@ -30,29 +30,6 @@ NOTARY_IMAGE = re.compile(
 POSTGRESQL_IMAGE = re.compile(
     r"^docker\.io/library/postgres@sha256:([0-9a-f]{64})$"
 )
-STAGING_RELAY_IMAGE = re.compile(
-    r"^ghcr\.io/registrystack/registry-relay-candidate@sha256:([0-9a-f]{64})$"
-)
-STAGING_NOTARY_IMAGE = re.compile(
-    r"^ghcr\.io/registrystack/registry-notary-candidate@sha256:([0-9a-f]{64})$"
-)
-COMMAND_ORDER = (
-    "install",
-    "version",
-    "init",
-    "preflight",
-    "relay_start",
-    "relay_smoke",
-    "add_notary",
-    "combined_test",
-    "combined_restart",
-    "combined_smoke",
-    "denied",
-    "allowed",
-    "inspect",
-    "listeners",
-    "stop",
-)
 STABLE_COMMAND_ORDER = (
     "install",
     "version",
@@ -60,13 +37,60 @@ STABLE_COMMAND_ORDER = (
     "pull_relay",
     "pull_notary",
     "pull_postgresql",
+    "public_source_live",
+    "oauth_dev_up",
+    "oauth_dev_smoke",
+    "oauth_dev_down",
     "doctor",
     "dev_up",
     "dev_status",
     "dev_smoke",
     "dev_logs",
     "inspect",
+    "anchor_relay_public",
+    "sign_relay_public",
+    "verify_relay_public",
+    "anchor_relay_consultation",
+    "sign_relay_consultation",
+    "verify_relay_consultation",
+    "anchor_notary",
+    "sign_notary",
+    "verify_notary",
+    "approved_set",
+    "deploy_generate",
     "dev_down",
+    "deploy_verify",
+    "parent_include_config",
+    "initialize_config",
+    "initialize_stage_secrets",
+    "initialize_postgresql",
+    "initialize_relay_public_prepare",
+    "initialize_relay_consultation_prepare",
+    "initialize_notary_prepare",
+    "initialize_relay_public",
+    "initialize_relay_consultation",
+    "initialize_notary",
+    "governed_start",
+    "governed_restart",
+    "governed_stop_for_backup",
+    "backup_restore",
+    "restored_start",
+    "restored_stop",
+    "update_build",
+    "rotate_relay_consultation",
+    "update_sign_relay_consultation",
+    "update_verify_relay_consultation",
+    "update_sign_notary",
+    "update_approved_set",
+    "update_generate",
+    "update_verify",
+    "failed_activation",
+    "failed_activation_recovery",
+    "updated_start",
+    "updated_stop",
+    "rollback_rejected",
+    "final_start",
+    "isolated_teardown",
 )
 STABLE_WORKLOAD_IMAGES = {
     "relay-public": "relay_image",
@@ -78,6 +102,89 @@ STABLE_WORKLOAD_IMAGES = {
 STABLE_LISTENERS = {
     "relay-public": "127.0.0.1:4242",
     "notary": "127.0.0.1:4243",
+}
+STABLE_READER_EVIDENCE_FILES = {
+    "manifest.json",
+    "http/init.txt",
+    "http/test.txt",
+    "http/trace.txt",
+    "http/build.txt",
+    "http/test.json",
+    "http/check.json",
+    "http/build.json",
+    "opencrvs-init.txt",
+    "opencrvs-overlay.txt",
+    "opencrvs-check-explain.txt",
+    "opencrvs/test.json",
+    "opencrvs/check.json",
+    "opencrvs/build.json",
+    "public-source-init.txt",
+    "public-source-overlay.txt",
+    "public-source-test.txt",
+    "public-source-check.txt",
+    "public-source-missing-check.txt",
+}
+PUBLIC_SOURCE_LIVE_EVIDENCE_FILES = {
+    "init.txt",
+    "overlay.txt",
+    "offline-test.txt",
+    "public-demo-check.txt",
+    "public-demo-missing-check.txt",
+    "public-todo-4.json",
+    "public-todo-999999.json",
+    "public-demo-start.txt",
+    "public-demo-smoke.txt",
+    "public-demo-down.txt",
+    "public-demo-missing-start.txt",
+    "public-demo-missing-smoke.txt",
+    "public-demo-missing-down.txt",
+}
+PUBLIC_MATERIAL_FILENAMES = {
+    "request.json",
+    "notary-workload-jwks.json",
+    "relay-public.public.jwk",
+    "relay-consultation.public.jwk",
+    "notary.public.jwk",
+    "relay-public-tls-certificate",
+    "relay-consultation-tls-certificate",
+    "notary-tls-certificate",
+    "postgresql-tls-certificate",
+    "relay-public-tls.crt",
+    "relay-consultation-tls.crt",
+    "notary-tls.crt",
+    "postgres-tls.crt",
+}
+HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
+OAUTH_MINIMIZED_CLAIMS = ["birth-event-found", "birth-event-registered"]
+GOVERNED_LANES = ("relay-public", "relay-consultation", "notary")
+GOVERNED_OPERATOR_SOURCES = {
+    "relay-public-environment": (
+        "relay-public-prepare.env",
+        "relay-public-initialize.env",
+        "relay-public-serve.env",
+    ),
+    "relay-consultation-environment": (
+        "relay-consultation-prepare.env",
+        "relay-consultation-initialize.env",
+        "relay-consultation-serve.env",
+    ),
+    "notary-environment": (
+        "notary-prepare.env",
+        "notary-initialize.env",
+        "notary-serve.env",
+    ),
+    "postgresql-bootstrap-environment": ("postgres-bootstrap.env",),
+    "relay-public-tls-certificate": ("relay-public-tls.crt",),
+    "relay-public-tls-private-key": ("relay-public-tls.key",),
+    "relay-consultation-tls-certificate": ("relay-consultation-tls.crt",),
+    "relay-consultation-tls-private-key": ("relay-consultation-tls.key",),
+    "notary-tls-certificate": ("notary-tls.crt",),
+    "notary-tls-private-key": ("notary-tls.key",),
+    "notary-signing-key": ("notary-signing-key.jwk",),
+    "notary-relay-workload-credential": ("notary-relay-token",),
+    "postgresql-tls-certificate": ("postgres-tls.crt",),
+    "postgresql-tls-private-key": ("postgres-tls.key",),
+    "postgresql-admin-password": ("postgres-admin-password",),
 }
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
@@ -163,6 +270,14 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sealed_release_environment(source: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in source.items()
+        if not name.startswith(("REGISTRYCTL_", "COMPOSE_"))
+    }
+
+
 def require_regular(path: Path, *, max_bytes: int = MAX_FILE_BYTES) -> None:
     try:
         metadata = path.lstat()
@@ -227,14 +342,13 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
     tag_match = TAG.fullmatch(tag)
     if tag_match is None:
         raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
+    if int(tag_match.group(1)) < 1:
+        raise ReleaseFormError("release-form proof supports Registry Stack v1 and later")
     installer_name = f"registryctl-{tag}-install.sh"
     binary_name = platform_asset(tag)
     lock_name = f"registryctl-{tag}-image-lock.json"
     release_lock_name = "registry-release-lock.v1.json"
-    requires_release_lock = int(tag_match.group(1)) >= 1
-    names = [installer_name, binary_name, lock_name]
-    if requires_release_lock:
-        names.append(release_lock_name)
+    names = [installer_name, binary_name, lock_name, release_lock_name]
     checksums = parse_checksums(asset_dir / "SHA256SUMS")
     assets: dict[str, str] = {}
     for name in names:
@@ -299,45 +413,13 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         "installer_name": installer_name,
         "binary_name": binary_name,
         "lock_name": lock_name,
-        "release_lock_name": release_lock_name if requires_release_lock else None,
+        "release_lock_name": release_lock_name,
         "assets": assets,
         "lock": lock,
         "relay_image": relay_image,
         "notary_image": notary_image,
         "postgresql_image": postgresql_image,
     }
-
-
-def validate_relay_override(expected: str, override: str | None) -> str | None:
-    if override is None:
-        return None
-    expected_match = RELAY_IMAGE.fullmatch(expected)
-    override_match = STAGING_RELAY_IMAGE.fullmatch(override)
-    if expected_match is None or override_match is None:
-        raise ReleaseFormError(
-            "Relay staging transport must use the private candidate repository and an immutable digest"
-        )
-    if expected_match.group(1) != override_match.group(1):
-        raise ReleaseFormError(
-            "Relay staging transport does not match the release image digest"
-        )
-    return override
-
-
-def validate_notary_override(expected: str, override: str | None) -> str | None:
-    if override is None:
-        return None
-    expected_match = NOTARY_IMAGE.fullmatch(expected)
-    override_match = STAGING_NOTARY_IMAGE.fullmatch(override)
-    if expected_match is None or override_match is None:
-        raise ReleaseFormError(
-            "Notary staging transport must use the private candidate repository and an immutable digest"
-        )
-    if expected_match.group(1) != override_match.group(1):
-        raise ReleaseFormError(
-            "Notary staging transport does not match the release image digest"
-        )
-    return override
 
 
 def run_command(
@@ -360,7 +442,7 @@ def run_command(
         check=False,
     )
     output = result.stdout[-MAX_LOG_BYTES:]
-    (logs / f"{name}.log").write_text(output, encoding="utf-8")
+    write_private(logs / f"{name}.log", output.encode())
     if result.returncode != expected_status:
         raise ReleaseFormError(
             f"{name} failed with status {result.returncode}; expected {expected_status}"
@@ -578,6 +660,43 @@ def assert_no_secret_leak(project: Path, secrets: Iterable[bytes]) -> int:
     return scanned
 
 
+def assert_no_governed_secret_leak(
+    package: Path, secrets: Iterable[bytes]
+) -> int:
+    scanned = 0
+    for path in sorted(package.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(package)
+        if relative.parts and relative.parts[0] == "operator":
+            continue
+        try:
+            data = path.read_bytes()
+        except PermissionError as error:
+            if shutil.which("sudo") is None:
+                raise ReleaseFormError(
+                    "governed generated file cannot be scanned"
+                ) from error
+            read = subprocess.run(
+                ["sudo", "--non-interactive", "cat", "--", str(path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+                check=False,
+            )
+            if read.returncode != 0 or len(read.stdout) > MAX_FILE_BYTES:
+                raise ReleaseFormError(
+                    "governed generated file cannot be scanned"
+                ) from error
+            data = read.stdout
+        scanned += 1
+        if any(secret in data for secret in secrets):
+            raise ReleaseFormError(
+                f"raw credential leaked into governed generated file {relative}"
+            )
+    return scanned
+
+
 def redact_logs(
     logs: Path,
     secrets: Iterable[bytes],
@@ -600,7 +719,7 @@ def redact_logs(
             data = data.replace(secret, b"[REDACTED]")
         for private_path in path_bytes:
             data = data.replace(private_path, b"[PRIVATE_PATH]")
-        path.write_bytes(data)
+        write_private(path, data)
 
 
 def mode(path: Path) -> str:
@@ -611,6 +730,8 @@ def require_private_directory(path: Path) -> None:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
         raise ReleaseFormError(f"required directory must be real: {path.name}")
+    if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise ReleaseFormError(f"required directory must be owner-only: {path.name}")
 
 
 def digest_uri(path: Path) -> str:
@@ -814,14 +935,18 @@ def read_closed_json(path: Path, description: str) -> Any:
 
 
 def write_json_log(logs: Path, name: str, value: Any) -> None:
-    (logs / f"{name}.log").write_text(
-        json.dumps(value, sort_keys=True) + "\n",
-        encoding="utf-8",
+    write_private(
+        logs / f"{name}.log",
+        (json.dumps(value, sort_keys=True) + "\n").encode(),
     )
 
 
 def stable_reader_summary(
-    manifest_path: Path, *, version: str, retained_project: Path
+    manifest_path: Path,
+    *,
+    version: str,
+    retained_project: Path,
+    retained_oauth_project: Path,
 ) -> dict[str, Any]:
     manifest = read_closed_json(manifest_path, "reader-journey manifest")
     expected_projects = [
@@ -829,7 +954,10 @@ def stable_reader_summary(
             "id": "http",
             "source": "embedded-http-template",
             "reports": [
-                "http/init.json",
+                "http/init.txt",
+                "http/test.txt",
+                "http/trace.txt",
+                "http/build.txt",
                 "http/test.json",
                 "http/check.json",
                 "http/build.json",
@@ -837,7 +965,7 @@ def stable_reader_summary(
         },
         {
             "id": "opencrvs-events-api",
-            "source": "maintained-synthetic-example",
+            "source": "public-docs-overlay-v1",
             "covers": [
                 "oauth-client-credentials",
                 "bounded-http",
@@ -859,6 +987,7 @@ def stable_reader_summary(
         "projects",
         "release_boundary",
         "retained_project",
+        "retained_oauth_project",
     }
     if (
         not isinstance(manifest, dict)
@@ -870,6 +999,7 @@ def stable_reader_summary(
         or manifest.get("registryctl_version") != version
         or manifest.get("projects") != expected_projects
         or manifest.get("retained_project") != str(retained_project)
+        or manifest.get("retained_oauth_project") != str(retained_oauth_project)
     ):
         raise ReleaseFormError(
             "reader-journey manifest does not prove the sealed maintained journeys"
@@ -880,6 +1010,29 @@ def stable_reader_summary(
         "mode": "sealed",
         "registryctl_version": version,
         "projects": ["http", "opencrvs-events-api"],
+    }
+
+
+def stable_public_source_live_summary(evidence: Path) -> dict[str, Any]:
+    observed = closed_tree_digests(evidence)
+    if set(observed) != PUBLIC_SOURCE_LIVE_EVIDENCE_FILES:
+        raise ReleaseFormError("public-source live evidence set is not closed")
+    for environment in ("public-demo", "public-demo-missing"):
+        smoke = evidence / f"{environment}-smoke.txt"
+        require_regular(smoke, max_bytes=MAX_LOG_BYTES)
+        text = smoke.read_text(encoding="utf-8")
+        if (
+            "Development smoke: passed." not in text
+            or "status=authorized; passed=true" not in text
+        ):
+            raise ReleaseFormError(
+                f"public-source live evidence did not pass {environment}"
+            )
+    return {
+        "schema_version": "registry-stack.public-source-live-proof.v1",
+        "status": "passed",
+        "environments": ["public-demo", "public-demo-missing"],
+        "evidence_sha256": observed,
     }
 
 
@@ -925,12 +1078,29 @@ def stable_doctor_summary(report: Any) -> dict[str, Any]:
 
 def stable_status_summary(report: Any) -> dict[str, Any]:
     workloads = report.get("workloads") if isinstance(report, dict) else None
+    binding = report.get("binding") if isinstance(report, dict) else None
     expected = set(STABLE_WORKLOAD_IMAGES)
     if (
         not isinstance(report, dict)
-        or set(report) != {"binding", "workloads", "source_mode", "request_command"}
+        or set(report)
+        != {
+            "schema_version",
+            "binding",
+            "workloads",
+            "source_mode",
+            "request_command",
+        }
+        or report.get("schema_version") != "registryctl.dev_status.v1"
         or report.get("source_mode") != "synthetic"
-        or not isinstance(report.get("binding"), dict)
+        or not isinstance(binding, dict)
+        or set(binding) != {"project", "environment", "project_root_digest"}
+        or not isinstance(binding.get("project"), str)
+        or not binding["project"]
+        or binding.get("environment") != "local"
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(binding.get("project_root_digest"))
+        )
+        is None
         or not isinstance(report.get("request_command"), str)
         or not report["request_command"]
         or not isinstance(workloads, list)
@@ -947,6 +1117,7 @@ def stable_status_summary(report: Any) -> dict[str, Any]:
             "registryctl dev status did not prove every bound workload running"
         )
     return {
+        "schema_version": "registryctl.dev_status.v1",
         "source_mode": "synthetic",
         "workloads": [
             {"workload": name, "state": "running"} for name in sorted(expected)
@@ -954,7 +1125,12 @@ def stable_status_summary(report: Any) -> dict[str, Any]:
     }
 
 
-def stable_smoke_summary(report: Any) -> dict[str, Any]:
+def stable_smoke_summary(
+    report: Any,
+    *,
+    expected_token_delta: int = 0,
+    expected_claims: list[str] = HTTP_MINIMIZED_CLAIMS,
+) -> dict[str, Any]:
     results = report.get("results") if isinstance(report, dict) else None
     statuses = {
         item.get("status")
@@ -1006,13 +1182,9 @@ def stable_smoke_summary(report: Any) -> dict[str, Any]:
         denial["token_counter_delta"] != 0
         or denial["source_counter_delta"] != 0
         or denial["minimized_claim_ids"] != []
-        or type(authorized["token_counter_delta"]) is not int
-        or authorized["token_counter_delta"] < 0
+        or authorized["token_counter_delta"] != expected_token_delta
         or authorized["source_counter_delta"] != 1
-        or not all(
-            isinstance(claim, str) and claim
-            for claim in authorized["minimized_claim_ids"]
-        )
+        or authorized["minimized_claim_ids"] != expected_claims
     ):
         raise ReleaseFormError(
             "registryctl dev smoke counters or minimized claims are invalid"
@@ -1039,8 +1211,17 @@ def stable_smoke_summary(report: Any) -> dict[str, Any]:
     }
 
 
+def stable_oauth_smoke_summary(report: Any) -> dict[str, Any]:
+    return stable_smoke_summary(
+        report,
+        expected_token_delta=1,
+        expected_claims=OAUTH_MINIMIZED_CLAIMS,
+    )
+
+
 def stable_logs_summary(report: Any) -> dict[str, Any]:
     products = report.get("products") if isinstance(report, dict) else None
+    binding = report.get("binding") if isinstance(report, dict) else None
     expected = {
         "relay-public",
         "relay-consultation",
@@ -1049,8 +1230,17 @@ def stable_logs_summary(report: Any) -> dict[str, Any]:
     }
     if (
         not isinstance(report, dict)
-        or set(report) != {"binding", "products"}
-        or not isinstance(report.get("binding"), dict)
+        or set(report) != {"schema_version", "binding", "products"}
+        or report.get("schema_version") != "registryctl.dev_logs.v1"
+        or not isinstance(binding, dict)
+        or set(binding) != {"project", "environment", "project_root_digest"}
+        or not isinstance(binding.get("project"), str)
+        or not binding["project"]
+        or binding.get("environment") != "local"
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(binding.get("project_root_digest"))
+        )
+        is None
         or not isinstance(products, list)
         or {item.get("workload") for item in products if isinstance(item, dict)}
         != expected
@@ -1065,6 +1255,7 @@ def stable_logs_summary(report: Any) -> dict[str, Any]:
             "registryctl dev logs did not prove bounded product log availability"
         )
     return {
+        "schema_version": "registryctl.dev_logs.v1",
         "products": [
             {"workload": name, "available": True} for name in sorted(expected)
         ]
@@ -1160,25 +1351,29 @@ def recursive_secret_values(directory: Path) -> list[bytes]:
     if not directory.exists():
         return values
     for path in sorted(directory.rglob("*")):
-        try:
-            if path.is_symlink() or not path.is_file():
-                continue
-            if (
-                path.name == "request.json"
-                or path.suffix == ".crt"
-                or "public" in path.name
-                or path.name == "notary-workload-jwks.json"
-            ):
-                continue
-            require_regular(path)
-            if path.suffix == ".env":
-                values.extend(credential_env_values(path))
-            else:
-                data = path.read_bytes()
-                values.extend(value for value in (data, data.strip()) if value)
-        except OSError:
+        if path.is_dir() and not path.is_symlink():
             continue
+        require_regular(path)
+        if path.name in PUBLIC_MATERIAL_FILENAMES:
+            continue
+        if path.suffix == ".env":
+            values.extend(credential_env_values(path))
+        else:
+            data = path.read_bytes()
+            values.extend(value for value in (data, data.strip()) if value)
     return sorted(set(values), key=len, reverse=True)
+
+
+def validate_dev_credentials(directory: Path) -> None:
+    require_private_directory(directory)
+    for path in sorted(directory.rglob("*")):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        require_regular(path)
+        if os.name == "posix" and mode(path) != "0600":
+            raise ReleaseFormError(
+                f"development credential is not owner-only: {path.name}"
+            )
 
 
 def redact_text_tree(directory: Path, private_paths: Iterable[Path]) -> None:
@@ -1211,19 +1406,1111 @@ def closed_tree_digests(directory: Path) -> dict[str, str]:
     return files
 
 
-def run_stable_release_form(args: argparse.Namespace) -> Path:
-    if args.relay_image_override is not None or args.notary_image_override is not None:
-        raise ReleaseFormError(
-            "stable release proof must use the exact public signed image references"
+def write_private(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    if os.name == "posix":
+        path.chmod(0o600)
+
+
+def protect_evidence_tree(root: Path) -> None:
+    metadata = root.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ReleaseFormError("release-form evidence root must be a real directory")
+    if os.name == "posix":
+        root.chmod(0o700)
+    for path in sorted(root.rglob("*")):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ReleaseFormError(
+                f"release-form evidence must not contain symlinks: {path.name}"
+            )
+        if stat.S_ISDIR(metadata.st_mode):
+            if os.name == "posix":
+                path.chmod(0o700)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReleaseFormError(
+                f"release-form evidence must contain only regular files: {path.name}"
+            )
+        if os.name == "posix":
+            path.chmod(0o600)
+
+
+def require_private_evidence_tree(root: Path) -> None:
+    require_private_directory(root)
+    for path in sorted(root.rglob("*")):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ReleaseFormError(
+                f"release-form evidence must not contain symlinks: {path.name}"
+            )
+        if stat.S_ISDIR(metadata.st_mode):
+            if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o700:
+                raise ReleaseFormError(
+                    f"release-form evidence directory is not owner-only: {path.name}"
+                )
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReleaseFormError(
+                f"release-form evidence must contain only regular files: {path.name}"
+            )
+        if os.name == "posix" and stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ReleaseFormError(
+                f"release-form evidence file is not owner-only: {path.name}"
+            )
+
+
+def governed_deployment_binding(
+    bundle: Path,
+    destination: Path,
+) -> tuple[str, str]:
+    manifest = read_closed_json(
+        bundle / "bundle/manifest.json", "signed Relay public manifest"
+    )
+    identity = manifest.get("acceptance_identity") if isinstance(manifest, dict) else None
+    expected_identity_keys = {
+        "trust_domain",
+        "project",
+        "environment",
+        "lane",
+        "product",
+        "stream",
+        "instance",
+    }
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != expected_identity_keys
+        or identity.get("trust_domain") != "governed"
+        or identity.get("lane") != "relay-public"
+        or identity.get("product") != "registry-relay"
+        or not isinstance(identity.get("project"), str)
+        or not isinstance(identity.get("environment"), str)
+    ):
+        raise ReleaseFormError("signed deployment identity is not the expected closed value")
+    identity_bytes = json.dumps(
+        {
+            "environment": identity["environment"],
+            "project": identity["project"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    package_id = f"registry-{hashlib.sha256(identity_bytes).hexdigest()[:24]}"
+    volume_prefix = f"registry-release-form-{os.getpid()}-{os.urandom(8).hex()}"
+    binding = {
+        "schema_id": "io.registrystack.deployment_binding",
+        "schema_version": "1.0",
+        "package_id": package_id,
+        "environment": identity["environment"],
+        "loopback_address": "127.0.0.1",
+        "ports": {"relay_public": 4242, "notary": 4255},
+        "edge_network_name": None,
+        "secret_files": {
+            name: f"operator/secrets/{name}"
+            for name in sorted(GOVERNED_OPERATOR_SOURCES)
+        },
+        "certificate_files": {},
+        "durable_volume_prefix": volume_prefix,
+        "restart_policy": "unless-stopped",
+        "logging_policy": "local-bounded",
+    }
+    write_private(
+        destination,
+        (json.dumps(binding, indent=2, sort_keys=True) + "\n").encode(),
+    )
+    return package_id, volume_prefix
+
+
+def assert_governed_resources_absent(
+    package_id: str,
+    volume_prefix: str,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> None:
+    queries = {
+        "container": [
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={package_id}",
+        ],
+        "network": [
+            "docker",
+            "network",
+            "ls",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={package_id}",
+        ],
+        "volume": ["docker", "volume", "ls", "--quiet"],
+    }
+    observed: dict[str, list[str]] = {}
+    for resource, command in queries.items():
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
         )
+        if result.returncode != 0:
+            raise ReleaseFormError(
+                f"cannot establish the preexisting governed {resource} boundary"
+            )
+        observed[resource] = [line for line in result.stdout.splitlines() if line]
+    prefixed_volumes = [
+        name for name in observed["volume"] if name.startswith(f"{volume_prefix}-")
+    ]
+    if observed["container"] or observed["network"] or prefixed_volumes:
+        raise ReleaseFormError(
+            "governed deployment package identity has preexisting Docker resources"
+        )
+
+
+def create_lane_signing_keys(root: Path) -> dict[str, tuple[Path, Path]]:
+    if shutil.which("openssl") is None:
+        raise ReleaseFormError("governed release proof requires openssl")
+    root.mkdir(mode=0o700)
+    keys: dict[str, tuple[Path, Path]] = {}
+    private_prefix = bytes.fromhex("302e020100300506032b657004220420")
+    public_prefix = bytes.fromhex("302a300506032b6570032100")
+    for lane in GOVERNED_LANES:
+        private_der = root / f"{lane}.private.der"
+        public_der = root / f"{lane}.public.der"
+        with private_der.open("wb") as output:
+            generated = subprocess.run(
+                ["openssl", "genpkey", "-algorithm", "ED25519", "-outform", "DER"],
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        if generated.returncode != 0:
+            raise ReleaseFormError("failed to create a synthetic lane signing key")
+        with public_der.open("wb") as output:
+            derived = subprocess.run(
+                [
+                    "openssl",
+                    "pkey",
+                    "-in",
+                    str(private_der),
+                    "-inform",
+                    "DER",
+                    "-pubout",
+                    "-outform",
+                    "DER",
+                ],
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        if derived.returncode != 0:
+            raise ReleaseFormError("failed to derive a synthetic lane public key")
+        private_bytes = private_der.read_bytes()
+        public_bytes = public_der.read_bytes()
+        if (
+            not private_bytes.startswith(private_prefix)
+            or len(private_bytes) != len(private_prefix) + 32
+            or not public_bytes.startswith(public_prefix)
+            or len(public_bytes) != len(public_prefix) + 32
+        ):
+            raise ReleaseFormError("openssl emitted an unexpected Ed25519 key encoding")
+        def encode(value: bytes) -> str:
+            return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+        private_jwk = root / f"{lane}.private.jwk"
+        public_jwk = root / f"{lane}.public.jwk"
+        write_private(
+            private_jwk,
+            (
+                json.dumps(
+                    {
+                        "crv": "Ed25519",
+                        "d": encode(private_bytes[-32:]),
+                        "kty": "OKP",
+                        "x": encode(public_bytes[-32:]),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode(),
+        )
+        write_private(
+            public_jwk,
+            (
+                json.dumps(
+                    {
+                        "crv": "Ed25519",
+                        "kty": "OKP",
+                        "x": encode(public_bytes[-32:]),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode(),
+        )
+        private_der.unlink()
+        public_der.unlink()
+        keys[lane] = (private_jwk, public_jwk)
+    return keys
+
+
+def copy_governed_operator_inputs(package: Path, credential_root: Path) -> int:
+    inventory = read_closed_json(
+        package / "generated/operator-files.v1.json", "operator-file inventory"
+    )
+    files = inventory.get("files") if isinstance(inventory, dict) else None
+    if not isinstance(files, list) or len(files) != len(GOVERNED_OPERATOR_SOURCES):
+        raise ReleaseFormError("operator-file inventory is not the expected closed set")
+    copied = 0
+    for entry in files:
+        if (
+            not isinstance(entry, dict)
+            or set(entry)
+            != {
+                "id",
+                "path",
+                "consumers",
+                "format",
+                "mode",
+                "allowed_owners",
+                "required_keys",
+            }
+            or entry.get("id") not in GOVERNED_OPERATOR_SOURCES
+            or not isinstance(entry.get("path"), str)
+            or Path(entry["path"]).is_absolute()
+            or ".." in Path(entry["path"]).parts
+        ):
+            raise ReleaseFormError("operator-file inventory entry is invalid")
+        sources = [
+            credential_root / name
+            for name in GOVERNED_OPERATOR_SOURCES[entry["id"]]
+        ]
+        for source in sources:
+            require_regular(source)
+        destination = package / entry["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "posix":
+            for directory in (
+                package / "operator",
+                package / "operator/secrets",
+                destination.parent,
+            ):
+                if directory.exists():
+                    directory.chmod(0o700)
+        if entry.get("format") == "dotenv":
+            merged: dict[bytes, bytes] = {}
+            for source in sources:
+                for line in source.read_bytes().splitlines():
+                    if not line or line.startswith(b"#"):
+                        continue
+                    if b"=" not in line:
+                        raise ReleaseFormError(
+                            "development dotenv input is malformed"
+                        )
+                    name, value = line.split(b"=", 1)
+                    if name in merged and merged[name] != value:
+                        raise ReleaseFormError(
+                            "development dotenv inputs disagree on a shared key"
+                        )
+                    merged[name] = value
+            data = b"".join(
+                name + b"=" + value + b"\n"
+                for name, value in sorted(merged.items())
+            )
+        else:
+            if len(sources) != 1:
+                raise ReleaseFormError(
+                    "non-dotenv operator input has ambiguous sources"
+                )
+            data = sources[0].read_bytes()
+        required_keys = entry.get("required_keys")
+        if required_keys:
+            if entry.get("format") != "dotenv" or not isinstance(required_keys, list):
+                raise ReleaseFormError("operator dotenv requirement is invalid")
+            values: dict[str, bytes] = {}
+            for line in data.splitlines():
+                if b"=" not in line:
+                    continue
+                name, value = line.split(b"=", 1)
+                try:
+                    decoded = name.decode("ascii")
+                except UnicodeDecodeError:
+                    continue
+                if decoded in required_keys:
+                    values[decoded] = value
+            if set(values) != set(required_keys) or any(not value for value in values.values()):
+                raise ReleaseFormError(
+                    "development credentials do not satisfy the governed operator inventory"
+                )
+            data = b"".join(name.encode() + b"=" + values[name] + b"\n" for name in required_keys)
+        write_private(destination, data)
+        copied += 1
+    return copied
+
+
+def protect_governed_operator_inputs(package: Path) -> None:
+    operator = package / "operator"
+    require_private_directory(operator)
+    if os.geteuid() == 0:
+        os.chown(operator, 0, 0)
+        for path in operator.rglob("*"):
+            os.chown(path, 0, 0)
+        return
+    if shutil.which("sudo") is None:
+        raise ReleaseFormError(
+            "governed operator inputs require root ownership but sudo is unavailable"
+        )
+    protected = subprocess.run(
+        ["sudo", "--non-interactive", "chown", "-R", "0:0", str(operator)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    if protected.returncode != 0:
+        raise ReleaseFormError("cannot establish governed operator-file ownership")
+
+
+def privileged_registryctl(registryctl: Path, *args: str) -> list[str]:
+    if os.geteuid() == 0:
+        return [str(registryctl), *args]
+    return ["sudo", "--non-interactive", str(registryctl), *args]
+
+
+def move_privileged(source: Path, destination: Path) -> None:
+    if os.geteuid() == 0:
+        source.replace(destination)
+        return
+    moved = subprocess.run(
+        [
+            "sudo",
+            "--non-interactive",
+            "mv",
+            "--",
+            str(source),
+            str(destination),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    if moved.returncode != 0:
+        raise ReleaseFormError("cannot isolate the failed-activation operator input")
+
+
+def release_governed_ownership(package: Path) -> None:
+    if os.geteuid() == 0 or not package.exists():
+        return
+    released = subprocess.run(
+        [
+            "sudo",
+            "--non-interactive",
+            "chown",
+            "-R",
+            f"{os.getuid()}:{os.getgid()}",
+            str(package),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    if released.returncode != 0:
+        raise ReleaseFormError("cannot release the temporary governed package")
+
+
+def stable_generate_summary(report: Any) -> dict[str, str]:
+    if (
+        not isinstance(report, dict)
+        or report.get("schema_version") != "registryctl.deployment_generate.v1"
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(report.get("source_approved_baseline_set_sha256")),
+        )
+        is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(report.get("externally_recorded_closure_sha256")),
+        )
+        is None
+    ):
+        raise ReleaseFormError("deployment generation report is invalid")
+    return {
+        "schema_version": report["schema_version"],
+        "approved_set_sha256": report["source_approved_baseline_set_sha256"],
+        "externally_recorded_closure_sha256": report[
+            "externally_recorded_closure_sha256"
+        ],
+    }
+
+
+def stable_deploy_verify_summary(report: Any) -> dict[str, Any]:
+    if (
+        not isinstance(report, dict)
+        or set(report)
+        != {
+            "schema_id",
+            "schema_version",
+            "verification_scope",
+            "ownership",
+            "package_freshness",
+            "verified_guarantees",
+            "operator_owned_guarantees",
+            "violations",
+            "in_place_regeneration_safe",
+        }
+        or report.get("schema_id")
+        != "io.registrystack.deployment_ownership_report"
+        or report.get("schema_version") != "1.0"
+        or report.get("ownership") != "managed"
+        or report.get("package_freshness") != "current"
+        or report.get("verification_scope") != "package"
+        or report.get("violations") != []
+        or report.get("verified_guarantees")
+        != [
+            "generator-owned closure matches its manifest",
+            (
+                "ordinary and initialization effective models match "
+                "the generated package"
+            ),
+        ]
+        or report.get("operator_owned_guarantees")
+        != [
+            (
+                "operator files satisfy the signed isolation, mode, owner, "
+                "and consumer inventory"
+            )
+        ]
+        or report.get("in_place_regeneration_safe") is not True
+    ):
+        raise ReleaseFormError("deployment package did not pass managed verification")
+    return {
+        "ownership": "managed",
+        "package_freshness": "current",
+        "verification_scope": "package",
+        "in_place_regeneration_safe": True,
+    }
+
+
+def stable_update_build_summary(report: Any) -> dict[str, Any]:
+    expected_lanes = ["relay-consultation", "notary"]
+    if (
+        not isinstance(report, dict)
+        or report.get("schema_version")
+        != "registryctl.reviewed_project_build_report.v1"
+        or report.get("affected_lanes") != expected_lanes
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(report.get("reviewed_build_record_digest")),
+        )
+        is None
+    ):
+        raise ReleaseFormError(
+            "purpose-only update did not affect exactly consultation Relay and Notary"
+        )
+    return {
+        "schema_version": report["schema_version"],
+        "affected_lanes": expected_lanes,
+        "reviewed_build_record_digest": report["reviewed_build_record_digest"],
+    }
+
+
+def validate_governed_summary(summary: Any) -> None:
+    phase_keys = {
+        "schema_version",
+        "approved_set_sha256",
+        "externally_recorded_closure_sha256",
+        "ownership",
+        "package_freshness",
+        "verification_scope",
+        "in_place_regeneration_safe",
+    }
+    if (
+        not isinstance(summary, dict)
+        or set(summary)
+        != {
+            "schema_version",
+            "operator_file_count",
+            "initial",
+            "parent_include",
+            "explicit_initialization",
+            "ordinary_restart",
+            "backup_restore",
+            "anchor_rotation",
+            "compatible_update",
+            "failed_activation_recovery",
+            "rollback_rejection",
+            "isolated_teardown",
+        }
+        or summary.get("schema_version")
+        != "registry-stack.governed-deployment-proof.v1"
+        or type(summary.get("operator_file_count")) is not int
+        or summary["operator_file_count"] != len(GOVERNED_OPERATOR_SOURCES)
+        or any(
+            summary.get(name) != "passed"
+            for name in (
+                "parent_include",
+                "explicit_initialization",
+                "ordinary_restart",
+                "backup_restore",
+                "anchor_rotation",
+                "failed_activation_recovery",
+                "rollback_rejection",
+                "isolated_teardown",
+            )
+        )
+    ):
+        raise ReleaseFormError("governed deployment summary is invalid")
+    for phase in ("initial", "compatible_update"):
+        value = summary.get(phase)
+        if (
+            not isinstance(value, dict)
+            or set(value) != phase_keys
+            or value.get("schema_version") != "registryctl.deployment_generate.v1"
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}", str(value.get("approved_set_sha256"))
+            )
+            is None
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(value.get("externally_recorded_closure_sha256")),
+            )
+            is None
+            or {
+                key: value.get(key)
+                for key in (
+                    "ownership",
+                    "package_freshness",
+                    "verification_scope",
+                    "in_place_regeneration_safe",
+                )
+            }
+            != {
+                "ownership": "managed",
+                "package_freshness": "current",
+                "verification_scope": "package",
+                "in_place_regeneration_safe": True,
+            }
+        ):
+            raise ReleaseFormError("governed deployment phase summary is invalid")
+    if (
+        summary["initial"]["externally_recorded_closure_sha256"]
+        == summary["compatible_update"]["externally_recorded_closure_sha256"]
+    ):
+        raise ReleaseFormError("governed deployment update did not change closure")
+
+
+def run_expected_failure(
+    name: str,
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=180,
+        check=False,
+    )
+    if result.returncode == 0:
+        raise ReleaseFormError(f"{name} unexpectedly succeeded")
+    write_json_log(
+        logs,
+        name,
+        {"outcome": "rejected", "observed_exit_class": "nonzero"},
+    )
+    return {
+        "name": name,
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / f"{name}.log"),
+    }
+
+
+def run_expected_rollbacks(
+    name: str,
+    lane_commands: list[tuple[str, list[str]]],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    observed: list[str] = []
+    for lane, command in lane_commands:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=180,
+            check=False,
+        )
+        report: Any = None
+        for line in reversed(result.stdout.splitlines()):
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                report = candidate
+                break
+        errors = report.get("errors") if isinstance(report, dict) else None
+        if (
+            result.returncode == 0
+            or not isinstance(report, dict)
+            or report.get("result") != "rejected_rollback"
+            or not isinstance(errors, list)
+            or not errors
+            or any(
+                not isinstance(error, dict)
+                or error.get("code") != "rejected_rollback"
+                for error in errors
+            )
+        ):
+            raise ReleaseFormError(
+                f"{lane} did not report a typed rejected_rollback"
+            )
+        observed.append(lane)
+    write_json_log(
+        logs,
+        name,
+        {
+            "outcome": "rejected",
+            "classification": "rejected_rollback",
+            "lanes": observed,
+        },
+    )
+    return {
+        "name": name,
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / f"{name}.log"),
+    }
+
+
+def compose_base(package: Path) -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "--env-file",
+        str(package / "generated/compose.empty.env"),
+        "-f",
+        str(package / "generated/compose.yaml"),
+    ]
+
+
+def compose_initialization_base(package: Path) -> list[str]:
+    return [
+        *compose_base(package),
+        "-f",
+        str(package / "generated/compose.initialize.yaml"),
+    ]
+
+
+def compose_verify_state_commands(package: Path) -> list[list[str]]:
+    return [
+        [
+            *compose_base(package),
+            "run",
+            "--rm",
+            "--no-deps",
+            "registry-relay-public",
+            "product-action",
+            "relay-public",
+            "verify_state",
+        ],
+        [
+            *compose_base(package),
+            "run",
+            "--rm",
+            "--no-deps",
+            "registry-relay-consultation",
+            "product-action",
+            "relay-consultation",
+            "verify_state",
+        ],
+        [
+            *compose_base(package),
+            "run",
+            "--rm",
+            "--no-deps",
+            "registry-notary",
+            "product-action",
+            "verify_state",
+        ],
+    ]
+
+
+def run_compose_group(
+    name: str,
+    commands: Iterable[list[str]],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ReleaseFormError(f"{name} failed")
+    write_json_log(logs, name, {"outcome": "passed"})
+    return {
+        "name": name,
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / f"{name}.log"),
+    }
+
+
+def backup_and_restore_governed_volumes(
+    package: Path,
+    *,
+    postgresql_image: str,
+    backup_root: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    config = subprocess.run(
+        [*compose_base(package), "config", "--format", "json"],
+        cwd=package.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    try:
+        document = json.loads(config.stdout)
+    except json.JSONDecodeError as error:
+        raise ReleaseFormError("cannot inspect the governed Compose project") from error
+    project_name = document.get("name") if isinstance(document, dict) else None
+    if config.returncode != 0 or not isinstance(project_name, str) or not project_name:
+        raise ReleaseFormError("governed Compose project identity is unavailable")
+    services = document.get("services") if isinstance(document, dict) else None
+    declared_volumes = document.get("volumes") if isinstance(document, dict) else None
+    durable_targets = {
+        "registry-postgres": {"/var/lib/postgresql/data"},
+        "registry-relay-public": {
+            "/var/lib/registry/state",
+            "/var/lib/registry/audit",
+        },
+        "registry-relay-consultation": {
+            "/var/lib/registry/state",
+            "/var/lib/registry/audit",
+        },
+        "registry-notary": {
+            "/var/lib/registry/state",
+            "/var/lib/registry/audit",
+        },
+    }
+    if not isinstance(services, dict) or not isinstance(declared_volumes, dict):
+        raise ReleaseFormError("governed Compose volume model is invalid")
+    selected_sources: set[str] = set()
+    for service_name, expected_targets in durable_targets.items():
+        service = services.get(service_name)
+        mounts = service.get("volumes") if isinstance(service, dict) else None
+        if not isinstance(mounts, list):
+            raise ReleaseFormError("governed durable volume selection is incomplete")
+        selected = {
+            (mount.get("source"), mount.get("target"))
+            for mount in mounts
+            if isinstance(mount, dict)
+            and mount.get("type") == "volume"
+            and mount.get("target") in expected_targets
+        }
+        if (
+            {target for _source, target in selected} != expected_targets
+            or any(not isinstance(source, str) for source, _target in selected)
+        ):
+            raise ReleaseFormError("governed durable volume selection is incomplete")
+        selected_sources.update(source for source, _target in selected)
+    if len(selected_sources) != 7:
+        raise ReleaseFormError("governed backup must select exactly seven durable volumes")
+    stager = services.get("registry-runtime-stage-secrets")
+    stager_mounts = stager.get("volumes") if isinstance(stager, dict) else None
+    if not isinstance(stager_mounts, list):
+        raise ReleaseFormError("governed staged-secret volume inventory is unavailable")
+    staged_sources = {
+        mount.get("source")
+        for mount in stager_mounts
+        if isinstance(mount, dict)
+        and mount.get("type") == "volume"
+        and isinstance(mount.get("target"), str)
+        and mount["target"].startswith("/registryctl-stage/output/")
+        and isinstance(mount.get("source"), str)
+    }
+    unexpected = set(declared_volumes).difference(selected_sources)
+    if (
+        selected_sources.intersection(staged_sources)
+        or unexpected != staged_sources
+        or any(not name.endswith("-secrets") for name in staged_sources)
+    ):
+        raise ReleaseFormError("governed backup found an unexpected durable volume")
+    volumes = sorted(
+        (
+            source,
+            (
+                declared_volumes[source].get("name")
+                if isinstance(declared_volumes[source], dict)
+                else None
+            )
+            or source,
+        )
+        for source in selected_sources
+    )
+    listed = subprocess.run(
+        [
+            "docker",
+            "volume",
+            "ls",
+            "--filter",
+            f"label=com.docker.compose.project={project_name}",
+            "--format",
+            "{{.Name}}",
+        ],
+        cwd=package.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    observed_volumes = set(filter(None, listed.stdout.splitlines()))
+    if listed.returncode != 0 or not {
+        volume for _source, volume in volumes
+    }.issubset(observed_volumes):
+        raise ReleaseFormError("governed durable volume set is unavailable")
+    backup_root.mkdir(mode=0o700)
+    for index, (_source, volume) in enumerate(volumes):
+        archive = backup_root / f"{index:02}.tar"
+        backed_up = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--user",
+                "0:0",
+                "--volume",
+                f"{volume}:/source:ro",
+                "--volume",
+                f"{backup_root}:/backup",
+                postgresql_image,
+                "tar",
+                "-C",
+                "/source",
+                "-cf",
+                f"/backup/{archive.name}",
+                ".",
+            ],
+            cwd=package.parent,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+        if backed_up.returncode != 0:
+            raise ReleaseFormError("governed consistency-group backup failed")
+    for source, volume in volumes:
+        removed = subprocess.run(
+            ["docker", "volume", "rm", volume],
+            cwd=package.parent,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        created = subprocess.run(
+            [
+                "docker",
+                "volume",
+                "create",
+                "--label",
+                f"com.docker.compose.project={project_name}",
+                "--label",
+                f"com.docker.compose.volume={source}",
+                volume,
+            ],
+            cwd=package.parent,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        if removed.returncode != 0 or created.returncode != 0:
+            raise ReleaseFormError("governed consistency-group volume restore failed")
+    for index, (_source, volume) in enumerate(volumes):
+        restored = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--user",
+                "0:0",
+                "--volume",
+                f"{volume}:/target",
+                "--volume",
+                f"{backup_root}:/backup:ro",
+                postgresql_image,
+                "tar",
+                "-C",
+                "/target",
+                "-xf",
+                f"/backup/{index:02}.tar",
+            ],
+            cwd=package.parent,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+        if restored.returncode != 0:
+            raise ReleaseFormError("governed consistency-group restore failed")
+    write_json_log(
+        logs,
+        "backup_restore",
+        {"outcome": "passed", "consistency_group_volumes": 7},
+    )
+    return {
+        "name": "backup_restore",
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / "backup_restore.log"),
+    }
+
+
+def isolated_governed_teardown(
+    package: Path,
+    *,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    config = subprocess.run(
+        [*compose_base(package), "config", "--format", "json"],
+        cwd=package.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    try:
+        document = json.loads(config.stdout)
+    except json.JSONDecodeError as error:
+        raise ReleaseFormError("cannot resolve the isolated Compose project") from error
+    project_name = document.get("name") if isinstance(document, dict) else None
+    if config.returncode != 0 or not isinstance(project_name, str) or not project_name:
+        raise ReleaseFormError("isolated Compose project identity is unavailable")
+    stopped = subprocess.run(
+        [*compose_base(package), "down", "--volumes", "--remove-orphans"],
+        cwd=package.parent,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=300,
+        check=False,
+    )
+    if stopped.returncode != 0:
+        raise ReleaseFormError("isolated governed teardown failed")
+    remaining_containers = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project_name}",
+        ],
+        cwd=package.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    remaining_volumes = subprocess.run(
+        [
+            "docker",
+            "volume",
+            "ls",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project_name}",
+        ],
+        cwd=package.parent,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+        check=False,
+    )
+    if (
+        remaining_containers.returncode != 0
+        or remaining_volumes.returncode != 0
+        or remaining_containers.stdout.strip()
+        or remaining_volumes.stdout.strip()
+    ):
+        raise ReleaseFormError("isolated governed teardown left project resources")
+    write_json_log(logs, "isolated_teardown", {"outcome": "passed"})
+    return {
+        "name": "isolated_teardown",
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / "isolated_teardown.log"),
+    }
+
+
+def run_stable_release_form(args: argparse.Namespace) -> Path:
     beginner_runtime_asset(args.tag)
     asset_dir = args.asset_dir.resolve()
     evidence_dir = args.evidence_dir.resolve()
     if evidence_dir.exists():
         raise ReleaseFormError("evidence directory must not already exist")
-    evidence_dir.mkdir(parents=True)
+    evidence_dir.mkdir(parents=True, mode=0o700)
     logs = evidence_dir / "logs"
-    logs.mkdir()
+    logs.mkdir(mode=0o700)
     verified = verify_asset_set(asset_dir, args.tag)
     if shutil.which("registry-relay") or shutil.which("registry-notary"):
         raise ReleaseFormError("ambient Registry product binaries must not be on PATH")
@@ -1231,20 +2518,26 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
     commands: list[dict[str, Any]] = []
     secrets: list[bytes] = []
     reader_summary: dict[str, Any]
+    public_source_live_summary: dict[str, Any]
+    oauth_runtime_summary: dict[str, Any]
+    oauth_smoke_summary: dict[str, Any]
     doctor_summary: dict[str, Any]
     status_summary: dict[str, Any]
     smoke_summary: dict[str, Any]
     product_logs_summary: dict[str, Any]
     runtime_summary: dict[str, Any]
+    governed_summary: dict[str, Any]
     with tempfile.TemporaryDirectory(
         prefix="registry-first-country-release-form-"
     ) as temporary:
         root = Path(temporary)
         install_dir = root / "install"
         project = root / "reader-http-project"
+        oauth_project = root / "reader-opencrvs-project"
         reader_evidence = evidence_dir / "reader-journeys"
+        public_source_evidence = evidence_dir / "public-source-live"
         install_dir.mkdir()
-        environment = os.environ.copy()
+        environment = sealed_release_environment(dict(os.environ))
         environment.update(
             {
                 "CI": "1",
@@ -1257,6 +2550,8 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         registryctl = install_dir / "registryctl"
         installer = asset_dir / verified["installer_name"]
         runtime_root: Path | None = None
+        oauth_runtime_root: Path | None = None
+        package: Path | None = None
         try:
             commands.append(
                 run_command(
@@ -1269,6 +2564,17 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             )
             require_regular(registryctl)
             require_regular(install_dir / "registry-release-lock.v1.json")
+            if sha256(registryctl) != verified["assets"][verified["binary_name"]]:
+                raise ReleaseFormError(
+                    "installed registryctl does not match the verified release asset"
+                )
+            if (
+                sha256(install_dir / "registry-release-lock.v1.json")
+                != verified["assets"][verified["release_lock_name"]]
+            ):
+                raise ReleaseFormError(
+                    "installed Registry release lock does not match the verified asset"
+                )
             commands.append(
                 run_command(
                     "version",
@@ -1291,6 +2597,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "REGISTRYCTL_BIN": str(registryctl),
                     "REGISTRYCTL_TUTORIAL_EVIDENCE_DIR": str(reader_evidence),
                     "REGISTRYCTL_TUTORIAL_PROJECT_DIR": str(project),
+                    "REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR": str(oauth_project),
                 }
             )
             commands.append(
@@ -1312,8 +2619,12 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 reader_evidence / "manifest.json",
                 version=version,
                 retained_project=project,
+                retained_oauth_project=oauth_project,
             )
-            redact_text_tree(reader_evidence, (root, install_dir, project))
+            redact_text_tree(
+                reader_evidence, (root, install_dir, project, oauth_project)
+            )
+            protect_evidence_tree(reader_evidence)
             reader_summary["evidence_sha256"] = closed_tree_digests(reader_evidence)
             for name, image in (
                 ("pull_relay", verified["relay_image"]),
@@ -1329,6 +2640,121 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                         logs=logs,
                     )
                 )
+            public_source_environment = environment.copy()
+            public_source_environment.update(
+                {
+                    "REGISTRYCTL_BIN": str(registryctl),
+                    "REGISTRYCTL_PUBLIC_SOURCE_LIVE": "1",
+                    "REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR": str(
+                        public_source_evidence
+                    ),
+                }
+            )
+            commands.append(
+                run_command(
+                    "public_source_live",
+                    [
+                        "sh",
+                        str(
+                            Path(__file__).resolve().parents[2]
+                            / (
+                                "docs/site/scripts/"
+                                "check-registryctl-public-source-live.sh"
+                            )
+                        ),
+                    ],
+                    cwd=root,
+                    env=public_source_environment,
+                    logs=logs,
+                )
+            )
+            if (
+                "PASS public-source live gate; evidence retained at "
+                not in (logs / "public_source_live.log").read_text(
+                    encoding="utf-8"
+                )
+            ):
+                raise ReleaseFormError("public-source live gate did not execute")
+            redact_text_tree(
+                public_source_evidence, (root, install_dir, public_source_evidence)
+            )
+            protect_evidence_tree(public_source_evidence)
+            public_source_live_summary = stable_public_source_live_summary(
+                public_source_evidence
+            )
+            write_json_log(
+                logs, "public_source_live", public_source_live_summary
+            )
+            commands.append(
+                run_command(
+                    "oauth_dev_up",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(oauth_project),
+                        "dev",
+                        "--detach",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            oauth_runtime_summary, oauth_runtime_root = stable_runtime_summary(
+                oauth_project, tag=args.tag, verified=verified
+            )
+            write_json_log(logs, "oauth_dev_up", oauth_runtime_summary)
+            validate_dev_credentials(oauth_runtime_root / "credentials")
+            secrets.extend(
+                recursive_secret_values(oauth_runtime_root / "credentials")
+            )
+            commands.append(
+                run_command(
+                    "oauth_dev_smoke",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(oauth_project),
+                        "dev",
+                        "smoke",
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            oauth_smoke_summary = stable_oauth_smoke_summary(
+                read_closed_json(
+                    logs / "oauth_dev_smoke.log", "OAuth development smoke report"
+                )
+            )
+            write_json_log(logs, "oauth_dev_smoke", oauth_smoke_summary)
+            commands.append(
+                run_command(
+                    "oauth_dev_down",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(oauth_project),
+                        "dev",
+                        "down",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            if oauth_runtime_root.exists():
+                raise ReleaseFormError(
+                    "OAuth development teardown left disposable runtime state"
+                )
+            write_json_log(
+                logs,
+                "oauth_dev_down",
+                {"outcome": "passed", "runtime_state": "absent"},
+            )
             commands.append(
                 run_command(
                     "doctor",
@@ -1441,10 +2867,169 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "log_sha256": sha256(logs / "inspect.log"),
                 }
             )
-            secrets = recursive_secret_values(runtime_root / "credentials")
-        finally:
-            if project.exists() and registryctl.exists():
-                result = subprocess.run(
+            validate_dev_credentials(runtime_root / "credentials")
+            secrets.extend(recursive_secret_values(runtime_root / "credentials"))
+            governed_private = root / "governed-private"
+            governed_private.mkdir(mode=0o700)
+            handoff = root / "operator-handoff"
+            handoff.mkdir()
+            run_nonce = os.urandom(8).hex()
+            package = root / f"registry-stack-release-form-{os.getpid()}-{run_nonce}"
+            rollback_package = (
+                root / f"registry-stack-release-form-{os.getpid()}-{run_nonce}-rollback"
+            )
+            lane_keys = create_lane_signing_keys(governed_private / "lane-keys")
+            signing_inputs = project / ".registry-stack/build/local/signing-inputs"
+            anchors: dict[str, Path] = {}
+            bundles: dict[str, Path] = {}
+            for lane in GOVERNED_LANES:
+                private_key, public_key = lane_keys[lane]
+                anchor = handoff / f"{lane}-anchor.json"
+                bundle = handoff / f"{lane}-bundle"
+                anchors[lane] = anchor
+                bundles[lane] = bundle
+                commands.append(
+                    run_command(
+                        f"anchor_{lane.replace('-', '_')}",
+                        [
+                            str(registryctl),
+                            "trust",
+                            "anchor",
+                            "create",
+                            "--lane",
+                            lane,
+                            "--input",
+                            str(signing_inputs / lane),
+                            "--public-key",
+                            str(public_key),
+                            "--threshold",
+                            "1",
+                            "--output-file",
+                            str(anchor),
+                            "--format",
+                            "json",
+                        ],
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+                commands.append(
+                    run_command(
+                        f"sign_{lane.replace('-', '_')}",
+                        [
+                            str(registryctl),
+                            "trust",
+                            "bundle",
+                            "sign",
+                            "--lane",
+                            lane,
+                            "--input",
+                            str(signing_inputs / lane),
+                            "--anchor",
+                            str(anchor),
+                            "--key",
+                            f"file:{private_key}",
+                            "--output-dir",
+                            str(bundle),
+                            "--format",
+                            "json",
+                        ],
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+                commands.append(
+                    run_command(
+                        f"verify_{lane.replace('-', '_')}",
+                        [
+                            str(registryctl),
+                            "trust",
+                            "bundle",
+                            "verify",
+                            "--bundle-dir",
+                            str(bundle),
+                            "--anchor",
+                            str(anchor),
+                            "--format",
+                            "json",
+                        ],
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+            approved_set = handoff / "approved-set.v1.json"
+            commands.append(
+                run_command(
+                    "approved_set",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "trust",
+                        "approved-set",
+                        "assemble",
+                        "--environment",
+                        "local",
+                        "--relay-public",
+                        str(bundles["relay-public"]),
+                        "--relay-consultation",
+                        str(bundles["relay-consultation"]),
+                        "--notary",
+                        str(bundles["notary"]),
+                        "--output-file",
+                        str(approved_set),
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            binding_file = governed_private / "binding.json"
+            package_id, volume_prefix = governed_deployment_binding(
+                bundles["relay-public"], binding_file
+            )
+            assert_governed_resources_absent(
+                package_id,
+                volume_prefix,
+                cwd=root,
+                env=environment,
+            )
+            commands.append(
+                run_command(
+                    "deploy_generate",
+                    [
+                        str(registryctl),
+                        "deploy",
+                        "generate",
+                        "--approved-set",
+                        str(approved_set),
+                        "--output-dir",
+                        str(package),
+                        "--binding",
+                        str(binding_file),
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            initial_generation = stable_generate_summary(
+                read_closed_json(logs / "deploy_generate.log", "deployment generation")
+            )
+            write_json_log(logs, "deploy_generate", initial_generation)
+            operator_file_count = copy_governed_operator_inputs(
+                package, runtime_root / "credentials"
+            )
+            commands.append(
+                run_command(
+                    "dev_down",
                     [
                         str(registryctl),
                         "-C",
@@ -1454,24 +3039,717 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     ],
                     cwd=root,
                     env=environment,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
+                    logs=logs,
+                )
+            )
+            if runtime_root.exists():
+                raise ReleaseFormError(
+                    "HTTP development teardown left disposable runtime state"
+                )
+            write_json_log(
+                logs,
+                "dev_down",
+                {"outcome": "passed", "runtime_state": "absent"},
+            )
+            shutil.copytree(package, rollback_package)
+            secrets.extend(recursive_secret_values(governed_private))
+            secrets.extend(recursive_secret_values(package / "operator"))
+            protect_governed_operator_inputs(package)
+            commands.append(
+                run_command(
+                    "deploy_verify",
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "verify",
+                        "--package",
+                        str(package),
+                        "--approved-set",
+                        str(approved_set),
+                        "--expected-closure-sha256",
+                        initial_generation["externally_recorded_closure_sha256"],
+                        "--check-operator-files",
+                        "--format",
+                        "json",
+                    ),
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            initial_verification = stable_deploy_verify_summary(
+                read_closed_json(logs / "deploy_verify.log", "deployment verification")
+            )
+            write_json_log(logs, "deploy_verify", initial_verification)
+            parent_include = root / "compose.yaml"
+            parent_include.write_text(
+                f"include:\n  - ./{package.name}/generated/compose.yaml\n",
+                encoding="utf-8",
+            )
+            commands.append(
+                run_command(
+                    "parent_include_config",
+                    [
+                        "docker",
+                        "compose",
+                        "--env-file",
+                        str(package / "generated/compose.empty.env"),
+                        "-f",
+                        str(parent_include),
+                        "config",
+                        "--no-interpolate",
+                        "--no-env-resolution",
+                        "--quiet",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "initialize_config",
+                    [
+                        *compose_initialization_base(package),
+                        "config",
+                        "--no-interpolate",
+                        "--no-env-resolution",
+                        "--quiet",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            initialization_steps = [
+                (
+                    "initialize_stage_secrets",
+                    [
+                        *compose_base(package),
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "registry-runtime-stage-secrets",
+                    ],
+                ),
+                (
+                    "initialize_postgresql",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-postgres-bootstrap",
+                    ],
+                ),
+                (
+                    "initialize_relay_public_prepare",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-relay-public-prepare-state",
+                    ],
+                ),
+                (
+                    "initialize_relay_consultation_prepare",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-relay-consultation-prepare-state",
+                    ],
+                ),
+                (
+                    "initialize_notary_prepare",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-notary-prepare-state",
+                    ],
+                ),
+                (
+                    "initialize_relay_public",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-relay-public-initialize",
+                    ],
+                ),
+                (
+                    "initialize_relay_consultation",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-relay-consultation-initialize",
+                    ],
+                ),
+                (
+                    "initialize_notary",
+                    [
+                        *compose_initialization_base(package),
+                        "run",
+                        "--rm",
+                        "registry-notary-initialize",
+                    ],
+                ),
+            ]
+            for name, command in initialization_steps:
+                commands.append(
+                    run_command(
+                        name,
+                        command,
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+            commands.append(
+                run_compose_group(
+                    "governed_start",
+                    [
+                        *compose_verify_state_commands(package),
+                        [
+                            *compose_base(package),
+                            "up",
+                            "--detach",
+                            "--wait",
+                            "--wait-timeout",
+                            "120",
+                        ],
+                        [*compose_base(package), "ps"],
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_compose_group(
+                    "governed_restart",
+                    [
+                        [*compose_base(package), "restart"],
+                        [
+                            *compose_base(package),
+                            "up",
+                            "--detach",
+                            "--wait",
+                            "--wait-timeout",
+                            "120",
+                        ],
+                        *compose_verify_state_commands(package),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "governed_stop_for_backup",
+                    [*compose_base(package), "down"],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                backup_and_restore_governed_volumes(
+                    package,
+                    postgresql_image=verified["postgresql_image"],
+                    backup_root=governed_private / "backup",
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_compose_group(
+                    "restored_start",
+                    [
+                        [
+                            *compose_base(package),
+                            "run",
+                            "--rm",
+                            "--no-deps",
+                            "registry-runtime-stage-secrets",
+                        ],
+                        *compose_verify_state_commands(package),
+                        [
+                            *compose_base(package),
+                            "up",
+                            "--detach",
+                            "--wait",
+                            "--wait-timeout",
+                            "120",
+                        ],
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "restored_stop",
+                    [*compose_base(package), "down"],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            project_file = project / "registry-stack.yaml"
+            project_text = project_file.read_text(encoding="utf-8")
+            original_purpose = "purpose: public-service-person-verification"
+            updated_purpose = "purpose: public-service-person-verification-updated"
+            if project_text.count(original_purpose) != 1:
+                raise ReleaseFormError(
+                    "maintained HTTP starter does not expose the expected update seam"
+                )
+            project_file.write_text(
+                project_text.replace(original_purpose, updated_purpose),
+                encoding="utf-8",
+            )
+            commands.append(
+                run_command(
+                    "update_build",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "build",
+                        "--environment",
+                        "local",
+                        "--against",
+                        str(approved_set),
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            update_build = stable_update_build_summary(
+                read_closed_json(logs / "update_build.log", "updated reviewed build")
+            )
+            write_json_log(logs, "update_build", update_build)
+            rotation_keys = create_lane_signing_keys(
+                governed_private / "rotation-keys"
+            )
+            secrets.extend(
+                recursive_secret_values(governed_private / "rotation-keys")
+            )
+            rotated_trust = handoff / "relay-consultation-rotated-trust"
+            commands.append(
+                run_command(
+                    "rotate_relay_consultation",
+                    [
+                        str(registryctl),
+                        "trust",
+                        "anchor",
+                        "rotate",
+                        "--current-anchor",
+                        str(anchors["relay-consultation"]),
+                        "--next-public-key",
+                        str(rotation_keys["relay-consultation"][1]),
+                        "--next-threshold",
+                        "1",
+                        "--key",
+                        f"file:{lane_keys['relay-consultation'][0]}",
+                        "--output-dir",
+                        str(rotated_trust),
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            updated_bundles: dict[str, Path] = {}
+            for lane in update_build["affected_lanes"]:
+                private_key, _ = (
+                    rotation_keys[lane]
+                    if lane == "relay-consultation"
+                    else lane_keys[lane]
+                )
+                updated_anchor = (
+                    rotated_trust / "anchor.json"
+                    if lane == "relay-consultation"
+                    else anchors[lane]
+                )
+                updated_bundle = handoff / f"{lane}-bundle-v2"
+                updated_bundles[lane] = updated_bundle
+                commands.append(
+                    run_command(
+                        f"update_sign_{lane.replace('-', '_')}",
+                        [
+                            str(registryctl),
+                            "trust",
+                            "bundle",
+                            "sign",
+                            "--lane",
+                            lane,
+                            "--input",
+                            str(signing_inputs / lane),
+                            "--anchor",
+                            str(updated_anchor),
+                            "--against",
+                            str(approved_set),
+                            "--key",
+                            f"file:{private_key}",
+                            "--output-dir",
+                            str(updated_bundle),
+                            "--format",
+                            "json",
+                        ],
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
+                if lane == "relay-consultation":
+                    commands.append(
+                        run_command(
+                            "update_verify_relay_consultation",
+                            [
+                                str(registryctl),
+                                "trust",
+                                "bundle",
+                                "verify",
+                                "--bundle-dir",
+                                str(updated_bundle),
+                                "--anchor",
+                                str(updated_anchor),
+                                "--format",
+                                "json",
+                            ],
+                            cwd=root,
+                            env=environment,
+                            logs=logs,
+                        )
+                    )
+            updated_set = handoff / "approved-set-v2.json"
+            commands.append(
+                run_command(
+                    "update_approved_set",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "trust",
+                        "approved-set",
+                        "assemble",
+                        "--environment",
+                        "local",
+                        "--from",
+                        str(approved_set),
+                        "--relay-consultation",
+                        str(updated_bundles["relay-consultation"]),
+                        "--notary",
+                        str(updated_bundles["notary"]),
+                        "--output-file",
+                        str(updated_set),
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "update_generate",
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "generate",
+                        "--approved-set",
+                        str(updated_set),
+                        "--output-dir",
+                        str(package),
+                        "--binding",
+                        str(binding_file),
+                        "--format",
+                        "json",
+                    ),
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            updated_generation = stable_generate_summary(
+                read_closed_json(logs / "update_generate.log", "updated generation")
+            )
+            if (
+                updated_generation["externally_recorded_closure_sha256"]
+                == initial_generation["externally_recorded_closure_sha256"]
+            ):
+                raise ReleaseFormError("compatible update did not change the governed closure")
+            write_json_log(logs, "update_generate", updated_generation)
+            commands.append(
+                run_command(
+                    "update_verify",
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "verify",
+                        "--package",
+                        str(package),
+                        "--approved-set",
+                        str(updated_set),
+                        "--expected-closure-sha256",
+                        updated_generation["externally_recorded_closure_sha256"],
+                        "--check-operator-files",
+                        "--format",
+                        "json",
+                    ),
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            updated_verification = stable_deploy_verify_summary(
+                read_closed_json(logs / "update_verify.log", "updated verification")
+            )
+            write_json_log(logs, "update_verify", updated_verification)
+            inventory = read_closed_json(
+                package / "generated/operator-files.v1.json",
+                "updated operator-file inventory",
+            )
+            notary_key_entry = next(
+                (
+                    entry
+                    for entry in inventory["files"]
+                    if entry.get("id") == "notary-tls-private-key"
+                ),
+                None,
+            )
+            if not isinstance(notary_key_entry, dict):
+                raise ReleaseFormError("updated package is missing the Notary TLS key binding")
+            notary_key = package / notary_key_entry["path"]
+            held_notary_key = governed_private / "held-notary-tls-private-key"
+            move_privileged(notary_key, held_notary_key)
+            commands.append(
+                run_expected_failure(
+                    "failed_activation",
+                    [
+                        *compose_base(package),
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "registry-runtime-stage-secrets",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            move_privileged(held_notary_key, notary_key)
+            commands.append(
+                run_command(
+                    "failed_activation_recovery",
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "verify",
+                        "--package",
+                        str(package),
+                        "--approved-set",
+                        str(updated_set),
+                        "--expected-closure-sha256",
+                        updated_generation["externally_recorded_closure_sha256"],
+                        "--check-operator-files",
+                        "--format",
+                        "json",
+                    ),
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            recovered_verification = stable_deploy_verify_summary(
+                read_closed_json(
+                    logs / "failed_activation_recovery.log",
+                    "failed-activation recovery verification",
+                )
+            )
+            write_json_log(
+                logs, "failed_activation_recovery", recovered_verification
+            )
+            commands.append(
+                run_compose_group(
+                    "updated_start",
+                    [
+                        [
+                            *compose_base(package),
+                            "run",
+                            "--rm",
+                            "--no-deps",
+                            "registry-runtime-stage-secrets",
+                        ],
+                        *compose_verify_state_commands(package),
+                        [
+                            *compose_base(package),
+                            "up",
+                            "--detach",
+                            "--wait",
+                            "--wait-timeout",
+                            "120",
+                        ],
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "updated_stop",
+                    [*compose_base(package), "down"],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_expected_rollbacks(
+                    "rollback_rejected",
+                    [
+                        (
+                            "relay-consultation",
+                            compose_verify_state_commands(rollback_package)[1],
+                        ),
+                        (
+                            "notary",
+                            compose_verify_state_commands(rollback_package)[2],
+                        ),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_compose_group(
+                    "final_start",
+                    [
+                        *compose_verify_state_commands(package),
+                        [
+                            *compose_base(package),
+                            "up",
+                            "--detach",
+                            "--wait",
+                            "--wait-timeout",
+                            "120",
+                        ],
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                isolated_governed_teardown(
+                    package,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            governed_summary = {
+                "schema_version": "registry-stack.governed-deployment-proof.v1",
+                "operator_file_count": operator_file_count,
+                "initial": {
+                    **initial_generation,
+                    **initial_verification,
+                },
+                "parent_include": "passed",
+                "explicit_initialization": "passed",
+                "ordinary_restart": "passed",
+                "backup_restore": "passed",
+                "anchor_rotation": "passed",
+                "compatible_update": {
+                    **updated_generation,
+                    **updated_verification,
+                },
+                "failed_activation_recovery": "passed",
+                "rollback_rejection": "passed",
+                "isolated_teardown": "passed",
+            }
+        finally:
+            if package is not None and package.exists():
+                subprocess.run(
+                    [*compose_base(package), "down", "--volumes", "--remove-orphans"],
+                    cwd=root,
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=300,
+                    check=False,
+                )
+                release_governed_ownership(package)
+            if oauth_project.exists() and registryctl.exists():
+                subprocess.run(
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(oauth_project),
+                        "dev",
+                        "down",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=180,
                     check=False,
                 )
-                (logs / "dev_down.log").write_text(
-                    result.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
+            if project.exists() and registryctl.exists():
+                subprocess.run(
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(project),
+                        "dev",
+                        "down",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=180,
+                    check=False,
                 )
-                if result.returncode == 0:
-                    commands.append(
-                        {
-                            "name": "dev_down",
-                            "status": "passed",
-                            "exit_code": 0,
-                            "log_sha256": sha256(logs / "dev_down.log"),
-                        }
-                    )
+            for dev_project in (project, oauth_project):
+                dev_root = dev_project / ".registry-stack/dev/local"
+                if dev_root.is_dir() and not dev_root.is_symlink():
+                    for credential_root in dev_root.glob("*/credentials"):
+                        secrets.extend(available_secret_values(credential_root))
+            for key_root in (
+                root / "governed-private/lane-keys",
+                root / "governed-private/rotation-keys",
+            ):
+                if key_root.exists():
+                    secrets.extend(recursive_secret_values(key_root))
+            if package is not None and (package / "operator").exists():
+                secrets.extend(recursive_secret_values(package / "operator"))
+            secrets = sorted(set(secrets), key=len, reverse=True)
+            redact_logs(
+                logs,
+                secrets,
+                private_paths=(
+                    root,
+                    install_dir,
+                    project,
+                    oauth_project,
+                    asset_dir,
+                    evidence_dir,
+                ),
+            )
+            protect_evidence_tree(evidence_dir)
         if tuple(command["name"] for command in commands) != STABLE_COMMAND_ORDER:
             raise ReleaseFormError(
                 "stable release-form command sequence did not complete in exact order"
@@ -1479,10 +3757,21 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         if runtime_root is not None and runtime_root.exists():
             raise ReleaseFormError("registryctl dev down left disposable runtime state")
         scanned_files = assert_no_secret_leak(project, secrets)
+        scanned_files += assert_no_secret_leak(oauth_project, secrets)
+        if package is None:
+            raise ReleaseFormError("governed deployment package was not created")
+        governed_scanned_files = assert_no_governed_secret_leak(package, secrets)
         redact_logs(
             logs,
             secrets,
-            private_paths=(root, install_dir, project, asset_dir, evidence_dir),
+            private_paths=(
+                root,
+                install_dir,
+                project,
+                oauth_project,
+                asset_dir,
+                evidence_dir,
+            ),
         )
         for command in commands:
             command["log_sha256"] = sha256(logs / f"{command['name']}.log")
@@ -1501,395 +3790,37 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             "postgresql_image": verified["postgresql_image"],
             "commands": commands,
             "reader_journeys": reader_summary,
+            "public_source_live": public_source_live_summary,
+            "oauth_runtime": oauth_runtime_summary,
+            "oauth_smoke": oauth_smoke_summary,
             "doctor": doctor_summary,
             "runtime": runtime_summary,
             "dev_status": status_summary,
             "smoke": smoke_summary,
             "product_logs": product_logs_summary,
+            "governed_deployment": governed_summary,
             "redaction": {
                 "status": "passed",
-                "generated_files_scanned": scanned_files,
+                "generated_files_scanned": scanned_files + governed_scanned_files,
             },
         }
         output = evidence_dir / "first-country-release-form.json"
-        output.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        write_private(
+            output,
+            (json.dumps(report, indent=2, sort_keys=True) + "\n").encode(),
         )
+        protect_evidence_tree(evidence_dir)
         return output
 
-
-def run_legacy_release_form(args: argparse.Namespace) -> Path:
-    beginner_runtime_asset(args.tag)
-    asset_dir = args.asset_dir.resolve()
-    evidence_dir = args.evidence_dir.resolve()
-    if evidence_dir.exists():
-        raise ReleaseFormError("evidence directory must not already exist")
-    evidence_dir.mkdir(parents=True)
-    logs = evidence_dir / "logs"
-    logs.mkdir()
-    verified = verify_asset_set(asset_dir, args.tag)
-    staging_transport = validate_relay_override(
-        verified["relay_image"], args.relay_image_override
-    )
-    notary_staging_transport = validate_notary_override(
-        verified["notary_image"], args.notary_image_override
-    )
-    if shutil.which("registry-relay") or shutil.which("registry-notary"):
-        raise ReleaseFormError("ambient Registry product binaries must not be on PATH")
-
-    with tempfile.TemporaryDirectory(
-        prefix="registry-first-country-release-form-"
-    ) as temporary:
-        root = Path(temporary)
-        install_dir = root / "install"
-        project = root / "my-first-api"
-        install_dir.mkdir()
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "CI": "1",
-                "REGISTRYCTL_NO_UPDATE_CHECK": "1",
-                "REGISTRYCTL_ASSET_DIR": str(asset_dir),
-                "REGISTRYCTL_INSTALL_DIR": str(install_dir),
-                "REGISTRYCTL_VERSION": args.tag,
-                "COMPOSE_PROJECT_NAME": f"registry-first-country-{os.getpid()}",
-            }
-        )
-        if staging_transport is not None:
-            environment["REGISTRYCTL_RELAY_STAGING_IMAGE"] = staging_transport
-        if notary_staging_transport is not None:
-            environment["REGISTRYCTL_NOTARY_STAGING_IMAGE"] = notary_staging_transport
-        commands: list[dict[str, Any]] = []
-        registryctl = install_dir / "registryctl"
-        installer = asset_dir / verified["installer_name"]
-        secrets: list[bytes] = []
-        try:
-            commands.append(
-                run_command(
-                    "install",
-                    ["bash", str(installer)],
-                    cwd=root,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            require_regular(registryctl)
-            installed_lock_name = (
-                verified["release_lock_name"] or verified["lock_name"]
-            )
-            require_regular(install_dir / installed_lock_name)
-            commands.append(
-                run_command(
-                    "version",
-                    [str(registryctl), "--version"],
-                    cwd=root,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            version_text = (logs / "version.log").read_text(encoding="utf-8").strip()
-            if version_text != f"registryctl {args.tag.removeprefix('v')}":
-                raise ReleaseFormError(
-                    "installed registryctl version does not match the release tag"
-                )
-            commands.append(
-                run_command(
-                    "init",
-                    [
-                        str(registryctl),
-                        "init",
-                        "--from",
-                        "spreadsheet",
-                        "--project-dir",
-                        str(project),
-                    ],
-                    cwd=root,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "preflight",
-                    [str(registryctl), "doctor", "--profile", "local"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "relay_start",
-                    [str(registryctl), "start"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "relay_smoke",
-                    [str(registryctl), "smoke"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            relay_smoke = smoke_outcomes(project, "relay_only")
-            read_runtime_inspection(
-                project,
-                expected_relay_image=staging_transport or verified["relay_image"],
-                expected_notary_image=None,
-                expected_postgresql_image=None,
-            )
-            commands.append(
-                run_command(
-                    "add_notary",
-                    [str(registryctl), "add", "notary"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "combined_test",
-                    [str(registryctl), "test", "--environment", "local"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "combined_restart",
-                    [str(registryctl), "restart"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            commands.append(
-                run_command(
-                    "combined_smoke",
-                    [str(registryctl), "smoke"],
-                    cwd=project,
-                    env=environment,
-                    logs=logs,
-                )
-            )
-            combined_smoke = smoke_outcomes(project, "combined_notary")
-            denied = subprocess.run(
-                [
-                    "curl",
-                    "-sS",
-                    "-o",
-                    os.devnull,
-                    "-w",
-                    "%{http_code}",
-                    "-H",
-                    "Data-Purpose: public-works-case-management",
-                    RECORDS_URL,
-                ],
-                cwd=project,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=30,
-                check=False,
-            )
-            (logs / "denied.log").write_text(
-                denied.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
-            )
-            if denied.returncode != 0 or denied.stdout.strip() != "401":
-                raise ReleaseFormError("anonymous records request did not return 401")
-            commands.append(
-                {
-                    "name": "denied",
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": sha256(logs / "denied.log"),
-                }
-            )
-            secrets = sorted(
-                set(
-                    credential_env_values(
-                        project / ".registry-stack/runtime/local/secrets/local.env"
-                    )
-                    + credential_env_values(
-                        project / ".registry-stack/runtime/local/secrets/relay.env"
-                    )
-                ),
-                key=len,
-                reverse=True,
-            )
-            match_key, no_match_key = required_local_credentials(
-                project / ".registry-stack/runtime/local/secrets/local.env"
-            )
-            run_authenticated_records_evidence(
-                project=project,
-                env=environment,
-                logs=logs,
-                match_key=match_key,
-                no_match_key=no_match_key,
-            )
-            commands.append(
-                {
-                    "name": "allowed",
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": sha256(logs / "allowed.log"),
-                }
-            )
-            runtime = read_runtime_inspection(
-                project,
-                expected_relay_image=staging_transport or verified["relay_image"],
-                expected_notary_image=(
-                    notary_staging_transport or verified["notary_image"]
-                ),
-                expected_postgresql_image=verified["postgresql_image"],
-            )
-            (logs / "inspect.log").write_text(
-                "".join(f"{name}={value}\n" for name, value in runtime.items()),
-                encoding="utf-8",
-            )
-            commands.append(
-                {
-                    "name": "inspect",
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": sha256(logs / "inspect.log"),
-                }
-            )
-            listeners = verify_loopback_listeners(project, environment, logs)
-            commands.append(
-                {
-                    "name": "listeners",
-                    "status": "passed",
-                    "exit_code": 0,
-                    "log_sha256": sha256(logs / "listeners.log"),
-                }
-            )
-        finally:
-            try:
-                if project.exists():
-                    stopped = subprocess.run(
-                        [str(registryctl), "stop"] if registryctl.exists() else ["true"],
-                        cwd=project,
-                        env=environment,
-                        text=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        timeout=60,
-                        check=False,
-                    )
-                    (logs / "stop.log").write_text(
-                        stopped.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
-                    )
-                    if stopped.returncode == 0:
-                        commands.append(
-                            {
-                                "name": "stop",
-                                "status": "passed",
-                                "exit_code": 0,
-                                "log_sha256": sha256(logs / "stop.log"),
-                            }
-                        )
-            finally:
-                secrets.extend(
-                    available_secret_values(
-                        project / ".registry-stack/runtime/local/secrets"
-                    )
-                )
-                secrets = sorted(set(secrets), key=len, reverse=True)
-                redact_logs(
-                    logs,
-                    secrets,
-                    private_paths=(root, install_dir, project, asset_dir, evidence_dir),
-                )
-        if tuple(command["name"] for command in commands) != COMMAND_ORDER:
-            raise ReleaseFormError(
-                "release-form command sequence did not complete in exact order"
-            )
-        secrets_dir = project / ".registry-stack/runtime/local/secrets"
-        for secret_path in sorted(secrets_dir.iterdir()):
-            require_regular(secret_path)
-            if secret_path.suffix == ".env":
-                secrets.extend(credential_env_values(secret_path))
-            else:
-                data = secret_path.read_bytes()
-                secrets.extend(value for value in (data, data.strip()) if value)
-        secrets = sorted(set(secrets), key=len, reverse=True)
-        scanned_files = assert_no_secret_leak(project, secrets)
-        redact_logs(
-            logs,
-            secrets,
-            private_paths=(root, install_dir, project, asset_dir, evidence_dir),
-        )
-        for command in commands:
-            command["log_sha256"] = sha256(logs / f"{command['name']}.log")
-        permissions = {"runtime_secrets_directory": mode(secrets_dir)}
-        permissions.update(
-            {
-                name: mode(secrets_dir / filename)
-                for name, filename in SECRET_FILES.items()
-            }
-        )
-        expected_permissions = {
-            "runtime_secrets_directory": "0700",
-            **{name: "0600" for name in SECRET_FILES},
-        }
-        if os.name == "posix" and permissions != expected_permissions:
-            raise ReleaseFormError(
-                "generated credential permissions are not owner-only"
-            )
-        report = {
-            "schema_version": SCHEMA,
-            "status": "passed",
-            "release_tag": args.tag,
-            "manifest_source_ref": verified["lock"].get("manifest_source_ref"),
-            "tag_target": verified["lock"].get("tag_target"),
-            "platform_asset": verified["binary_name"],
-            "asset_sha256": verified["assets"],
-            "release_image_lock_sha256": verified["assets"][verified["lock_name"]],
-            "release_lock_sha256": (
-                verified["assets"][verified["release_lock_name"]]
-                if verified["release_lock_name"] is not None
-                else None
-            ),
-            "relay_image": verified["relay_image"],
-            "notary_image": verified["notary_image"],
-            "postgresql_image": verified["postgresql_image"],
-            "staging_transport": staging_transport,
-            "notary_staging_transport": notary_staging_transport,
-            "commands": commands,
-            "listeners": listeners,
-            "permissions": permissions,
-            "runtime": runtime,
-            "smoke": {
-                "relay_only": relay_smoke,
-                "combined_notary": combined_smoke,
-            },
-            "redaction": {
-                "status": "passed",
-                "generated_files_scanned": scanned_files,
-            },
-        }
-        output = evidence_dir / "first-country-release-form.json"
-        output.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        return output
 
 
 def run_release_form(args: argparse.Namespace) -> Path:
     match = TAG.fullmatch(args.tag)
     if match is None:
         raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
-    if int(match.group(1)) >= 1:
-        return run_stable_release_form(args)
-    return run_legacy_release_form(args)
+    if int(match.group(1)) < 1:
+        raise ReleaseFormError("release-form proof supports Registry Stack v1 and later")
+    return run_stable_release_form(args)
 
 
 def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1901,182 +3832,12 @@ def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def verify_evidence_logs(report_path: Path, commands: list[dict[str, Any]]) -> None:
-    logs = report_path.parent / "logs"
-    try:
-        metadata = logs.lstat()
-    except OSError as error:
-        raise ReleaseFormError("release-form evidence logs are unavailable") from error
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise ReleaseFormError("release-form evidence logs must be a real directory")
-    try:
-        entries = list(logs.iterdir())
-    except OSError as error:
-        raise ReleaseFormError("release-form evidence logs are unavailable") from error
-
-    expected_names = {f"{name}.log" for name in COMMAND_ORDER}
-    if {entry.name for entry in entries} != expected_names:
-        raise ReleaseFormError("release-form evidence log set is not closed")
-
-    contents: dict[str, bytes] = {}
-    for command in commands:
-        name = command["name"]
-        log_path = logs / f"{name}.log"
-        require_regular(log_path, max_bytes=MAX_LOG_BYTES)
-        try:
-            data = log_path.read_bytes()
-        except OSError as error:
-            raise ReleaseFormError(
-                f"release-form evidence log is unreadable: {name}.log"
-            ) from error
-        digest = hashlib.sha256(data).hexdigest()
-        if digest != command["log_sha256"]:
-            raise ReleaseFormError(
-                f"release-form evidence log digest does not match: {name}.log"
-            )
-        contents[name] = data
-
-    try:
-        allowed = json.loads(
-            contents["allowed"].decode("utf-8"),
-            object_pairs_hook=reject_duplicate_json_keys,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        raise ReleaseFormError(
-            "allowed evidence log is not valid closed JSON"
-        ) from error
-    exact_scalar_types = (
-        isinstance(allowed, list)
-        and len(allowed) == 2
-        and all(isinstance(summary, dict) for summary in allowed)
-        and all(type(summary.get("http_status")) is int for summary in allowed)
-        and all(type(summary.get("row_count")) is int for summary in allowed)
-    )
-    if not exact_scalar_types or allowed != ALLOWED_EVIDENCE:
-        raise ReleaseFormError(
-            "allowed evidence log does not prove the exact value-free match and no-match summaries"
-        )
-
-
-def verify_legacy_report(path: Path, asset_dir: Path, tag: str) -> None:
-    require_regular(path, max_bytes=4 * 1024 * 1024)
-    try:
-        report = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=reject_duplicate_json_keys,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        raise ReleaseFormError(
-            "release-form report is not valid closed JSON"
-        ) from error
-    expected_keys = {
-        "schema_version",
-        "status",
-        "release_tag",
-        "manifest_source_ref",
-        "tag_target",
-        "platform_asset",
-        "asset_sha256",
-        "release_image_lock_sha256",
-        "release_lock_sha256",
-        "relay_image",
-        "notary_image",
-        "postgresql_image",
-        "staging_transport",
-        "notary_staging_transport",
-        "commands",
-        "listeners",
-        "permissions",
-        "runtime",
-        "smoke",
-        "redaction",
-    }
-    if not isinstance(report, dict) or set(report) != expected_keys:
-        raise ReleaseFormError("release-form report fields are not closed")
-    verified = verify_asset_set(asset_dir.resolve(), tag)
-    commands = report.get("commands")
-    command_shape_valid = isinstance(commands, list) and all(
-        isinstance(command, dict)
-        and set(command) == {"name", "status", "exit_code", "log_sha256"}
-        and command.get("status") == "passed"
-        and command.get("exit_code") == 0
-        and isinstance(command.get("log_sha256"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", command["log_sha256"]) is not None
-        for command in commands
-    )
-    permissions = report.get("permissions")
-    runtime = report.get("runtime")
-    smoke = report.get("smoke")
-    redaction = report.get("redaction")
-    if (
-        report["schema_version"] != SCHEMA
-        or report["status"] != "passed"
-        or report["release_tag"] != tag
-        or re.fullmatch(r"[0-9a-f]{40}", str(report["manifest_source_ref"])) is None
-        or re.fullmatch(r"[0-9a-f]{40}", str(report["tag_target"])) is None
-        or report["manifest_source_ref"] != verified["lock"].get("manifest_source_ref")
-        or report["tag_target"] != verified["lock"].get("tag_target")
-        or report["platform_asset"] != verified["binary_name"]
-        or report["asset_sha256"] != verified["assets"]
-        or report["release_image_lock_sha256"]
-        != verified["assets"][verified["lock_name"]]
-        or report["release_lock_sha256"]
-        != (
-            verified["assets"][verified["release_lock_name"]]
-            if verified["release_lock_name"] is not None
-            else None
-        )
-        or report["relay_image"] != verified["relay_image"]
-        or report["notary_image"] != verified["notary_image"]
-        or report["postgresql_image"] != verified["postgresql_image"]
-        or report["listeners"]
-        != {"relay": RELAY_LISTENER, "notary": NOTARY_LISTENER}
-        or not command_shape_valid
-        or tuple(command["name"] for command in commands) != COMMAND_ORDER
-        or permissions
-        != {
-            "runtime_secrets_directory": "0700",
-            **{name: "0600" for name in SECRET_FILES},
-        }
-        or not isinstance(runtime, dict)
-        or set(runtime)
-        != {
-            "relay_config_sha256",
-            "runtime_manifest_sha256",
-            "compose_sha256",
-            "notary_config_sha256",
-            "topology",
-            "workbook_classification",
-        }
-        or any(
-            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
-            for name, value in runtime.items()
-            if name.endswith("_sha256")
-        )
-        or runtime.get("topology") != "combined_notary"
-        or runtime.get("workbook_classification") != "operator_owned_source_data"
-        or smoke != SMOKE_EVIDENCE
-        or not isinstance(redaction, dict)
-        or set(redaction) != {"status", "generated_files_scanned"}
-        or redaction.get("status") != "passed"
-        or not isinstance(redaction.get("generated_files_scanned"), int)
-        or redaction["generated_files_scanned"] <= 0
-    ):
-        raise ReleaseFormError(
-            "release-form report does not prove the required journey"
-        )
-    validate_relay_override(report["relay_image"], report["staging_transport"])
-    validate_notary_override(
-        report["notary_image"], report["notary_staging_transport"]
-    )
-    verify_evidence_logs(path, commands)
-
 
 def verify_stable_evidence(
     report_path: Path, report: dict[str, Any], commands: list[dict[str, Any]]
 ) -> None:
+    require_private_evidence_tree(report_path.parent)
     logs = report_path.parent / "logs"
-    require_private_directory(logs)
     entries = list(logs.iterdir())
     expected_logs = {f"{name}.log" for name in STABLE_COMMAND_ORDER}
     if {entry.name for entry in entries} != expected_logs:
@@ -2089,6 +3850,9 @@ def verify_stable_evidence(
                 f"stable release-form evidence log digest does not match: {log_path.name}"
             )
     normalized = {
+        "public_source_live": report["public_source_live"],
+        "oauth_dev_up": report["oauth_runtime"],
+        "oauth_dev_smoke": report["oauth_smoke"],
         "doctor": report["doctor"],
         "dev_status": report["dev_status"],
         "dev_smoke": report["smoke"],
@@ -2100,22 +3864,28 @@ def verify_stable_evidence(
             raise ReleaseFormError(
                 f"{name} evidence log does not bind the normalized report"
             )
+    if read_closed_json(logs / "dev_down.log", "development teardown log") != {
+        "outcome": "passed",
+        "runtime_state": "absent",
+    }:
+        raise ReleaseFormError(
+            "development teardown evidence does not prove absent runtime state"
+        )
+    if read_closed_json(
+        logs / "oauth_dev_down.log", "OAuth development teardown log"
+    ) != {
+        "outcome": "passed",
+        "runtime_state": "absent",
+    }:
+        raise ReleaseFormError(
+            "OAuth development teardown evidence does not prove absent runtime state"
+        )
 
     reader_dir = report_path.parent / "reader-journeys"
     require_private_directory(reader_dir)
-    expected_reader_files = {
-        "manifest.json",
-        "http/init.json",
-        "http/test.json",
-        "http/check.json",
-        "http/build.json",
-        "opencrvs/test.json",
-        "opencrvs/check.json",
-        "opencrvs/build.json",
-    }
     observed_reader = closed_tree_digests(reader_dir)
     if (
-        set(observed_reader) != expected_reader_files
+        set(observed_reader) != STABLE_READER_EVIDENCE_FILES
         or observed_reader != report["reader_journeys"]["evidence_sha256"]
     ):
         raise ReleaseFormError("reader-journey evidence set is not closed")
@@ -2130,9 +3900,19 @@ def verify_stable_evidence(
         or manifest.get("mode") != "sealed"
         or manifest.get("registryctl_version") != report["release_tag"].removeprefix("v")
         or manifest.get("retained_project") != "[PRIVATE_PATH]"
+        or manifest.get("retained_oauth_project") != "[PRIVATE_PATH]"
     ):
         raise ReleaseFormError(
             "reader-journey evidence does not bind the sealed release binary"
+        )
+    public_source_dir = report_path.parent / "public-source-live"
+    require_private_directory(public_source_dir)
+    if (
+        stable_public_source_live_summary(public_source_dir)
+        != report["public_source_live"]
+    ):
+        raise ReleaseFormError(
+            "public-source live evidence does not bind the normalized report"
         )
 
 
@@ -2153,11 +3933,15 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         "postgresql_image",
         "commands",
         "reader_journeys",
+        "public_source_live",
+        "oauth_runtime",
+        "oauth_smoke",
         "doctor",
         "runtime",
         "dev_status",
         "smoke",
         "product_logs",
+        "governed_deployment",
         "redaction",
     }
     if not isinstance(report, dict) or set(report) != expected_keys:
@@ -2174,11 +3958,15 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         for command in commands
     )
     reader = report.get("reader_journeys")
+    public_source_live = report.get("public_source_live")
+    oauth_runtime = report.get("oauth_runtime")
+    oauth_smoke = report.get("oauth_smoke")
     doctor = report.get("doctor")
     runtime = report.get("runtime")
     status = report.get("dev_status")
     smoke = report.get("smoke")
     product_logs = report.get("product_logs")
+    governed_deployment = report.get("governed_deployment")
     redaction = report.get("redaction")
     expected_doctor_checks = sorted(
         {
@@ -2253,6 +4041,47 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
             and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
             for name, digest in reader.get("evidence_sha256", {}).items()
         )
+        or not isinstance(public_source_live, dict)
+        or stable_public_source_live_summary(
+            path.parent / "public-source-live"
+        )
+        != public_source_live
+        or not isinstance(oauth_runtime, dict)
+        or set(oauth_runtime)
+        != {
+            "release_tag",
+            "source_mode",
+            "plan_sha256",
+            "plan_digest",
+            "build_manifest_digest",
+            "compose_digest",
+            "request_digest",
+            "listeners",
+            "workloads",
+            "permissions",
+        }
+        or oauth_runtime.get("release_tag") != tag
+        or oauth_runtime.get("source_mode") != "synthetic"
+        or oauth_runtime.get("listeners") != STABLE_LISTENERS
+        or oauth_runtime.get("workloads") != expected_runtime_workloads
+        or oauth_runtime.get("permissions")
+        != {"runtime_root": "0700", "credentials": "0700"}
+        or any(
+            not isinstance(oauth_runtime.get(name), str)
+            or re.fullmatch(
+                r"(?:sha256:)?[0-9a-f]{64}",
+                oauth_runtime[name],
+            )
+            is None
+            for name in (
+                "plan_sha256",
+                "plan_digest",
+                "build_manifest_digest",
+                "compose_digest",
+                "request_digest",
+            )
+        )
+        or stable_oauth_smoke_summary(oauth_smoke) != oauth_smoke
         or doctor
         != {
             "schema_version": "registryctl.doctor.v1",
@@ -2297,9 +4126,18 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
             )
         )
         or status
-        != {"source_mode": "synthetic", "workloads": expected_status_workloads}
+        != {
+            "schema_version": "registryctl.dev_status.v1",
+            "source_mode": "synthetic",
+            "workloads": expected_status_workloads,
+        }
         or stable_smoke_summary(smoke) != smoke
-        or product_logs != {"products": expected_product_logs}
+        or product_logs
+        != {
+            "schema_version": "registryctl.dev_logs.v1",
+            "products": expected_product_logs,
+        }
+        or governed_deployment is None
         or not isinstance(redaction, dict)
         or set(redaction) != {"status", "generated_files_scanned"}
         or redaction.get("status") != "passed"
@@ -2309,6 +4147,7 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         raise ReleaseFormError(
             "stable release-form report does not prove the maintained journey"
         )
+    validate_governed_summary(governed_deployment)
     verify_stable_evidence(path, report, commands)
 
 
@@ -2316,18 +4155,15 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
     match = TAG.fullmatch(tag)
     if match is None:
         raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
+    if int(match.group(1)) < 1:
+        raise ReleaseFormError("release-form proof supports Registry Stack v1 and later")
     report = read_closed_json(path, "release-form report")
     schema = report.get("schema_version") if isinstance(report, dict) else None
-    if int(match.group(1)) >= 1:
-        if schema != STABLE_SCHEMA:
-            raise ReleaseFormError(
-                "stable release requires the maintained release-form evidence schema"
-            )
-        verify_stable_report(path, asset_dir, tag)
-        return
-    if schema != SCHEMA:
-        raise ReleaseFormError("legacy release-form evidence schema is invalid")
-    verify_legacy_report(path, asset_dir, tag)
+    if schema != STABLE_SCHEMA:
+        raise ReleaseFormError(
+            "stable release requires the maintained release-form evidence schema"
+        )
+    verify_stable_report(path, asset_dir, tag)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -2337,8 +4173,6 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--asset-dir", type=Path, required=True)
     run.add_argument("--tag", required=True)
     run.add_argument("--evidence-dir", type=Path, required=True)
-    run.add_argument("--relay-image-override")
-    run.add_argument("--notary-image-override")
     verify = subcommands.add_parser("verify")
     verify.add_argument("--asset-dir", type=Path, required=True)
     verify.add_argument("--tag", required=True)

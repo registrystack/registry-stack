@@ -680,6 +680,11 @@ jobs:
       - name: Test adopter Compose conformance checker
         run: python3 -m unittest release/scripts/test_check_adopter_compose_contract.py
 
+      - name: Test PostgreSQL runtime recipe
+        env:
+          REGISTRY_POSTGRESQL_DOCKER_PROOF: "1"
+        run: python3 -m unittest release/scripts/test_postgresql_runtime_recipe.py
+
       - name: Check adopter Compose models
         run: bash release/scripts/check_adopter_compose_contract.sh
 

@@ -259,7 +259,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         release, _ = workflow("release.yml")
         candidate, _ = workflow("release-candidate.yml")
         self.assertIn("if ((major >= 1)); then", release)
-        self.assertIn("if ((major == 0)); then", candidate)
+        self.assertIn("if ((major >= 1)); then", candidate)
         self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", release)
         self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
 
