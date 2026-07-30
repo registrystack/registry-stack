@@ -6,7 +6,7 @@ the Rhai runtime. The offline fixtures are the deterministic acceptance path;
 a reachable live DHIS2 instance is optional compatibility evidence.
 
 ```bash
-registryctl authoring editor --project-dir .
+registryctl -C . tooling editor
 registryctl test --project-dir . --integration health-record --fixture complete-child-health-evidence --trace
 registryctl test --project-dir . --integration health-record --fixture complete-child-health-evidence --watch
 registryctl test --project-dir .
@@ -15,7 +15,7 @@ registryctl build --project-dir . --environment local
 registryctl authoring xw --format reference
 ```
 
-`authoring editor`, `test`, `check`, and `build` are human-readable by default. Use `--format json`
+`tooling editor`, `test`, `check`, and `build` are human-readable by default. Use `--format json`
 with those report commands only for machine consumers. Editor setup uses the five schemas copied
 from this `registryctl` build for VS Code and Zed.
 

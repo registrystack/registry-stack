@@ -4,7 +4,7 @@ This starter demonstrates the product-neutral `script` capability with bounded
 FHIR R4 search-set handling and same-authority continuation fixtures.
 
 ```bash
-registryctl authoring editor --project-dir .
+registryctl -C . tooling editor
 registryctl test --project-dir . --integration coverage --fixture coverage-active --trace
 registryctl test --project-dir . --integration coverage --fixture coverage-active --watch
 registryctl test --project-dir .
@@ -13,7 +13,7 @@ registryctl build --project-dir . --environment local
 registryctl authoring xw --format reference
 ```
 
-`authoring editor`, `test`, `check`, and `build` are human-readable by default. Use `--format json`
+`tooling editor`, `test`, `check`, and `build` are human-readable by default. Use `--format json`
 with those report commands only for machine consumers. Editor setup uses the five schemas copied
 from this `registryctl` build for VS Code and Zed.
 

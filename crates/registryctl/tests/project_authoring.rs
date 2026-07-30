@@ -5,20 +5,19 @@ use std::path::{Path, PathBuf};
 
 use registry_platform_config::ProductAcceptanceLaneV1;
 use registryctl::{
-    add_config_anchor_key, build_registry_project_with_baselines_and_context,
-    build_registry_project_with_context, check_registry_project_with_context,
-    compare_registry_projects_semantically, create_trust_anchor, init_config_anchor,
-    init_registry_project, inspect_project_capabilities, preflight_registry_project,
-    render_project_authoring_diagnostics, setup_registry_project_editor, sign_config_bundle,
-    sign_product_bundle, test_registry_project_selected_with_context,
-    test_registry_project_with_context, verify_config_bundle_cli, BundleSignOptions,
-    ClassifierSafeReportedValue, InitSource, ProductBundleSignOptions, ProjectAuthoringDiagnostics,
-    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityOptions,
-    ProjectCheckOptions, ProjectEditorSetupOptions, ProjectExecutionContext,
-    ProjectExplanationReportV1, ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions,
-    ProjectPreflightOptions, ProjectSchemaKind, ProjectSemanticComparisonOptions, ProjectStarter,
-    ProjectTestOptions, ProjectTestSelection, SemanticComparisonEquivalence,
-    TrustAnchorCreateOptions,
+    build_registry_project_with_baselines_and_context, build_registry_project_with_context,
+    check_registry_project_with_context, compare_registry_projects_semantically,
+    create_trust_anchor, init_registry_project, inspect_project_capabilities,
+    preflight_registry_project, render_project_authoring_diagnostics,
+    setup_registry_project_editor, sign_product_bundle,
+    test_registry_project_selected_with_context, test_registry_project_with_context,
+    verify_config_bundle_cli, ClassifierSafeReportedValue, InitSource, ProductBundleSignOptions,
+    ProjectAuthoringDiagnostics, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
+    ProjectCapabilityOptions, ProjectCheckOptions, ProjectEditorSetupOptions,
+    ProjectExecutionContext, ProjectExplanationReportV1, ProjectFieldAddress,
+    ProjectFieldExplanation, ProjectInitOptions, ProjectPreflightOptions, ProjectSchemaKind,
+    ProjectSemanticComparisonOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
+    SemanticComparisonEquivalence, TrustAnchorCreateOptions,
 };
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -2140,7 +2139,7 @@ fn signed_dci_rejects_wrong_jwks_algorithm_and_key_use() {
 }
 
 #[test]
-fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
+fn partial_relay_project_tests_and_checks_but_cannot_ship_a_governed_build() {
     let relay_root = tempfile::tempdir().expect("Relay-only temporary directory");
     let relay = copy_project("relay-only-records", relay_root.path());
     test_registry_project(&ProjectTestOptions {
@@ -2168,35 +2167,6 @@ fn partial_product_projects_test_and_check_but_cannot_ship_a_governed_build() {
     assert!(relay_message.contains("project test"));
     assert!(relay_message.contains("project check"));
     assert!(relay_message.contains("add deployment.notary before project build"));
-
-    let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
-    let notary = copy_project("notary-only-evaluation", notary_root.path());
-    test_registry_project(&ProjectTestOptions {
-        project_directory: notary.clone(),
-        environment: None,
-    })
-    .expect("Notary-only project tests");
-    let check = check_registry_project(&ProjectCheckOptions {
-        project_directory: notary.clone(),
-        environment: "local".to_string(),
-        explain: true,
-        against: None,
-        anchor: None,
-    })
-    .expect("Notary-only project explains");
-    assert!(check.explanation.is_some());
-    let notary_build = build_registry_project(&ProjectBuildOptions {
-        project_directory: notary,
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
-    .expect_err("Notary-only project cannot ship a partial governed signed set");
-    let notary_message = format!("{notary_build:#}");
-    assert!(notary_message.contains("governed build requires"));
-    assert!(notary_message.contains("project test"));
-    assert!(notary_message.contains("project check"));
-    assert!(notary_message.contains("add deployment.relay before project build"));
 }
 
 #[test]
@@ -2557,7 +2527,15 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
         environment: "local".to_string(),
     })
     .expect("spreadsheet starter preflight executes");
-    assert_eq!(preflight.status, registryctl::PreflightStatus::Ready);
+    assert_eq!(
+        preflight.status,
+        registryctl::PreflightStatus::NotReady,
+        "authoring and deterministic build remain available without pretending missing local runtime inputs are ready"
+    );
+    assert!(
+        !preflight.diagnostics.is_empty(),
+        "offline preflight must explain the missing local runtime inputs"
+    );
     let repeated_preflight = preflight_registry_project(&ProjectPreflightOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -6205,7 +6183,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "e9d0c2d4ebface1579ab6b340811bd6f6ea1af59f1e90884f5b6b2ba751dc430",
+        "421d7552007ed5cb2501c93f303ea6358ba78516b6e769d51749416cbbec2005",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6752,62 +6730,6 @@ fn records_and_snapshot_share_one_generated_materialization() {
 }
 
 #[test]
-fn relay_only_and_notary_only_projects_emit_only_selected_products() {
-    for (project_name, present_directory, present_closure, absent_directory, absent_closure) in [
-        (
-            "relay-only-records",
-            "relay-public",
-            "relay",
-            "notary",
-            "notary",
-        ),
-        (
-            "notary-only-evaluation",
-            "notary",
-            "notary",
-            "relay-public",
-            "relay",
-        ),
-    ] {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = copy_project(project_name, temporary.path());
-        let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-            against: None,
-            anchor: None,
-        })
-        .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
-        let output = resolve_build_output(&project, build.output.expect("build output"));
-        assert!(
-            output.join("private").join(present_directory).is_dir(),
-            "{project_name}"
-        );
-        assert!(
-            !output.join("private").join(absent_directory).exists(),
-            "{project_name} emitted unselected {absent_directory} configuration"
-        );
-        assert!(
-            !output.join("private/relay-consultation").exists(),
-            "{project_name} emitted a consultation Relay input without consultation profiles"
-        );
-        let approval_state: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(
-                output
-                    .join("private")
-                    .join(present_directory)
-                    .join("approval/project-state.json"),
-            )
-            .expect("approval state reads"),
-        )
-        .expect("approval state parses");
-        assert!(approval_state["generated_closure_digests"][present_closure].is_string());
-        assert!(approval_state["generated_closure_digests"][absent_closure].is_null());
-        assert!(approval_state["generated_closure_digests"]["relay_consultation"].is_null());
-    }
-}
-
-#[test]
 fn materialization_size_boundary_accepts_integer_ceiling_and_rejects_human_above() {
     let at_boundary = tempfile::tempdir().expect("boundary temporary directory");
     let boundary_project = copy_project("snapshot-exact", at_boundary.path());
@@ -6847,41 +6769,31 @@ fn materialization_size_boundary_accepts_integer_ceiling_and_rejects_human_above
 }
 
 #[test]
-fn materialization_only_project_emits_private_relay_table_without_public_records() {
+fn materialization_only_project_checks_but_emits_no_partial_governed_build() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("relay-only-materialization", temporary.path());
-    let build = build_registry_project(&ProjectBuildOptions {
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("materialization-only Relay project checks");
+    let error = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
-    .expect("materialization-only Relay project builds");
-    let output = resolve_build_output(&project, build.output.expect("build output"));
-    assert!(output.join("private/relay-public").is_dir());
-    assert!(!output.join("private/relay-consultation").exists());
-    assert!(!output.join("private/notary").exists());
-
-    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
-    let datasets = relay["datasets"].as_sequence().expect("Relay datasets");
-    assert_eq!(datasets.len(), 1);
-    assert_eq!(
-        datasets[0]["tables"].as_sequence().map(std::vec::Vec::len),
-        Some(1)
+    .expect_err("materialization-only Relay project cannot emit a partial governed build");
+    let message = format!("{error:#}");
+    assert!(message.contains("governed build requires"));
+    assert!(message.contains("add deployment.notary before project build"));
+    assert!(
+        !project.join(".registry-stack/build/local").exists(),
+        "a rejected partial topology must not leave deployable-looking output"
     );
-    assert!(datasets[0]["entities"]
-        .as_sequence()
-        .is_some_and(std::vec::Vec::is_empty));
-    assert!(relay.get("consultation").is_none());
-
-    let approval_state: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(output.join("private/relay-public/approval/project-state.json"))
-            .expect("approval state reads"),
-    )
-    .expect("approval state parses");
-    assert!(approval_state["generated_closure_digests"]["relay"].is_string());
-    assert!(approval_state["generated_closure_digests"]["relay_consultation"].is_null());
-    assert!(approval_state["generated_closure_digests"]["notary"].is_null());
 }
 
 #[test]
@@ -8088,31 +8000,15 @@ fn records_provider_change_requires_a_new_generation() {
     let output = resolve_build_output(&project, initial.output.expect("initial output"));
     let private_key = temporary.path().join("records-private.jwk");
     let public_key = temporary.path().join("records-public.jwk");
-    let anchor = temporary.path().join("records-anchor.json");
-    let baseline = temporary.path().join("records-baseline");
-    std::fs::write(&private_key, TEST_PRIVATE_JWK).expect("private key writes");
-    std::fs::write(&public_key, TEST_PUBLIC_JWK).expect("public key writes");
-    init_config_anchor(
-        &anchor,
-        "registry-notary".to_string(),
-        "local".to_string(),
-        "project-authoring".to_string(),
-        "project-instance".to_string(),
-    )
-    .expect("anchor initializes");
-    add_config_anchor_key(&anchor, &public_key, true).expect("anchor key adds");
-    sign_config_bundle(BundleSignOptions {
-        input: output.join("private/notary"),
-        key: private_key.display().to_string(),
-        product: "registry-notary".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring".to_string(),
-        instance_id: Some("project-instance".to_string()),
-        sequence: 1,
-        bundle_id: "records-baseline".to_string(),
-        out: baseline.clone(),
-    })
-    .expect("records baseline signs");
+    write_test_signing_key_pair(&private_key, &public_key);
+    let (baseline, anchor) = create_and_sign_test_lane_baseline(
+        temporary.path(),
+        "records",
+        ProductAcceptanceLaneV1::Notary,
+        &output.join("signing-inputs/notary"),
+        &private_key,
+        &public_key,
+    );
 
     let environment = project.join("environments/local.yaml");
     replace_in_file(
@@ -8128,7 +8024,8 @@ fn records_provider_change_requires_a_new_generation() {
         anchor: Some(anchor.clone()),
     })
     .expect_err("provider change with reused generation must fail");
-    assert!(format!("{error:#}").contains("without a new generation"));
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("without a new generation"), "{rendered}");
 
     replace_in_file(
         &environment,
@@ -8546,80 +8443,32 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     let output = resolve_build_output(&project, initial.output.expect("initial build output"));
     let private_key = temporary.path().join("baseline-private.jwk");
     let public_key = temporary.path().join("baseline-public.jwk");
-    let anchor = temporary.path().join("baseline-anchor.json");
-    let baseline = temporary.path().join("baseline-bundle");
-    std::fs::write(&private_key, TEST_PRIVATE_JWK).expect("private test key writes");
-    std::fs::write(&public_key, TEST_PUBLIC_JWK).expect("public test key writes");
-    init_config_anchor(
-        &anchor,
-        "registry-notary".to_string(),
-        "local".to_string(),
-        "project-authoring".to_string(),
-        "project-instance".to_string(),
-    )
-    .expect("baseline anchor initializes");
-    add_config_anchor_key(&anchor, &public_key, true).expect("baseline key adds");
-    sign_config_bundle(BundleSignOptions {
-        input: output.join("private/notary"),
-        key: private_key.display().to_string(),
-        product: "registry-notary".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring".to_string(),
-        instance_id: Some("project-instance".to_string()),
-        sequence: 1,
-        bundle_id: "project-authoring-baseline".to_string(),
-        out: baseline.clone(),
-    })
-    .expect("baseline signs");
-    let relay_anchor = temporary.path().join("relay-baseline-anchor.json");
-    let relay_baseline = temporary.path().join("relay-baseline-bundle");
-    init_config_anchor(
-        &relay_anchor,
-        "registry-relay".to_string(),
-        "local".to_string(),
-        "project-authoring-relay".to_string(),
-        "project-relay-instance".to_string(),
-    )
-    .expect("Relay baseline anchor initializes");
-    add_config_anchor_key(&relay_anchor, &public_key, true).expect("Relay baseline key adds");
-    sign_config_bundle(BundleSignOptions {
-        input: output.join("private/relay-public"),
-        key: private_key.display().to_string(),
-        product: "registry-relay".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring-relay".to_string(),
-        instance_id: Some("project-relay-instance".to_string()),
-        sequence: 1,
-        bundle_id: "project-authoring-relay-baseline".to_string(),
-        out: relay_baseline.clone(),
-    })
-    .expect("Relay baseline signs");
-    let relay_consultation_anchor = temporary
-        .path()
-        .join("relay-consultation-baseline-anchor.json");
-    let relay_consultation_baseline = temporary.path().join("relay-consultation-baseline-bundle");
-    init_config_anchor(
-        &relay_consultation_anchor,
-        "registry-relay".to_string(),
-        "local".to_string(),
-        "project-authoring-relay-consultation".to_string(),
-        "project-relay-consultation-instance".to_string(),
-    )
-    .expect("consultation Relay baseline anchor initializes");
-    add_config_anchor_key(&relay_consultation_anchor, &public_key, true)
-        .expect("consultation Relay baseline key adds");
-    sign_config_bundle(BundleSignOptions {
-        input: output.join("private/relay-consultation"),
-        key: private_key.display().to_string(),
-        product: "registry-relay".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring-relay-consultation".to_string(),
-        instance_id: Some("project-relay-consultation-instance".to_string()),
-        sequence: 1,
-        bundle_id: "project-authoring-relay-consultation-baseline".to_string(),
-        out: relay_consultation_baseline.clone(),
-    })
-    .expect("consultation Relay baseline signs");
+    write_test_signing_key_pair(&private_key, &public_key);
+    let (baseline, anchor) = create_and_sign_test_lane_baseline(
+        temporary.path(),
+        "notary-baseline",
+        ProductAcceptanceLaneV1::Notary,
+        &output.join("signing-inputs/notary"),
+        &private_key,
+        &public_key,
+    );
+    let (relay_baseline, relay_anchor) = create_and_sign_test_lane_baseline(
+        temporary.path(),
+        "relay-baseline",
+        ProductAcceptanceLaneV1::RelayPublic,
+        &output.join("signing-inputs/relay-public"),
+        &private_key,
+        &public_key,
+    );
+    let (relay_consultation_baseline, relay_consultation_anchor) =
+        create_and_sign_test_lane_baseline(
+            temporary.path(),
+            "relay-consultation-baseline",
+            ProductAcceptanceLaneV1::RelayConsultation,
+            &output.join("signing-inputs/relay-consultation"),
+            &private_key,
+            &public_key,
+        );
 
     for relative in ["approval/review.json", "approval/project-state.json"] {
         let tampered = temporary
@@ -8724,24 +8573,19 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     assert!(unchanged.semantic_changes.is_empty());
 
     let mismatched_input = temporary.path().join("mismatched-baseline-input");
-    copy_tree(&output.join("private/notary"), &mismatched_input);
+    copy_tree(&output.join("signing-inputs/notary"), &mismatched_input);
     let mismatched_config = mismatched_input.join("config/notary.yaml");
     let mut mismatched_bytes = std::fs::read(&mismatched_config).expect("Notary config reads");
     mismatched_bytes.push(b'\n');
     std::fs::write(&mismatched_config, mismatched_bytes).expect("Notary config changes");
-    let mismatched_bundle = temporary.path().join("mismatched-baseline-bundle");
-    sign_config_bundle(BundleSignOptions {
-        input: mismatched_input,
-        key: private_key.display().to_string(),
-        product: "registry-notary".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring".to_string(),
-        instance_id: Some("project-instance".to_string()),
-        sequence: 2,
-        bundle_id: "project-authoring-mismatched-baseline".to_string(),
-        out: mismatched_bundle.clone(),
-    })
-    .expect("mismatched baseline signs");
+    let mismatched_bundle = sign_test_lane_bundle(
+        temporary.path(),
+        "mismatched-baseline",
+        ProductAcceptanceLaneV1::Notary,
+        &mismatched_input,
+        &private_key,
+        &anchor,
+    );
     let mismatch = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -8753,7 +8597,10 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     assert!(format!("{mismatch:#}").contains("lane closure does not match"));
 
     let report_mismatch_input = temporary.path().join("report-mismatch-input");
-    copy_tree(&output.join("private/notary"), &report_mismatch_input);
+    copy_tree(
+        &output.join("signing-inputs/notary"),
+        &report_mismatch_input,
+    );
     let report_mismatch_path = report_mismatch_input.join("approval/review.json");
     let mut mismatched_report: serde_json::Value = serde_json::from_slice(
         &std::fs::read(&report_mismatch_path).expect("approval review reads"),
@@ -8765,19 +8612,14 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         serde_json::to_vec(&mismatched_report).expect("mismatched review serializes"),
     )
     .expect("mismatched approval review writes");
-    let report_mismatch_bundle = temporary.path().join("report-mismatch-bundle");
-    sign_config_bundle(BundleSignOptions {
-        input: report_mismatch_input,
-        key: private_key.display().to_string(),
-        product: "registry-notary".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring".to_string(),
-        instance_id: Some("project-instance".to_string()),
-        sequence: 2,
-        bundle_id: "project-authoring-report-mismatch".to_string(),
-        out: report_mismatch_bundle.clone(),
-    })
-    .expect("report mismatch bundle signs");
+    let report_mismatch_bundle = sign_test_lane_bundle(
+        temporary.path(),
+        "report-mismatch",
+        ProductAcceptanceLaneV1::Notary,
+        &report_mismatch_input,
+        &private_key,
+        &anchor,
+    );
     let report_mismatch = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -8833,7 +8675,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     );
 
     let compiler_input = temporary.path().join("compiler-baseline-input");
-    copy_tree(&output.join("private/notary"), &compiler_input);
+    copy_tree(&output.join("signing-inputs/notary"), &compiler_input);
     let compiler_state_path = compiler_input.join("approval/project-state.json");
     let mut compiler_state: serde_json::Value = serde_json::from_slice(
         &std::fs::read(&compiler_state_path).expect("compiler baseline approval state reads"),
@@ -8845,19 +8687,14 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         serde_json::to_vec(&compiler_state).expect("compiler baseline state serializes"),
     )
     .expect("compiler baseline approval state writes");
-    let compiler_baseline = temporary.path().join("compiler-baseline-bundle");
-    sign_config_bundle(BundleSignOptions {
-        input: compiler_input,
-        key: private_key.display().to_string(),
-        product: "registry-notary".to_string(),
-        environment: "local".to_string(),
-        stream_id: "project-authoring".to_string(),
-        instance_id: Some("project-instance".to_string()),
-        sequence: 2,
-        bundle_id: "project-authoring-compiler-baseline".to_string(),
-        out: compiler_baseline.clone(),
-    })
-    .expect("compiler baseline signs");
+    let compiler_baseline = sign_test_lane_bundle(
+        temporary.path(),
+        "compiler-baseline",
+        ProductAcceptanceLaneV1::Notary,
+        &compiler_input,
+        &private_key,
+        &anchor,
+    );
     let compiler_mismatch = check_registry_project(&ProjectCheckOptions {
         project_directory: claim_project,
         environment: "local".to_string(),
@@ -9605,6 +9442,64 @@ fn copy_project(name: &str, temporary: &Path) -> PathBuf {
     let destination = temporary.join(name);
     copy_tree(&golden(name), &destination);
     destination
+}
+
+fn write_test_signing_key_pair(private_key: &Path, public_key: &Path) {
+    std::fs::write(private_key, TEST_PRIVATE_JWK).expect("private test key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = std::fs::metadata(private_key)
+            .expect("private test key metadata reads")
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(private_key, permissions)
+            .expect("private test key becomes owner-only");
+    }
+    std::fs::write(public_key, TEST_PUBLIC_JWK).expect("public test key writes");
+}
+
+fn create_and_sign_test_lane_baseline(
+    root: &Path,
+    label: &str,
+    lane: ProductAcceptanceLaneV1,
+    input: &Path,
+    private_key: &Path,
+    public_key: &Path,
+) -> (PathBuf, PathBuf) {
+    let anchor = root.join(format!("{label}-anchor.json"));
+    create_trust_anchor(&TrustAnchorCreateOptions {
+        lane,
+        input: input.to_path_buf(),
+        public_keys: vec![public_key.to_path_buf()],
+        threshold: 1,
+        output_file: anchor.clone(),
+    })
+    .expect("lane trust anchor creates");
+    let bundle = sign_test_lane_bundle(root, label, lane, input, private_key, &anchor);
+    (bundle, anchor)
+}
+
+fn sign_test_lane_bundle(
+    root: &Path,
+    label: &str,
+    lane: ProductAcceptanceLaneV1,
+    input: &Path,
+    private_key: &Path,
+    anchor: &Path,
+) -> PathBuf {
+    let output = root.join(format!("{label}-signed"));
+    sign_product_bundle(&ProductBundleSignOptions {
+        lane,
+        input: input.to_path_buf(),
+        anchor: anchor.to_path_buf(),
+        preceding_approved_set: None,
+        keys: vec![format!("file:{}", private_key.display())],
+        output_dir: output.clone(),
+    })
+    .expect("lane baseline signs");
+    output.join("bundle")
 }
 
 fn author_oid4vci_binding(project: &Path, service: &str, profile: &str, id_type: &str) {
