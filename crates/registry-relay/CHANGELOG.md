@@ -14,9 +14,6 @@
   capability fingerprint. Quiesce consultations and cleanly re-bootstrap the
   pre-1.0 consultation state plane before upgrading; do not run old and updated
   Relay binaries against one state plane.
-- Local image builds can set `REGISTRY_RELAY_IMAGE_REVISION` to an exact
-  40-character lowercase Git commit SHA and publish it as the
-  `org.opencontainers.image.revision` OCI label.
 - Script workers now charge their active execution budget only while the
   isolated worker is running or exchanging IPC. Relay-owned credential,
   permit, TLS, and source waits remain bounded by the existing absolute durable

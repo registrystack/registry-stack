@@ -252,20 +252,6 @@ def main() -> int:
         )
     )
     failures.extend(
-        require(
-            build_script,
-            "REGISTRY_RELAY_IMAGE_REVISION must be a 40-character lowercase commit SHA",
-            "image revision validation",
-        )
-    )
-    failures.extend(
-        require(
-            build_script,
-            '--label "org.opencontainers.image.revision=$image_revision"',
-            "optional OCI revision label forwarding",
-        )
-    )
-    failures.extend(
         require_runtime(
             dockerfile,
             "FROM gcr.io/distroless/cc-debian13:nonroot@sha256:",

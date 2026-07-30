@@ -5,19 +5,12 @@ image="${1:-registry-relay:local}"
 platform_dir="${REGISTRY_PLATFORM_DIR:-../registry-platform}"
 manifest_dir="${REGISTRY_MANIFEST_DIR:-../registry-manifest}"
 manifest_ref="${REGISTRY_MANIFEST_REF:-19cf67ada5eb7325a8fb8b051a2acc266b41bbde}"
-image_revision="${REGISTRY_RELAY_IMAGE_REVISION:-}"
 # CEL_MAPPING_DIR is the deprecated name for CROSSWALK_DIR; remove the fallback
 # once operators have migrated.
 if [ -z "${CROSSWALK_DIR:-}" ] && [ -n "${CEL_MAPPING_DIR:-}" ]; then
   echo "warning: CEL_MAPPING_DIR is deprecated, please use CROSSWALK_DIR instead" >&2
 fi
 crosswalk_dir="${CROSSWALK_DIR:-${CEL_MAPPING_DIR:-../crosswalk}}"
-
-if [ -n "$image_revision" ] &&
-  [ "$(expr "$image_revision" : '[0-9a-f][0-9a-f]*$')" -ne 40 ]; then
-  echo "REGISTRY_RELAY_IMAGE_REVISION must be a 40-character lowercase commit SHA" >&2
-  exit 1
-fi
 
 verify_pinned_git_context() {
   name="$1"
@@ -81,10 +74,6 @@ set -- docker buildx build \
 
 if [ -n "${REGISTRY_RELAY_FEATURES:-}" ]; then
   set -- "$@" --build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_FEATURES"
-fi
-
-if [ -n "$image_revision" ]; then
-  set -- "$@" --label "org.opencontainers.image.revision=$image_revision"
 fi
 
 exec "$@" .
