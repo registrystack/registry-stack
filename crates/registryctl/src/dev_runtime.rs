@@ -20,6 +20,7 @@ use registry_platform_config::{
     verify_config_bundle, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
     ProductAcceptanceProductV1, ProductTrustDomainV1, MAX_MANIFEST_BYTES,
 };
+use registry_platform_crypto::canonicalize_json;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -126,6 +127,9 @@ pub struct AuthoredDevScenario {
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
     pub minimized_claim_ids: Vec<String>,
+    /// Binds the request-selected claim values and disclosure semantics without
+    /// persisting those values in the generated runtime plan.
+    pub expected_claim_results_sha256: String,
     pub synthetic_source: Option<AuthoredSyntheticSourcePlan>,
     /// The compiler-produced governed request. It is intentionally private to
     /// the owner-only request materializer and is never serialized or logged.
@@ -145,6 +149,10 @@ impl fmt::Debug for AuthoredDevScenario {
             .field("denial_scenario_id", &self.denial_scenario_id)
             .field("authorized_scenario_id", &self.authorized_scenario_id)
             .field("minimized_claim_ids", &self.minimized_claim_ids)
+            .field(
+                "expected_claim_results_sha256",
+                &self.expected_claim_results_sha256,
+            )
             .field(
                 "synthetic_source",
                 &self.synthetic_source.as_ref().map(|_| "<redacted>"),
@@ -981,7 +989,36 @@ pub struct DevScenarioPlan {
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
     pub minimized_claim_ids: Vec<String>,
+    /// Value-free commitment checked against the authorized smoke response.
+    pub expected_claim_results_sha256: String,
     pub synthetic_source_origin: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DevClaimResultExpectation {
+    pub claim_id: String,
+    pub value: serde_json::Value,
+    pub satisfied: Option<bool>,
+    pub disclosure: String,
+}
+
+pub(crate) fn dev_claim_results_commitment(
+    mut results: Vec<DevClaimResultExpectation>,
+) -> Result<String, ()> {
+    results.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+    if results.is_empty()
+        || results
+            .windows(2)
+            .any(|pair| pair[0].claim_id == pair[1].claim_id)
+    {
+        return Err(());
+    }
+    let canonical = canonicalize_json(&serde_json::json!({
+        "schema": "registryctl.dev_claim_results_commitment.v1",
+        "results": results,
+    }))
+    .map_err(|_| ())?;
+    Ok(sha256_uri(&canonical))
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -1428,6 +1465,7 @@ impl DevRuntimePlan {
             denial_scenario_id: scenario.denial_scenario_id.clone(),
             authorized_scenario_id: scenario.authorized_scenario_id.clone(),
             minimized_claim_ids: scenario.minimized_claim_ids.clone(),
+            expected_claim_results_sha256: scenario.expected_claim_results_sha256.clone(),
             synthetic_source_origin: (input.development.source_mode == DevSourceMode::Synthetic)
                 .then(|| DEV_SYNTHETIC_SOURCE_ORIGIN.to_string()),
         };
@@ -1855,6 +1893,13 @@ fn select_authored_scenario<'a>(
                 "remove the duplicate expected claim id",
             ));
         }
+    }
+    if validate_sha256(&selected.expected_claim_results_sha256).is_err() {
+        return Err(DevRuntimeError::new(
+            DevFailureCategory::InvalidPlan,
+            "expected development claim result commitment is invalid",
+            "rebuild the development plan from a valid authored fixture",
+        ));
     }
     Ok(selected)
 }
@@ -3595,23 +3640,7 @@ impl DockerComposeBackend {
                 if body.len() > MAX_REQUEST_BODY_BYTES {
                     return Err(DevRuntimeError::smoke());
                 }
-                let value: serde_json::Value =
-                    parse_json_strict(&body).map_err(|_| DevRuntimeError::smoke())?;
-                let results = value
-                    .get("results")
-                    .and_then(serde_json::Value::as_array)
-                    .ok_or_else(DevRuntimeError::smoke)?;
-                let mut claim_ids = results
-                    .iter()
-                    .map(|result| {
-                        result
-                            .get("claim_id")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                            .ok_or_else(DevRuntimeError::smoke)
-                    })
-                    .collect::<DevRuntimeResult<Vec<_>>>()?;
-                claim_ids.sort();
+                let claim_ids = validate_authorized_evaluation_response(plan, &body)?;
                 Ok((DevSmokeStatus::Authorized, claim_ids))
             }
             Err(ureq::Error::Status(status, _)) if !authorized && matches!(status, 401 | 403) => {
@@ -3620,6 +3649,64 @@ impl DockerComposeBackend {
             _ => Err(DevRuntimeError::smoke()),
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevEvaluationResponse {
+    results: Vec<registry_notary_core::ClaimResultView>,
+}
+
+pub(crate) fn validate_authorized_evaluation_response(
+    plan: &DevRuntimePlan,
+    body: &[u8],
+) -> DevRuntimeResult<Vec<String>> {
+    let response: DevEvaluationResponse =
+        parse_json_strict(body).map_err(|_| DevRuntimeError::smoke())?;
+    // The typed response intentionally represents JSON null as None, but the
+    // wire contract requires these fields to be present even when they are null.
+    let wire: serde_json::Value = parse_json_strict(body).map_err(|_| DevRuntimeError::smoke())?;
+    let wire_results = wire
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(DevRuntimeError::smoke)?;
+    if wire_results.len() != response.results.len()
+        || wire_results.iter().any(|result| {
+            result.as_object().is_none_or(|object| {
+                !object.contains_key("value")
+                    || !object.contains_key("satisfied")
+                    || !object.contains_key("disclosure")
+            })
+        })
+    {
+        return Err(DevRuntimeError::smoke());
+    }
+    let mut claim_ids = response
+        .results
+        .iter()
+        .map(|result| result.claim_id.clone())
+        .collect::<Vec<_>>();
+    claim_ids.sort();
+    if claim_ids != plan.scenario.minimized_claim_ids {
+        return Err(DevRuntimeError::smoke());
+    }
+    let observed_commitment = dev_claim_results_commitment(
+        response
+            .results
+            .into_iter()
+            .map(|result| DevClaimResultExpectation {
+                claim_id: result.claim_id,
+                value: result.value.unwrap_or(serde_json::Value::Null),
+                satisfied: result.satisfied,
+                disclosure: result.disclosure,
+            })
+            .collect(),
+    )
+    .map_err(|_| DevRuntimeError::smoke())?;
+    if observed_commitment != plan.scenario.expected_claim_results_sha256 {
+        return Err(DevRuntimeError::smoke());
+    }
+    Ok(claim_ids)
 }
 
 pub(crate) fn supporting_up_operation(services: Vec<String>) -> Vec<String> {

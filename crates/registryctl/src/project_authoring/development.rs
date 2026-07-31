@@ -6,10 +6,10 @@ use crate::dev_credentials::{
     DevSourceCredentialProjection, PreparedDevCredentialClosure,
 };
 use crate::dev_runtime::{
-    AuthoredDevScenario, AuthoredDevelopment, AuthoredSyntheticOauthRequest,
-    AuthoredLocalSnapshot, AuthoredSyntheticSourcePlan, AuthoredSyntheticSourceRequest,
-    DevEnvironmentProfile, DevOAuthProfile, DevSourceMode, DevSourceProvider,
-    SyntheticOAuthResponseCase,
+    dev_claim_results_commitment, AuthoredDevScenario, AuthoredDevelopment,
+    AuthoredLocalSnapshot, AuthoredSyntheticOauthRequest, AuthoredSyntheticSourcePlan,
+    AuthoredSyntheticSourceRequest, DevClaimResultExpectation, DevEnvironmentProfile,
+    DevOAuthProfile, DevSourceMode, DevSourceProvider, SyntheticOAuthResponseCase,
     SyntheticRequestEncoding, SyntheticRequestMethod, SyntheticSourceAuth, SyntheticSourceScenario,
 };
 use base64::Engine as _;
@@ -206,7 +206,8 @@ pub(crate) fn compile_dev_runtime_authoring(
         });
     let request_json =
         serde_json::to_vec(request).context("failed to compile the local governed request")?;
-    let minimized_claim_ids = fixture_document.expect.claims.keys().cloned().collect();
+    let (minimized_claim_ids, expected_claim_results_sha256) =
+        compile_development_claim_result_expectation(&loaded, request, fixture_document)?;
     let scenario = AuthoredDevScenario {
         integration_id: default_integration.to_owned(),
         fixture_id: default_fixture.to_owned(),
@@ -217,6 +218,7 @@ pub(crate) fn compile_dev_runtime_authoring(
         denial_scenario_id: "unauthorized".to_string(),
         authorized_scenario_id: "authorized".to_string(),
         minimized_claim_ids,
+        expected_claim_results_sha256,
         synthetic_source,
         request_json,
     };
@@ -240,6 +242,91 @@ pub(crate) fn compile_dev_runtime_authoring(
         records_request,
         local_snapshot,
         credential_requirements,
+    })
+}
+
+fn compile_development_claim_result_expectation(
+    loaded: &LoadedRegistryProject,
+    request: &GovernedFixtureRequest,
+    fixture: &FixtureDocument,
+) -> Result<(Vec<String>, String)> {
+    let first_claim = request
+        .claims
+        .first()
+        .ok_or_else(|| anyhow!("default development request must select at least one claim"))?;
+    let first_declaration = loaded
+        .project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::Evidence)
+        .filter(|service| service.purpose == request.purpose)
+        .find_map(|service| service.claims.get(&first_claim.id))
+        .ok_or_else(|| anyhow!("default development request claim is not declared"))?;
+    let disclosure = request
+        .disclosure
+        .as_deref()
+        .unwrap_or_else(|| expanded_disclosure(&first_declaration.disclosure).0);
+    let mut minimized_claim_ids = Vec::with_capacity(request.claims.len());
+    let mut expectations = Vec::with_capacity(request.claims.len());
+    for claim in &request.claims {
+        let authored_value = fixture.expect.claims.get(&claim.id).ok_or_else(|| {
+            anyhow!(
+                "default development request claim {} has no fixture result expectation",
+                claim.id
+            )
+        })?;
+        let declaration = loaded
+            .project
+            .services
+            .values()
+            .filter(|service| service.kind == ServiceKind::Evidence)
+            .filter(|service| service.purpose == request.purpose)
+            .find_map(|service| service.claims.get(&claim.id))
+            .ok_or_else(|| anyhow!("default development request claim is not declared"))?;
+        let oracle_is_redacted =
+            expanded_disclosure(&declaration.disclosure).0 == "redacted";
+        minimized_claim_ids.push(claim.id.clone());
+        expectations.push(compile_development_claim_result(
+            &claim.id,
+            authored_value,
+            disclosure,
+            oracle_is_redacted,
+        )?);
+    }
+    minimized_claim_ids.sort();
+    let commitment = dev_claim_results_commitment(expectations)
+        .map_err(|_| anyhow!("default development claim result expectation is invalid"))?;
+    Ok((minimized_claim_ids, commitment))
+}
+
+fn compile_development_claim_result(
+    claim_id: &str,
+    authored_value: &Value,
+    disclosure: &str,
+    oracle_is_redacted: bool,
+) -> Result<DevClaimResultExpectation> {
+    if oracle_is_redacted && disclosure != "redacted" {
+        bail!(
+            "default development claim {claim_id} cannot derive {disclosure} disclosure from a redacted fixture result"
+        );
+    }
+    let (value, satisfied) = match disclosure {
+        "value" => (authored_value.clone(), authored_value.as_bool()),
+        "predicate" => (
+            authored_value
+                .as_bool()
+                .map(Value::Bool)
+                .unwrap_or(Value::Null),
+            authored_value.as_bool(),
+        ),
+        "redacted" => (Value::Null, None),
+        _ => bail!("default development request disclosure is invalid"),
+    };
+    Ok(DevClaimResultExpectation {
+        claim_id: claim_id.to_string(),
+        value,
+        satisfied,
+        disclosure: disclosure.to_string(),
     })
 }
 
@@ -1559,11 +1646,30 @@ mod development_authoring_tests {
         );
         assert_eq!(
             scenario.minimized_claim_ids,
-            vec![
-                "person-active".to_string(),
-                "person-record-exists".to_string()
-            ]
+            vec!["person-record-exists".to_string()]
         );
+    }
+
+    #[test]
+    fn development_claim_commitment_does_not_invent_a_redacted_value() {
+        let error = compile_development_claim_result(
+            "redacted-claim",
+            &json!("redacted"),
+            "value",
+            true,
+        )
+        .err()
+        .expect("redacted fixture oracle cannot prove a value result");
+        assert!(error.to_string().contains("cannot derive value disclosure"));
+
+        let literal = compile_development_claim_result(
+            "literal-claim",
+            &json!("redacted"),
+            "value",
+            false,
+        )
+        .expect("a value-disclosed literal remains distinguishable from the marker");
+        assert_eq!(literal.value, json!("redacted"));
     }
 
     #[test]
@@ -1842,6 +1948,10 @@ api:
         let temporary = tempfile::tempdir().unwrap();
         let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
         copy_embedded_dir(embedded, temporary.path()).unwrap();
+        let match_projection = compile_dev_runtime_authoring(temporary.path(), "local").unwrap();
+        let match_commitment = match_projection.scenarios[0]
+            .expected_claim_results_sha256
+            .clone();
         let environment_path = temporary.path().join("environments/local.yaml");
         let environment = fs::read_to_string(&environment_path)
             .unwrap()
@@ -1851,6 +1961,7 @@ api:
         let projection = compile_dev_runtime_authoring(temporary.path(), "local").unwrap();
         let scenario = &projection.scenarios[0];
         assert_eq!(scenario.fixture_id, "planned");
+        assert_ne!(scenario.expected_claim_results_sha256, match_commitment);
         let request: Value = serde_json::from_slice(&scenario.request_json).unwrap();
         assert_eq!(
             request.pointer("/target/identifiers/0/scheme"),

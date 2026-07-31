@@ -2343,7 +2343,11 @@ class FirstCountryReleaseFormTest(TestCase):
                 "project_root_digest": "sha256:" + "a" * 64,
             },
             "source_mode": "synthetic",
-            "request_command": "fixture",
+            "relay_api_url": "http://127.0.0.1:4242",
+            "evidence_api_url": "http://127.0.0.1:4243",
+            "records_denied_command": None,
+            "records_request_command": None,
+            "evidence_request_command": "curl --config '<owner-only-request-config>'",
             "workloads": [
                 {"workload": name, "state": "running"}
                 for name in sorted(self.module.STABLE_WORKLOAD_IMAGES)

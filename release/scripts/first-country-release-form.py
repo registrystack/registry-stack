@@ -191,7 +191,7 @@ PUBLIC_MATERIAL_FILENAMES = {
     "postgresql-tls-certificate",
     "postgres-tls.crt",
 }
-HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
+HTTP_MINIMIZED_CLAIMS = ["person-record-exists"]
 OPENCRVS_MINIMIZED_CLAIM_IDS = ["birth-event-found", "birth-event-registered"]
 GOVERNED_EVIDENCE_SUMMARY = {
     "http_status": 200,
@@ -1640,7 +1640,11 @@ def stable_status_summary(report: Any) -> dict[str, Any]:
             "binding",
             "workloads",
             "source_mode",
-            "request_command",
+            "relay_api_url",
+            "evidence_api_url",
+            "records_denied_command",
+            "records_request_command",
+            "evidence_request_command",
         }
         or report.get("schema_version") != "registryctl.dev_status.v1"
         or report.get("source_mode") != "synthetic"
@@ -1653,8 +1657,16 @@ def stable_status_summary(report: Any) -> dict[str, Any]:
             r"sha256:[0-9a-f]{64}", str(binding.get("project_root_digest"))
         )
         is None
-        or not isinstance(report.get("request_command"), str)
-        or not report["request_command"]
+        or any(
+            not isinstance(report.get(field), str) or not report[field]
+            for field in (
+                "relay_api_url",
+                "evidence_api_url",
+                "evidence_request_command",
+            )
+        )
+        or report.get("records_denied_command") is not None
+        or report.get("records_request_command") is not None
         or not isinstance(workloads, list)
         or {item.get("workload") for item in workloads if isinstance(item, dict)}
         != expected

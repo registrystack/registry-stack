@@ -506,6 +506,9 @@ on:
             "docs/site/src/content/docs/operate/approve-initial-baseline.mdx",
             "docs/site/src/content/docs/tutorials/author-registry-project.mdx",
             "docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx",
+            "docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx",
+            "docs/site/src/content/docs/tutorials/use-your-spreadsheet.mdx",
+            "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
             "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
         )
 
@@ -513,15 +516,6 @@ on:
             with self.subTest(path=path):
                 self.assertTrue(
                     classify(self.workspace, (path,))["registryctl_tutorial"]
-                )
-
-        for deleted_path in (
-            "docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx",
-            "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
-        ):
-            with self.subTest(deleted_path=deleted_path):
-                self.assertFalse(
-                    classify(self.workspace, (deleted_path,))["registryctl_tutorial"]
                 )
 
     def test_first_country_generation_inputs_run_docs(self) -> None:

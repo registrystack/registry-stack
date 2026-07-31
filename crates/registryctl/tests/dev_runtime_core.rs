@@ -730,6 +730,14 @@ fn write_development_trust_material(
 }
 
 fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> AuthoredDevScenario {
+    let expected_claim_results_sha256 =
+        dev_claim_results_commitment(vec![DevClaimResultExpectation {
+            claim_id: "eligibility".to_string(),
+            value: serde_json::json!(true),
+            satisfied: Some(true),
+            disclosure: "predicate".to_string(),
+        }])
+        .unwrap();
     AuthoredDevScenario {
         integration_id: "citizen-source".to_string(),
         fixture_id: "passing-default".to_string(),
@@ -744,6 +752,7 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
         denial_scenario_id: "default-denied".to_string(),
         authorized_scenario_id: "default-authorized".to_string(),
         minimized_claim_ids: vec!["eligibility".to_string()],
+        expected_claim_results_sha256,
         synthetic_source: Some(AuthoredSyntheticSourcePlan {
             scenario: SyntheticSourceScenario::AuthoredResponse,
             source_request: AuthoredSyntheticSourceRequest {
@@ -770,6 +779,115 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
             response_body: Some(format!(r#"{{"result":"{RESPONSE_CANARY}"}}"#).into_bytes()),
         }),
         request_json: format!(r#"{{"subject":"{REQUEST_CANARY}"}}"#).into_bytes(),
+    }
+}
+
+fn authorized_claim_result() -> serde_json::Value {
+    serde_json::json!({
+        "evaluation_id": "evaluation-1",
+        "claim_id": "eligibility",
+        "claim_version": "1",
+        "subject_type": "Person",
+        "target_ref": {
+            "type": "Person",
+            "handle": "rnref:v1:test",
+            "identifier_schemes": []
+        },
+        "value": true,
+        "satisfied": true,
+        "disclosure": "predicate",
+        "format": "application/vnd.registry-notary.claim-result+json",
+        "issued_at": "2026-07-31T00:00:00Z",
+        "expires_at": null,
+        "provenance": {
+            "schema_version": "registry-notary-claim-provenance/v2",
+            "generated_by": {
+                "type": "claim_evaluation",
+                "service_id": "registry-notary",
+                "evaluation_id": "evaluation-1",
+                "claim_id": "eligibility",
+                "claim_version": "1"
+            },
+            "used": {"relay_consultation_count": 1},
+            "derived_from": []
+        }
+    })
+}
+
+#[test]
+fn authorized_evaluation_requires_the_committed_claim_outcome() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut plan = DevRuntimePlan::derive(plan_input(
+        temporary.path(),
+        DevSourceProvider::Http,
+        DevOAuthProfile::None,
+    ))
+    .unwrap();
+    let valid = serde_json::json!({"results": [authorized_claim_result()]});
+    let valid_bytes = serde_json::to_vec(&valid).unwrap();
+    assert_eq!(
+        validate_authorized_evaluation_response(&plan, &valid_bytes).unwrap(),
+        ["eligibility"]
+    );
+
+    for (field, unexpected) in [
+        ("value", serde_json::json!(false)),
+        ("satisfied", serde_json::json!(false)),
+        ("disclosure", serde_json::json!("value")),
+    ] {
+        let mut changed = valid.clone();
+        changed["results"][0][field] = unexpected;
+        assert!(
+            validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&changed).unwrap())
+                .is_err(),
+            "{field} mismatch must fail smoke"
+        );
+    }
+
+    let mut missing = valid.clone();
+    missing["results"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("satisfied");
+    assert!(
+        validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&missing).unwrap())
+            .is_err()
+    );
+
+    let duplicate = serde_json::json!({
+        "results": [authorized_claim_result(), authorized_claim_result()]
+    });
+    assert!(validate_authorized_evaluation_response(
+        &plan,
+        &serde_json::to_vec(&duplicate).unwrap()
+    )
+    .is_err());
+
+    plan.scenario.expected_claim_results_sha256 =
+        dev_claim_results_commitment(vec![DevClaimResultExpectation {
+            claim_id: "eligibility".to_string(),
+            value: serde_json::Value::Null,
+            satisfied: None,
+            disclosure: "redacted".to_string(),
+        }])
+        .unwrap();
+    let mut redacted = valid;
+    redacted["results"][0]["value"] = serde_json::Value::Null;
+    redacted["results"][0]["satisfied"] = serde_json::Value::Null;
+    redacted["results"][0]["disclosure"] = serde_json::json!("redacted");
+    assert!(validate_authorized_evaluation_response(
+        &plan,
+        &serde_json::to_vec(&redacted).unwrap()
+    )
+    .is_ok());
+    for field in ["value", "satisfied"] {
+        let mut missing = redacted.clone();
+        missing["results"][0].as_object_mut().unwrap().remove(field);
+        assert!(
+            validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&missing).unwrap())
+                .is_err(),
+            "nullable {field} must still be present"
+        );
     }
 }
 

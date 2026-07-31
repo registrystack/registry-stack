@@ -427,7 +427,7 @@ run_synthetic_runtime \
 	"$HTTP_PROJECT" \
 	"$REPORT_ROOT/http/runtime" \
 	0 \
-	'person-active,person-record-exists'
+	'person-record-exists'
 (
 	cd "$HTTP_PROJECT"
 	"$REGISTRYCTL_BIN" test
