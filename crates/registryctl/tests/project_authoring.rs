@@ -6798,6 +6798,20 @@ fn materialization_only_project_checks_but_emits_no_partial_governed_build() {
 fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
+    let inventory = inspect_project_capabilities(&ProjectCapabilityOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect("capability inventory builds");
+    let public_relay = inventory
+        .capabilities
+        .iter()
+        .find(|record| record.capability == registryctl::CapabilityId::RegistryRelayProduct)
+        .expect("public Relay capability is inventoried");
+    assert_eq!(
+        public_relay.disposition,
+        registryctl::CapabilityDisposition::DeclaredEnabledUnused
+    );
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -6840,6 +6854,82 @@ fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
         consultation_relay["consultation"]["authorized_workload"]["client_value"].as_str(),
         Some("household-relay-client")
     );
+}
+
+#[test]
+fn evidence_only_project_rejects_an_empty_public_relay_allowlist() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["relay"]["allowed_clients"] = serde_norway::Value::Sequence(Vec::new());
+    write_yaml(&environment_path, &environment);
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("evidence-only project without a public Relay client must fail authoring");
+    let report = error
+        .downcast_ref::<ProjectAuthoringDiagnostics>()
+        .expect("error is a typed authoring diagnostics report");
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.field == Some("relay.allowed_clients"))
+        .expect("empty public Relay allowlist has a focused diagnostic");
+    assert_eq!(
+        diagnostic.remediation,
+        "Add at least one intended public Relay client id. Keep the private Notary workload client only in notary_relay."
+    );
+
+    build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("invalid evidence-only project must not build");
+    assert!(
+        !project.join(".registry-stack/build/local").exists(),
+        "rejected project must not leave build output"
+    );
+}
+
+#[test]
+fn records_api_requires_an_explicit_public_relay_client() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("relay-only-records", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["relay"]["allowed_clients"] = serde_norway::Value::Sequence(Vec::new());
+    write_yaml(&environment_path, &environment);
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("records API without a public Relay client must fail authoring");
+    let report = error
+        .downcast_ref::<ProjectAuthoringDiagnostics>()
+        .expect("error is a typed authoring diagnostics report");
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.field == Some("relay.allowed_clients"))
+        .expect("empty public Relay allowlist has a focused diagnostic");
+    assert_eq!(
+        diagnostic.cause,
+        "The public Relay has no admitted OpenID Connect client."
+    );
+    assert!(diagnostic.remediation.contains("Add at least one intended"));
+    assert!(diagnostic.remediation.contains("only in notary_relay"));
 }
 
 #[test]
