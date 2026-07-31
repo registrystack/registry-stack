@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-01
+
 ### Removed
 
 - Removed the `self_attested` evidence mode. Every configured claim now
@@ -37,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relationship proof, committed dependency closure, proof-bounded
   transactions, pseudonymous wallet-token bindings, holder binding, and
   required credential status.
+
+### Fixed
+
+- Delegated registry-backed consultations must consume the compiler-pinned
+  target instead of permitting requester-only policy dependencies.
+- Delegated Relay results are checked for expiry again after the Relay call
+  returns, before evaluation continues.
 
 ## [0.15.2] - 2026-07-28
 
