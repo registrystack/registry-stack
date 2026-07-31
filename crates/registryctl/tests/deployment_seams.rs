@@ -120,6 +120,11 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
         "/var/lib/registry/state",
         false,
     );
+    let state_read_only = mount(
+        LockedMountSourceV1::AntiRollbackState,
+        "/var/lib/registry/state",
+        true,
+    );
     let database_ca = secret(
         "postgresql-tls-certificate",
         "/run/secrets/postgresql-ca.pem",
@@ -195,7 +200,7 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
     LockedProductRuntimeV1 {
         serve: action(
             command("serve"),
-            [common.clone(), vec![state.clone(), audit.clone()]].concat(),
+            [common.clone(), vec![state_read_only.clone(), audit.clone()]].concat(),
             &environment,
             serve_secrets.clone(),
         ),
@@ -211,9 +216,21 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
             &environment,
             prepare_secrets,
         ),
+        preview_state: action(
+            command("preview-state"),
+            [common.clone(), vec![state_read_only.clone()]].concat(),
+            &environment,
+            serve_secrets.clone(),
+        ),
+        accept_state: action(
+            command("accept-state"),
+            [common.clone(), vec![state.clone(), audit.clone()]].concat(),
+            &environment,
+            serve_secrets.clone(),
+        ),
         verify_state: action(
             command("verify-state"),
-            [common, vec![state, audit]].concat(),
+            [common, vec![state_read_only, audit]].concat(),
             &environment,
             serve_secrets,
         ),
@@ -378,7 +395,7 @@ fn package_fixture() -> PackageFixture {
     for lane in ApprovedLaneV1::ALL {
         write_source_tree(&source, lane);
     }
-    let approved_set = ApprovedBaselineSetV1 {
+    let mut approved_set = ApprovedBaselineSetV1 {
         schema_id: APPROVED_BASELINE_SET_SCHEMA_ID.to_string(),
         schema_version: APPROVED_BASELINE_SET_SCHEMA_VERSION.to_string(),
         lanes: ApprovedBaselineLanesV1 {
@@ -405,6 +422,35 @@ fn package_fixture() -> PackageFixture {
             ),
         },
     };
+    let consultation_root = source.join("approved/relay-consultation");
+    let mut transition_links = Vec::new();
+    for index in 0..2 {
+        let predecessor = format!("predecessor-{index}.anchor.json");
+        let transition = format!("transition-{index}.json");
+        fs::write(
+            consultation_root.join(&predecessor),
+            format!("{{\"anchor\":{index}}}\n"),
+        )
+        .unwrap();
+        fs::write(
+            consultation_root.join(&transition),
+            format!("{{\"transition\":{index}}}\n"),
+        )
+        .unwrap();
+        transition_links.push(approved_set::ApprovedAnchorTransitionLinkV1 {
+            predecessor_anchor: approved_set_support::portable(format!(
+                "approved/relay-consultation/{predecessor}"
+            )),
+            transition: approved_set_support::portable(format!(
+                "approved/relay-consultation/{transition}"
+            )),
+        });
+    }
+    approved_set
+        .lanes
+        .relay_consultation
+        .locators
+        .anchor_transitions = transition_links;
     fs::write(&approved, approved_set.canonical_bytes().unwrap()).unwrap();
     fs::write(&release_lock, "{\"release\":\"1.0.0\"}\n").unwrap();
     let plan = plan();
@@ -860,14 +906,20 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
     assert_eq!(
         delta_services.keys().cloned().collect::<Vec<_>>(),
         vec![
+            "registry-notary-accept-state",
             "registry-notary-initialize",
             "registry-notary-prepare-state",
+            "registry-notary-preview-state",
             "registry-postgres",
             "registry-postgres-bootstrap",
+            "registry-relay-consultation-accept-state",
             "registry-relay-consultation-initialize",
             "registry-relay-consultation-prepare-state",
+            "registry-relay-consultation-preview-state",
+            "registry-relay-public-accept-state",
             "registry-relay-public-initialize",
             "registry-relay-public-prepare-state",
+            "registry-relay-public-preview-state",
         ]
     );
     for (action_service, stage_service) in [
@@ -932,6 +984,67 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         assert!(service.get("volumes").is_some());
         assert!(service.get("env_file").is_some());
     }
+    let expected_runtime = runtime();
+    for (service_name, action, expected_state_read_only, expected_audit) in [
+        (
+            "registry-relay-public-preview-state",
+            &expected_runtime.relay_public.preview_state,
+            true,
+            false,
+        ),
+        (
+            "registry-relay-consultation-preview-state",
+            &expected_runtime.relay_consultation.preview_state,
+            true,
+            false,
+        ),
+        (
+            "registry-notary-preview-state",
+            &expected_runtime.notary.preview_state,
+            true,
+            false,
+        ),
+        (
+            "registry-relay-public-accept-state",
+            &expected_runtime.relay_public.accept_state,
+            false,
+            true,
+        ),
+        (
+            "registry-relay-consultation-accept-state",
+            &expected_runtime.relay_consultation.accept_state,
+            false,
+            true,
+        ),
+        (
+            "registry-notary-accept-state",
+            &expected_runtime.notary.accept_state,
+            false,
+            true,
+        ),
+    ] {
+        let service = &delta_services[service_name];
+        assert_eq!(service["command"], json!(action.command));
+        let mounts = service["volumes"].as_array().unwrap();
+        let state = mounts
+            .iter()
+            .find(|mount| mount["target"] == "/var/lib/registry/state")
+            .unwrap();
+        assert_eq!(state["read_only"], expected_state_read_only);
+        assert_eq!(
+            mounts
+                .iter()
+                .any(|mount| mount["target"] == "/var/lib/registry/audit"),
+            expected_audit
+        );
+        assert_eq!(
+            mounts
+                .iter()
+                .find(|mount| mount["target"] == "/run/secrets")
+                .unwrap()["read_only"],
+            true
+        );
+    }
     let bootstrap = &delta_services["registry-postgres-bootstrap"];
     assert_eq!(bootstrap["networks"], json!({"registry-runtime": {}}));
     assert_eq!(
@@ -993,10 +1106,20 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         ),
         (
             "registry-relay-public-stage-secrets",
-            vec![(
-                "registry-operator-files-relay-public-serve",
-                "/registryctl-stage/output/relay-public-serve",
-            )],
+            vec![
+                (
+                    "registry-operator-files-relay-public-serve",
+                    "/registryctl-stage/output/relay-public-serve",
+                ),
+                (
+                    "registry-operator-files-relay-public-preview",
+                    "/registryctl-stage/output/relay-public-preview",
+                ),
+                (
+                    "registry-operator-files-relay-public-accept",
+                    "/registryctl-stage/output/relay-public-accept",
+                ),
+            ],
             vec![
                 "relay-public-tls-certificate",
                 "relay-public-tls-private-key",
@@ -1016,6 +1139,14 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
                 (
                     "registry-operator-files-relay-consultation-initialize",
                     "/registryctl-stage/output/relay-consultation-initialize",
+                ),
+                (
+                    "registry-operator-files-relay-consultation-preview",
+                    "/registryctl-stage/output/relay-consultation-preview",
+                ),
+                (
+                    "registry-operator-files-relay-consultation-accept",
+                    "/registryctl-stage/output/relay-consultation-accept",
                 ),
             ],
             vec![
@@ -1038,6 +1169,14 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
                 (
                     "registry-operator-files-notary-initialize",
                     "/registryctl-stage/output/notary-initialize",
+                ),
+                (
+                    "registry-operator-files-notary-preview",
+                    "/registryctl-stage/output/notary-preview",
+                ),
+                (
+                    "registry-operator-files-notary-accept",
+                    "/registryctl-stage/output/notary-accept",
                 ),
             ],
             vec![
@@ -1225,6 +1364,42 @@ fn package_normalizes_locators_and_mounts_digest_specific_lane_inputs() {
         assert_eq!(bundle_mount["read_only"], true);
         assert_eq!(bundle_mount["bind"]["create_host_path"], false);
     }
+    let consultation_anchors = fixture.package.join("generated/anchors/relay-consultation");
+    assert_eq!(
+        fs::read(consultation_anchors.join("previous-anchor.json")).unwrap(),
+        fs::read(consultation_anchors.join("history/0001.anchor.json")).unwrap()
+    );
+    assert_eq!(
+        fs::read(consultation_anchors.join("transition.json")).unwrap(),
+        fs::read(consultation_anchors.join("history/0001.transition.json")).unwrap()
+    );
+    for lane in ["relay-public", "notary"] {
+        let anchors = fixture.package.join("generated/anchors").join(lane);
+        assert!(!anchors.join("previous-anchor.json").exists());
+        assert!(!anchors.join("transition.json").exists());
+    }
+}
+
+#[test]
+fn terminal_rotation_pair_is_hash_covered() {
+    let fixture = package_fixture();
+    fs::write(
+        fixture
+            .package
+            .join("generated/anchors/relay-consultation/transition.json"),
+        b"{\"transition\":\"tampered\"}\n",
+    )
+    .unwrap();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify(&fixture, &effective);
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("transition.json")));
 }
 
 #[test]
@@ -1308,12 +1483,112 @@ fn ordinary_networking_publishes_only_public_applications_on_loopback() {
         "registry-relay-consultation-initialize",
         "registry-notary-prepare-state",
         "registry-notary-initialize",
+        "registry-relay-public-preview-state",
+        "registry-relay-consultation-preview-state",
+        "registry-notary-preview-state",
+        "registry-relay-public-accept-state",
+        "registry-relay-consultation-accept-state",
+        "registry-notary-accept-state",
     ] {
         assert_eq!(
             initialization[service_name]["networks"],
             json!({"registry-runtime": {}})
         );
         assert!(initialization[service_name].get("network_mode").is_none());
+    }
+}
+
+#[test]
+fn durable_volumes_are_stable_and_scratch_volumes_are_project_scoped() {
+    let fixture = package_fixture();
+    let volumes = fixture.models.ordinary["volumes"].as_object().unwrap();
+    let package_id = fixture.models.ordinary["name"].as_str().unwrap();
+    for name in [
+        "registry-postgresql-data",
+        "registry-relay-public-state",
+        "registry-relay-public-audit",
+        "registry-relay-consultation-state",
+        "registry-relay-consultation-audit",
+        "registry-notary-state",
+        "registry-notary-audit",
+    ] {
+        assert_eq!(
+            volumes[name],
+            json!({"name": format!("{package_id}_{name}")})
+        );
+    }
+    for (name, volume) in volumes {
+        if name.starts_with("registry-operator-files-") {
+            assert_eq!(volume, &json!({}), "{name} must stay project-scoped");
+        }
+    }
+}
+
+#[test]
+fn generated_services_use_fixed_bounded_local_logging() {
+    let fixture = package_fixture();
+    let expected = json!({
+        "driver": "local",
+        "options": {
+            "max-size": "10m",
+            "max-file": "3"
+        }
+    });
+    for service_name in [
+        "registry-relay-public",
+        "registry-relay-consultation",
+        "registry-notary",
+        "registry-postgres",
+    ] {
+        assert_eq!(
+            fixture.models.ordinary["services"][service_name]["logging"],
+            expected
+        );
+    }
+    for service_name in [
+        "registry-postgres-bootstrap",
+        "registry-relay-public-prepare-state",
+        "registry-relay-public-initialize",
+        "registry-relay-consultation-prepare-state",
+        "registry-relay-consultation-initialize",
+        "registry-notary-prepare-state",
+        "registry-notary-initialize",
+        "registry-relay-public-preview-state",
+        "registry-relay-consultation-preview-state",
+        "registry-notary-preview-state",
+        "registry-relay-public-accept-state",
+        "registry-relay-consultation-accept-state",
+        "registry-notary-accept-state",
+    ] {
+        assert_eq!(
+            fixture.models.initialization["services"][service_name]["logging"],
+            expected
+        );
+    }
+    for service_name in [
+        "registry-postgresql-stage-secrets",
+        "registry-relay-public-stage-secrets",
+        "registry-relay-consultation-stage-secrets",
+        "registry-notary-stage-secrets",
+    ] {
+        assert!(fixture.models.ordinary["services"][service_name]
+            .get("logging")
+            .is_none());
+    }
+}
+
+#[test]
+fn top_level_secrets_exclude_environment_files() {
+    let fixture = package_fixture();
+    let secrets = fixture.models.ordinary["secrets"].as_object().unwrap();
+    assert_eq!(secrets.len(), 11);
+    for environment in [
+        "relay-public-environment",
+        "relay-consultation-environment",
+        "notary-environment",
+        "postgresql-bootstrap-environment",
+    ] {
+        assert!(!secrets.contains_key(&format!("registry-{environment}")));
     }
 }
 
@@ -1418,6 +1693,45 @@ fn generated_closure_is_re_rendered_and_external_root_is_enforced() {
 }
 
 #[test]
+fn renamed_package_verifies_through_dot_path() {
+    let mut fixture = package_fixture();
+    let restored = fixture
+        .package
+        .parent()
+        .unwrap()
+        .join("restored-registry-stack");
+    fs::rename(&fixture.package, &restored).unwrap();
+    fixture.package = restored.join(".");
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1 {
+                externally_recorded_closure_sha256: Some(fixture.externally_recorded_root.clone()),
+                ..ExpectedGenerationInputsV1::default()
+            },
+        },
+        &effective,
+    )
+    .unwrap();
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
+    let runbook = fs::read_to_string(fixture.package.join("generated/RUNBOOK.md")).unwrap();
+    let package_id = fixture.models.ordinary["name"].as_str().unwrap();
+    assert!(runbook.contains(&format!("Package: `{package_id}`")));
+    assert!(!runbook.contains("restored-registry-stack"));
+}
+
+#[test]
 fn manifest_only_tamper_and_nonempty_compose_environment_are_invalid() {
     let fixture = package_fixture();
     let effective = EffectiveComposeModelsV1 {
@@ -1509,6 +1823,67 @@ fn operator_file_checks_are_opt_in_structural_and_value_free() {
 }
 
 #[test]
+#[cfg(unix)]
+fn operator_file_checks_reject_intermediate_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = package_fixture();
+    let external = fixture.package.parent().unwrap().join("external-secrets");
+    fs::create_dir(&external).unwrap();
+    fs::remove_dir(fixture.package.join("operator/secrets")).unwrap();
+    symlink(&external, fixture.package.join("operator/secrets")).unwrap();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: true,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        },
+        &effective,
+    )
+    .unwrap();
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("symbolic-link path component")));
+}
+
+#[test]
+fn operator_file_checks_reject_intermediate_non_directory() {
+    let fixture = package_fixture();
+    fs::remove_dir(fixture.package.join("operator/secrets")).unwrap();
+    fs::write(
+        fixture.package.join("operator/secrets"),
+        b"not a directory\n",
+    )
+    .unwrap();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: true,
+            expected_inputs: ExpectedGenerationInputsV1::default(),
+        },
+        &effective,
+    )
+    .unwrap();
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert!(report
+        .violations
+        .iter()
+        .any(|violation| violation.contains("non-directory path component")));
+}
+
+#[test]
 fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
     let fixture = package_fixture();
     let runbook = fs::read_to_string(fixture.package.join("generated/RUNBOOK.md")).unwrap();
@@ -1539,8 +1914,8 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         let command = format!("generated/compose.yaml run --rm --no-deps {stage}");
         assert_eq!(
             runbook.matches(&command).count(),
-            2,
-            "{stage} must run exactly once in each command block"
+            3,
+            "{stage} must run exactly once in each staging command block"
         );
     }
     let staging_sequence = stages
@@ -1558,6 +1933,31 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
     assert!(runbook.contains(&format!(
         "{ordinary_config}\n{staging_sequence}\ndocker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public"
     )));
+    let preview_public = runbook.find("registry-relay-public-preview-state").unwrap();
+    let preview_consultation = runbook
+        .find("registry-relay-consultation-preview-state")
+        .unwrap();
+    let preview_notary = runbook.find("registry-notary-preview-state").unwrap();
+    let stop = runbook[preview_notary..]
+        .find("generated/compose.yaml stop")
+        .map(|offset| preview_notary + offset)
+        .unwrap();
+    let accept_public = runbook.find("registry-relay-public-accept-state").unwrap();
+    let accept_consultation = runbook
+        .find("registry-relay-consultation-accept-state")
+        .unwrap();
+    let accept_notary = runbook.find("registry-notary-accept-state").unwrap();
+    assert!(
+        preview_public < preview_consultation
+            && preview_consultation < preview_notary
+            && preview_notary < stop
+            && stop < accept_public
+            && accept_public < accept_consultation
+            && accept_consultation < accept_notary
+    );
+    assert!(runbook
+        .contains("Do not stop any service or accept any lane unless every preview succeeds"));
+    assert!(runbook.contains("audit-before-mutation"));
     assert!(!runbook.contains("registry-runtime-stage-secrets"));
     assert!(!runbook.contains("registry-relay-public-serve-stage-secrets"));
     assert!(!runbook.contains("registry-relay-consultation-serve-stage-secrets"));

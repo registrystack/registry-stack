@@ -63,8 +63,11 @@ pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
 
 const SERVICE_POSTGRESQL_BOOTSTRAP: &str = "registry-postgres-bootstrap";
 const GENERATED_BINDING_PROJECTION: &str = "deployment-binding.v1.yaml";
+const BOUNDED_LOG_DRIVER: &str = "local";
+const BOUNDED_LOG_MAX_SIZE: &str = "10m";
+const BOUNDED_LOG_MAX_FILES: &str = "3";
 
-const INITIALIZATION_SERVICES: [&str; 7] = [
+const INITIALIZATION_SERVICES: [&str; 13] = [
     SERVICE_POSTGRESQL_BOOTSTRAP,
     "registry-relay-public-prepare-state",
     "registry-relay-consultation-prepare-state",
@@ -72,6 +75,12 @@ const INITIALIZATION_SERVICES: [&str; 7] = [
     "registry-relay-public-initialize",
     "registry-relay-consultation-initialize",
     "registry-notary-initialize",
+    "registry-relay-public-preview-state",
+    "registry-relay-consultation-preview-state",
+    "registry-notary-preview-state",
+    "registry-relay-public-accept-state",
+    "registry-relay-consultation-accept-state",
+    "registry-notary-accept-state",
 ];
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -159,6 +168,8 @@ pub enum RuntimeActionV1 {
     PrepareStateStore,
     Serve,
     InitializeState,
+    PreviewState,
+    AcceptState,
     VerifyState,
 }
 
@@ -449,6 +460,32 @@ impl DeploymentPlanV1 {
                     NOTARY,
                     RuntimeActionV1::InitializeState,
                 ),
+                initialization(
+                    "preview-relay-public-state",
+                    RELAY_PUBLIC,
+                    RuntimeActionV1::PreviewState,
+                ),
+                initialization(
+                    "preview-relay-consultation-state",
+                    RELAY_CONSULTATION,
+                    RuntimeActionV1::PreviewState,
+                ),
+                initialization(
+                    "preview-notary-state",
+                    NOTARY,
+                    RuntimeActionV1::PreviewState,
+                ),
+                initialization(
+                    "accept-relay-public-state",
+                    RELAY_PUBLIC,
+                    RuntimeActionV1::AcceptState,
+                ),
+                initialization(
+                    "accept-relay-consultation-state",
+                    RELAY_CONSULTATION,
+                    RuntimeActionV1::AcceptState,
+                ),
+                initialization("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
             ],
             recovery_consistency_groups: vec![
                 WorkloadGroupV1 {
@@ -567,6 +604,32 @@ impl DeploymentPlanV1 {
                 NOTARY,
                 RuntimeActionV1::InitializeState,
             ),
+            (
+                "preview-relay-public-state",
+                RELAY_PUBLIC,
+                RuntimeActionV1::PreviewState,
+            ),
+            (
+                "preview-relay-consultation-state",
+                RELAY_CONSULTATION,
+                RuntimeActionV1::PreviewState,
+            ),
+            (
+                "preview-notary-state",
+                NOTARY,
+                RuntimeActionV1::PreviewState,
+            ),
+            (
+                "accept-relay-public-state",
+                RELAY_PUBLIC,
+                RuntimeActionV1::AcceptState,
+            ),
+            (
+                "accept-relay-consultation-state",
+                RELAY_CONSULTATION,
+                RuntimeActionV1::AcceptState,
+            ),
+            ("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
         ];
         if self.initialization_actions.len() != expected_initialization.len()
             || !self
@@ -758,6 +821,8 @@ pub struct LockedProductRuntimeV1 {
     pub serve: LockedRuntimeActionV1,
     pub prepare_state_store: LockedRuntimeActionV1,
     pub initialize_state: LockedRuntimeActionV1,
+    pub preview_state: LockedRuntimeActionV1,
+    pub accept_state: LockedRuntimeActionV1,
     pub verify_state: LockedRuntimeActionV1,
     pub health_probe: Vec<String>,
 }
@@ -793,6 +858,14 @@ impl LockedRuntimeMappingV1 {
                 &self.relay_public.initialize_state.command,
             ),
             (
+                "public Relay preview_state",
+                &self.relay_public.preview_state.command,
+            ),
+            (
+                "public Relay accept_state",
+                &self.relay_public.accept_state.command,
+            ),
+            (
                 "public Relay verify_state",
                 &self.relay_public.verify_state.command,
             ),
@@ -808,6 +881,14 @@ impl LockedRuntimeMappingV1 {
             (
                 "consultation Relay initialize_state",
                 &self.relay_consultation.initialize_state.command,
+            ),
+            (
+                "consultation Relay preview_state",
+                &self.relay_consultation.preview_state.command,
+            ),
+            (
+                "consultation Relay accept_state",
+                &self.relay_consultation.accept_state.command,
             ),
             (
                 "consultation Relay verify_state",
@@ -826,6 +907,8 @@ impl LockedRuntimeMappingV1 {
                 "Notary initialize_state",
                 &self.notary.initialize_state.command,
             ),
+            ("Notary preview_state", &self.notary.preview_state.command),
+            ("Notary accept_state", &self.notary.accept_state.command),
             ("Notary verify_state", &self.notary.verify_state.command),
             ("Notary health", &self.notary.health_probe),
             (
@@ -875,6 +958,8 @@ impl LockedProductRuntimeV1 {
             serve: value.serve_action().clone(),
             prepare_state_store: value.prepare_state_store_action().clone(),
             initialize_state: value.initialize_state_action().clone(),
+            preview_state: value.preview_state_action().clone(),
+            accept_state: value.accept_state_action().clone(),
             verify_state: value.verify_state_action().clone(),
             health_probe: value.health_probe().to_vec(),
         }
@@ -941,6 +1026,8 @@ fn operator_file_inventory(
             ("serve", &product.serve),
             ("prepare_state_store", &product.prepare_state_store),
             ("initialize_state", &product.initialize_state),
+            ("preview_state", &product.preview_state),
+            ("accept_state", &product.accept_state),
             ("verify_state", &product.verify_state),
         ] {
             add_action_consumers(&mut consumers, &format!("{lane}:{action_name}"), action);
@@ -1814,10 +1901,7 @@ pub fn render_deployment_package(
     write_bytes(
         root.join("generated/RUNBOOK.md"),
         runbook(
-            request
-                .output_dir
-                .file_name()
-                .and_then(|name| name.to_str()),
+            &request.binding.package_id,
             &inputs.runtime,
             &operator_inventory,
         )
@@ -1862,6 +1946,22 @@ pub fn render_deployment_package(
                     .join(lane.lane.id())
                     .join("history")
                     .join(format!("{index:04}.transition.json")),
+            )?;
+        }
+        if let Some((predecessor_anchor, transition)) = lane.anchor_history.last() {
+            copy_regular_file(
+                predecessor_anchor,
+                &root
+                    .join("generated/anchors")
+                    .join(lane.lane.id())
+                    .join("previous-anchor.json"),
+            )?;
+            copy_regular_file(
+                transition,
+                &root
+                    .join("generated/anchors")
+                    .join(lane.lane.id())
+                    .join("transition.json"),
             )?;
         }
     }
@@ -2114,15 +2214,8 @@ fn verify_deployment_package_core(
     let mut generated_intact = actual_generated == manifest.generated_files;
     let binding_digest = sha256_uri(&binding_bytes);
     let binding_is_stale = binding_digest != manifest.binding_sha256;
-    let expected_fixed_files = expected_fixed_generated_files(
-        expected_rendered,
-        inputs,
-        generation_binding,
-        request
-            .package_dir
-            .file_name()
-            .and_then(|name| name.to_str()),
-    )?;
+    let expected_fixed_files =
+        expected_fixed_generated_files(expected_rendered, inputs, generation_binding)?;
     for (path, digest) in &expected_fixed_files {
         if actual_generated.get(path) != Some(digest) {
             generated_intact = false;
@@ -2422,34 +2515,13 @@ fn render_ordinary_model(
     );
 
     let mut volumes = Map::from_iter([
-        (
-            format!("{}-postgresql-data", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-relay-public-state", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-relay-public-audit", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-relay-consultation-state", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-relay-consultation-audit", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-notary-state", binding.durable_volume_prefix),
-            json!({}),
-        ),
-        (
-            format!("{}-notary-audit", binding.durable_volume_prefix),
-            json!({}),
-        ),
+        durable_volume(binding, "postgresql-data"),
+        durable_volume(binding, "relay-public-state"),
+        durable_volume(binding, "relay-public-audit"),
+        durable_volume(binding, "relay-consultation-state"),
+        durable_volume(binding, "relay-consultation-audit"),
+        durable_volume(binding, "notary-state"),
+        durable_volume(binding, "notary-audit"),
     ]);
     volumes.extend(secret_stage_volumes(secret_stage_groups(runtime), binding));
     Ok(json!({
@@ -2459,8 +2531,14 @@ fn render_ordinary_model(
             NETWORK_RUNTIME: {}
         },
         "volumes": volumes,
-        "secrets": render_secrets(binding)
+        "secrets": render_secrets(binding, runtime)?
     }))
+}
+
+fn durable_volume(binding: &DeploymentBindingV1, suffix: &str) -> (String, Value) {
+    let logical_name = format!("{}-{suffix}", binding.durable_volume_prefix);
+    let physical_name = format!("{}_{}", binding.package_id, logical_name);
+    (logical_name, json!({"name": physical_name}))
 }
 
 fn render_initialization_model(
@@ -2542,6 +2620,14 @@ fn render_initialization_model(
                 format!("{}-initialize", lane.service()),
                 &runtime.initialize_state,
             ),
+            RuntimeActionV1::PreviewState => (
+                format!("{}-preview-state", lane.service()),
+                &runtime.preview_state,
+            ),
+            RuntimeActionV1::AcceptState => (
+                format!("{}-accept-state", lane.service()),
+                &runtime.accept_state,
+            ),
             _ => bail!("initialization model contains a non-initialization action"),
         };
         let (networks, dependencies) = match lane {
@@ -2586,18 +2672,17 @@ fn render_initialization_model(
                 match action.action {
                     RuntimeActionV1::PrepareStateStore => "prepare",
                     RuntimeActionV1::InitializeState => "initialize",
+                    RuntimeActionV1::PreviewState => "preview",
+                    RuntimeActionV1::AcceptState => "accept",
                     _ => unreachable!(),
                 }
             ),
         )?;
         match action.action {
-            RuntimeActionV1::PrepareStateStore => {
-                service
-                    .as_object_mut()
-                    .expect("service object")
-                    .remove("healthcheck");
-            }
-            RuntimeActionV1::InitializeState => {
+            RuntimeActionV1::PrepareStateStore
+            | RuntimeActionV1::InitializeState
+            | RuntimeActionV1::PreviewState
+            | RuntimeActionV1::AcceptState => {
                 service
                     .as_object_mut()
                     .expect("service object")
@@ -2755,6 +2840,8 @@ fn secret_stage_groups(
                     "relay-public-initialize",
                     &runtime.relay_public.initialize_state,
                 ),
+                ("relay-public-preview", &runtime.relay_public.preview_state),
+                ("relay-public-accept", &runtime.relay_public.accept_state),
             ],
         ),
         (
@@ -2772,6 +2859,14 @@ fn secret_stage_groups(
                     "relay-consultation-initialize",
                     &runtime.relay_consultation.initialize_state,
                 ),
+                (
+                    "relay-consultation-preview",
+                    &runtime.relay_consultation.preview_state,
+                ),
+                (
+                    "relay-consultation-accept",
+                    &runtime.relay_consultation.accept_state,
+                ),
             ],
         ),
         (
@@ -2780,6 +2875,8 @@ fn secret_stage_groups(
                 ("notary-serve", &runtime.notary.serve),
                 ("notary-prepare", &runtime.notary.prepare_state_store),
                 ("notary-initialize", &runtime.notary.initialize_state),
+                ("notary-preview", &runtime.notary.preview_state),
+                ("notary-accept", &runtime.notary.accept_state),
             ],
         ),
         (
@@ -2930,6 +3027,13 @@ fn hardened_service(
             "timeout": "5s",
             "retries": 3
         },
+        "logging": {
+            "driver": BOUNDED_LOG_DRIVER,
+            "options": {
+                "max-size": BOUNDED_LOG_MAX_SIZE,
+                "max-file": BOUNDED_LOG_MAX_FILES
+            }
+        },
         "depends_on": dependencies,
         "restart": restart,
         "networks": networks
@@ -2973,15 +3077,28 @@ fn bundle_source(lanes: &[VerifiedLanePackageSourceV1], lane: ProductLaneV1) -> 
     ))
 }
 
-fn render_secrets(binding: &DeploymentBindingV1) -> Value {
+fn render_secrets(
+    binding: &DeploymentBindingV1,
+    runtime: &LockedRuntimeMappingV1,
+) -> Result<Value> {
     let mut secrets = Map::new();
-    for (consumer, locator) in &binding.secret_files {
+    let declared_files = secret_stage_groups(runtime)
+        .into_iter()
+        .flat_map(|(_, actions)| actions)
+        .flat_map(|(_, action)| action.secret_files.iter())
+        .map(|projection| projection.file_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for consumer in declared_files {
+        let locator = binding
+            .secret_files
+            .get(consumer)
+            .ok_or_else(|| anyhow!("binding is missing operator file {consumer}"))?;
         secrets.insert(
             format!("registry-{consumer}"),
             json!({"file": format!("../{locator}")}),
         );
     }
-    Value::Object(secrets)
+    Ok(Value::Object(secrets))
 }
 
 fn dependency_map(items: &[(&str, &str)]) -> Value {
@@ -3452,7 +3569,6 @@ fn expected_fixed_generated_files(
     rendered: &RenderedComposePackageV1,
     inputs: &VerifiedDeploymentInputsV1,
     binding: &DeploymentBindingV1,
-    package_name: Option<&str>,
 ) -> Result<BTreeMap<String, String>> {
     let mut plan = serde_json::to_vec_pretty(&inputs.plan)?;
     plan.push(b'\n');
@@ -3477,7 +3593,7 @@ fn expected_fixed_generated_files(
         ("operator-files.v1.json", inventory_bytes),
         (
             "RUNBOOK.md",
-            runbook(package_name, &inputs.runtime, &inventory).into_bytes(),
+            runbook(&binding.package_id, &inputs.runtime, &inventory).into_bytes(),
         ),
         ("inputs/approved-baseline-set.v1.json", approved),
         (
@@ -3527,6 +3643,22 @@ fn copied_input_roots_from_verified_inputs(
                     .join(lane.lane.id())
                     .join("history")
                     .join(format!("{index:04}.transition.json")),
+            )?;
+        }
+        if let Some((predecessor_anchor, transition)) = lane.anchor_history.last() {
+            copy_regular_file(
+                predecessor_anchor,
+                &root
+                    .join("generated/anchors")
+                    .join(lane.lane.id())
+                    .join("previous-anchor.json"),
+            )?;
+            copy_regular_file(
+                transition,
+                &root
+                    .join("generated/anchors")
+                    .join(lane.lane.id())
+                    .join("transition.json"),
             )?;
         }
     }
@@ -3870,7 +4002,35 @@ fn verify_operator_files(
     inventory: &DeploymentOperatorFileInventoryV1,
 ) -> Vec<String> {
     let mut violations = Vec::new();
-    for file in &inventory.files {
+    'files: for file in &inventory.files {
+        let relative = Path::new(&file.path);
+        let mut current = package_dir.to_path_buf();
+        if let Some(parent) = relative.parent() {
+            for component in parent.components() {
+                current.push(component.as_os_str());
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        violations.push(format!(
+                            "operator file {} has a symbolic-link path component",
+                            file.id
+                        ));
+                        continue 'files;
+                    }
+                    Ok(metadata) if !metadata.is_dir() => {
+                        violations.push(format!(
+                            "operator file {} has a non-directory path component",
+                            file.id
+                        ));
+                        continue 'files;
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        violations.push(format!("operator file {} is missing", file.id));
+                        continue 'files;
+                    }
+                }
+            }
+        }
         let path = package_dir.join(&file.path);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata)
@@ -3975,11 +4135,10 @@ fn ownership_report(
 }
 
 fn runbook(
-    package_name: Option<&str>,
+    package_name: &str,
     runtime: &LockedRuntimeMappingV1,
     inventory: &DeploymentOperatorFileInventoryV1,
 ) -> String {
-    let package_name = package_name.unwrap_or("registry-stack");
     let relay_public_verify = shell_command(&runtime.relay_public.verify_state.command);
     let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state.command);
     let notary_verify = shell_command(&runtime.notary.verify_state.command);
@@ -4048,7 +4207,22 @@ docker compose --env-file generated/compose.empty.env -f generated/compose.yaml 
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down\n\
 ```\n\n\
 ## Product or image update\n\n\
-Before shutdown, run `registryctl deploy verify --package .` against the current package and the candidate package, render and verify the candidate effective Compose model, verify every operator file against `generated/operator-files.v1.json`, verify each current and candidate bundle and anchor, and run all three current `verify_state` actions above. Preserve the intact current closure as `generated.previous/` before publishing the candidate. Stop externally reachable dependent services before a private-lane contract change. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. The manual abort boundary is the first successful product acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
+Before shutdown, run `registryctl deploy verify --package .` against the current package and the candidate package, render and verify the candidate effective Compose model, verify every operator file against `generated/operator-files.v1.json`, verify each current and candidate bundle and anchor, and run all three current `verify_state` actions above. Preserve the intact current closure as `generated.previous/` before publishing the candidate. From the candidate package, stage its operator files and preview every affected lane while all current services remain up. Do not stop any service or accept any lane unless every preview succeeds.\n\n\
+```text\n\
+{secret_staging_commands}\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml stop\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
+```\n\n\
+Each `accept_state` action uses the locked audit-before-mutation path. The manual abort boundary is the first successful acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
 ## State recovery\n\n\
 Quiesce the complete `relay-public-state` or `consultation-state` recovery consistency group before snapshot or restore. A coherent backup includes the lane anti-rollback and audit state, PostgreSQL data where declared, this package, approved set, bundle, anchor, instance, stream, and accepted sequence identities. After restoring the exact lane, instance, and stream, run the three read-only `verify_state` commands above before ordinary startup. Partial or older recovery must be manually aborted.\n\n\
 If no coherent backup exists, provision a new instance identity, review and sign every affected lane, generate a new package, and follow first installation. Reinitializing the same identity is not recovery and is unsupported. Rollback is unsupported.\n\n\
