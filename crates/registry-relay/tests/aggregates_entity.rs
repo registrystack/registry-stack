@@ -1024,6 +1024,10 @@ fn aggregate_only_config_with_sensitivity(sensitivity: &str) -> String {
     AGGREGATE_CONFIG
         .replace("    sensitivity: public\n", &format!("    sensitivity: {sensitivity}\n"))
         .replace(
+            "          max_limit: 1000\n",
+            "          max_limit: 1000\n          require_purpose_header: true\n",
+        )
+        .replace(
             "      - id: by_municipality\n",
             "      - id: by_municipality\n        access:\n          aggregate_only_execution: true\n",
         )
@@ -1057,6 +1061,23 @@ async fn aggregate_only_execution_on_secret_dataset_requires_min_cell_size_two()
     let err = config::load(&config_path)
         .expect_err("secret aggregate-only dataset with min_cell_size 1 must be rejected");
     assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn aggregate_only_execution_on_sensitive_dataset_accepts_min_cell_size_two() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+
+    for sensitivity in ["confidential", "secret"] {
+        let config = aggregate_only_config_with_sensitivity(sensitivity).replacen(
+            "          min_group_size: 1\n",
+            "          min_group_size: 2\n",
+            1,
+        );
+        std::fs::write(&config_path, config).expect("write config");
+        config::load(&config_path)
+            .unwrap_or_else(|err| panic!("{sensitivity} config with min_cell_size 2 loads: {err}"));
+    }
 }
 
 #[tokio::test]
