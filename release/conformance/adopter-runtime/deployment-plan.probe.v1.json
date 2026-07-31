@@ -9,6 +9,7 @@
       "product_lane": "relay-public",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["relay-public-bundle", "relay-public-anchor"],
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
       "secret_consumers": ["relay-public-tls"],
@@ -26,6 +27,7 @@
       "product_lane": "relay-consultation",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["relay-consultation-bundle", "relay-consultation-anchor"],
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
       "secret_consumers": ["relay-consultation-tls"],
@@ -43,6 +45,7 @@
       "product_lane": "notary",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["notary-bundle", "notary-anchor"],
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "secret", "certificate", "audit"],
       "secret_consumers": ["notary-tls", "notary-signing-key"],
@@ -59,6 +62,7 @@
       "kind": "supporting",
       "recipe": "postgresql_state_plane",
       "image_identity": "example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "image_platform": "linux-amd64",
       "secret_consumers": ["postgresql-tls", "postgresql-credentials"],
       "state_roles": ["postgresql-data"],
       "endpoint_classes": ["private-application"],
@@ -82,7 +86,10 @@
     {"id": "preview-notary-state", "workload": "notary", "action": "preview_state"},
     {"id": "accept-relay-public-state", "workload": "relay-public", "action": "accept_state"},
     {"id": "accept-relay-consultation-state", "workload": "relay-consultation", "action": "accept_state"},
-    {"id": "accept-notary-state", "workload": "notary", "action": "accept_state"}
+    {"id": "accept-notary-state", "workload": "notary", "action": "accept_state"},
+    {"id": "verify-relay-public-state", "workload": "relay-public", "action": "verify_state"},
+    {"id": "verify-relay-consultation-state", "workload": "relay-consultation", "action": "verify_state"},
+    {"id": "verify-notary-state", "workload": "notary", "action": "verify_state"}
   ],
   "recovery_consistency_groups": [
     {

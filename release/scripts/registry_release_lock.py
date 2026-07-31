@@ -246,11 +246,6 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
                 "notary-tls-private-key", "/run/secrets/notary-tls.key"
             ),
         ]
-    action_audit_secret = secret_projection(
-        f"{lane}-product-action-audit-key",
-        "/run/secrets/product-action-audit-key",
-    )
-
     def action(
         name: str,
         mounts: list[dict[str, Any]],
@@ -300,8 +295,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         "accept_state": action(
             "accept_state",
             [*common_mounts, state, audit],
-            [action_audit_secret],
-            environment=False,
+            [],
         ),
         "development_prepare_state_store": action(
             "prepare_state_store",
@@ -507,15 +501,6 @@ def operator_files() -> list[dict[str, Any]]:
             {
                 "id": f"{lane}-environment",
                 "format": "dotenv",
-                "mode": "0600",
-                "allowed_owners": product_owners,
-                "required_keys": [],
-            }
-        )
-        files.append(
-            {
-                "id": f"{lane}-product-action-audit-key",
-                "format": "opaque",
                 "mode": "0600",
                 "allowed_owners": product_owners,
                 "required_keys": [],

@@ -47,7 +47,6 @@ STAGER_SERVICES = frozenset(
 ACTION_STAGER_SERVICES = frozenset(
     {
         "registry-postgresql-actions-stage-secrets",
-        "registry-relay-public-actions-stage-secrets",
         "registry-relay-consultation-actions-stage-secrets",
         "registry-notary-actions-stage-secrets",
     }
@@ -84,7 +83,6 @@ OPERATOR_ENVIRONMENT_FILES = frozenset(
 )
 OPERATOR_SECRET_FILES = frozenset(
     {
-        "notary-product-action-audit-key",
         "notary-relay-workload-credential",
         "notary-signing-key",
         "notary-tls-certificate",
@@ -94,10 +92,8 @@ OPERATOR_SECRET_FILES = frozenset(
         "postgresql-tls-private-key",
         "relay-consultation-tls-certificate",
         "relay-consultation-tls-private-key",
-        "relay-consultation-product-action-audit-key",
         "relay-public-tls-certificate",
         "relay-public-tls-private-key",
-        "relay-public-product-action-audit-key",
     }
 )
 EXPECTED_OPERATOR_FILES = OPERATOR_ENVIRONMENT_FILES | OPERATOR_SECRET_FILES
@@ -305,21 +301,11 @@ INITIALIZATION_DEPENDENCIES = {
     },
     "registry-notary-initialize": {},
     "registry-relay-public-preview-state": {},
-    "registry-relay-public-accept-state": {
-        "registry-relay-public-actions-stage-secrets": (
-            "service_completed_successfully"
-        ),
-    },
+    "registry-relay-public-accept-state": {},
     "registry-relay-consultation-preview-state": {},
-    "registry-relay-consultation-accept-state": {
-        "registry-relay-consultation-actions-stage-secrets": (
-            "service_completed_successfully"
-        ),
-    },
+    "registry-relay-consultation-accept-state": {},
     "registry-notary-preview-state": {},
-    "registry-notary-accept-state": {
-        "registry-notary-actions-stage-secrets": "service_completed_successfully"
-    },
+    "registry-notary-accept-state": {},
     "registry-relay-public-verify-state": {},
     "registry-relay-consultation-verify-state": {},
     "registry-notary-verify-state": {},
@@ -383,12 +369,6 @@ ACTION_STAGER_SPECS = {
             "registry-postgresql-tls-certificate",
         },
     },
-    "registry-relay-public-actions-stage-secrets": {
-        "outputs": {
-            "relay-public-accept": "registry-operator-files-relay-public-accept",
-        },
-        "secrets": {"registry-relay-public-product-action-audit-key"},
-    },
     "registry-relay-consultation-actions-stage-secrets": {
         "outputs": {
             "relay-consultation-prepare": (
@@ -397,24 +377,14 @@ ACTION_STAGER_SPECS = {
             "relay-consultation-initialize": (
                 "registry-operator-files-relay-consultation-initialize"
             ),
-            "relay-consultation-accept": (
-                "registry-operator-files-relay-consultation-accept"
-            ),
         },
-        "secrets": {
-            "registry-postgresql-tls-certificate",
-            "registry-relay-consultation-product-action-audit-key",
-        },
+        "secrets": {"registry-postgresql-tls-certificate"},
     },
     "registry-notary-actions-stage-secrets": {
         "outputs": {
             "notary-prepare": "registry-operator-files-notary-prepare",
-            "notary-accept": "registry-operator-files-notary-accept",
         },
-        "secrets": {
-            "registry-notary-product-action-audit-key",
-            "registry-postgresql-tls-certificate",
-        },
+        "secrets": {"registry-postgresql-tls-certificate"},
     },
 }
 
@@ -448,28 +418,9 @@ ACTION_STAGER_RUNTIME_ACTIONS = {
             "relay_consultation",
             "initialize_state",
         ),
-        (
-            "relay-consultation-preview",
-            "relay_consultation",
-            "preview_state",
-        ),
-        (
-            "relay-consultation-accept",
-            "relay_consultation",
-            "accept_state",
-        ),
-        (
-            "relay-consultation-verify",
-            "relay_consultation",
-            "verify_state",
-        ),
     ],
     "registry-notary-actions-stage-secrets": [
         ("notary-prepare", "notary", "prepare_state_store"),
-        ("notary-initialize", "notary", "initialize_state"),
-        ("notary-preview", "notary", "preview_state"),
-        ("notary-accept", "notary", "accept_state"),
-        ("notary-verify", "notary", "verify_state"),
     ],
 }
 
@@ -1207,7 +1158,14 @@ def _assert_operator_file_inventory(
         not isinstance(declared_secrets, dict)
         or set(declared_secrets) != expected_names
     ):
-        raise ContractError("package has the wrong operator secret definitions")
+        observed_names = (
+            set(declared_secrets) if isinstance(declared_secrets, dict) else set()
+        )
+        raise ContractError(
+            "package has the wrong operator secret definitions "
+            f"(missing={sorted(expected_names - observed_names)}, "
+            f"unexpected={sorted(observed_names - expected_names)})"
+        )
     observed_secret_files = set()
     for name, definition in declared_secrets.items():
         path = definition.get("file") if isinstance(definition, dict) else None
@@ -1473,10 +1431,15 @@ def assert_initialization_model(
     package_root = package_root or FIXTURE_ROOT / "package"
     assert_value_free(model)
     services = _services(model)
-    if set(services) != (
+    expected_services = (
         ORDINARY_SERVICES | ACTION_STAGER_SERVICES | INITIALIZATION_SERVICES
-    ):
-        raise ContractError("initialization model has the wrong explicit services")
+    )
+    if set(services) != expected_services:
+        raise ContractError(
+            "initialization model has the wrong explicit services "
+            f"(missing={sorted(expected_services - set(services))}, "
+            f"unexpected={sorted(set(services) - expected_services)})"
+        )
     ordinary_services = _services(ordinary)
     for name in ORDINARY_SERVICES - {"registry-postgres"}:
         if services[name] != ordinary_services[name]:
@@ -1552,7 +1515,7 @@ def assert_initialization_model(
         ) or (lane == "notary" and action == "prepare")
         expected_environment_files = (
             [package_root / "operator/secrets" / environment]
-            if action in {"prepare", "initialize"}
+            if action in {"prepare", "initialize", "accept"}
             else []
         )
         if (

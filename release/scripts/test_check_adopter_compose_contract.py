@@ -287,7 +287,7 @@ def initialization_model(ordinary: dict) -> dict:
             service["networks"] = {CHECKER.NETWORK_RUNTIME: {}}
         else:
             service["network_mode"] = "none"
-        if action in {"prepare", "initialize"}:
+        if action in {"prepare", "initialize", "accept"}:
             service["env_file"] = [
                 (
                     "/fixture/package/operator/secrets/"
@@ -745,7 +745,7 @@ class AdopterComposeContractTests(unittest.TestCase):
                     with self.assertRaises(CHECKER.ContractError):
                         assert_initialization(initialized, ordinary)
 
-    def test_state_checks_are_non_mutating_and_accept_has_only_lane_audit_key(
+    def test_state_checks_are_non_mutating_and_accept_has_only_lane_environment(
         self,
     ) -> None:
         ordinary = ordinary_model()
@@ -753,31 +753,23 @@ class AdopterComposeContractTests(unittest.TestCase):
         for lane in ("relay-public", "relay-consultation", "notary"):
             accept_name = f"registry-{lane}-accept-state"
             accept = initialized["services"][accept_name]
-            self.assertNotIn("env_file", accept)
+            self.assertEqual(
+                accept["env_file"],
+                [
+                    (
+                        "/fixture/package/operator/secrets/"
+                        f"{CHECKER.LANE_ENVIRONMENTS['registry-' + lane]}"
+                    )
+                ],
+            )
             self.assertEqual(accept["network_mode"], "none")
             accept_secrets = [
                 mount
                 for mount in accept["volumes"]
                 if mount["target"] == "/run/secrets"
             ]
-            self.assertEqual(
-                accept_secrets,
-                [
-                    volume(
-                        f"registry-operator-files-{lane}-accept",
-                        "/run/secrets",
-                        read_only=True,
-                    )
-                ],
-            )
-            self.assertEqual(
-                CHECKER._dependencies(accept),
-                {
-                    f"registry-{lane}-actions-stage-secrets": (
-                        "service_completed_successfully"
-                    )
-                },
-            )
+            self.assertEqual(accept_secrets, [])
+            self.assertEqual(CHECKER._dependencies(accept), {})
             for action in ("preview", "verify"):
                 service = initialized["services"][f"registry-{lane}-{action}-state"]
                 self.assertNotIn("env_file", service)
@@ -790,17 +782,19 @@ class AdopterComposeContractTests(unittest.TestCase):
 
         changed = initialization_model(ordinary)
         changed["services"]["registry-notary-accept-state"]["env_file"] = [
-            "/fixture/package/operator/secrets/notary-environment"
+            "/fixture/package/operator/secrets/relay-public-environment"
         ]
         with self.assertRaises(CHECKER.ContractError):
             assert_initialization(changed, ordinary)
 
         changed = initialization_model(ordinary)
-        changed["services"]["registry-notary-accept-state"]["volumes"] = [
-            mount
-            for mount in changed["services"]["registry-notary-accept-state"]["volumes"]
-            if mount["target"] != "/run/secrets"
-        ]
+        changed["services"]["registry-notary-accept-state"]["volumes"].append(
+            volume(
+                "registry-operator-files-notary-serve",
+                "/run/secrets",
+                read_only=True,
+            )
+        )
         with self.assertRaises(CHECKER.ContractError):
             assert_initialization(changed, ordinary)
 

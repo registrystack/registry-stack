@@ -1,6 +1,7 @@
 name: registry-adopter-probe
 
 x-product-hardening: &product-hardening
+  platform: linux/amd64
   read_only: true
   user: "65532:65532"
   cap_drop: [ALL]
@@ -19,6 +20,7 @@ x-product-hardening: &product-hardening
 
 x-stager-hardening: &stager-hardening
   image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  platform: linux/amd64
   entrypoint: ["/bin/sh", "-ceu"]
   command: ["umask 077\nexit 0\n"]
   user: "0:0"
@@ -35,7 +37,6 @@ services:
     <<: *stager-hardening
     volumes:
       - registry-operator-files-postgresql-serve:/registryctl-stage/output/postgresql-serve
-      - registry-operator-files-postgresql-bootstrap:/registryctl-stage/output/postgresql-bootstrap
     secrets:
       - source: registry-postgresql-admin-password
         target: postgresql-admin-password
@@ -48,8 +49,6 @@ services:
     <<: *stager-hardening
     volumes:
       - registry-operator-files-relay-public-serve:/registryctl-stage/output/relay-public-serve
-      - registry-operator-files-relay-public-preview:/registryctl-stage/output/relay-public-preview
-      - registry-operator-files-relay-public-accept:/registryctl-stage/output/relay-public-accept
     secrets:
       - source: registry-relay-public-tls-certificate
         target: relay-public-tls-certificate
@@ -60,10 +59,6 @@ services:
     <<: *stager-hardening
     volumes:
       - registry-operator-files-relay-consultation-serve:/registryctl-stage/output/relay-consultation-serve
-      - registry-operator-files-relay-consultation-prepare:/registryctl-stage/output/relay-consultation-prepare
-      - registry-operator-files-relay-consultation-initialize:/registryctl-stage/output/relay-consultation-initialize
-      - registry-operator-files-relay-consultation-preview:/registryctl-stage/output/relay-consultation-preview
-      - registry-operator-files-relay-consultation-accept:/registryctl-stage/output/relay-consultation-accept
     secrets:
       - source: registry-postgresql-tls-certificate
         target: postgresql-tls-certificate
@@ -76,10 +71,6 @@ services:
     <<: *stager-hardening
     volumes:
       - registry-operator-files-notary-serve:/registryctl-stage/output/notary-serve
-      - registry-operator-files-notary-prepare:/registryctl-stage/output/notary-prepare
-      - registry-operator-files-notary-initialize:/registryctl-stage/output/notary-initialize
-      - registry-operator-files-notary-preview:/registryctl-stage/output/notary-preview
-      - registry-operator-files-notary-accept:/registryctl-stage/output/notary-accept
     secrets:
       - source: registry-notary-relay-workload-credential
         target: notary-relay-workload-credential
@@ -96,6 +87,7 @@ services:
 
   registry-postgres:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    platform: linux/amd64
     entrypoint:
       - /bin/sh
       - -ceu
@@ -138,7 +130,12 @@ services:
     restart: unless-stopped
     command: [product-action, relay-public, serve]
     networks: [registry-runtime]
-    ports: ["127.0.0.1:4242:4242"]
+    ports:
+      - target: 8080
+        published: "4242"
+        host_ip: 127.0.0.1
+        protocol: tcp
+        mode: ingress
     depends_on:
       registry-relay-public-stage-secrets:
         condition: service_completed_successfully
@@ -195,7 +192,12 @@ services:
     restart: unless-stopped
     command: [product-action, serve]
     networks: [registry-runtime]
-    ports: ["127.0.0.1:4255:4255"]
+    ports:
+      - target: 8081
+        published: "4255"
+        host_ip: 127.0.0.1
+        protocol: tcp
+        mode: ingress
     depends_on:
       registry-postgres:
         condition: service_healthy
@@ -240,20 +242,9 @@ volumes:
   registry-notary-audit:
     name: registry-adopter-probe_registry-notary-audit
   registry-operator-files-postgresql-serve:
-  registry-operator-files-postgresql-bootstrap:
   registry-operator-files-relay-public-serve:
-  registry-operator-files-relay-public-preview:
-  registry-operator-files-relay-public-accept:
   registry-operator-files-relay-consultation-serve:
-  registry-operator-files-relay-consultation-prepare:
-  registry-operator-files-relay-consultation-initialize:
-  registry-operator-files-relay-consultation-preview:
-  registry-operator-files-relay-consultation-accept:
   registry-operator-files-notary-serve:
-  registry-operator-files-notary-prepare:
-  registry-operator-files-notary-initialize:
-  registry-operator-files-notary-preview:
-  registry-operator-files-notary-accept:
 
 secrets:
   registry-relay-public-tls-certificate:

@@ -79,8 +79,8 @@
         },
         "operator_files": {
           "type": "array",
-          "minItems": 18,
-          "maxItems": 18,
+          "minItems": 15,
+          "maxItems": 15,
           "items": {
             "$ref": "#/$defs/operator_file"
           }

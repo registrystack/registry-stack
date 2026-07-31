@@ -183,33 +183,37 @@ class FirstCountryReleaseFormTest(TestCase):
 
     def secret_staging_models(self):
         volume_prefix = "release"
-        stagers = {}
-        for service_name, contract in self.module.SECRET_STAGER_CONTRACT.items():
-            stagers[service_name] = {
-                "network_mode": "none",
-                "user": "0:0",
-                "read_only": True,
-                "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
-                "cap_drop": ["ALL"],
-                "security_opt": ["no-new-privileges:true"],
-                "tmpfs": ["/tmp"],
-                "restart": "no",
-                "volumes": [
-                    {
-                        "type": "volume",
-                        "source": (f"{volume_prefix}-operator-files-{stage_id}"),
-                        "target": f"/registryctl-stage/output/{stage_id}",
-                        "volume": {},
-                    }
-                    for stage_id in contract["outputs"]
-                ],
-                "secrets": [
-                    {
-                        "source": f"registry-{file_id}",
-                        "target": f"/run/secrets/{file_id}",
-                    }
-                    for file_id in contract["sources"]
-                ],
+        def stagers(contract):
+            return {
+                service_name: {
+                    "network_mode": "none",
+                    "user": "0:0",
+                    "read_only": True,
+                    "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
+                    "cap_drop": ["ALL"],
+                    "security_opt": ["no-new-privileges:true"],
+                    "tmpfs": ["/tmp"],
+                    "restart": "no",
+                    "volumes": [
+                        {
+                            "type": "volume",
+                            "source": (
+                                f"{volume_prefix}-operator-files-{stage_id}"
+                            ),
+                            "target": f"/registryctl-stage/output/{stage_id}",
+                            "volume": {},
+                        }
+                        for stage_id in projection["outputs"]
+                    ],
+                    "secrets": [
+                        {
+                            "source": f"registry-{file_id}",
+                            "target": f"/run/secrets/{file_id}",
+                        }
+                        for file_id in projection["sources"]
+                    ],
+                }
+                for service_name, projection in contract.items()
             }
 
         def consumer(stager, stage_id):
@@ -231,38 +235,72 @@ class FirstCountryReleaseFormTest(TestCase):
                 },
             }
 
-        ordinary_names = {
-            "registry-postgres",
-            "registry-relay-public",
-            "registry-relay-consultation",
-            "registry-notary",
-        }
         ordinary = {
             "services": {
-                **stagers,
+                **stagers(self.module.SERVING_SECRET_STAGER_CONTRACT),
                 **{
                     service_name: consumer(*contract)
                     for service_name, contract in (
-                        self.module.SECRET_STAGE_CONSUMERS.items()
+                        self.module.SERVING_SECRET_STAGE_CONSUMERS.items()
                     )
-                    if service_name in ordinary_names
                 },
             }
         }
         initialization = copy.deepcopy(ordinary)
         initialization["services"].update(
+            stagers(self.module.ACTION_SECRET_STAGER_CONTRACT)
+        )
+        initialization["services"].update(
             {
                 service_name: consumer(*contract)
                 for service_name, contract in (
-                    self.module.SECRET_STAGE_CONSUMERS.items()
+                    self.module.ACTION_SECRET_STAGE_CONSUMERS.items()
                 )
-                if service_name not in ordinary_names
             }
         )
         initialization["services"].update(
             {
-                "registry-relay-public-prepare-state": {"volumes": []},
-                "registry-relay-public-initialize": {"volumes": []},
+                f"registry-{lane}-{action}-state": {
+                    "network_mode": "none",
+                    "depends_on": {},
+                    "volumes": [
+                        {
+                            "type": "volume",
+                            "source": f"{volume_prefix}-{lane}-state",
+                            "target": "/var/lib/registry/state",
+                            "read_only": True,
+                            "volume": {},
+                        }
+                    ],
+                }
+                for lane in self.module.GOVERNED_LANES
+                for action in ("preview", "verify")
+            }
+        )
+        for lane in self.module.GOVERNED_LANES:
+            initialization["services"][f"registry-{lane}-accept-state"] = {
+                "network_mode": "none",
+                "depends_on": {},
+                "volumes": [],
+                "env_file": [f"/fixture/operator/secrets/{lane}-environment"],
+            }
+        initialization["services"].update(
+            {
+                "registry-relay-public-prepare-state": {
+                    "network_mode": "none",
+                    "depends_on": {},
+                    "volumes": [],
+                },
+                "registry-relay-public-initialize": {
+                    "network_mode": "none",
+                    "depends_on": {},
+                    "volumes": [],
+                },
+                "registry-notary-initialize": {
+                    "network_mode": "none",
+                    "depends_on": {},
+                    "volumes": [],
+                },
             }
         )
         return ordinary, initialization, volume_prefix
@@ -788,10 +826,9 @@ class FirstCountryReleaseFormTest(TestCase):
             "parent_include_config",
             "initialize_config",
             "inspect_secret_stagers",
-            "initialize_stage_relay_public_secrets",
-            "initialize_stage_relay_consultation_secrets",
-            "initialize_stage_notary_secrets",
-            "initialize_stage_postgresql_secrets",
+            "initialize_stage_relay_consultation_action_secrets",
+            "initialize_stage_notary_action_secrets",
+            "initialize_stage_postgresql_action_secrets",
             "initialize_postgresql",
             "initialize_relay_public",
             "initialize_relay_consultation",
@@ -804,9 +841,21 @@ class FirstCountryReleaseFormTest(TestCase):
             "update_generate",
             "failed_activation",
             "failed_activation_recovery",
+            "update_preview_relay_public",
+            "update_preview_relay_consultation",
+            "update_preview_notary",
+            "update_stop_current",
+            "update_accept_relay_consultation",
+            "update_accept_notary",
+            "update_verify_relay_public_state",
+            "update_verify_relay_consultation_state",
+            "update_verify_notary_state",
+            "update_stage_relay_public_serving_secrets",
+            "update_stage_relay_consultation_serving_secrets",
+            "update_stage_notary_serving_secrets",
+            "update_stage_postgresql_serving_secrets",
             "updated_start",
             "updated_stop",
-            "rollback_stage_secrets",
             "rollback_rejected",
             "final_start",
             "isolated_teardown",
@@ -817,6 +866,31 @@ class FirstCountryReleaseFormTest(TestCase):
         )
         positions = [self.module.STABLE_COMMAND_ORDER.index(name) for name in required]
         self.assertEqual(positions, sorted(positions))
+        update_start = self.module.STABLE_COMMAND_ORDER.index("update_generate")
+        updated_start = self.module.STABLE_COMMAND_ORDER.index("updated_start")
+        self.assertEqual(
+            self.module.STABLE_COMMAND_ORDER[update_start : updated_start + 1],
+            (
+                "update_generate",
+                "update_verify",
+                "failed_activation",
+                "failed_activation_recovery",
+                "update_preview_relay_public",
+                "update_preview_relay_consultation",
+                "update_preview_notary",
+                "update_stop_current",
+                "update_accept_relay_consultation",
+                "update_accept_notary",
+                "update_verify_relay_public_state",
+                "update_verify_relay_consultation_state",
+                "update_verify_notary_state",
+                "update_stage_relay_public_serving_secrets",
+                "update_stage_relay_consultation_serving_secrets",
+                "update_stage_notary_serving_secrets",
+                "update_stage_postgresql_serving_secrets",
+                "updated_start",
+            ),
+        )
         stable_source = SCRIPT.read_text(encoding="utf-8").split(
             "def run_stable_release_form", 1
         )[1].split("def run_release_form", 1)[0]
@@ -830,10 +904,21 @@ class FirstCountryReleaseFormTest(TestCase):
         )
         self.assertNotIn("git clone", stable_source)
         self.assertNotIn('"spreadsheet"', stable_source)
+        self.assertIn(
+            '"--output-dir",\n                        str(candidate_package)',
+            stable_source,
+        )
+        self.assertIn(
+            "compose_preview_state_commands(candidate_package)", stable_source
+        )
+        self.assertIn(
+            '"update_stop_current",\n                    [*compose_base(package), "down"]',
+            stable_source,
+        )
         cleanup_source = stable_source.split("        finally:", 1)[1]
         self.assertLess(
             cleanup_source.index("available_secret_values"),
-            cleanup_source.index("if package is not None"),
+            cleanup_source.index("for governed_package in"),
         )
 
     def test_expected_failure_requires_its_value_free_classification(self) -> None:
@@ -924,8 +1009,8 @@ class FirstCountryReleaseFormTest(TestCase):
 
     def test_secret_stage_commands_precede_each_consumer_sequence(self) -> None:
         package = self.root / "package"
-        expected_stagers = tuple(self.module.SECRET_STAGER_CONTRACT)
-        stage_commands = self.module.compose_secret_stage_commands(package)
+        expected_stagers = tuple(self.module.SERVING_SECRET_STAGER_CONTRACT)
+        stage_commands = self.module.compose_serving_secret_stage_commands(package)
         self.assertEqual(
             tuple(command[-1] for command in stage_commands),
             expected_stagers,
@@ -946,20 +1031,35 @@ class FirstCountryReleaseFormTest(TestCase):
         )
         self.assertEqual(ordered[4:], consumers)
 
-        rollback_stagers = (
-            "registry-relay-consultation-stage-secrets",
-            "registry-notary-stage-secrets",
+        action_stagers = (
+            "registry-relay-consultation-actions-stage-secrets",
+            "registry-notary-actions-stage-secrets",
         )
-        rollback = self.module.compose_staged_consumer_commands(
+        actions = self.module.compose_action_secret_stage_commands(
             package,
-            consumers[1:3],
-            rollback_stagers,
+            action_stagers,
         )
         self.assertEqual(
-            tuple(command[-1] for command in rollback[:2]),
-            rollback_stagers,
+            tuple(command[-1] for command in actions),
+            action_stagers,
         )
-        self.assertEqual(rollback[2:], consumers[1:3])
+        for command in actions:
+            self.assertIn(
+                str(package / "generated/compose.initialize.yaml"), command
+            )
+
+        self.assertEqual(
+            [command[-1] for command in consumers],
+            [
+                "registry-relay-public-verify-state",
+                "registry-relay-consultation-verify-state",
+                "registry-notary-verify-state",
+            ],
+        )
+        for command in consumers:
+            self.assertIn(
+                str(package / "generated/compose.initialize.yaml"), command
+            )
 
     def test_secret_staging_models_enforce_exact_lane_authority(self) -> None:
         ordinary, initialization, volume_prefix = self.secret_staging_models()
@@ -977,7 +1077,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "services"
         ].pop("registry-relay-public-stage-secrets")
         with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "wrong isolated stager roster"
+            self.module.ReleaseFormError, "wrong serving stager roster"
         ):
             self.module.stable_secret_staging_summary(
                 wrong_roster,
@@ -1047,13 +1147,47 @@ class FirstCountryReleaseFormTest(TestCase):
             )
 
         missing_consumer = copy.deepcopy(initialization)
-        missing_consumer["services"].pop("registry-notary-initialize")
+        missing_consumer["services"].pop("registry-notary-accept-state")
         with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "missing staged-secret consumers"
+            self.module.ReleaseFormError, "exact lane environment"
         ):
             self.module.stable_secret_staging_summary(
                 ordinary,
                 missing_consumer,
+                volume_prefix=volume_prefix,
+            )
+
+        preview_with_secret = copy.deepcopy(initialization)
+        preview_with_secret["services"]["registry-notary-preview-state"][
+            "volumes"
+        ].append(
+            {
+                "type": "volume",
+                "source": f"{volume_prefix}-operator-files-notary-accept",
+                "target": "/run/secrets",
+                "read_only": True,
+                "volume": {},
+            }
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "unowned staged-secret authority"
+        ):
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                preview_with_secret,
+                volume_prefix=volume_prefix,
+            )
+
+        accept_with_wrong_environment = copy.deepcopy(initialization)
+        accept_with_wrong_environment["services"]["registry-notary-accept-state"][
+            "env_file"
+        ] = ["relay-public-environment"]
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "exact lane environment"
+        ):
+            self.module.stable_secret_staging_summary(
+                ordinary,
+                accept_with_wrong_environment,
                 volume_prefix=volume_prefix,
             )
 
@@ -2150,7 +2284,9 @@ class FirstCountryReleaseFormTest(TestCase):
             }
             for service, targets in durable.items()
         }
-        for stager_name, contract in self.module.SECRET_STAGER_CONTRACT.items():
+        for stager_name, contract in (
+            self.module.SERVING_SECRET_STAGER_CONTRACT.items()
+        ):
             services[stager_name] = {
                 "volumes": [
                     {
@@ -2166,7 +2302,7 @@ class FirstCountryReleaseFormTest(TestCase):
         }
         staged_sources = {
             mount["source"]
-            for stager_name in self.module.SECRET_STAGER_CONTRACT
+            for stager_name in self.module.SERVING_SECRET_STAGER_CONTRACT
             for mount in services[stager_name]["volumes"]
         }
         project_name = "governed-fixture"

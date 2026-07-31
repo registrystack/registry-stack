@@ -9,8 +9,69 @@ services:
         exec /usr/local/bin/docker-entrypoint.sh "$@"
       - --
 
+  registry-postgresql-actions-stage-secrets:
+    image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    platform: linux/amd64
+    entrypoint: ["/bin/sh", "-ceu"]
+    command: ["umask 077\nexit 0\n"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - registry-operator-files-postgresql-bootstrap:/registryctl-stage/output/postgresql-bootstrap
+    secrets:
+      - source: registry-postgresql-admin-password
+        target: postgresql-admin-password
+      - source: registry-postgresql-tls-certificate
+        target: postgresql-tls-certificate
+
+  registry-relay-consultation-actions-stage-secrets:
+    image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    platform: linux/amd64
+    entrypoint: ["/bin/sh", "-ceu"]
+    command: ["umask 077\nexit 0\n"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - registry-operator-files-relay-consultation-prepare:/registryctl-stage/output/relay-consultation-prepare
+      - registry-operator-files-relay-consultation-initialize:/registryctl-stage/output/relay-consultation-initialize
+    secrets:
+      - source: registry-postgresql-tls-certificate
+        target: postgresql-tls-certificate
+
+  registry-notary-actions-stage-secrets:
+    image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    platform: linux/amd64
+    entrypoint: ["/bin/sh", "-ceu"]
+    command: ["umask 077\nexit 0\n"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - registry-operator-files-notary-prepare:/registryctl-stage/output/notary-prepare
+    secrets:
+      - source: registry-postgresql-tls-certificate
+        target: postgresql-tls-certificate
+
   registry-postgres-bootstrap:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    platform: linux/amd64
     command: [postgresql-action, bootstrap]
     user: "999:999"
     read_only: true
@@ -27,7 +88,7 @@ services:
     depends_on:
       registry-postgres:
         condition: service_healthy
-      registry-postgresql-stage-secrets:
+      registry-postgresql-actions-stage-secrets:
         condition: service_completed_successfully
     env_file:
       - ./postgresql-server.env
@@ -37,6 +98,7 @@ services:
 
   registry-relay-public-prepare-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-public, prepare_state_store]
     user: "65532:65532"
     read_only: true
@@ -47,7 +109,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
+    network_mode: none
     env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
@@ -66,6 +128,7 @@ services:
 
   registry-relay-consultation-prepare-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-consultation, prepare_state_store]
     user: "65532:65532"
     read_only: true
@@ -80,7 +143,7 @@ services:
     depends_on:
       registry-postgres:
         condition: service_healthy
-      registry-relay-consultation-stage-secrets:
+      registry-relay-consultation-actions-stage-secrets:
         condition: service_completed_successfully
     env_file: [../operator/secrets/relay-consultation-environment]
     volumes:
@@ -101,6 +164,7 @@ services:
 
   registry-notary-prepare-state:
     image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    platform: linux/amd64
     command: [product-action, prepare_state_store]
     user: "65532:65532"
     read_only: true
@@ -115,7 +179,7 @@ services:
     depends_on:
       registry-postgres:
         condition: service_healthy
-      registry-notary-stage-secrets:
+      registry-notary-actions-stage-secrets:
         condition: service_completed_successfully
     env_file: [../operator/secrets/notary-environment]
     volumes:
@@ -136,6 +200,7 @@ services:
 
   registry-relay-public-initialize:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-public, initialize_state]
     user: "65532:65532"
     read_only: true
@@ -146,7 +211,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
+    network_mode: none
     env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
@@ -166,6 +231,7 @@ services:
 
   registry-relay-consultation-initialize:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-consultation, initialize_state]
     user: "65532:65532"
     read_only: true
@@ -180,7 +246,7 @@ services:
     depends_on:
       registry-postgres:
         condition: service_healthy
-      registry-relay-consultation-stage-secrets:
+      registry-relay-consultation-actions-stage-secrets:
         condition: service_completed_successfully
     env_file: [../operator/secrets/relay-consultation-environment]
     volumes:
@@ -202,6 +268,7 @@ services:
 
   registry-notary-initialize:
     image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    platform: linux/amd64
     command: [product-action, initialize_state]
     user: "65532:65532"
     read_only: true
@@ -212,12 +279,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-notary-stage-secrets:
-        condition: service_completed_successfully
+    network_mode: none
     env_file: [../operator/secrets/notary-environment]
     volumes:
       - type: bind
@@ -234,10 +296,10 @@ services:
           create_host_path: false
       - registry-notary-state:/var/lib/registry/state
       - registry-notary-audit:/var/lib/registry/audit
-      - registry-operator-files-notary-initialize:/run/secrets:ro
 
   registry-relay-public-preview-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-public, preview_state]
     user: "65532:65532"
     read_only: true
@@ -248,11 +310,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-relay-public-stage-secrets:
-        condition: service_completed_successfully
-    env_file: [../operator/secrets/relay-public-environment]
+    network_mode: none
     volumes:
       - type: bind
         source: ./bundles/relay-public
@@ -267,10 +325,10 @@ services:
         bind:
           create_host_path: false
       - registry-relay-public-state:/var/lib/registry/state:ro
-      - registry-operator-files-relay-public-preview:/run/secrets:ro
 
   registry-relay-consultation-preview-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-consultation, preview_state]
     user: "65532:65532"
     read_only: true
@@ -281,13 +339,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-relay-consultation-stage-secrets:
-        condition: service_completed_successfully
-    env_file: [../operator/secrets/relay-consultation-environment]
+    network_mode: none
     volumes:
       - type: bind
         source: ./bundles/relay-consultation
@@ -302,10 +354,10 @@ services:
         bind:
           create_host_path: false
       - registry-relay-consultation-state:/var/lib/registry/state:ro
-      - registry-operator-files-relay-consultation-preview:/run/secrets:ro
 
   registry-notary-preview-state:
     image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    platform: linux/amd64
     command: [product-action, preview_state]
     user: "65532:65532"
     read_only: true
@@ -316,13 +368,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-notary-stage-secrets:
-        condition: service_completed_successfully
-    env_file: [../operator/secrets/notary-environment]
+    network_mode: none
     volumes:
       - type: bind
         source: ./bundles/notary
@@ -337,10 +383,10 @@ services:
         bind:
           create_host_path: false
       - registry-notary-state:/var/lib/registry/state:ro
-      - registry-operator-files-notary-preview:/run/secrets:ro
 
   registry-relay-public-accept-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-public, accept_state]
     user: "65532:65532"
     read_only: true
@@ -351,10 +397,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-relay-public-stage-secrets:
-        condition: service_completed_successfully
+    network_mode: none
     env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
@@ -371,10 +414,10 @@ services:
           create_host_path: false
       - registry-relay-public-state:/var/lib/registry/state
       - registry-relay-public-audit:/var/lib/registry/audit
-      - registry-operator-files-relay-public-accept:/run/secrets:ro
 
   registry-relay-consultation-accept-state:
     image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
     command: [product-action, relay-consultation, accept_state]
     user: "65532:65532"
     read_only: true
@@ -385,12 +428,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-relay-consultation-stage-secrets:
-        condition: service_completed_successfully
+    network_mode: none
     env_file: [../operator/secrets/relay-consultation-environment]
     volumes:
       - type: bind
@@ -407,10 +445,10 @@ services:
           create_host_path: false
       - registry-relay-consultation-state:/var/lib/registry/state
       - registry-relay-consultation-audit:/var/lib/registry/audit
-      - registry-operator-files-relay-consultation-accept:/run/secrets:ro
 
   registry-notary-accept-state:
     image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    platform: linux/amd64
     command: [product-action, accept_state]
     user: "65532:65532"
     read_only: true
@@ -421,12 +459,7 @@ services:
       driver: local
       options: {max-size: 10m, max-file: "3"}
     restart: "no"
-    networks: [registry-runtime]
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-notary-stage-secrets:
-        condition: service_completed_successfully
+    network_mode: none
     env_file: [../operator/secrets/notary-environment]
     volumes:
       - type: bind
@@ -443,4 +476,96 @@ services:
           create_host_path: false
       - registry-notary-state:/var/lib/registry/state
       - registry-notary-audit:/var/lib/registry/audit
-      - registry-operator-files-notary-accept:/run/secrets:ro
+
+  registry-relay-public-verify-state:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
+    command: [product-action, relay-public, verify_state]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+    restart: "no"
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ./bundles/relay-public
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-public
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-public-state:/var/lib/registry/state:ro
+
+  registry-relay-consultation-verify-state:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    platform: linux/amd64
+    command: [product-action, relay-consultation, verify_state]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+    restart: "no"
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ./bundles/relay-consultation
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/relay-consultation
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-relay-consultation-state:/var/lib/registry/state:ro
+
+  registry-notary-verify-state:
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    platform: linux/amd64
+    command: [product-action, verify_state]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+    restart: "no"
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ./bundles/notary
+        target: /run/registry/bundle
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./anchors/notary
+        target: /run/registry/anchor
+        read_only: true
+        bind:
+          create_host_path: false
+      - registry-notary-state:/var/lib/registry/state:ro
+
+volumes:
+  registry-operator-files-postgresql-bootstrap:
+  registry-operator-files-relay-consultation-prepare:
+  registry-operator-files-relay-consultation-initialize:
+  registry-operator-files-notary-prepare:

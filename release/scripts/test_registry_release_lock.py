@@ -303,8 +303,8 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     "verify_state": ([], []),
                     "preview_state": ([], []),
                     "accept_state": (
+                        [f"{lane}-environment"],
                         [],
-                        [f"{lane}-product-action-audit-key"],
                     ),
                 }
                 for action in [
@@ -330,10 +330,6 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         ],
                         action_inputs[action][1],
                     )
-                self.assertEqual(
-                    recipe["accept_state"]["secret_files"][0]["target"],
-                    "/run/secrets/product-action-audit-key",
-                )
                 development_prefix = ["development-action"]
                 if product == "registry-relay":
                     development_prefix.append(lane)
@@ -450,13 +446,10 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 | {
                     "relay-public-tls-certificate",
                     "relay-public-tls-private-key",
-                    "relay-public-product-action-audit-key",
                     "relay-consultation-tls-certificate",
                     "relay-consultation-tls-private-key",
-                    "relay-consultation-product-action-audit-key",
                     "notary-tls-certificate",
                     "notary-tls-private-key",
-                    "notary-product-action-audit-key",
                     "notary-signing-key",
                     "notary-relay-workload-credential",
                     "postgresql-tls-certificate",
