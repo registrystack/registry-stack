@@ -459,21 +459,36 @@ impl VerifiedDevReleaseProjection {
             registry_notary_image: images.notary().to_string(),
             postgresql_image: images.postgresql_state_plane().to_string(),
             minimum_compose_version: lock.minimum_compose_version().to_string(),
-            relay_public_prepare: runtime.relay_public().prepare_state_store_action().into(),
-            relay_public_initialize: runtime.relay_public().initialize_state_action().into(),
-            relay_public_serve: runtime.relay_public().serve_action().into(),
+            relay_public_prepare: runtime
+                .relay_public()
+                .development_prepare_state_store_action()
+                .into(),
+            relay_public_initialize: runtime
+                .relay_public()
+                .development_initialize_state_action()
+                .into(),
+            relay_public_serve: runtime.relay_public().development_serve_action().into(),
             relay_consultation_prepare: runtime
                 .relay_consultation()
-                .prepare_state_store_action()
+                .development_prepare_state_store_action()
                 .into(),
             relay_consultation_initialize: runtime
                 .relay_consultation()
-                .initialize_state_action()
+                .development_initialize_state_action()
                 .into(),
-            relay_consultation_serve: runtime.relay_consultation().serve_action().into(),
-            notary_prepare: runtime.notary().prepare_state_store_action().into(),
-            notary_initialize: runtime.notary().initialize_state_action().into(),
-            notary_serve: runtime.notary().serve_action().into(),
+            relay_consultation_serve: runtime
+                .relay_consultation()
+                .development_serve_action()
+                .into(),
+            notary_prepare: runtime
+                .notary()
+                .development_prepare_state_store_action()
+                .into(),
+            notary_initialize: runtime
+                .notary()
+                .development_initialize_state_action()
+                .into(),
+            notary_serve: runtime.notary().development_serve_action().into(),
             postgresql_serve: runtime.postgresql_state_plane().serve().into(),
             postgresql_bootstrap: runtime.postgresql_state_plane().bootstrap().into(),
             postgresql_server_environment: runtime
@@ -535,21 +550,21 @@ impl VerifiedDevReleaseProjection {
             registry_notary_image,
             postgresql_image,
             minimum_compose_version,
-            relay_public_prepare: relay_product_action("relay-public", "prepare_state_store"),
-            relay_public_initialize: relay_product_action("relay-public", "initialize_state"),
-            relay_public_serve: relay_product_action("relay-public", "serve"),
-            relay_consultation_prepare: relay_product_action(
+            relay_public_prepare: relay_development_action("relay-public", "prepare_state_store"),
+            relay_public_initialize: relay_development_action("relay-public", "initialize_state"),
+            relay_public_serve: relay_development_action("relay-public", "serve"),
+            relay_consultation_prepare: relay_development_action(
                 "relay-consultation",
                 "prepare_state_store",
             ),
-            relay_consultation_initialize: relay_product_action(
+            relay_consultation_initialize: relay_development_action(
                 "relay-consultation",
                 "initialize_state",
             ),
-            relay_consultation_serve: relay_product_action("relay-consultation", "serve"),
-            notary_prepare: notary_product_action("prepare_state_store"),
-            notary_initialize: notary_product_action("initialize_state"),
-            notary_serve: notary_product_action("serve"),
+            relay_consultation_serve: relay_development_action("relay-consultation", "serve"),
+            notary_prepare: notary_development_action("prepare_state_store"),
+            notary_initialize: notary_development_action("initialize_state"),
+            notary_serve: notary_development_action("serve"),
             postgresql_serve: DevRuntimeActionProjection {
                 command: vec![
                     "postgres".into(),
@@ -2677,8 +2692,8 @@ const fn private_ipv4_address(workload: DevWorkloadId) -> &'static str {
     test,
     allow(dead_code, reason = "used by direct-module integration tests")
 )]
-fn relay_product_action(lane: &str, action: &str) -> DevRuntimeActionProjection {
-    test_product_action("registry-relay", lane, action)
+fn relay_development_action(lane: &str, action: &str) -> DevRuntimeActionProjection {
+    test_development_action("registry-relay", lane, action)
 }
 
 #[cfg(test)]
@@ -2735,8 +2750,8 @@ fn product_action(
     test,
     allow(dead_code, reason = "used by direct-module integration tests")
 )]
-fn notary_product_action(action: &str) -> DevRuntimeActionProjection {
-    test_product_action("registry-notary", "notary", action)
+fn notary_development_action(action: &str) -> DevRuntimeActionProjection {
+    test_development_action("registry-notary", "notary", action)
 }
 
 #[cfg(test)]
@@ -2744,8 +2759,8 @@ fn notary_product_action(action: &str) -> DevRuntimeActionProjection {
     test,
     allow(dead_code, reason = "used by direct-module integration tests")
 )]
-fn test_product_action(binary: &str, lane: &str, action: &str) -> DevRuntimeActionProjection {
-    let mut command = vec![binary.to_string(), "product-action".to_string()];
+fn test_development_action(binary: &str, lane: &str, action: &str) -> DevRuntimeActionProjection {
+    let mut command = vec![binary.to_string(), "development-action".to_string()];
     if binary == "registry-relay" {
         command.push(lane.to_string());
     }

@@ -164,7 +164,12 @@ pub struct LockedProductRecipeV1 {
     pub serve: LockedRuntimeActionV1,
     pub prepare_state_store: LockedRuntimeActionV1,
     pub initialize_state: LockedRuntimeActionV1,
+    pub preview_state: LockedRuntimeActionV1,
+    pub accept_state: LockedRuntimeActionV1,
     pub verify_state: LockedRuntimeActionV1,
+    pub development_prepare_state_store: LockedRuntimeActionV1,
+    pub development_initialize_state: LockedRuntimeActionV1,
+    pub development_serve: LockedRuntimeActionV1,
     pub health_probe: Vec<String>,
 }
 
@@ -325,7 +330,12 @@ pub struct VerifiedProductRuntimeV1 {
     serve: LockedRuntimeActionV1,
     prepare_state_store: LockedRuntimeActionV1,
     initialize_state: LockedRuntimeActionV1,
+    preview_state: LockedRuntimeActionV1,
+    accept_state: LockedRuntimeActionV1,
     verify_state: LockedRuntimeActionV1,
+    development_prepare_state_store: LockedRuntimeActionV1,
+    development_initialize_state: LockedRuntimeActionV1,
+    development_serve: LockedRuntimeActionV1,
     health_probe: Vec<String>,
 }
 
@@ -346,6 +356,14 @@ impl VerifiedProductRuntimeV1 {
         &self.verify_state.command
     }
 
+    pub fn preview_state(&self) -> &[String] {
+        &self.preview_state.command
+    }
+
+    pub fn accept_state(&self) -> &[String] {
+        &self.accept_state.command
+    }
+
     pub fn serve_action(&self) -> &LockedRuntimeActionV1 {
         &self.serve
     }
@@ -360,6 +378,26 @@ impl VerifiedProductRuntimeV1 {
 
     pub fn verify_state_action(&self) -> &LockedRuntimeActionV1 {
         &self.verify_state
+    }
+
+    pub fn preview_state_action(&self) -> &LockedRuntimeActionV1 {
+        &self.preview_state
+    }
+
+    pub fn accept_state_action(&self) -> &LockedRuntimeActionV1 {
+        &self.accept_state
+    }
+
+    pub fn development_prepare_state_store_action(&self) -> &LockedRuntimeActionV1 {
+        &self.development_prepare_state_store
+    }
+
+    pub fn development_initialize_state_action(&self) -> &LockedRuntimeActionV1 {
+        &self.development_initialize_state
+    }
+
+    pub fn development_serve_action(&self) -> &LockedRuntimeActionV1 {
+        &self.development_serve
     }
 
     pub fn health_probe(&self) -> &[String] {
@@ -525,7 +563,12 @@ impl From<LockedProductRecipeV1> for VerifiedProductRuntimeV1 {
             serve: value.serve,
             prepare_state_store: value.prepare_state_store,
             initialize_state: value.initialize_state,
+            preview_state: value.preview_state,
+            accept_state: value.accept_state,
             verify_state: value.verify_state,
+            development_prepare_state_store: value.development_prepare_state_store,
+            development_initialize_state: value.development_initialize_state,
+            development_serve: value.development_serve,
             health_probe: value.health_probe,
         }
     }
@@ -840,7 +883,18 @@ impl LockedProductRecipeV1 {
             ("serve", &self.serve),
             ("prepare_state_store", &self.prepare_state_store),
             ("initialize_state", &self.initialize_state),
+            ("preview_state", &self.preview_state),
+            ("accept_state", &self.accept_state),
             ("verify_state", &self.verify_state),
+            (
+                "development_prepare_state_store",
+                &self.development_prepare_state_store,
+            ),
+            (
+                "development_initialize_state",
+                &self.development_initialize_state,
+            ),
+            ("development_serve", &self.development_serve),
         ] {
             recipe.validate(&format!("{label} {action}"))?;
         }
@@ -921,7 +975,12 @@ impl LockedRuntimeActionV1 {
             let (target, read_only) = match mount.source {
                 LockedMountSourceV1::Bundle => (PRODUCT_BUNDLE_TARGET, true),
                 LockedMountSourceV1::Anchor => (PRODUCT_ANCHOR_TARGET, true),
-                LockedMountSourceV1::AntiRollbackState => (PRODUCT_STATE_TARGET, false),
+                LockedMountSourceV1::AntiRollbackState => {
+                    if mount.target != PRODUCT_STATE_TARGET {
+                        bail!("{label} contains an unsupported runtime mount");
+                    }
+                    continue;
+                }
                 LockedMountSourceV1::Audit => (PRODUCT_AUDIT_TARGET, false),
                 LockedMountSourceV1::PostgresqlData => (POSTGRESQL_DATA_TARGET, false),
             };
@@ -992,6 +1051,12 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         },
         &format!("{label} initialize_state"),
     )?;
+    validate_mount_access(
+        &recipe.initialize_state,
+        LockedMountSourceV1::AntiRollbackState,
+        false,
+        &format!("{label} initialize_state"),
+    )?;
     let serve_secrets: &[&str] = match id {
         "relay-public" => &[
             "relay-public-tls-certificate",
@@ -1012,8 +1077,26 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         ],
         _ => unreachable!(),
     };
+    validate_action_shape(
+        &recipe.preview_state,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+        ],
+        &[environment.as_str()],
+        serve_secrets,
+        &format!("{label} preview_state"),
+    )?;
+    validate_mount_access(
+        &recipe.preview_state,
+        LockedMountSourceV1::AntiRollbackState,
+        true,
+        &format!("{label} preview_state"),
+    )?;
     for (name, action) in [
         ("serve", &recipe.serve),
+        ("accept_state", &recipe.accept_state),
         ("verify_state", &recipe.verify_state),
     ] {
         validate_action_shape(
@@ -1029,6 +1112,90 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             &format!("{label} {name}"),
         )?;
     }
+    for (name, action, read_only) in [
+        ("serve", &recipe.serve, true),
+        ("accept_state", &recipe.accept_state, false),
+        ("verify_state", &recipe.verify_state, true),
+    ] {
+        validate_mount_access(
+            action,
+            LockedMountSourceV1::AntiRollbackState,
+            read_only,
+            &format!("{label} {name}"),
+        )?;
+    }
+    validate_action_shape(
+        &recipe.development_prepare_state_store,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::Audit,
+        ],
+        &[environment.as_str()],
+        if id == "relay-public" {
+            &[]
+        } else {
+            &["postgresql-tls-certificate"]
+        },
+        &format!("{label} development_prepare_state_store"),
+    )?;
+    validate_action_shape(
+        &recipe.development_initialize_state,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+            LockedMountSourceV1::Audit,
+        ],
+        &[environment.as_str()],
+        if id == "relay-public" {
+            &[]
+        } else {
+            &["postgresql-tls-certificate"]
+        },
+        &format!("{label} development_initialize_state"),
+    )?;
+    validate_mount_access(
+        &recipe.development_initialize_state,
+        LockedMountSourceV1::AntiRollbackState,
+        false,
+        &format!("{label} development_initialize_state"),
+    )?;
+    validate_action_shape(
+        &recipe.development_serve,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+            LockedMountSourceV1::Audit,
+        ],
+        &[environment.as_str()],
+        serve_secrets,
+        &format!("{label} development_serve"),
+    )?;
+    validate_mount_access(
+        &recipe.development_serve,
+        LockedMountSourceV1::AntiRollbackState,
+        true,
+        &format!("{label} development_serve"),
+    )?;
+    Ok(())
+}
+
+fn validate_mount_access(
+    action: &LockedRuntimeActionV1,
+    source: LockedMountSourceV1,
+    read_only: bool,
+    label: &str,
+) -> Result<()> {
+    if action
+        .mounts
+        .iter()
+        .find(|mount| mount.source == source)
+        .is_none_or(|mount| mount.read_only != read_only)
+    {
+        bail!("{label} has unsupported runtime mount access");
+    }
     Ok(())
 }
 
@@ -1043,6 +1210,8 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
         ("serve", &recipe.serve),
         ("prepare_state_store", &recipe.prepare_state_store),
         ("initialize_state", &recipe.initialize_state),
+        ("preview_state", &recipe.preview_state),
+        ("accept_state", &recipe.accept_state),
         ("verify_state", &recipe.verify_state),
     ] {
         let expected = if let Some(lane) = lane {
@@ -1056,10 +1225,35 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
             &format!("{label} {name} command"),
         )?;
     }
+    for (name, action) in [
+        (
+            "prepare_state_store",
+            &recipe.development_prepare_state_store,
+        ),
+        ("initialize_state", &recipe.development_initialize_state),
+        ("serve", &recipe.development_serve),
+    ] {
+        let expected = if let Some(lane) = lane {
+            vec!["development-action", lane, name]
+        } else {
+            vec!["development-action", name]
+        };
+        validate_exact_command(
+            &action.command,
+            &expected,
+            &format!("{label} development {name} command"),
+        )?;
+    }
     let health_binary = format!("/usr/local/bin/{product}");
     validate_exact_command(
         &recipe.health_probe,
-        &["CMD", health_binary.as_str(), "healthcheck"],
+        &[
+            "CMD",
+            health_binary.as_str(),
+            "healthcheck",
+            "--url",
+            "http://127.0.0.1:8080/ready",
+        ],
         &format!("{label} health probe"),
     )
 }
@@ -1189,8 +1383,13 @@ fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
     ] {
         collect(&product.prepare_state_store);
         collect(&product.initialize_state);
+        collect(&product.preview_state);
+        collect(&product.accept_state);
         collect(&product.verify_state);
         collect(&product.serve);
+        collect(&product.development_prepare_state_store);
+        collect(&product.development_initialize_state);
+        collect(&product.development_serve);
     }
     collect(&runtime.postgresql_state_plane.serve);
     collect(&runtime.postgresql_state_plane.bootstrap);
@@ -1496,15 +1695,30 @@ mod tests {
             command.push(name);
             command_action(&command)
         };
+        let development_action = |name: &str| {
+            let mut command = vec!["development-action"];
+            if let Some(lane) = lane {
+                command.push(lane);
+            }
+            command.push(name);
+            command_action(&command)
+        };
         LockedProductRecipeV1 {
             serve: action("serve"),
             prepare_state_store: action("prepare_state_store"),
             initialize_state: action("initialize_state"),
+            preview_state: action("preview_state"),
+            accept_state: action("accept_state"),
             verify_state: action("verify_state"),
+            development_prepare_state_store: development_action("prepare_state_store"),
+            development_initialize_state: development_action("initialize_state"),
+            development_serve: development_action("serve"),
             health_probe: vec![
                 "CMD".to_string(),
                 format!("/usr/local/bin/{product}"),
                 "healthcheck".to_string(),
+                "--url".to_string(),
+                "http://127.0.0.1:8080/ready".to_string(),
             ],
         }
     }
@@ -1521,6 +1735,16 @@ mod tests {
             ("Notary", "registry-notary", None),
         ] {
             let recipe = command_recipe(product, lane);
+            assert_eq!(
+                recipe.health_probe,
+                vec![
+                    "CMD".to_string(),
+                    format!("/usr/local/bin/{product}"),
+                    "healthcheck".to_string(),
+                    "--url".to_string(),
+                    "http://127.0.0.1:8080/ready".to_string(),
+                ]
+            );
             validate_product_recipe_commands(&recipe, label)
                 .expect("the release generator's exact action mapping is accepted");
 
@@ -1528,6 +1752,8 @@ mod tests {
                 "serve",
                 "prepare_state_store",
                 "initialize_state",
+                "preview_state",
+                "accept_state",
                 "verify_state",
             ] {
                 let mut swapped = recipe.clone();
@@ -1535,6 +1761,8 @@ mod tests {
                     "serve" => &mut swapped.serve,
                     "prepare_state_store" => &mut swapped.prepare_state_store,
                     "initialize_state" => &mut swapped.initialize_state,
+                    "preview_state" => &mut swapped.preview_state,
+                    "accept_state" => &mut swapped.accept_state,
                     "verify_state" => &mut swapped.verify_state,
                     _ => unreachable!(),
                 };
@@ -1553,10 +1781,33 @@ mod tests {
                     "{label} {slot}: {error:#}"
                 );
             }
+            for slot in [
+                "development_prepare_state_store",
+                "development_initialize_state",
+                "development_serve",
+            ] {
+                let mut swapped = recipe.clone();
+                let action = match slot {
+                    "development_prepare_state_store" => {
+                        &mut swapped.development_prepare_state_store
+                    }
+                    "development_initialize_state" => &mut swapped.development_initialize_state,
+                    "development_serve" => &mut swapped.development_serve,
+                    _ => unreachable!(),
+                };
+                action.command[0] = "product-action".to_string();
+                assert!(
+                    validate_product_recipe_commands(&swapped, label).is_err(),
+                    "{label} {slot} accepted the governed action namespace"
+                );
+            }
 
             let mut wrong_health = recipe;
             wrong_health.health_probe[2] = "serve".to_string();
             assert!(validate_product_recipe_commands(&wrong_health, label).is_err());
+            let mut wrong_health_url = command_recipe(product, lane);
+            wrong_health_url.health_probe[4] = "http://127.0.0.1:8080/healthz".to_string();
+            assert!(validate_product_recipe_commands(&wrong_health_url, label).is_err());
         }
     }
 

@@ -103,6 +103,15 @@ mod release_lock {
         pub fn initialize_state_action(&self) -> &LockedRuntimeActionV1 {
             unreachable!()
         }
+        pub fn development_prepare_state_store_action(&self) -> &LockedRuntimeActionV1 {
+            unreachable!()
+        }
+        pub fn development_initialize_state_action(&self) -> &LockedRuntimeActionV1 {
+            unreachable!()
+        }
+        pub fn development_serve_action(&self) -> &LockedRuntimeActionV1 {
+            unreachable!()
+        }
         pub fn health_probe(&self) -> &[String] {
             unreachable!()
         }
@@ -889,7 +898,7 @@ fn generic_plan_uses_locked_images_loopback_development_identity_and_exact_sourc
                 workload.id.compose_service()
             );
             assert_eq!(workload.command.last(), Some(&"serve".to_string()));
-            assert!(workload.command.contains(&"product-action".to_string()));
+            assert!(workload.command.contains(&"development-action".to_string()));
             assert!(workload.mounts.iter().any(|mount| {
                 !mount.read_only && mount.container_path == "/var/lib/registry/state"
             }));
