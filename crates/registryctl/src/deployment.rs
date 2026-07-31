@@ -47,9 +47,8 @@ const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
 const SECRET_STAGER_SUFFIX: &str = "-stage-secrets";
 const NETWORK_RUNTIME: &str = "registry-runtime";
-pub(crate) const OPERATOR_FILE_IDS: [&str; 18] = [
+pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
     "notary-environment",
-    "notary-product-action-audit-key",
     "notary-relay-workload-credential",
     "notary-signing-key",
     "notary-tls-certificate",
@@ -59,11 +58,9 @@ pub(crate) const OPERATOR_FILE_IDS: [&str; 18] = [
     "postgresql-tls-certificate",
     "postgresql-tls-private-key",
     "relay-consultation-environment",
-    "relay-consultation-product-action-audit-key",
     "relay-consultation-tls-certificate",
     "relay-consultation-tls-private-key",
     "relay-public-environment",
-    "relay-public-product-action-audit-key",
     "relay-public-tls-certificate",
     "relay-public-tls-private-key",
 ];

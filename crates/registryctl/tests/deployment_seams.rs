@@ -946,7 +946,6 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
             "registry-relay-consultation-preview-state",
             "registry-relay-consultation-verify-state",
             "registry-relay-public-accept-state",
-            "registry-relay-public-actions-stage-secrets",
             "registry-relay-public-initialize",
             "registry-relay-public-prepare-state",
             "registry-relay-public-preview-state",
@@ -969,18 +968,6 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         (
             "registry-postgres-bootstrap",
             "registry-postgresql-actions-stage-secrets",
-        ),
-        (
-            "registry-relay-public-accept-state",
-            "registry-relay-public-actions-stage-secrets",
-        ),
-        (
-            "registry-relay-consultation-accept-state",
-            "registry-relay-consultation-actions-stage-secrets",
-        ),
-        (
-            "registry-notary-accept-state",
-            "registry-notary-actions-stage-secrets",
         ),
     ] {
         assert_eq!(
@@ -1124,16 +1111,12 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
                 .unwrap()
                 .strip_suffix("-accept-state")
                 .unwrap();
+            assert!(secret_mount.is_none());
+            assert!(service["depends_on"].as_object().unwrap().is_empty());
             assert_eq!(
-                secret_mount.unwrap()["source"],
-                format!("registry-operator-files-{lane}-accept")
+                service["env_file"],
+                json!([format!("../operator/secrets/{lane}-environment")])
             );
-            assert_eq!(
-                service["depends_on"][format!("registry-{lane}-actions-stage-secrets")]
-                    ["condition"],
-                "service_completed_successfully"
-            );
-            assert!(service.get("env_file").is_none());
         } else {
             assert!(secret_mount.is_none());
             assert!(service["depends_on"].as_object().unwrap().is_empty());
@@ -2084,7 +2067,6 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         );
     }
     let action_stages = [
-        "registry-relay-public-actions-stage-secrets",
         "registry-relay-consultation-actions-stage-secrets",
         "registry-notary-actions-stage-secrets",
         "registry-postgresql-actions-stage-secrets",
@@ -2093,8 +2075,8 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         let command = format!("generated/compose.initialize.yaml run --rm --no-deps {stage}");
         assert_eq!(
             runbook.matches(&command).count(),
-            2,
-            "{stage} must run before first installation and update acceptance"
+            1,
+            "{stage} must run exactly once during first installation"
         );
     }
     let ordinary_compose = "docker compose --project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\" --env-file generated/compose.empty.env -f generated/compose.yaml";

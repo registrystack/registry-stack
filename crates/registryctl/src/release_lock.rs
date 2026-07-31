@@ -1121,7 +1121,6 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         true,
         &format!("{label} preview_state"),
     )?;
-    let action_audit_key = format!("{id}-product-action-audit-key");
     validate_action_shape(
         &recipe.accept_state,
         &[
@@ -1130,13 +1129,10 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::AntiRollbackState,
             LockedMountSourceV1::Audit,
         ],
+        &[environment.as_str()],
         &[],
-        &[action_audit_key.as_str()],
         &format!("{label} accept_state"),
     )?;
-    if recipe.accept_state.secret_files[0].target != "/run/secrets/product-action-audit-key" {
-        bail!("{label} accept_state audit key target is unsupported");
-    }
     validate_action_shape(
         &recipe.verify_state,
         &[
@@ -1459,13 +1455,6 @@ fn validate_operator_file_contract(file: &LockedOperatorFileV1) -> Result<()> {
             | "relay-consultation-environment"
             | "notary-environment" => (
                 LockedOperatorFileFormatV1::Dotenv,
-                &["root:root", "65532:65532"],
-                &[],
-            ),
-            "relay-public-product-action-audit-key"
-            | "relay-consultation-product-action-audit-key"
-            | "notary-product-action-audit-key" => (
-                LockedOperatorFileFormatV1::Opaque,
                 &["root:root", "65532:65532"],
                 &[],
             ),
