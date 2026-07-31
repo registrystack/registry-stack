@@ -14,13 +14,13 @@ from pathlib import Path
 
 expected = {
   ".gitignore": "84a80d00398b512ef755f17c1764c15b491058265d06d2cea71af37641324b83",
-  "environments/local.yaml": "0ebcfa090a07c01178ba8ca60795160b889cc72c0eadc3347971edf5a806697f",
+  "environments/local.yaml": "0ae0ce73cd6a775e188aaa0caed37cccce378c392aa021544872b16d6f0047a6",
   "integrations/person-record/fixtures/active.yaml": "4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
   "integrations/person-record/fixtures/ambiguous.yaml": "6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
   "integrations/person-record/fixtures/no-match.yaml": "f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "4ae46281a04c27e542edc7e1d19f72425252171c9dd3b1a4ef46cbe648b38e82"
+  "registry-stack.yaml": "900ca2fc427b9a9caf606d8adf85a7c1794c7271308493c4336e8f5435f0029e"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"jsonplaceholder-todo-live-overlay-v1.sh", "jsonplaceholder-todo-live-overlay-v1.sh.sha256"}
@@ -96,7 +96,7 @@ relay:
   allowed_clients: [fictional-relay-client]
 
 notary_relay:
-  base_url: http://127.0.0.1:8080
+  base_url: http://registry-relay-consultation:8080
   workload_client_id: fictional-registry-notary
   token_file: /run/secrets/relay-workload-token
 
@@ -139,7 +139,7 @@ relay:
   allowed_clients: [fictional-relay-client]
 
 notary_relay:
-  base_url: http://127.0.0.1:8080
+  base_url: http://registry-relay-consultation:8080
   workload_client_id: fictional-registry-notary
   token_file: /run/secrets/relay-workload-token
 
@@ -182,7 +182,7 @@ relay:
   allowed_clients: [fictional-relay-client]
 
 notary_relay:
-  base_url: http://127.0.0.1:8080
+  base_url: http://registry-relay-consultation:8080
   workload_client_id: fictional-registry-notary
   token_file: /run/secrets/relay-workload-token
 

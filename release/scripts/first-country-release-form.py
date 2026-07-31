@@ -49,6 +49,7 @@ STABLE_COMMAND_ORDER = (
     "dev_smoke",
     "dev_logs",
     "inspect",
+    "governed_build",
     "anchor_relay_public",
     "sign_relay_public",
     "verify_relay_public",
@@ -78,6 +79,7 @@ STABLE_COMMAND_ORDER = (
     "reject_postgresql_data_reinitialization",
     "reject_postgresql_bootstrap_reinitialization",
     "governed_start",
+    "governed_evidence",
     "governed_restart",
     "governed_stop_for_backup",
     "backup_restore",
@@ -105,7 +107,6 @@ STABLE_COMMAND_ORDER = (
     "update_verify_relay_public_state",
     "update_verify_relay_consultation_state",
     "update_verify_notary_state",
-    "update_stage_relay_public_serving_secrets",
     "update_stage_relay_consultation_serving_secrets",
     "update_stage_notary_serving_secrets",
     "update_stage_postgresql_serving_secrets",
@@ -187,17 +188,21 @@ PUBLIC_MATERIAL_FILENAMES = {
     "relay-public.public.jwk",
     "relay-consultation.public.jwk",
     "notary.public.jwk",
-    "relay-public-tls-certificate",
-    "relay-consultation-tls-certificate",
-    "notary-tls-certificate",
     "postgresql-tls-certificate",
-    "relay-public-tls.crt",
-    "relay-consultation-tls.crt",
-    "notary-tls.crt",
     "postgres-tls.crt",
 }
 HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
 OPENCRVS_MINIMIZED_CLAIM_IDS = ["birth-event-found", "birth-event-registered"]
+GOVERNED_EVIDENCE_SUMMARY = {
+    "http_status": 200,
+    "claims": [
+        {
+            "claim_id": "todo-record-exists",
+            "satisfied": True,
+            "disclosure": "predicate",
+        }
+    ],
+}
 GOVERNED_LANES = ("relay-public", "relay-consultation", "notary")
 ROLLBACK_AFFECTED_LANES = ("relay-consultation", "notary")
 ROLLBACK_SAFE_MESSAGE = (
@@ -238,12 +243,6 @@ GOVERNED_OPERATOR_SOURCES = {
         "notary-serve.env",
     ),
     "postgresql-bootstrap-environment": ("postgres-bootstrap.env",),
-    "relay-public-tls-certificate": ("relay-public-tls.crt",),
-    "relay-public-tls-private-key": ("relay-public-tls.key",),
-    "relay-consultation-tls-certificate": ("relay-consultation-tls.crt",),
-    "relay-consultation-tls-private-key": ("relay-consultation-tls.key",),
-    "notary-tls-certificate": ("notary-tls.crt",),
-    "notary-tls-private-key": ("notary-tls.key",),
     "notary-signing-key": ("notary-signing-key.jwk",),
     "notary-relay-workload-credential": ("notary-relay-token",),
     "postgresql-tls-certificate": ("postgres-tls.crt",),
@@ -251,30 +250,16 @@ GOVERNED_OPERATOR_SOURCES = {
     "postgresql-admin-password": ("postgres-admin-password",),
 }
 SERVING_SECRET_STAGER_CONTRACT = {
-    "registry-relay-public-stage-secrets": {
-        "outputs": ("relay-public-serve",),
-        "sources": (
-            "relay-public-tls-certificate",
-            "relay-public-tls-private-key",
-        ),
-    },
     "registry-relay-consultation-stage-secrets": {
         "outputs": ("relay-consultation-serve",),
-        "sources": (
-            "postgresql-tls-certificate",
-            "relay-consultation-tls-certificate",
-            "relay-consultation-tls-private-key",
-        ),
+        "sources": ("postgresql-tls-certificate",),
     },
     "registry-notary-stage-secrets": {
         "outputs": ("notary-serve",),
         "sources": (
             "notary-relay-workload-credential",
             "notary-signing-key",
-            "notary-tls-certificate",
-            "notary-tls-private-key",
             "postgresql-tls-certificate",
-            "relay-consultation-tls-certificate",
         ),
     },
     "registry-postgresql-stage-secrets": {
@@ -311,10 +296,6 @@ SERVING_SECRET_STAGE_CONSUMERS = {
     "registry-postgres": (
         "registry-postgresql-stage-secrets",
         "postgresql-serve",
-    ),
-    "registry-relay-public": (
-        "registry-relay-public-stage-secrets",
-        "relay-public-serve",
     ),
     "registry-relay-consultation": (
         "registry-relay-consultation-stage-secrets",
@@ -368,8 +349,8 @@ RELEASED_DOCS_OVERLAYS = (
     "jsonplaceholder-todo-live-overlay-v1.sh",
     "opencrvs-events-api-overlay-v1.sh",
 )
-FAILED_ACTIVATION_OUTPUT_CLASSIFICATION = "notary-tls-private-key"
-FAILED_ACTIVATION_EXIT_CLASS = "notary_tls_private_key_missing"
+FAILED_ACTIVATION_OUTPUT_CLASSIFICATION = "notary-signing-key"
+FAILED_ACTIVATION_EXIT_CLASS = "notary_signing_key_missing"
 RECORDS_URL = "http://127.0.0.1:4242/v1/datasets/projects/entities/projects/records"
 RELAY_LISTENER = "127.0.0.1:4242"
 NOTARY_LISTENER = "127.0.0.1:4255"
@@ -975,6 +956,113 @@ def authenticated_records_request(
     ):
         raise ReleaseFormError("authenticated records request failed")
     return int(status_text), body
+
+
+def governed_evidence_request(
+    *,
+    notary_port: int,
+    caller_token_file: Path,
+    cwd: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    if type(notary_port) is not int or notary_port <= 0 or notary_port > 65535:
+        raise ReleaseFormError("governed Notary port is invalid")
+    require_regular(caller_token_file, max_bytes=64 * 1024)
+    try:
+        caller_token = caller_token_file.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise ReleaseFormError("governed caller token is unavailable") from error
+    if not caller_token or any(character.isspace() for character in caller_token):
+        raise ReleaseFormError("governed caller token is invalid")
+
+    request = json.dumps(
+        {
+            "target": {
+                "type": "Person",
+                "identifiers": [
+                    {"scheme": "public_todo_id", "value": "4"}
+                ],
+            },
+            "claims": ["todo-record-exists"],
+            "disclosure": "predicate",
+            "format": "application/vnd.registry-notary.claim-result+json",
+            "purpose": "public-source-connection-demonstration",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    marker = "\nREGISTRYCTL_HTTP_STATUS:"
+    result = subprocess.run(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "30",
+            "--max-filesize",
+            str(MAX_AUTHENTICATED_RESPONSE_BYTES),
+            "--header",
+            "@-",
+            "--header",
+            "Content-Type: application/json",
+            "--header",
+            "Accept: application/vnd.registry-notary.claim-result+json",
+            "--data-binary",
+            request,
+            "--write-out",
+            f"{marker}%{{http_code}}",
+            f"http://127.0.0.1:{notary_port}/v1/evaluations",
+        ],
+        cwd=cwd,
+        env=env,
+        input=(
+            f"Authorization: Bearer {caller_token}\n"
+            "Data-Purpose: public-source-connection-demonstration\n"
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=35,
+        check=False,
+    )
+    body, separator, status_text = result.stdout.rpartition(marker)
+    if (
+        result.returncode != 0
+        or not separator
+        or not re.fullmatch(r"[0-9]{3}", status_text)
+        or len(body.encode("utf-8")) > MAX_AUTHENTICATED_RESPONSE_BYTES
+    ):
+        raise ReleaseFormError("governed evidence request failed")
+    if status_text != "200":
+        raise ReleaseFormError(
+            f"governed evidence request returned HTTP {status_text}, expected 200"
+        )
+    try:
+        response = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise ReleaseFormError("governed evidence response is not valid JSON") from error
+    results = response.get("results") if isinstance(response, dict) else None
+    if not isinstance(results, list) or len(results) != 1:
+        raise ReleaseFormError("governed evidence response is not exactly minimized")
+    result_claim = results[0]
+    expected_claim = GOVERNED_EVIDENCE_SUMMARY["claims"][0]
+    if (
+        not isinstance(result_claim, dict)
+        or result_claim.get("claim_id") != expected_claim["claim_id"]
+        or result_claim.get("value") is not True
+        or result_claim.get("satisfied") is not True
+        or result_claim.get("disclosure") != expected_claim["disclosure"]
+    ):
+        raise ReleaseFormError("governed evidence response has an unexpected claim")
+
+    write_json_log(logs, "governed_evidence", GOVERNED_EVIDENCE_SUMMARY)
+    return {
+        "name": "governed_evidence",
+        "status": "passed",
+        "exit_code": 0,
+        "log_sha256": sha256(logs / "governed_evidence.log"),
+    }
 
 
 def summarize_records_response(
@@ -1933,6 +2021,7 @@ def governed_deployment_binding(
     destination: Path,
     *,
     expected_project: str,
+    expected_environment: str,
     ports: tuple[int, int],
 ) -> tuple[str, str]:
     if (
@@ -1940,6 +2029,7 @@ def governed_deployment_binding(
             r"first-country-release-form-[0-9a-f]{16}", expected_project
         )
         is None
+        or re.fullmatch(r"[a-z][a-z0-9-]*", expected_environment) is None
         or len(ports) != 2
         or ports[0] == ports[1]
         or any(type(port) is not int or port <= 0 or port > 65535 for port in ports)
@@ -1965,7 +2055,7 @@ def governed_deployment_binding(
         or identity.get("lane") != "relay-public"
         or identity.get("product") != "registry-relay"
         or identity.get("project") != expected_project
-        or identity.get("environment") != "local"
+        or identity.get("environment") != expected_environment
         or identity.get("stream") != expected_project
         or identity.get("instance") != "relay-public"
     ):
@@ -2428,6 +2518,7 @@ def validate_governed_summary(summary: Any) -> None:
             "initial",
             "parent_include",
             "explicit_initialization",
+            "functional_evidence",
             "ordinary_restart",
             "backup_restore",
             "anchor_rotation",
@@ -2440,6 +2531,7 @@ def validate_governed_summary(summary: Any) -> None:
         != "registry-stack.governed-deployment-proof.v1"
         or type(summary.get("operator_file_count")) is not int
         or summary["operator_file_count"] != len(GOVERNED_OPERATOR_SOURCES)
+        or summary.get("functional_evidence") != GOVERNED_EVIDENCE_SUMMARY
         or any(
             summary.get(name) != "passed"
             for name in (
@@ -3562,6 +3654,8 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         install_dir = root / "install"
         project = root / "reader-http-project"
         oauth_project = root / "reader-opencrvs-project"
+        governed_project = root / "governed-public-http-project"
+        governed_environment = "public-demo"
         reader_evidence = evidence_dir / "reader-journeys"
         public_source_evidence = evidence_dir / "public-source-live"
         install_dir.mkdir()
@@ -3661,10 +3755,6 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             )
             protect_evidence_tree(reader_evidence)
             reader_summary["evidence_sha256"] = closed_tree_digests(reader_evidence)
-            bind_release_form_project_identity(
-                project / "registry-stack.yaml",
-                proof_project_id,
-            )
             for name, image in (
                 ("pull_relay", verified["relay_image"]),
                 ("pull_notary", verified["notary_image"]),
@@ -3687,6 +3777,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR": str(
                         public_source_evidence
                     ),
+                    "REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR": str(governed_project),
                     "REGISTRYCTL_RELEASED_DOCS_ROOT": str(released_docs_root),
                 }
             )
@@ -3923,8 +4014,49 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             rollback_package = (
                 root / f"registry-stack-release-form-{os.getpid()}-{run_nonce}-rollback"
             )
+            bind_release_form_project_identity(
+                governed_project / "registry-stack.yaml",
+                proof_project_id,
+            )
+            commands.append(
+                run_command(
+                    "governed_build",
+                    [
+                        str(registryctl),
+                        "-C",
+                        str(governed_project),
+                        "build",
+                        "--environment",
+                        governed_environment,
+                        "--format",
+                        "json",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            governed_build = read_closed_json(
+                logs / "governed_build.log", "governed project build"
+            )
+            if (
+                not isinstance(governed_build, dict)
+                or governed_build.get("schema_version")
+                != "registryctl.reviewed_project_build_report.v1"
+                or governed_build.get("affected_lanes") != list(GOVERNED_LANES)
+                or governed_build.get("next_action")
+                != "registryctl trust anchor create --help"
+            ):
+                raise ReleaseFormError(
+                    "governed public-source build is not deployment eligible"
+                )
             lane_keys = create_lane_signing_keys(governed_private / "lane-keys")
-            signing_inputs = project / ".registry-stack/build/local/signing-inputs"
+            signing_inputs = (
+                governed_project
+                / ".registry-stack/build"
+                / governed_environment
+                / "signing-inputs"
+            )
             anchors: dict[str, Path] = {}
             bundles: dict[str, Path] = {}
             for lane in GOVERNED_LANES:
@@ -4012,12 +4144,12 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     [
                         str(registryctl),
                         "-C",
-                        str(project),
+                        str(governed_project),
                         "trust",
                         "approved-set",
                         "assemble",
                         "--environment",
-                        "local",
+                        governed_environment,
                         "--relay-public",
                         str(bundles["relay-public"]),
                         "--relay-consultation",
@@ -4040,6 +4172,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 bundles["relay-public"],
                 binding_file,
                 expected_project=proof_project_id,
+                expected_environment=governed_environment,
                 ports=governed_ports,
             )
             assert_governed_resources_absent(
@@ -4325,6 +4458,15 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 )
             )
             commands.append(
+                governed_evidence_request(
+                    notary_port=governed_ports[1],
+                    caller_token_file=operator_inputs / "caller-token",
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
                 run_compose_group(
                     "governed_restart",
                     [
@@ -4364,10 +4506,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     logs=logs,
                 )
             )
-            project_file = project / "registry-stack.yaml"
+            project_file = governed_project / "registry-stack.yaml"
             project_text = project_file.read_text(encoding="utf-8")
-            original_purpose = "purpose: public-service-person-verification"
-            updated_purpose = "purpose: public-service-person-verification-updated"
+            original_purpose = "purpose: public-source-connection-demonstration"
+            updated_purpose = "purpose: public-source-connection-demonstration-updated"
             if project_text.count(original_purpose) != 1:
                 raise ReleaseFormError(
                     "maintained HTTP starter does not expose the expected update seam"
@@ -4382,10 +4524,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     [
                         str(registryctl),
                         "-C",
-                        str(project),
+                        str(governed_project),
                         "build",
                         "--environment",
-                        "local",
+                        governed_environment,
                         "--against",
                         str(approved_set),
                         "--format",
@@ -4503,12 +4645,12 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     [
                         str(registryctl),
                         "-C",
-                        str(project),
+                        str(governed_project),
                         "trust",
                         "approved-set",
                         "assemble",
                         "--environment",
-                        "local",
+                        governed_environment,
                         "--from",
                         str(approved_set),
                         "--relay-consultation",
@@ -4590,19 +4732,21 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 candidate_package / "generated/operator-files.v1.json",
                 "updated operator-file inventory",
             )
-            notary_key_entry = next(
+            notary_signing_key_entry = next(
                 (
                     entry
                     for entry in inventory["files"]
-                    if entry.get("id") == "notary-tls-private-key"
+                    if entry.get("id") == "notary-signing-key"
                 ),
                 None,
             )
-            if not isinstance(notary_key_entry, dict):
-                raise ReleaseFormError("updated package is missing the Notary TLS key binding")
-            notary_key = candidate_package / notary_key_entry["path"]
-            held_notary_key = governed_private / "held-notary-tls-private-key"
-            move_privileged(notary_key, held_notary_key)
+            if not isinstance(notary_signing_key_entry, dict):
+                raise ReleaseFormError(
+                    "updated package is missing the Notary signing key binding"
+                )
+            notary_signing_key = candidate_package / notary_signing_key_entry["path"]
+            held_notary_signing_key = governed_private / "held-notary-signing-key"
+            move_privileged(notary_signing_key, held_notary_signing_key)
             commands.append(
                 run_failed_activation(
                     privileged_registryctl(
@@ -4624,7 +4768,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     logs=logs,
                 )
             )
-            move_privileged(held_notary_key, notary_key)
+            move_privileged(held_notary_signing_key, notary_signing_key)
             commands.append(
                 run_command(
                     "failed_activation_recovery",
@@ -4771,7 +4915,6 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 )
             for name, command in zip(
                 (
-                    "update_stage_relay_public_serving_secrets",
                     "update_stage_relay_consultation_serving_secrets",
                     "update_stage_notary_serving_secrets",
                     "update_stage_postgresql_serving_secrets",
@@ -4852,6 +4995,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 },
                 "parent_include": "passed",
                 "explicit_initialization": "passed",
+                "functional_evidence": GOVERNED_EVIDENCE_SUMMARY,
                 "ordinary_restart": "passed",
                 "backup_restore": "passed",
                 "anchor_rotation": "passed",
@@ -4949,6 +5093,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     install_dir,
                     project,
                     oauth_project,
+                    governed_project,
                     asset_dir,
                     evidence_dir,
                 ),
@@ -4962,6 +5107,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             raise ReleaseFormError("registryctl dev down left disposable runtime state")
         scanned_files = assert_no_secret_leak(project, secrets)
         scanned_files += assert_no_secret_leak(oauth_project, secrets)
+        scanned_files += assert_no_secret_leak(governed_project, secrets)
         if package is None or candidate_package is None:
             raise ReleaseFormError("governed deployment closures were not created")
         governed_scanned_files = assert_no_governed_secret_leak(package, secrets)
@@ -4976,6 +5122,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 install_dir,
                 project,
                 oauth_project,
+                governed_project,
                 asset_dir,
                 evidence_dir,
             ),
@@ -5065,6 +5212,7 @@ def verify_stable_evidence(
         "dev_smoke": report["smoke"],
         "dev_logs": report["product_logs"],
         "inspect": report["runtime"],
+        "governed_evidence": report["governed_deployment"]["functional_evidence"],
     }
     for name, expected in normalized.items():
         if read_closed_json(logs / f"{name}.log", f"{name} evidence log") != expected:

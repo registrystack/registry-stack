@@ -46,9 +46,25 @@ else
   OVERLAY="$SITE_ROOT/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
 fi
 WORK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/registryctl-public-source.XXXXXX")
-PROJECT="$WORK_ROOT/public-json-live-demo"
+PROJECT=${REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR:-$WORK_ROOT/public-json-live-demo}
 EVIDENCE_ROOT="${REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR:-$WORK_ROOT/evidence}"
 ACTIVE_ENVIRONMENT=
+
+if [ -n "${REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR:-}" ]; then
+  case "$PROJECT" in
+    /*) ;;
+    *)
+      printf '%s\n' 'REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR must be absolute' >&2
+      exit 1
+      ;;
+  esac
+  project_parent=$(dirname -- "$PROJECT")
+  if [ -e "$PROJECT" ] || [ -L "$project_parent" ] || [ ! -d "$project_parent" ]; then
+    printf '%s\n' \
+      'REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR must be absent under a real parent directory' >&2
+    exit 1
+  fi
+fi
 
 run_report() {
   report=$1

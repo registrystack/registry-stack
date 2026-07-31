@@ -111,7 +111,6 @@ const compose =
   'docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml';
 const actions = `${compose} -f generated/compose.initialize.yaml`;
 const servingStages = [
-  'registry-relay-public-stage-secrets',
   'registry-relay-consultation-stage-secrets',
   'registry-notary-stage-secrets',
   'registry-postgresql-stage-secrets',
@@ -239,6 +238,7 @@ test('optional public-source continuation has exact offline and opt-in live gate
 
   assert.match(gate, /REGISTRYCTL_PUBLIC_SOURCE_LIVE/);
   assert.match(gate, /REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR/);
+  assert.match(gate, /REGISTRYCTL_PUBLIC_SOURCE_PROJECT_DIR/);
   assert.match(gate, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
   assert.match(
     gate,
@@ -347,7 +347,7 @@ test('product update executes preview, stop, accept, exact verify, then start', 
       '    printf "stage:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *" up --detach --wait --wait-timeout 120")',
-      '    test "$(grep -c "^stage:" "$DX_UPDATE_EVENTS")" -eq 4',
+      '    test "$(grep -c "^stage:" "$DX_UPDATE_EVENTS")" -eq 3',
       '    printf "start\\n" >>"$DX_UPDATE_EVENTS"',
       '    printf "running\\n" >"$DX_UPDATE_STATE"',
       '    ;;',
@@ -385,7 +385,6 @@ test('product update executes preview, stop, accept, exact verify, then start', 
       'verify-before:registry-relay-public-verify-state',
       'verify-before:registry-relay-consultation-verify-state',
       'verify-before:registry-notary-verify-state',
-      'stage:registry-relay-public-stage-secrets',
       'stage:registry-relay-consultation-stage-secrets',
       'stage:registry-notary-stage-secrets',
       'stage:registry-postgresql-stage-secrets',
@@ -483,6 +482,23 @@ test('HTTP tutorial hands initial builds to baseline approval before deployment'
   assert.ok(page.includes(`](${approval})`));
   assert.ok(page.includes(`](${deployment})`));
   assert.ok(page.indexOf(`](${approval})`) < page.indexOf(`](${deployment})`));
+});
+
+test('file-backed spreadsheet journeys stop before governed approval', () => {
+  const firstRun = read(
+    'src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
+  );
+  const adaptation = read('src/content/docs/tutorials/use-your-spreadsheet.mdx');
+  const approval = read('src/content/docs/operate/approve-initial-baseline.mdx');
+  const reference = read('src/content/docs/reference/registryctl.mdx');
+  const safeNext =
+    'Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build';
+
+  assert.match(firstRun, new RegExp(safeNext));
+  assert.match(adaptation, new RegExp(safeNext));
+  assert.doesNotMatch(firstRun, /\]\(\.\.\/\.\.\/operate\/\)/);
+  assert.match(approval, /Do not sign a build that contains a project-local file dataset/);
+  assert.match(reference, /project-local file remains for development\s+and review only/);
 });
 
 test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK pairs', (t) => {

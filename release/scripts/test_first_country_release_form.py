@@ -520,6 +520,9 @@ class FirstCountryReleaseFormTest(TestCase):
             "initial": governed_phase,
             "parent_include": "passed",
             "explicit_initialization": "passed",
+            "functional_evidence": copy.deepcopy(
+                self.module.GOVERNED_EVIDENCE_SUMMARY
+            ),
             "ordinary_restart": "passed",
             "backup_restore": "passed",
             "anchor_rotation": "passed",
@@ -547,6 +550,9 @@ class FirstCountryReleaseFormTest(TestCase):
             "dev_logs": product_logs,
             "inspect": runtime,
             "inspect_secret_stagers": {"outcome": "passed"},
+            "governed_evidence": copy.deepcopy(
+                self.module.GOVERNED_EVIDENCE_SUMMARY
+            ),
         }
         commands = []
         for name in self.module.STABLE_COMMAND_ORDER:
@@ -860,6 +866,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "oauth_dev_smoke",
             "oauth_dev_down",
             "dev_smoke",
+            "governed_build",
             "deploy_generate",
             "dev_down",
             "deploy_verify",
@@ -875,6 +882,8 @@ class FirstCountryReleaseFormTest(TestCase):
             "initialize_notary",
             "reject_postgresql_data_reinitialization",
             "reject_postgresql_bootstrap_reinitialization",
+            "governed_start",
+            "governed_evidence",
             "governed_restart",
             "backup_restore",
             "rotate_relay_consultation",
@@ -894,7 +903,6 @@ class FirstCountryReleaseFormTest(TestCase):
             "update_verify_relay_public_state",
             "update_verify_relay_consultation_state",
             "update_verify_notary_state",
-            "update_stage_relay_public_serving_secrets",
             "update_stage_relay_consultation_serving_secrets",
             "update_stage_notary_serving_secrets",
             "update_stage_postgresql_serving_secrets",
@@ -930,7 +938,6 @@ class FirstCountryReleaseFormTest(TestCase):
             "update_verify_relay_public_state",
             "update_verify_relay_consultation_state",
             "update_verify_notary_state",
-            "update_stage_relay_public_serving_secrets",
             "update_stage_relay_consultation_serving_secrets",
             "update_stage_notary_serving_secrets",
             "update_stage_postgresql_serving_secrets",
@@ -1101,7 +1108,6 @@ class FirstCountryReleaseFormTest(TestCase):
                 "registry-relay-public-verify-state",
                 "registry-relay-consultation-verify-state",
                 "registry-notary-verify-state",
-                "registry-relay-public-stage-secrets",
                 "registry-relay-consultation-stage-secrets",
                 "registry-notary-stage-secrets",
                 "registry-postgresql-stage-secrets",
@@ -1113,14 +1119,14 @@ class FirstCountryReleaseFormTest(TestCase):
             ],
         )
         self.assertEqual(
-            commands[7][-5:],
+            commands[6][-5:],
             ["up", "--detach", "--wait", "--wait-timeout", "120"],
         )
         post_accept = self.module.compose_start_and_verify_commands(
             package,
             include_ps=True,
         )
-        self.assertEqual(commands[7:], post_accept)
+        self.assertEqual(commands[6:], post_accept)
         self.assertEqual(
             [operation(command) for command in post_accept],
             [
@@ -1175,16 +1181,16 @@ class FirstCountryReleaseFormTest(TestCase):
             "services: {}\n",
             encoding="utf-8",
         )
-        (operator / "notary-tls-private-key").write_text(
-            fixture_text("notary-tls-private-key"),
+        (operator / "notary-signing-key").write_text(
+            fixture_text("notary-signing-key"),
             encoding="utf-8",
         )
         current_generated = {
             "compose.yaml": hashlib.sha256(b"services: {}\n").hexdigest()
         }
         current_operator = {
-            "notary-tls-private-key": hashlib.sha256(
-                fixture_bytes("notary-tls-private-key")
+            "notary-signing-key": hashlib.sha256(
+                fixture_bytes("notary-signing-key")
             ).hexdigest()
         }
 
@@ -1194,8 +1200,8 @@ class FirstCountryReleaseFormTest(TestCase):
             current_operator_digests=current_operator,
         )
 
-        (operator / "notary-tls-private-key").write_text(
-            fixture_text("replacement-notary-key"),
+        (operator / "notary-signing-key").write_text(
+            fixture_text("replacement-notary-signing-key"),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(
@@ -1207,8 +1213,8 @@ class FirstCountryReleaseFormTest(TestCase):
                 current_generated_digests=current_generated,
                 current_operator_digests=current_operator,
             )
-        (operator / "notary-tls-private-key").write_text(
-            fixture_text("notary-tls-private-key"),
+        (operator / "notary-signing-key").write_text(
+            fixture_text("notary-signing-key"),
             encoding="utf-8",
         )
         (generated / "compose.yaml").write_text(
@@ -1239,7 +1245,7 @@ class FirstCountryReleaseFormTest(TestCase):
         wrong_roster = copy.deepcopy(ordinary)
         wrong_roster["services"]["registry-runtime-stage-secrets"] = wrong_roster[
             "services"
-        ].pop("registry-relay-public-stage-secrets")
+        ].pop("registry-relay-consultation-stage-secrets")
         with self.assertRaisesRegex(
             self.module.ReleaseFormError, "wrong serving stager roster"
         ):
@@ -1255,11 +1261,11 @@ class FirstCountryReleaseFormTest(TestCase):
             "source": "registry-notary-signing-key",
             "target": "/run/secrets/notary-signing-key",
         }
-        cross_lane_source_ordinary["services"]["registry-relay-public-stage-secrets"][
-            "secrets"
-        ].append(cross_lane_secret)
+        cross_lane_source_ordinary["services"][
+            "registry-relay-consultation-stage-secrets"
+        ]["secrets"].append(cross_lane_secret)
         cross_lane_source_initialization["services"][
-            "registry-relay-public-stage-secrets"
+            "registry-relay-consultation-stage-secrets"
         ]["secrets"].append(cross_lane_secret)
         with self.assertRaisesRegex(self.module.ReleaseFormError, "source authority"):
             self.module.stable_secret_staging_summary(
@@ -1270,11 +1276,11 @@ class FirstCountryReleaseFormTest(TestCase):
 
         cross_lane_output_ordinary = copy.deepcopy(ordinary)
         cross_lane_output_initialization = copy.deepcopy(initialization)
-        cross_lane_output_ordinary["services"]["registry-relay-public-stage-secrets"][
-            "volumes"
-        ][0]["source"] = f"{volume_prefix}-operator-files-notary-serve"
+        cross_lane_output_ordinary["services"][
+            "registry-relay-consultation-stage-secrets"
+        ]["volumes"][0]["source"] = f"{volume_prefix}-operator-files-notary-serve"
         cross_lane_output_initialization["services"][
-            "registry-relay-public-stage-secrets"
+            "registry-relay-consultation-stage-secrets"
         ]["volumes"][0]["source"] = f"{volume_prefix}-operator-files-notary-serve"
         with self.assertRaisesRegex(self.module.ReleaseFormError, "output authority"):
             self.module.stable_secret_staging_summary(
@@ -1284,9 +1290,9 @@ class FirstCountryReleaseFormTest(TestCase):
             )
 
         wrong_consumer = copy.deepcopy(initialization)
-        wrong_consumer["services"]["registry-relay-public"]["volumes"][0]["source"] = (
-            f"{volume_prefix}-operator-files-notary-serve"
-        )
+        wrong_consumer["services"]["registry-relay-consultation"]["volumes"][0][
+            "source"
+        ] = f"{volume_prefix}-operator-files-notary-serve"
         with self.assertRaisesRegex(self.module.ReleaseFormError, "consumer authority"):
             self.module.stable_secret_staging_summary(
                 ordinary,
@@ -1295,7 +1301,7 @@ class FirstCountryReleaseFormTest(TestCase):
             )
 
         wrong_dependency = copy.deepcopy(initialization)
-        wrong_dependency["services"]["registry-relay-public"]["depends_on"] = {
+        wrong_dependency["services"]["registry-relay-consultation"]["depends_on"] = {
             "registry-notary-stage-secrets": {
                 "condition": "service_completed_successfully",
                 "required": True,
@@ -1424,6 +1430,40 @@ class FirstCountryReleaseFormTest(TestCase):
         with (
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "did not change closure"
+            ),
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            self.module.verify_report(path, self.assets, self.tag)
+
+    def test_governed_summary_requires_the_exact_functional_evidence(self) -> None:
+        path, report, logs = self.write_valid_stable_report_evidence()
+        unexpected = {
+            "http_status": 200,
+            "claims": [
+                {
+                    "claim_id": "todo-completed",
+                    "satisfied": True,
+                    "disclosure": "value",
+                }
+            ],
+        }
+        report["governed_deployment"]["functional_evidence"] = unexpected
+        log = logs / "governed_evidence.log"
+        log.chmod(0o600)
+        log.write_text(json.dumps(unexpected) + "\n", encoding="utf-8")
+        command = next(
+            command
+            for command in report["commands"]
+            if command["name"] == "governed_evidence"
+        )
+        command["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
+        write_report_fixture(path, report)
+        path.chmod(0o600)
+
+        with (
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "governed deployment summary"
             ),
             mock.patch.object(platform, "system", return_value="Linux"),
             mock.patch.object(platform, "machine", return_value="x86_64"),
@@ -1769,6 +1809,91 @@ class FirstCountryReleaseFormTest(TestCase):
                 expected_fields=self.module.MATCH_FIELDS,
             )
 
+    def test_governed_evidence_uses_stdin_for_token_and_records_minimized_summary(
+        self,
+    ) -> None:
+        token = "governed-caller-secret"
+        token_file = self.root / "caller-token"
+        token_file.write_text(token, encoding="ascii")
+        logs = self.root / "governed-logs"
+        logs.mkdir()
+        body = json.dumps(
+            {
+                "results": [
+                    {
+                        "claim_id": "todo-record-exists",
+                        "value": True,
+                        "satisfied": True,
+                        "disclosure": "predicate",
+                        "provenance": {"used": {"relay_consultation_count": 1}},
+                    }
+                ]
+            }
+        )
+        completed = subprocess.CompletedProcess(
+            [], 0, body + "\nREGISTRYCTL_HTTP_STATUS:200", ""
+        )
+
+        with mock.patch.object(
+            self.module.subprocess, "run", return_value=completed
+        ) as run:
+            record = self.module.governed_evidence_request(
+                notary_port=43422,
+                caller_token_file=token_file,
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+
+        command = run.call_args.args[0]
+        self.assertNotIn(token, " ".join(command))
+        self.assertIn(token, run.call_args.kwargs["input"])
+        self.assertEqual(record["name"], "governed_evidence")
+        self.assertEqual(
+            json.loads((logs / "governed_evidence.log").read_text(encoding="utf-8")),
+            self.module.GOVERNED_EVIDENCE_SUMMARY,
+        )
+
+    def test_governed_evidence_rejects_an_unexpected_claim(self) -> None:
+        token_file = self.root / "caller-token"
+        token_file.write_text("governed-caller-secret", encoding="ascii")
+        logs = self.root / "governed-logs"
+        logs.mkdir()
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "claim_id": "todo-completed",
+                            "value": True,
+                            "satisfied": True,
+                            "disclosure": "value",
+                        }
+                    ]
+                }
+            )
+            + "\nREGISTRYCTL_HTTP_STATUS:200",
+            "",
+        )
+
+        with (
+            mock.patch.object(
+                self.module.subprocess, "run", return_value=completed
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError, "unexpected claim"
+            ),
+        ):
+            self.module.governed_evidence_request(
+                notary_port=43422,
+                caller_token_file=token_file,
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+
     def test_smoke_requires_all_notary_negative_and_positive_outcomes(self) -> None:
         path = self.write_smoke_report("combined_notary")
         report = json.loads(path.read_text(encoding="utf-8"))
@@ -2082,10 +2207,10 @@ class FirstCountryReleaseFormTest(TestCase):
         unlisted_certificate_material = fixture_bytes("recursive-unlisted-certificate")
         values = {
             "relay-public-serve.env": b"API_SECRET=" + api_material + b"\n",
-            "relay-public-tls.key": tls_material + b"\n",
+            "postgres-tls.key": tls_material + b"\n",
             "relay-public.private.jwk": signing_material + b"\n",
             "relay-public.public.jwk": public_jwk_material + b"\n",
-            "relay-public-tls.crt": certificate_material + b"\n",
+            "postgres-tls.crt": certificate_material + b"\n",
             "unlisted.crt": unlisted_certificate_material + b"\n",
         }
         for name, value in values.items():
@@ -2239,6 +2364,7 @@ class FirstCountryReleaseFormTest(TestCase):
             bundle,
             destination,
             expected_project=project_id,
+            expected_environment="local",
             ports=(43421, 43422),
         )
         binding = json.loads(destination.read_text(encoding="utf-8"))
@@ -2276,6 +2402,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 bundle,
                 destination,
                 expected_project=project_id,
+                expected_environment="local",
                 ports=(43421, 43422),
             )
 
@@ -2542,8 +2669,8 @@ class FirstCountryReleaseFormTest(TestCase):
             7,
         )
 
-        public_stage = services["registry-relay-public-stage-secrets"]
-        public_stage["volumes"][0]["source"] = (
+        consultation_stage = services["registry-relay-consultation-stage-secrets"]
+        consultation_stage["volumes"][0]["source"] = (
             f"{volume_prefix}-operator-files-notary-serve"
         )
         with (
@@ -2561,8 +2688,8 @@ class FirstCountryReleaseFormTest(TestCase):
                 env={},
                 logs=logs,
             )
-        public_stage["volumes"][0]["source"] = (
-            f"{volume_prefix}-operator-files-relay-public-serve"
+        consultation_stage["volumes"][0]["source"] = (
+            f"{volume_prefix}-operator-files-relay-consultation-serve"
         )
 
         postgresql_source = "release-postgresql-data"
