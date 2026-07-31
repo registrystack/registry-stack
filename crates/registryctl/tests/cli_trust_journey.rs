@@ -33,13 +33,17 @@ fn sign_verify_and_assemble_share_one_signed_artifact_root() {
         "--template".to_string(),
         "http".to_string(),
     ]);
-    successful(vec![
+    let initial_build = successful(vec![
         "-C".to_string(),
         project.display().to_string(),
         "build".to_string(),
         "--environment".to_string(),
         "local".to_string(),
     ]);
+    assert!(
+        initial_build.contains("Next: registryctl trust anchor create --help"),
+        "{initial_build}"
+    );
 
     let private_key = temporary.path().join("private.jwk");
     let public_key = temporary.path().join("public.jwk");
@@ -165,4 +169,41 @@ fn sign_verify_and_assemble_share_one_signed_artifact_root() {
         "{assembled}"
     );
     assert!(approved_set.is_file());
+
+    let unchanged_update = successful(vec![
+        "-C".to_string(),
+        project.display().to_string(),
+        "build".to_string(),
+        "--environment".to_string(),
+        "local".to_string(),
+        "--against".to_string(),
+        approved_set.display().to_string(),
+    ]);
+    assert!(
+        unchanged_update
+            .contains("Next: retain the current approved set; no lane signing input was emitted"),
+        "{unchanged_update}"
+    );
+
+    let environment_file = project.join("environments/local.yaml");
+    let changed_environment = fs::read_to_string(&environment_file)
+        .expect("environment reads")
+        .replace(
+            "https://citizen-registry.invalid",
+            "https://citizen-registry-next.invalid",
+        );
+    fs::write(&environment_file, changed_environment).expect("environment change writes");
+    let changed_update = successful(vec![
+        "-C".to_string(),
+        project.display().to_string(),
+        "build".to_string(),
+        "--environment".to_string(),
+        "local".to_string(),
+        "--against".to_string(),
+        approved_set.display().to_string(),
+    ]);
+    assert!(
+        changed_update.contains("Next: registryctl trust bundle sign --help"),
+        "{changed_update}"
+    );
 }

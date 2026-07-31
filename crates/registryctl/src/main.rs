@@ -173,7 +173,7 @@ enum Commands {
 
     /// Emit deterministic unsigned product-lane signing inputs.
     #[command(
-        after_help = "Governed handoff:\n  Input owner: country implementer and reviewer\n  Output owner: independent product-lane trust owners\n  Mutation: replaces only generated build output for the selected environment\n  Next command: registryctl trust bundle sign --help"
+        after_help = "Governed handoff:\n  Input owner: country implementer and reviewer\n  Output owner: independent product-lane trust owners\n  Mutation: replaces only generated build output for the selected environment\n  Next command: registryctl trust anchor create --help\n  Update next command: registryctl trust bundle sign --help when a lane changed"
     )]
     Build {
         /// Select one declared project environment.
@@ -182,6 +182,15 @@ enum Commands {
         /// Current approved baseline set for an update.
         #[arg(long)]
         against: Option<PathBuf>,
+        /// Emit an unchanged lane input for an authenticated trust-anchor rotation.
+        #[arg(
+            long = "rotate-anchor",
+            value_enum,
+            action = clap::ArgAction::Append,
+            requires = "against",
+            value_name = "LANE"
+        )]
+        rotate_anchors: Vec<Lane>,
         /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -718,18 +727,30 @@ fn run(cli: Cli) -> CliResult {
         Commands::Build {
             environment,
             against,
+            rotate_anchors,
             format,
         } => {
+            let is_update = against.is_some();
             let project = discover_project(project_dir.as_deref())?;
             let environment = resolve_environment(&project, environment)?;
             let report = registryctl::build_reviewed_project(&ReviewedProjectBuildOptions {
                 project_directory: project,
                 environment,
                 against,
+                anchor_rotations: rotate_anchors.into_iter().map(Into::into).collect(),
             })
             .map_err(CliFailure::domain)?;
+            let next_action = build_next_action(is_update, &report.affected_lanes);
             match format {
-                OutputFormat::Json => print_json(&report)?,
+                OutputFormat::Json => {
+                    let mut value = serde_json::to_value(&report).map_err(|error| {
+                        CliFailure::operational(anyhow!(
+                            "cannot render reviewed build report: {error}"
+                        ))
+                    })?;
+                    value["next_action"] = serde_json::Value::String(next_action.to_string());
+                    print_json(&value)?;
+                }
                 OutputFormat::Human => {
                     println!(
                         "Built unsigned signing inputs for {}.",
@@ -744,7 +765,7 @@ fn run(cli: Cli) -> CliResult {
                             .map(ToString::to_string)
                             .unwrap_or_else(|| "<none>".to_string())
                     );
-                    println!("Next: registryctl trust bundle sign --help");
+                    println!("Next: {next_action}");
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -825,6 +846,16 @@ fn run(cli: Cli) -> CliResult {
         },
         Commands::Trust { command } => run_trust(project_dir.as_deref(), command),
         Commands::Tooling { command } => run_tooling(project_dir.as_deref(), command),
+    }
+}
+
+fn build_next_action(is_update: bool, affected_lanes: &[ApprovedLaneV1]) -> &'static str {
+    if !is_update {
+        "registryctl trust anchor create --help"
+    } else if affected_lanes.is_empty() {
+        "retain the current approved set; no lane signing input was emitted"
+    } else {
+        "registryctl trust bundle sign --help"
     }
 }
 
@@ -2297,5 +2328,21 @@ mod tests {
         assert!(message.contains("run registryctl doctor"));
         assert!(message.contains("reinstall Registryctl from a verified Registry Stack release"));
         assert!(!message.contains("file not found"));
+    }
+
+    #[test]
+    fn build_handoff_distinguishes_initial_changed_and_unchanged_updates() {
+        assert_eq!(
+            build_next_action(false, &ApprovedLaneV1::ALL),
+            "registryctl trust anchor create --help"
+        );
+        assert_eq!(
+            build_next_action(true, &[ApprovedLaneV1::RelayPublic]),
+            "registryctl trust bundle sign --help"
+        );
+        assert_eq!(
+            build_next_action(true, &[]),
+            "retain the current approved set; no lane signing input was emitted"
+        );
     }
 }

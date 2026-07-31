@@ -313,7 +313,7 @@ fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
     for (args, next) in [
         (
             &["build", "--help"][..],
-            "registryctl trust bundle sign --help",
+            "registryctl trust anchor create --help",
         ),
         (&["review", "compare", "--help"][..], "registryctl build"),
         (
@@ -366,6 +366,16 @@ fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
             "{args:?} help is missing exact next command {next:?}: {help}"
         );
     }
+}
+
+#[test]
+fn build_help_exposes_explicit_anchor_rotation_selection() {
+    let help = stdout(&["build", "--help"]);
+    assert!(help.contains("--rotate-anchor <LANE>"), "{help}");
+    assert!(
+        help.contains("authenticated trust-anchor rotation"),
+        "{help}"
+    );
 }
 
 #[test]
