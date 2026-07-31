@@ -2,8 +2,8 @@
 
 use crate::dev_credentials::{
     DevCredentialPublicProjection, DevCredentialRequirements, DevIssuanceCredentialRequirement,
-    DevOAuthCredentialProfile, DevSourceCredentialProfile, DevSourceCredentialProjection,
-    PreparedDevCredentialClosure,
+    DevOAuthCredentialProfile, DevRelayApiKeyRequirements, DevSourceCredentialProfile,
+    DevSourceCredentialProjection, PreparedDevCredentialClosure,
 };
 use crate::dev_runtime::{
     AuthoredDevScenario, AuthoredDevelopment, AuthoredSyntheticOauthRequest,
@@ -40,7 +40,21 @@ pub(crate) struct DevAuthoringProjection {
     /// synthetic development.
     pub operator_source_secret_env: Vec<String>,
     pub scenarios: Vec<AuthoredDevScenario>,
+    pub records_request: Option<AuthoredRecordsRequest>,
     credential_requirements: DevCredentialRequirements,
+}
+
+/// Exact, validated public Relay records request selected from authoring.
+///
+/// This is kept out of reports and persisted plans because its record id is
+/// an authored principal identifier. It exists only long enough to create the
+/// owner-only curl configuration.
+pub(crate) struct AuthoredRecordsRequest {
+    pub(crate) dataset_id: String,
+    pub(crate) entity_id: String,
+    pub(crate) record_id: String,
+    pub(crate) purpose: String,
+    scopes: [String; 2],
 }
 
 /// Value-free projection applied only to the in-memory development compile.
@@ -156,6 +170,7 @@ pub(crate) fn compile_dev_runtime_authoring(
         .to_string_lossy();
     let (request_encoding, oauth_profile, source_auth, oauth_request) =
         compile_development_auth(&integration_file, credential)?;
+    let records_request = select_development_records_request(&loaded, environment_id)?;
     let credential_requirements = development_credential_requirements(
         DevelopmentCredentialRequirementsInput {
             loaded: &loaded,
@@ -166,6 +181,9 @@ pub(crate) fn compile_dev_runtime_authoring(
             credential,
             caller_id: &caller_id,
             caller_fingerprint_env: &caller_fingerprint_locator,
+            relay_api_key_scopes: records_request
+                .as_ref()
+                .map(|request| request.scopes.as_slice()),
         },
     )?;
     let interaction = &fixture_document.interactions[0];
@@ -218,8 +236,77 @@ pub(crate) fn compile_dev_runtime_authoring(
         caller_fingerprint_locator,
         operator_source_secret_env,
         scenarios: vec![scenario],
+        records_request,
         credential_requirements,
     })
+}
+
+fn select_development_records_request(
+    loaded: &LoadedRegistryProject,
+    environment_id: &str,
+) -> Result<Option<AuthoredRecordsRequest>> {
+    let environment = loaded
+        .environment
+        .as_ref()
+        .expect("selected environment was loaded");
+    let Some(local_keys) = environment
+        .relay
+        .as_ref()
+        .and_then(|relay| relay.local_api_keys.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    let snapshot_entities = loaded
+        .integrations
+        .values()
+        .filter_map(|integration| match &integration.document.capability {
+            CapabilityDeclaration::Snapshot { snapshot } => Some(snapshot.entity.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut candidates = loaded
+        .project
+        .services
+        .iter()
+        .filter_map(|(service_id, service)| {
+            let entity = service.entity.as_deref()?;
+            let api = service.api.as_ref()?;
+            let primary_key = loaded
+                .entities
+                .get(entity)
+                .map(|entity| entity.document.primary_key.as_str())?;
+            (service.kind == ServiceKind::RecordsApi
+                && snapshot_entities.contains(entity)
+                && local_keys.scopes.contains(&api.scopes.metadata)
+                && local_keys.scopes.contains(&api.scopes.rows)
+                && api.required_principal_filters.as_slice() == [primary_key])
+            .then_some((service_id.as_str(), entity, api))
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() != 1 {
+        bail!(
+            "environments/{environment_id}.yaml#/relay/local_api_keys requires one exact snapshot records service whose metadata and rows scopes are granted and whose sole principal-bound filter is the entity primary key; matching service ids: {}",
+            candidates
+                .iter()
+                .map(|(service_id, _, _)| *service_id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let (service_id, entity_id, api) = candidates.remove(0);
+    if api.purposes.len() != 1 {
+        bail!(
+            "registry-stack.yaml#/services/{service_id}/api/purposes must contain exactly one purpose for the development records request"
+        );
+    }
+    Ok(Some(AuthoredRecordsRequest {
+        dataset_id: entity_id.to_string(),
+        entity_id: entity_id.to_string(),
+        record_id: local_keys.match_principal.clone(),
+        purpose: api.purposes[0].clone(),
+        scopes: [api.scopes.metadata.clone(), api.scopes.rows.clone()],
+    }))
 }
 
 fn operator_source_secret_env(
@@ -262,6 +349,7 @@ struct DevelopmentCredentialRequirementsInput<'a> {
     credential: &'a CredentialInterface,
     caller_id: &'a str,
     caller_fingerprint_env: &'a str,
+    relay_api_key_scopes: Option<&'a [String]>,
 }
 
 fn development_credential_requirements(
@@ -276,6 +364,7 @@ fn development_credential_requirements(
         credential,
         caller_id,
         caller_fingerprint_env,
+        relay_api_key_scopes,
     } = input;
     let environment = loaded
         .environment
@@ -363,6 +452,21 @@ fn development_credential_requirements(
         service_id: service_id.to_owned(),
         caller_id: caller_id.to_owned(),
         caller_fingerprint_env: caller_fingerprint_env.to_owned(),
+        relay_api_keys: match (
+            environment
+                .relay
+                .as_ref()
+                .and_then(|relay| relay.local_api_keys.as_ref()),
+            relay_api_key_scopes,
+        ) {
+            (Some(keys), Some(scopes)) => Some(DevRelayApiKeyRequirements {
+                match_principal: keys.match_principal.clone(),
+                no_match_principal: keys.no_match_principal.clone(),
+                scopes: scopes.to_vec(),
+            }),
+            (None, None) => None,
+            _ => bail!("development Relay API-key scopes do not match the selected records request"),
+        },
         source,
         issuance,
     })
@@ -824,7 +928,13 @@ impl DevBindingProjection {
         relay.jwks_url = self.credentials.relay_oidc.jwks_url.clone();
         relay.audience = self.credentials.relay_oidc.audience.clone();
         relay.allowed_clients = vec![self.credentials.relay_oidc.client_id.clone()];
-        relay.local_api_keys = None;
+        relay.local_api_keys = self.credentials.relay_api_keys.as_ref().map(|keys| {
+            RelayLocalApiKeyBinding {
+                match_principal: keys.match_principal.clone(),
+                no_match_principal: keys.no_match_principal.clone(),
+                scopes: keys.scopes.clone(),
+            }
+        });
 
         environment.notary_relay = Some(NotaryRelayBinding {
             base_url: self.credentials.notary_relay.base_url.clone(),
@@ -1363,6 +1473,7 @@ mod development_authoring_tests {
             "person-verification"
         );
         assert_eq!(projection.scenarios.len(), 1);
+        assert!(projection.records_request.is_none());
         let scenario = &projection.scenarios[0];
         assert_eq!(scenario.integration_id, "person-record");
         assert_eq!(scenario.fixture_id, "active-person");
@@ -1407,12 +1518,33 @@ mod development_authoring_tests {
         let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
         copy_embedded_dir(embedded, temporary.path()).unwrap();
         let project = temporary.path();
+        let environment_path = project.join("environments/local.yaml");
+        let environment = fs::read_to_string(&environment_path)
+            .unwrap()
+            .replace(
+                "scopes: [projects:metadata, projects:rows]",
+                "scopes: [projects:metadata, projects:rows, unrelated:admin]",
+            );
+        fs::write(&environment_path, environment).unwrap();
         let projection = compile_dev_runtime_authoring(project, "local").unwrap();
         assert_eq!(projection.environment_profile, DevEnvironmentProfile::Local);
         assert_eq!(projection.caller_id, "public-works-service");
         assert_eq!(
             projection.credential_requirements().service_id,
             "public-works-verification"
+        );
+        let records = projection.records_request.as_ref().unwrap();
+        assert_eq!(records.dataset_id, "projects");
+        assert_eq!(records.entity_id, "projects");
+        assert_eq!(records.record_id, "pw_001");
+        assert_eq!(records.purpose, "public-works-case-management");
+        assert_eq!(
+            projection
+                .credential_requirements()
+                .relay_api_keys
+                .unwrap()
+                .scopes,
+            ["projects:metadata", "projects:rows"]
         );
         let scenario = &projection.scenarios[0];
         assert_eq!(scenario.integration_id, "project-record-snapshot");
@@ -1437,6 +1569,123 @@ mod development_authoring_tests {
         )
         .unwrap();
         assert_eq!(signed.lane_config_digests.len(), 3);
+        let public = registry_platform_config::verify_config_bundle(
+            &signed.relay_public_bundle,
+            &signed.relay_public_anchor,
+        )
+        .unwrap();
+        let public: Value = serde_norway::from_slice(&public.config_bytes).unwrap();
+        assert_eq!(public.pointer("/auth/mode"), Some(&json!("api_key")));
+        assert_eq!(
+            public.pointer("/auth/api_keys/0/fingerprint/name"),
+            Some(&json!(LOCAL_RELAY_MATCH_KEY_HASH_ENV))
+        );
+        assert_eq!(
+            public.pointer("/auth/api_keys/1/fingerprint/name"),
+            Some(&json!(LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV))
+        );
+        assert_eq!(
+            public.pointer("/auth/api_keys/0/scopes"),
+            Some(&json!(["projects:metadata", "projects:rows"]))
+        );
+        assert_eq!(
+            public.pointer("/auth/api_keys/1/scopes"),
+            Some(&json!(["projects:metadata", "projects:rows"]))
+        );
+        assert!(!public.to_string().contains("unrelated:admin"));
+        let consultation = registry_platform_config::verify_config_bundle(
+            &signed.relay_consultation_bundle,
+            &signed.relay_consultation_anchor,
+        )
+        .unwrap();
+        let consultation: Value =
+            serde_norway::from_slice(&consultation.config_bytes).unwrap();
+        assert_eq!(consultation.pointer("/auth/mode"), Some(&json!("oidc")));
+        assert!(consultation.pointer("/auth/api_keys").is_none());
+    }
+
+    #[test]
+    fn records_request_rejects_ambiguous_service_or_purpose() {
+        let temporary = tempfile::tempdir().unwrap();
+        let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
+        copy_embedded_dir(embedded, temporary.path()).unwrap();
+        let mut loaded = load_registry_project(temporary.path(), Some("local")).unwrap();
+        loaded
+            .project
+            .services
+            .get_mut("projects-records")
+            .unwrap()
+            .api
+            .as_mut()
+            .unwrap()
+            .required_principal_filters = vec!["district_code".to_string()];
+        let error = select_development_records_request(&loaded, "local")
+            .err()
+            .expect("non-primary principal binding fails");
+        assert!(error.to_string().contains("entity primary key"));
+        loaded
+            .project
+            .services
+            .get_mut("projects-records")
+            .unwrap()
+            .api
+            .as_mut()
+            .unwrap()
+            .required_principal_filters = vec!["project_id".to_string()];
+        loaded
+            .project
+            .services
+            .get_mut("projects-records")
+            .unwrap()
+            .api
+            .as_mut()
+            .unwrap()
+            .purposes
+            .push("secondary-purpose".to_string());
+        let error = select_development_records_request(&loaded, "local")
+            .err()
+            .expect("ambiguous purpose fails");
+        assert!(error.to_string().contains("must contain exactly one purpose"));
+
+        loaded
+            .project
+            .services
+            .get_mut("projects-records")
+            .unwrap()
+            .api
+            .as_mut()
+            .unwrap()
+            .purposes
+            .truncate(1);
+        let second: ServiceDeclaration = serde_norway::from_str(
+            r#"
+kind: records_api
+entity: projects
+api:
+  scopes:
+    metadata: projects:metadata
+    rows: projects:rows
+    aggregate: projects:aggregate
+    evidence_verification: projects:evidence_verification
+  purposes: [public-works-case-management]
+  projection: [project_id]
+  pagination: { default_limit: 1, max_limit: 1 }
+  filters: { project_id: [eq] }
+  required_principal_filters: [project_id]
+  standards: { ogc_features: false, sp_dci: false }
+"#,
+        )
+        .unwrap();
+        loaded
+            .project
+            .services
+            .insert("projects-records-second".to_string(), second);
+        let error = select_development_records_request(&loaded, "local")
+            .err()
+            .expect("ambiguous service fails");
+        assert!(error
+            .to_string()
+            .contains("requires one exact snapshot records service"));
     }
 
     #[test]
@@ -1466,6 +1715,7 @@ mod development_authoring_tests {
                 credential,
                 caller_id: &caller_id,
                 caller_fingerprint_env: &caller_fingerprint_locator,
+                relay_api_key_scopes: None,
             },
         )
         .unwrap();
@@ -1477,6 +1727,31 @@ mod development_authoring_tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn spreadsheet_planned_fixture_is_a_complete_development_scenario() {
+        let temporary = tempfile::tempdir().unwrap();
+        let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
+        copy_embedded_dir(embedded, temporary.path()).unwrap();
+        let environment_path = temporary.path().join("environments/local.yaml");
+        let environment = fs::read_to_string(&environment_path)
+            .unwrap()
+            .replace("default_fixture: match", "default_fixture: planned");
+        fs::write(&environment_path, environment).unwrap();
+
+        let projection = compile_dev_runtime_authoring(temporary.path(), "local").unwrap();
+        let scenario = &projection.scenarios[0];
+        assert_eq!(scenario.fixture_id, "planned");
+        let request: Value = serde_json::from_slice(&scenario.request_json).unwrap();
+        assert_eq!(
+            request.pointer("/target/identifiers/0/scheme"),
+            Some(&json!("project_id"))
+        );
+        assert_eq!(
+            request.pointer("/target/identifiers/0/value"),
+            Some(&json!("PW-002"))
+        );
     }
 
     #[test]

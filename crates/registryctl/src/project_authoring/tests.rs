@@ -45,6 +45,33 @@ mod tests {
                 ));
             }
         }
+        for (expected_id, directory) in [
+            ("http", "bounded-http"),
+            ("spreadsheet", "spreadsheet"),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary embedded starter");
+            copy_embedded_dir(
+                PROJECT_STARTERS
+                    .get_dir(directory)
+                    .expect("embedded starter exists"),
+                temporary.path(),
+            )
+            .expect("embedded starter copies");
+            let loaded =
+                load_registry_project(temporary.path(), None).expect("embedded starter loads");
+            let provenance = loaded
+                .project
+                .starter
+                .as_ref()
+                .expect("embedded starter provenance");
+            assert_eq!(provenance.id, expected_id);
+            if provenance.content_digest != loaded.project_content_digest {
+                mismatches.push(format!(
+                    "{expected_id} embedded: expected {}, calculated {}",
+                    provenance.content_digest, loaded.project_content_digest
+                ));
+            }
+        }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 

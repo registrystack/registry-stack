@@ -33,7 +33,7 @@ use crate::dev_credentials::{
 };
 use crate::project_authoring::{
     build_registry_project, compile_and_sign_dev_lanes, compile_dev_runtime_authoring,
-    ProjectBuildOptions,
+    AuthoredRecordsRequest, ProjectBuildOptions,
 };
 use crate::release_lock::{
     verify_installed_release_lock, LockedMountSourceV1, LockedOperatorFileV1,
@@ -54,6 +54,8 @@ const DEV_ROOT: &str = ".registry-stack/dev";
 const RUNTIME_STATE_FILE: &str = "runtime-state.json";
 const REQUEST_CONFIG_FILE: &str = "request.curl";
 const REQUEST_BODY_FILE: &str = "request.json";
+const RECORDS_REQUEST_CONFIG_FILE: &str = "records-request.curl";
+const RECORDS_DENIED_CONFIG_FILE: &str = "records-denied.curl";
 const CALLER_TOKEN_FILE: &str = "caller-token";
 const SYNTHETIC_SOURCE_PLAN_FILE: &str = "synthetic-source-plan.json";
 const SYNTHETIC_SOURCE_PLAN_SCHEMA_V1: &str = "registry.relay.synthetic-source-plan.v1";
@@ -796,6 +798,7 @@ pub fn prepare_dev_runtime_plan(
         release,
         development: authoring.development,
         scenarios: authoring.scenarios,
+        records_request: authoring.records_request,
         artifacts,
         credentials,
         operator_source_secret_env: authoring.operator_source_secret_env,
@@ -870,6 +873,12 @@ fn runtime_paths(root: &Path, environment_id: &str, runtime_id: &str) -> DevRunt
         credentials: runtime_root.join("credentials"),
         request_config: runtime_root.join("credentials").join(REQUEST_CONFIG_FILE),
         request_body: runtime_root.join("credentials").join(REQUEST_BODY_FILE),
+        records_request_config: runtime_root
+            .join("credentials")
+            .join(RECORDS_REQUEST_CONFIG_FILE),
+        records_denied_config: runtime_root
+            .join("credentials")
+            .join(RECORDS_DENIED_CONFIG_FILE),
         synthetic_source_plan: runtime_root.join(SYNTHETIC_SOURCE_PLAN_FILE),
         postgresql_staged_files: runtime_root.join("postgresql-staged-files"),
         root: runtime_root,
@@ -924,6 +933,7 @@ pub(crate) struct DevRuntimePlanInput {
     pub release: VerifiedDevReleaseProjection,
     pub development: AuthoredDevelopment,
     pub scenarios: Vec<AuthoredDevScenario>,
+    pub records_request: Option<AuthoredRecordsRequest>,
     pub artifacts: DevRuntimeArtifactInputs,
     pub credentials: PreparedDevCredentialClosure,
     pub operator_source_secret_env: Vec<String>,
@@ -1048,6 +1058,8 @@ pub struct DevRuntimePaths {
     pub credentials: PathBuf,
     pub request_config: PathBuf,
     pub request_body: PathBuf,
+    pub records_request_config: PathBuf,
+    pub records_denied_config: PathBuf,
     pub synthetic_source_plan: PathBuf,
     pub postgresql_staged_files: PathBuf,
 }
@@ -1061,6 +1073,7 @@ pub struct DevRuntimePlan {
     pub minimum_compose_version: String,
     pub compose_digest: String,
     pub request_digest: String,
+    pub records_request_digest: Option<String>,
     pub source_mode: DevSourceMode,
     pub scenario: DevScenarioPlan,
     pub workloads: Vec<DevWorkloadPlan>,
@@ -1069,6 +1082,8 @@ pub struct DevRuntimePlan {
     pub artifacts: DevRuntimeArtifactInputs,
     #[serde(skip)]
     request_json: Vec<u8>,
+    #[serde(skip)]
+    records_request: Option<AuthoredRecordsRequest>,
     #[serde(skip)]
     synthetic_source_plan: Option<SyntheticSourcePlanV1>,
     #[serde(skip)]
@@ -1088,6 +1103,7 @@ impl fmt::Debug for DevRuntimePlan {
             .field("minimum_compose_version", &self.minimum_compose_version)
             .field("compose_digest", &self.compose_digest)
             .field("request_digest", &self.request_digest)
+            .field("records_request_digest", &self.records_request_digest)
             .field("source_mode", &self.source_mode)
             .field("scenario", &self.scenario)
             .field("workloads", &self.workloads)
@@ -1095,6 +1111,10 @@ impl fmt::Debug for DevRuntimePlan {
             .field("paths", &self.paths)
             .field("artifacts", &self.artifacts)
             .field("request_json", &"<redacted>")
+            .field(
+                "records_request",
+                &self.records_request.as_ref().map(|_| "<redacted>"),
+            )
             .field(
                 "synthetic_source_plan",
                 &self.synthetic_source_plan.as_ref().map(|_| "<redacted>"),
@@ -1266,6 +1286,20 @@ impl DevRuntimePlan {
         validate_source_binding(&input.development)?;
         let scenario = select_authored_scenario(&input.development, &input.scenarios)?;
         let request_digest = sha256_uri(&scenario.request_json);
+        let records_request_digest = input.records_request.as_ref().map(|request| {
+            sha256_uri(
+                &[
+                    request.dataset_id.as_bytes(),
+                    b"\0",
+                    request.entity_id.as_bytes(),
+                    b"\0",
+                    request.record_id.as_bytes(),
+                    b"\0",
+                    request.purpose.as_bytes(),
+                ]
+                .concat(),
+            )
+        });
         if input.development.source_mode == DevSourceMode::OperatorBound
             && scenario.synthetic_source.is_some()
         {
@@ -1306,11 +1340,25 @@ impl DevRuntimePlan {
             credentials: runtime_root.join("credentials"),
             request_config: runtime_root.join("credentials").join(REQUEST_CONFIG_FILE),
             request_body: runtime_root.join("credentials").join(REQUEST_BODY_FILE),
+            records_request_config: runtime_root
+                .join("credentials")
+                .join(RECORDS_REQUEST_CONFIG_FILE),
+            records_denied_config: runtime_root
+                .join("credentials")
+                .join(RECORDS_DENIED_CONFIG_FILE),
             synthetic_source_plan: runtime_root.join(SYNTHETIC_SOURCE_PLAN_FILE),
             postgresql_staged_files: runtime_root.join("postgresql-staged-files"),
             root: runtime_root,
         };
         let credential_files = input.credentials.planned_files(&paths.credentials);
+        let records_credentials_present = credential_files.relay_match_token.is_some()
+            && credential_files.relay_no_match_token.is_some();
+        if input.records_request.is_some() != records_credentials_present
+            || credential_files.relay_match_token.is_some()
+                != credential_files.relay_no_match_token.is_some()
+        {
+            return Err(DevRuntimeError::invalid_credentials());
+        }
         validate_credential_projection(
             &input.development,
             scenario,
@@ -1388,6 +1436,7 @@ impl DevRuntimePlan {
             artifacts: &artifacts,
             compose_digest: &compose_digest,
             request_digest: &request_digest,
+            records_request_digest: records_request_digest.as_deref(),
             synthetic_source_plan: synthetic_source_plan.as_ref(),
         })?;
 
@@ -1399,6 +1448,7 @@ impl DevRuntimePlan {
             minimum_compose_version: input.release.minimum_compose_version,
             compose_digest,
             request_digest,
+            records_request_digest,
             source_mode: input.development.source_mode,
             scenario: scenario_plan,
             workloads,
@@ -1406,6 +1456,7 @@ impl DevRuntimePlan {
             paths,
             artifacts,
             request_json: scenario.request_json.clone(),
+            records_request: input.records_request,
             synthetic_source_plan,
             credentials: Some(input.credentials),
             credential_files: Some(credential_files),
@@ -1426,11 +1477,29 @@ impl DevRuntimePlan {
             .collect()
     }
 
-    pub fn request_command(&self) -> String {
+    pub fn evidence_request_command(&self) -> String {
         format!(
             "curl --config {}",
             shell_quote_path(&self.paths.request_config)
         )
+    }
+
+    pub fn records_request_command(&self) -> Option<String> {
+        self.records_request_digest.as_ref().map(|_| {
+            format!(
+                "curl --config {}",
+                shell_quote_path(&self.paths.records_request_config)
+            )
+        })
+    }
+
+    pub fn records_denied_command(&self) -> Option<String> {
+        self.records_request_digest.as_ref().map(|_| {
+            format!(
+                "curl --config {}",
+                shell_quote_path(&self.paths.records_denied_config)
+            )
+        })
     }
 
     pub fn logs_command(&self) -> String {
@@ -1462,6 +1531,20 @@ impl DevRuntimePlan {
                 DevRuntimeError::new(
                     DevFailureCategory::InvalidPlan,
                     "development plan has no public Notary endpoint",
+                    "rebuild the development runtime plan",
+                )
+            })
+    }
+
+    fn relay_public_endpoint(&self) -> DevRuntimeResult<SocketAddr> {
+        self.workloads
+            .iter()
+            .find(|workload| workload.id == DevWorkloadId::RelayPublic)
+            .and_then(|workload| workload.host_endpoint)
+            .ok_or_else(|| {
+                DevRuntimeError::new(
+                    DevFailureCategory::InvalidPlan,
+                    "development plan has no public Relay endpoint",
                     "rebuild the development runtime plan",
                 )
             })
@@ -3091,7 +3174,11 @@ pub struct DevStatusReport {
     pub binding: DevProjectBindingV1,
     pub workloads: Vec<DevWorkloadStatus>,
     pub source_mode: DevSourceMode,
-    pub request_command: String,
+    pub relay_api_url: String,
+    pub evidence_api_url: String,
+    pub records_denied_command: Option<String>,
+    pub records_request_command: Option<String>,
+    pub evidence_request_command: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3198,9 +3285,12 @@ impl DevSmokeReportV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DevStartupReport {
     pub endpoints: Vec<SocketAddr>,
-    pub endpoint_urls: Vec<String>,
+    pub relay_api_url: String,
+    pub evidence_api_url: String,
     pub source_mode: DevSourceMode,
-    pub request_command: String,
+    pub records_denied_command: Option<String>,
+    pub records_request_command: Option<String>,
+    pub evidence_request_command: String,
     pub smoke_command: String,
     pub logs_command: String,
     pub down_command: String,
@@ -3950,7 +4040,11 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
             binding: plan.binding.clone(),
             workloads,
             source_mode: plan.source_mode,
-            request_command: plan.request_command(),
+            relay_api_url: format!("https://{}", plan.relay_public_endpoint()?),
+            evidence_api_url: format!("https://{}", plan.caller_endpoint()?),
+            records_denied_command: plan.records_denied_command(),
+            records_request_command: plan.records_request_command(),
+            evidence_request_command: plan.evidence_request_command(),
         })
     }
 
@@ -3983,6 +4077,7 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
 fn same_runtime_semantics(existing: &DevRuntimePlan, candidate: &DevRuntimePlan) -> bool {
     existing.binding == candidate.binding
         && existing.build_manifest_digest == candidate.build_manifest_digest
+        && existing.records_request_digest == candidate.records_request_digest
         && existing.release_tag == candidate.release_tag
         && existing.minimum_compose_version == candidate.minimum_compose_version
         && existing.request_digest == candidate.request_digest
@@ -4124,11 +4219,54 @@ fn materialize_runtime(plan: &DevRuntimePlan) -> DevRuntimeResult<DevRuntimeStat
         }
         let endpoint = plan.caller_endpoint()?;
         let request_config = format!(
-            "url = \"https://{endpoint}/v1/evaluations\"\ncacert = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {caller_token}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\nfail\n",
+            "url = \"https://{endpoint}/v1/evaluations\"\ncacert = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {caller_token}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\nsilent\nshow-error\nfail\n",
             curl_config_path(&plan.paths.credentials.join("notary-tls.crt"))?,
             curl_config_path(&plan.paths.request_body)?,
         );
         write_owner_only(&plan.paths.request_config, request_config.as_bytes())?;
+        match (
+            plan.records_request.as_ref(),
+            &plan.prepared_credential_files()?.relay_match_token,
+            &plan.prepared_credential_files()?.relay_no_match_token,
+        ) {
+            (Some(records), Some(match_token_path), Some(_)) => {
+                for value in [
+                    records.dataset_id.as_str(),
+                    records.entity_id.as_str(),
+                    records.record_id.as_str(),
+                    records.purpose.as_str(),
+                ] {
+                    validate_curl_literal(value)?;
+                }
+                let match_token = read_owner_only_regular_file(match_token_path, 16 * 1024)
+                    .map_err(|_| DevRuntimeError::io())?;
+                let match_token = std::str::from_utf8(&match_token)
+                    .map_err(|_| DevRuntimeError::invalid_credentials())?;
+                validate_curl_literal(match_token)?;
+                let relay_endpoint = plan.relay_public_endpoint()?;
+                let records_url = format!(
+                    "https://{relay_endpoint}/v1/datasets/{}/entities/{}/records/{}",
+                    records.dataset_id, records.entity_id, records.record_id
+                );
+                let relay_ca =
+                    curl_config_path(&plan.paths.credentials.join("relay-public-tls.crt"))?;
+                let records_request = format!(
+                    "url = \"{records_url}\"\ncacert = \"{relay_ca}\"\nrequest = \"GET\"\nheader = \"Authorization: Bearer {match_token}\"\nheader = \"Data-Purpose: {}\"\nsilent\nshow-error\nfail\n",
+                    records.purpose
+                );
+                write_owner_only(
+                    &plan.paths.records_request_config,
+                    records_request.as_bytes(),
+                )?;
+                let records_denied = format!(
+                    "url = \"{records_url}\"\ncacert = \"{relay_ca}\"\nrequest = \"GET\"\nheader = \"Data-Purpose: {}\"\ninclude\nsilent\nshow-error\n",
+                    records.purpose
+                );
+                write_owner_only(&plan.paths.records_denied_config, records_denied.as_bytes())?;
+            }
+            (None, None, None) => {}
+            _ => return Err(DevRuntimeError::invalid_credentials()),
+        }
         let mut plan_bytes = serde_json::to_vec(plan).map_err(|_| DevRuntimeError::io())?;
         plan_bytes.push(b'\n');
         write_owner_only(&plan.paths.plan_file, &plan_bytes)?;
@@ -4313,9 +4451,20 @@ fn check_loopback_ports(plan: &DevRuntimePlan) -> DevRuntimeResult<()> {
 fn startup_report(plan: &DevRuntimePlan) -> DevStartupReport {
     DevStartupReport {
         endpoints: plan.public_endpoints(),
-        endpoint_urls: plan.public_endpoint_urls(),
+        relay_api_url: format!(
+            "https://{}",
+            plan.relay_public_endpoint()
+                .expect("validated development plan has a public Relay endpoint")
+        ),
+        evidence_api_url: format!(
+            "https://{}",
+            plan.caller_endpoint()
+                .expect("validated development plan has a public Notary endpoint")
+        ),
         source_mode: plan.source_mode,
-        request_command: plan.request_command(),
+        records_denied_command: plan.records_denied_command(),
+        records_request_command: plan.records_request_command(),
+        evidence_request_command: plan.evidence_request_command(),
         smoke_command: plan.smoke_command(),
         logs_command: plan.logs_command(),
         down_command: plan.down_command(),
@@ -4529,6 +4678,7 @@ struct DevPlanDigestInput<'a> {
     artifacts: &'a DevRuntimeArtifactInputs,
     compose_digest: &'a str,
     request_digest: &'a str,
+    records_request_digest: Option<&'a str>,
     synthetic_source_plan: Option<&'a SyntheticSourcePlanV1>,
 }
 
@@ -4545,6 +4695,7 @@ fn plan_digest(input: DevPlanDigestInput<'_>) -> DevRuntimeResult<String> {
         artifacts: &'a DevRuntimeArtifactInputs,
         compose_digest: &'a str,
         request_digest: &'a str,
+        records_request_digest: Option<&'a str>,
         synthetic_source_plan_digest: Option<String>,
     }
     let synthetic_source_plan_digest = input
@@ -4566,6 +4717,7 @@ fn plan_digest(input: DevPlanDigestInput<'_>) -> DevRuntimeResult<String> {
         artifacts: input.artifacts,
         compose_digest: input.compose_digest,
         request_digest: input.request_digest,
+        records_request_digest: input.records_request_digest,
         synthetic_source_plan_digest,
     })
     .map_err(|_| DevRuntimeError::io())?;
@@ -4762,6 +4914,21 @@ fn curl_config_path(path: &Path) -> DevRuntimeResult<String> {
         ));
     }
     Ok(text.to_string())
+}
+
+fn validate_curl_literal(value: &str) -> DevRuntimeResult<()> {
+    if value.is_empty()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'"' | b'\\'))
+    {
+        return Err(DevRuntimeError::new(
+            DevFailureCategory::InvalidPlan,
+            "development request value cannot be represented safely",
+            "use identifiers and purposes without quotes or control characters",
+        ));
+    }
+    Ok(())
 }
 
 fn shell_quote_path(path: &Path) -> String {

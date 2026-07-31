@@ -199,6 +199,7 @@ mod dev_credentials {
 
     pub struct PreparedDevCredentialClosure {
         projection: DevCredentialPublicProjection,
+        relay_api_keys: bool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -221,6 +222,8 @@ mod dev_credentials {
     pub struct PreparedDevCredentialFiles {
         pub root: PathBuf,
         pub caller_token: PathBuf,
+        pub relay_match_token: Option<PathBuf>,
+        pub relay_no_match_token: Option<PathBuf>,
         pub workload_token: PathBuf,
         pub workload_public_jwk: PathBuf,
         pub workload_jwks: PathBuf,
@@ -259,6 +262,7 @@ mod dev_credentials {
                 projection: DevCredentialPublicProjection {
                     source: DevSourceCredentialProjection::OperatorBound,
                 },
+                relay_api_keys: false,
             }
         }
 
@@ -304,7 +308,14 @@ mod dev_credentials {
             };
             Self {
                 projection: DevCredentialPublicProjection { source },
+                relay_api_keys: false,
             }
+        }
+
+        pub fn synthetic_records() -> Self {
+            let mut closure = Self::synthetic(None, false);
+            closure.relay_api_keys = true;
+            closure
         }
 
         pub fn public_projection(&self) -> &DevCredentialPublicProjection {
@@ -343,6 +354,10 @@ mod dev_credentials {
             PreparedDevCredentialFiles {
                 root: root.to_path_buf(),
                 caller_token: root.join("caller-token"),
+                relay_match_token: self.relay_api_keys.then(|| root.join("relay-match-token")),
+                relay_no_match_token: self
+                    .relay_api_keys
+                    .then(|| root.join("relay-no-match-token")),
                 workload_token: root.join("notary-relay-token"),
                 workload_public_jwk: root.join("notary-workload-public.jwk"),
                 workload_jwks: root.join("notary-workload-jwks.json"),
@@ -416,6 +431,12 @@ mod dev_credentials {
                 (&files.lane_public_jwks[1], "{}"),
                 (&files.lane_public_jwks[2], "{}"),
             ];
+            if let Some(path) = &files.relay_match_token {
+                paths.push((path, "test-relay-match-token"));
+            }
+            if let Some(path) = &files.relay_no_match_token {
+                paths.push((path, "test-relay-no-match-token"));
+            }
             if let Some(source) = &files.source {
                 paths.extend([
                     (&source.control_token, "control"),
@@ -458,7 +479,15 @@ mod project_authoring {
         pub environment_profile: DevEnvironmentProfile,
         pub development: AuthoredDevelopment,
         pub scenarios: Vec<AuthoredDevScenario>,
+        pub records_request: Option<AuthoredRecordsRequest>,
         pub operator_source_secret_env: Vec<String>,
+    }
+
+    pub struct AuthoredRecordsRequest {
+        pub dataset_id: String,
+        pub entity_id: String,
+        pub record_id: String,
+        pub purpose: String,
     }
 
     impl DevAuthoringProjection {
@@ -806,6 +835,7 @@ fn plan_input_generation(
             notary_port: Some(notary_port),
         },
         scenarios: vec![scenario(provider, oauth_profile)],
+        records_request: None,
         artifacts,
         credentials: PreparedDevCredentialClosure::synthetic(
             match oauth_profile {
@@ -1304,7 +1334,9 @@ fn attached_flow_returns_report_before_wait_and_cleans_up_normally() {
     .unwrap();
     let mut controller = DevRuntimeController::new(FakeBackend::default());
     let report = controller.start(&plan, false).unwrap();
-    assert!(report.request_command.starts_with("curl --config "));
+    assert!(report
+        .evidence_request_command
+        .starts_with("curl --config "));
     assert!(plan.paths.state_file.exists());
     controller.attach(&plan).unwrap();
     let backend = controller.into_backend();
@@ -1647,7 +1679,7 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
     let startup = controller.start(&plan, true).unwrap();
     assert_eq!(startup.source_mode, DevSourceMode::Synthetic);
     assert!(startup.disposable_notice.contains("not production inputs"));
-    assert!(startup.request_command.contains("curl --config"));
+    assert!(startup.evidence_request_command.contains("curl --config"));
     assert!(!format!("{startup:?}").contains(RESPONSE_CANARY));
     assert!(!format!("{startup:?}").contains(REQUEST_CANARY));
 
@@ -1657,13 +1689,11 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
     assert!(!request_config.contains("url = \"http://"));
     assert!(request_config.contains("cacert = "));
     assert!(request_config.contains("notary-tls.crt"));
-    assert!(startup
-        .endpoint_urls
-        .iter()
-        .all(|endpoint| endpoint.starts_with("https://")));
+    assert!(startup.relay_api_url.starts_with("https://"));
+    assert!(startup.evidence_api_url.starts_with("https://"));
     let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
     assert!(request_config.contains(&caller_token));
-    assert!(!startup.request_command.contains(&caller_token));
+    assert!(!startup.evidence_request_command.contains(&caller_token));
     assert!(fs::read_to_string(&plan.paths.synthetic_source_plan)
         .unwrap()
         .contains(RESPONSE_CANARY));
@@ -1705,7 +1735,10 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
     );
     assert_eq!(source_plan["secrets"]["control_token"]["generation"], 1);
     let same_runtime = controller.start(&plan, true).unwrap();
-    assert_eq!(same_runtime.request_command, startup.request_command);
+    assert_eq!(
+        same_runtime.evidence_request_command,
+        startup.evidence_request_command
+    );
 
     #[cfg(unix)]
     {
@@ -1733,11 +1766,14 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
 
     let status = controller.status(&plan).unwrap();
     assert_eq!(status.schema_version, DEV_STATUS_REPORT_SCHEMA_V1);
-    assert_eq!(status.request_command, startup.request_command);
+    assert_eq!(
+        status.evidence_request_command,
+        startup.evidence_request_command
+    );
     assert_eq!(status.workloads.len(), plan.lifecycle.status_services.len());
     let status_json = serde_json::to_value(&status).unwrap();
     assert_eq!(status_json["schema_version"], DEV_STATUS_REPORT_SCHEMA_V1);
-    assert_eq!(status_json.as_object().unwrap().len(), 5);
+    assert_eq!(status_json.as_object().unwrap().len(), 9);
     let serialized_status = serde_json::to_string(&status).unwrap();
     assert!(!serialized_status.contains(&caller_token));
     assert!(!serialized_status.contains(RESPONSE_CANARY));
@@ -1772,6 +1808,84 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
     );
     assert_eq!(backend.calls.first().unwrap(), "doctor");
     assert!(backend.calls.iter().any(|call| call.starts_with("pull:")));
+}
+
+#[test]
+fn records_requests_are_owner_only_minimal_and_credential_separated() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut input = plan_input(
+        temp.path(),
+        DevSourceProvider::Spreadsheet,
+        DevOAuthProfile::None,
+    );
+    input.records_request = Some(project_authoring::AuthoredRecordsRequest {
+        dataset_id: "projects".to_string(),
+        entity_id: "projects".to_string(),
+        record_id: "pw_001".to_string(),
+        purpose: "public-works-case-management".to_string(),
+    });
+    input.credentials = PreparedDevCredentialClosure::synthetic_records();
+    let plan = DevRuntimePlan::derive(input).unwrap();
+    let mut controller = DevRuntimeController::new(FakeBackend::default());
+    let startup = controller.start(&plan, true).unwrap();
+
+    assert!(startup.relay_api_url.starts_with("https://127.0.0.1:"));
+    assert!(startup
+        .records_denied_command
+        .as_ref()
+        .unwrap()
+        .contains("records-denied.curl"));
+    assert!(startup
+        .records_request_command
+        .as_ref()
+        .unwrap()
+        .contains("records-request.curl"));
+    assert!(!startup.evidence_request_command.contains("records"));
+
+    let authorized = fs::read_to_string(&plan.paths.records_request_config).unwrap();
+    let denied = fs::read_to_string(&plan.paths.records_denied_config).unwrap();
+    let match_token = fs::read_to_string(plan.paths.credentials.join("relay-match-token")).unwrap();
+    let no_match_token =
+        fs::read_to_string(plan.paths.credentials.join("relay-no-match-token")).unwrap();
+    let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
+    assert!(authorized.contains("/v1/datasets/projects/entities/projects/records/pw_001"));
+    assert!(authorized.contains("header = \"Data-Purpose: public-works-case-management\""));
+    assert!(authorized.contains(&match_token));
+    assert!(authorized.contains("fail\n"));
+    assert!(!authorized.contains(&no_match_token));
+    assert!(!authorized.contains(&caller_token));
+    assert!(denied.contains("include\n"));
+    assert!(denied.contains("silent\n"));
+    assert!(denied.contains("show-error\n"));
+    assert!(!denied.contains("Authorization"));
+    assert!(!denied.contains("fail\n"));
+    for token in [&match_token, &no_match_token, &caller_token] {
+        assert!(!denied.contains(token));
+        assert!(!startup
+            .records_request_command
+            .as_ref()
+            .unwrap()
+            .contains(token));
+    }
+    let status = controller.status(&plan).unwrap();
+    let status_json = serde_json::to_string(&status).unwrap();
+    for token in [&match_token, &no_match_token, &caller_token] {
+        assert!(!status_json.contains(token));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for path in [
+            &plan.paths.records_request_config,
+            &plan.paths.records_denied_config,
+        ] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 }
 
 #[test]
@@ -1979,7 +2093,10 @@ fn bound_plan_loader_is_read_only_and_rebinds_exact_request_body() {
 
     let loaded = load_bound_dev_runtime_plan(temp.path(), "local").unwrap();
     assert_eq!(loaded.request_digest, plan.request_digest);
-    assert_eq!(loaded.request_command(), plan.request_command());
+    assert_eq!(
+        loaded.evidence_request_command(),
+        plan.evidence_request_command()
+    );
     assert_eq!(snapshot(&plan.paths.root), before);
 
     fs::write(&plan.paths.request_body, br#"{"subject":"tampered"}"#).unwrap();

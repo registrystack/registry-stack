@@ -64,6 +64,8 @@ const NOTARY_MAINTENANCE_ROLE: &str = "registry_notary_maintenance";
 const NOTARY_READER_ROLE: &str = "registry_notary_reader";
 
 const CALLER_TOKEN_FILE: &str = "caller-token";
+const RELAY_MATCH_TOKEN_FILE: &str = "relay-match-token";
+const RELAY_NO_MATCH_TOKEN_FILE: &str = "relay-no-match-token";
 const WORKLOAD_TOKEN_FILE: &str = "notary-relay-token";
 const WORKLOAD_PUBLIC_JWK_FILE: &str = "notary-workload-public.jwk";
 const WORKLOAD_JWKS_FILE: &str = "notary-workload-jwks.json";
@@ -129,8 +131,16 @@ pub(crate) struct DevCredentialRequirements {
     pub(crate) service_id: String,
     pub(crate) caller_id: String,
     pub(crate) caller_fingerprint_env: String,
+    pub(crate) relay_api_keys: Option<DevRelayApiKeyRequirements>,
     pub(crate) source: DevSourceCredentialProfile,
     pub(crate) issuance: Option<DevIssuanceCredentialRequirement>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct DevRelayApiKeyRequirements {
+    pub(crate) match_principal: String,
+    pub(crate) no_match_principal: String,
+    pub(crate) scopes: Vec<String>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -138,6 +148,17 @@ pub(crate) struct DevCallerCredentialProjection {
     pub(crate) id: String,
     pub(crate) fingerprint_env: String,
     pub(crate) token_file: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct DevRelayApiKeyProjection {
+    pub(crate) match_principal: String,
+    pub(crate) no_match_principal: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) match_fingerprint_env: &'static str,
+    pub(crate) no_match_fingerprint_env: &'static str,
+    pub(crate) match_token_file: String,
+    pub(crate) no_match_token_file: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -256,6 +277,7 @@ pub(crate) struct DevActionCredentialProjection {
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct DevCredentialPublicProjection {
     pub(crate) caller: DevCallerCredentialProjection,
+    pub(crate) relay_api_keys: Option<DevRelayApiKeyProjection>,
     pub(crate) relay_oidc: DevRelayOidcProjection,
     pub(crate) notary_relay: DevNotaryRelayProjection,
     pub(crate) databases: DevDatabaseCredentialProjection,
@@ -339,6 +361,8 @@ enum SourceCredential {
 pub(crate) struct PreparedDevCredentialClosure {
     projection: DevCredentialPublicProjection,
     caller_token: Zeroizing<String>,
+    relay_match_token: Option<Zeroizing<String>>,
+    relay_no_match_token: Option<Zeroizing<String>>,
     workload_private_jwk: Zeroizing<String>,
     workload_public_jwk: String,
     workload_jwks: String,
@@ -376,6 +400,8 @@ pub(crate) struct PreparedDevSourceCredentialFiles {
 pub(crate) struct PreparedDevCredentialFiles {
     pub(crate) root: PathBuf,
     pub(crate) caller_token: PathBuf,
+    pub(crate) relay_match_token: Option<PathBuf>,
+    pub(crate) relay_no_match_token: Option<PathBuf>,
     pub(crate) workload_token: PathBuf,
     pub(crate) workload_public_jwk: PathBuf,
     pub(crate) workload_jwks: PathBuf,
@@ -411,6 +437,19 @@ impl PreparedDevCredentialClosure {
         validate_api_key_entropy(&caller_token)
             .map_err(|_| anyhow!("generated development caller credential failed validation"))?;
         let caller_fingerprint = fingerprint_api_key(&caller_token);
+        let (relay_match_token, relay_no_match_token) = if requirements.relay_api_keys.is_some() {
+            let match_token = secret_token(32)?;
+            let no_match_token = secret_token(32)?;
+            validate_api_key_entropy(&match_token).map_err(|_| {
+                anyhow!("generated development Relay match credential failed validation")
+            })?;
+            validate_api_key_entropy(&no_match_token).map_err(|_| {
+                anyhow!("generated development Relay no-match credential failed validation")
+            })?;
+            (Some(match_token), Some(no_match_token))
+        } else {
+            (None, None)
+        };
 
         let (workload_private_jwk, workload_public_jwk) = generate_ed25519_jwk(DEV_WORKLOAD_KID)
             .context("failed to generate the development workload identity")?;
@@ -466,6 +505,18 @@ impl PreparedDevCredentialClosure {
                 fingerprint_env: requirements.caller_fingerprint_env,
                 token_file: secret_container_path(CALLER_TOKEN_FILE),
             },
+            relay_api_keys: requirements
+                .relay_api_keys
+                .map(|keys| DevRelayApiKeyProjection {
+                    match_principal: keys.match_principal,
+                    no_match_principal: keys.no_match_principal,
+                    scopes: keys.scopes,
+                    match_fingerprint_env: crate::project_authoring::LOCAL_RELAY_MATCH_KEY_HASH_ENV,
+                    no_match_fingerprint_env:
+                        crate::project_authoring::LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
+                    match_token_file: secret_container_path(RELAY_MATCH_TOKEN_FILE),
+                    no_match_token_file: secret_container_path(RELAY_NO_MATCH_TOKEN_FILE),
+                }),
             relay_oidc: DevRelayOidcProjection {
                 issuer: DEV_WORKLOAD_ISSUER.to_string(),
                 jwks_url: DEV_WORKLOAD_JWKS_URL.to_string(),
@@ -523,6 +574,8 @@ impl PreparedDevCredentialClosure {
         let closure = Self {
             projection,
             caller_token,
+            relay_match_token,
+            relay_no_match_token,
             workload_private_jwk: Zeroizing::new(workload_private_jwk),
             workload_public_jwk,
             workload_jwks,
@@ -572,6 +625,13 @@ impl PreparedDevCredentialClosure {
     fn materialize_into(&self, root: &Path) -> Result<PreparedDevCredentialFiles> {
         let files = PreparedDevCredentialFiles::for_root(root, &self.projection);
         write_new_owner_only(&files.caller_token, self.caller_token.as_bytes())?;
+        if let (Some(path), Some(token)) = (&files.relay_match_token, &self.relay_match_token) {
+            write_new_owner_only(path, token.as_bytes())?;
+        }
+        if let (Some(path), Some(token)) = (&files.relay_no_match_token, &self.relay_no_match_token)
+        {
+            write_new_owner_only(path, token.as_bytes())?;
+        }
         write_new_owner_only(&files.workload_token, self.workload_token.as_bytes())?;
         write_new_owner_only(
             &files.workload_public_jwk,
@@ -587,14 +647,32 @@ impl PreparedDevCredentialClosure {
             &files.relay_public_initialize.host_path,
             env_file(&[(RELAY_PUBLIC_AUDIT_ENV, &self.relay_public_audit)]).as_bytes(),
         )?;
-        let caller_fingerprint = fingerprint_api_key(&self.caller_token);
+        let relay_match_fingerprint = self
+            .relay_match_token
+            .as_ref()
+            .map(|token| fingerprint_api_key(token));
+        let relay_no_match_fingerprint = self
+            .relay_no_match_token
+            .as_ref()
+            .map(|token| fingerprint_api_key(token));
+        let relay_public_serve = match (
+            &self.projection.relay_api_keys,
+            &relay_match_fingerprint,
+            &relay_no_match_fingerprint,
+        ) {
+            (Some(keys), Some(match_fingerprint), Some(no_match_fingerprint)) => vec![
+                (RELAY_PUBLIC_AUDIT_ENV, self.relay_public_audit.as_str()),
+                (keys.match_fingerprint_env, match_fingerprint.as_str()),
+                (keys.no_match_fingerprint_env, no_match_fingerprint.as_str()),
+            ],
+            (None, None, None) => {
+                vec![(RELAY_PUBLIC_AUDIT_ENV, self.relay_public_audit.as_str())]
+            }
+            _ => bail!("development Relay API-key credential closure is inconsistent"),
+        };
         write_new_owner_only(
             &files.relay_public_serve.host_path,
-            env_file(&[
-                (RELAY_PUBLIC_AUDIT_ENV, &self.relay_public_audit),
-                (&self.projection.caller.fingerprint_env, &caller_fingerprint),
-            ])
-            .as_bytes(),
+            env_file(&relay_public_serve).as_bytes(),
         )?;
 
         let relay_owner_url = database_url(
@@ -694,6 +772,7 @@ impl PreparedDevCredentialClosure {
             ])
             .as_bytes(),
         )?;
+        let caller_fingerprint = fingerprint_api_key(&self.caller_token);
         let mut notary_serve = vec![
             (NOTARY_AUDIT_ENV, self.notary_audit.as_str()),
             (NOTARY_DATABASE_ENV, notary_runtime_url.as_str()),
@@ -705,6 +784,10 @@ impl PreparedDevCredentialClosure {
             (
                 NOTARY_WORKLOAD_PUBLIC_JWK_ENV,
                 self.workload_public_jwk.as_str(),
+            ),
+            (
+                self.projection.caller.fingerprint_env.as_str(),
+                caller_fingerprint.as_str(),
             ),
         ];
         if let Some(issuance) = &self.issuance {
@@ -815,6 +898,8 @@ impl PreparedDevCredentialClosure {
             self.product_tls.notary.private_key.as_str(),
             self.product_tls.postgres.private_key.as_str(),
         ]);
+        values.extend(self.relay_match_token.iter().map(|token| token.as_str()));
+        values.extend(self.relay_no_match_token.iter().map(|token| token.as_str()));
         values.extend(self.databases.values());
         values.extend(
             self.lane_signers
@@ -855,6 +940,12 @@ impl PreparedDevCredentialClosure {
         }
         if values.iter().any(|value| value.is_empty())
             || values.contains(&caller_fingerprint)
+            || self
+                .relay_match_token
+                .iter()
+                .chain(self.relay_no_match_token.iter())
+                .map(|token| fingerprint_api_key(token))
+                .any(|fingerprint| values.contains(&fingerprint.as_str()))
             || values.iter().copied().collect::<BTreeSet<_>>().len() != values.len()
         {
             bail!("generated development credentials violated the closed separation invariant");
@@ -951,6 +1042,14 @@ impl PreparedDevCredentialFiles {
         Self {
             root: root.to_path_buf(),
             caller_token: root.join(CALLER_TOKEN_FILE),
+            relay_match_token: projection
+                .relay_api_keys
+                .as_ref()
+                .map(|_| root.join(RELAY_MATCH_TOKEN_FILE)),
+            relay_no_match_token: projection
+                .relay_api_keys
+                .as_ref()
+                .map(|_| root.join(RELAY_NO_MATCH_TOKEN_FILE)),
             workload_token: root.join(WORKLOAD_TOKEN_FILE),
             workload_public_jwk: root.join(WORKLOAD_PUBLIC_JWK_FILE),
             workload_jwks: root.join(WORKLOAD_JWKS_FILE),
@@ -1029,6 +1128,24 @@ fn validate_requirements(requirements: &DevCredentialRequirements) -> Result<()>
         }
     }
     validate_env_name(&requirements.caller_fingerprint_env)?;
+    if let Some(keys) = &requirements.relay_api_keys {
+        for (name, value) in [
+            ("Relay match principal", keys.match_principal.as_str()),
+            ("Relay no-match principal", keys.no_match_principal.as_str()),
+        ] {
+            if value.is_empty()
+                || value.len() > 128
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            {
+                bail!("development credential {name} is outside the closed identifier grammar");
+            }
+        }
+        if keys.match_principal == keys.no_match_principal || keys.scopes.is_empty() {
+            bail!("development Relay API-key principals and scopes must be distinct and non-empty");
+        }
+    }
     match &requirements.source {
         DevSourceCredentialProfile::OperatorBound
         | DevSourceCredentialProfile::SyntheticUnauthenticated => {}
@@ -1577,6 +1694,7 @@ mod tests {
             service_id: "example-service".to_string(),
             caller_id: "local-developer".to_string(),
             caller_fingerprint_env: "REGISTRY_DEV_CALLER_FINGERPRINT".to_string(),
+            relay_api_keys: None,
             source,
             issuance: Some(DevIssuanceCredentialRequirement {
                 issuer: "http://127.0.0.1:4243".to_string(),
@@ -1827,7 +1945,7 @@ mod tests {
         let files = closure
             .materialize_owner_only(&parent.path().join("credentials"))
             .unwrap();
-        let serve_env = fs::read_to_string(files.relay_public_serve.host_path).unwrap();
+        let serve_env = fs::read_to_string(files.notary_serve.host_path).unwrap();
         assert!(serve_env.contains(&format!(
             "{}={}",
             closure.projection.caller.fingerprint_env,
@@ -1952,7 +2070,7 @@ mod tests {
         );
         assert_eq!(
             keys(&relay_public_serve),
-            expected(&[RELAY_PUBLIC_AUDIT_ENV, "REGISTRY_DEV_CALLER_FINGERPRINT",])
+            expected(&[RELAY_PUBLIC_AUDIT_ENV])
         );
 
         let relay_prepare = parse(&files.relay_consultation_prepare.host_path);
@@ -2002,6 +2120,7 @@ mod tests {
                 NOTARY_MAINTENANCE_DATABASE_ENV,
                 NOTARY_READER_DATABASE_ENV,
                 NOTARY_WORKLOAD_PUBLIC_JWK_ENV,
+                "REGISTRY_DEV_CALLER_FINGERPRINT",
                 "REGISTRY_NOTARY_ISSUER_JWK",
             ])
         );
@@ -2018,6 +2137,62 @@ mod tests {
                 "REGISTRY_NOTARY_READER_PASSWORD",
             ])
         );
+    }
+
+    #[test]
+    fn relay_api_keys_are_distinct_owner_only_and_expose_only_exact_fingerprints() {
+        let mut requirements = requirements(DevSourceCredentialProfile::SyntheticUnauthenticated);
+        requirements.relay_api_keys = Some(DevRelayApiKeyRequirements {
+            match_principal: "pw_001".to_string(),
+            no_match_principal: "registryctl_local_no_match".to_string(),
+            scopes: vec!["projects:metadata".to_string(), "projects:rows".to_string()],
+        });
+        let closure = PreparedDevCredentialClosure::generate(requirements).unwrap();
+        let parent = tempdir().unwrap();
+        let files = closure
+            .materialize_owner_only(&parent.path().join("credentials"))
+            .unwrap();
+        let match_path = files.relay_match_token.unwrap();
+        let no_match_path = files.relay_no_match_token.unwrap();
+        let match_token = fs::read_to_string(&match_path).unwrap();
+        let no_match_token = fs::read_to_string(&no_match_path).unwrap();
+        let caller_token = fs::read_to_string(&files.caller_token).unwrap();
+        assert_eq!(
+            [
+                match_token.as_str(),
+                no_match_token.as_str(),
+                caller_token.as_str()
+            ]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+            3
+        );
+        let serve_env = fs::read_to_string(&files.relay_public_serve.host_path).unwrap();
+        assert!(serve_env.contains(&format!(
+            "{}={}",
+            crate::project_authoring::LOCAL_RELAY_MATCH_KEY_HASH_ENV,
+            fingerprint_api_key(&match_token)
+        )));
+        assert!(serve_env.contains(&format!(
+            "{}={}",
+            crate::project_authoring::LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
+            fingerprint_api_key(&no_match_token)
+        )));
+        for raw in [&match_token, &no_match_token, &caller_token] {
+            assert!(!serve_env.contains(raw));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            for path in [match_path, no_match_path] {
+                assert_eq!(
+                    fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
     }
 
     #[test]

@@ -903,11 +903,19 @@ fn run_dev(
                 "Started disposable development runtime for {}.",
                 environment
             );
-            for endpoint_url in &report.endpoint_urls {
-                println!("{}", dev_endpoint_line(endpoint_url)?);
-            }
+            println!("{}", dev_api_line("Relay API", &report.relay_api_url)?);
+            println!(
+                "{}",
+                dev_api_line("Evidence API", &report.evidence_api_url)?
+            );
             println!("Source mode: {}", json_enum(&report.source_mode)?);
-            println!("Request: {}", report.request_command);
+            if let Some(command) = &report.records_denied_command {
+                println!("Records denied request: {command}");
+            }
+            if let Some(command) = &report.records_request_command {
+                println!("Records request: {command}");
+            }
+            println!("Evidence request: {}", report.evidence_request_command);
             println!("Smoke: {}", report.smoke_command);
             println!("Logs: {}", report.logs_command);
             println!("Down: {}", report.down_command);
@@ -932,7 +940,18 @@ fn run_dev(
                             json_enum(&workload.state)?
                         );
                     }
-                    println!("Request: {}", report.request_command);
+                    println!("{}", dev_api_line("Relay API", &report.relay_api_url)?);
+                    println!(
+                        "{}",
+                        dev_api_line("Evidence API", &report.evidence_api_url)?
+                    );
+                    if let Some(command) = &report.records_denied_command {
+                        println!("Records denied request: {command}");
+                    }
+                    if let Some(command) = &report.records_request_command {
+                        println!("Records request: {command}");
+                    }
+                    println!("Evidence request: {}", report.evidence_request_command);
                 }
             }
         }
@@ -990,7 +1009,7 @@ fn dev_runtime_is_absent(project: &Path, environment: &str) -> bool {
     }
 }
 
-fn dev_endpoint_line(endpoint_url: &str) -> CliResult<String> {
+fn dev_api_line(label: &str, endpoint_url: &str) -> CliResult<String> {
     let authority = endpoint_url.strip_prefix("https://").ok_or_else(|| {
         CliFailure::operational(anyhow!(
             "development runtime returned a non-HTTPS public endpoint"
@@ -1001,7 +1020,7 @@ fn dev_endpoint_line(endpoint_url: &str) -> CliResult<String> {
             "development runtime returned an invalid public endpoint"
         )));
     }
-    Ok(format!("Endpoint: {endpoint_url}"))
+    Ok(format!("{label}: {endpoint_url}"))
 }
 
 fn dev_failure(error: registryctl::DevRuntimeError) -> CliFailure {
@@ -2309,11 +2328,11 @@ mod tests {
     #[test]
     fn development_success_endpoints_are_scheme_bearing_https_urls() {
         assert_eq!(
-            dev_endpoint_line("https://127.0.0.1:4255").expect("HTTPS endpoint renders"),
-            "Endpoint: https://127.0.0.1:4255"
+            dev_api_line("Relay API", "https://127.0.0.1:4255").expect("HTTPS endpoint renders"),
+            "Relay API: https://127.0.0.1:4255"
         );
-        let error =
-            dev_endpoint_line("http://127.0.0.1:4255").expect_err("HTTP endpoint must fail closed");
+        let error = dev_api_line("Evidence API", "http://127.0.0.1:4255")
+            .expect_err("HTTP endpoint must fail closed");
         assert_eq!(error.status, EXIT_OPERATIONAL);
         assert!(error.error.to_string().contains("non-HTTPS"));
     }

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
-const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
+pub(crate) const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
+pub(crate) const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeneratedRelayConfigKind {
