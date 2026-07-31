@@ -613,7 +613,7 @@ datasets:
     title: Social Registry
     description: Synthetic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:
@@ -874,7 +874,7 @@ datasets:
     title: Social Registry
     description: Synthetic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:
@@ -2212,7 +2212,7 @@ datasets:
     title: Social Registry
     description: Synthetic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:
@@ -2537,7 +2537,7 @@ datasets:
     title: Test Dataset
     description: Test
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:

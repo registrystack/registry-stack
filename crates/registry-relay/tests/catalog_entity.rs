@@ -175,6 +175,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: household_id
               ops: [eq]
@@ -215,6 +216,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
 
 audit:
   sink: stdout

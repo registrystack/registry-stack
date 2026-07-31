@@ -51,7 +51,7 @@ fn civic_dataset(dataset_id: &str, entity_name: &str, spatial: &str) -> String {
     title: Civic Registry
     description: Synthetic civic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:

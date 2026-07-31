@@ -104,6 +104,7 @@ fn valid_dataset() -> String {
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq]
@@ -127,6 +128,7 @@ fn valid_dataset() -> String {
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: household_id
               ops: [eq]
@@ -271,6 +273,7 @@ fn dataset_with_one_table(dataset_id: &str, table_id: &str, entity_name: &str) -
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq]
@@ -334,6 +337,7 @@ fn dataset_with_required_filters(required_filters: &str, required_filter_binding
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           required_filters: {required_filters}
 {required_filter_bindings}
           allowed_filters:
