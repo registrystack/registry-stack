@@ -654,19 +654,22 @@ jobs:
           version="${{ needs.verify.outputs.version }}"
           major="${version%%.*}"
           mkdir -p release-assets
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            > contract/draft-release.json
-          jq -e \
-            --arg tag "${tag}" \
-            --arg title "RegistryStack ${tag}" \
-            --arg marker \
-              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
-            '.draft == true and
-             .prerelease == false and
-             .tag_name == $tag and
-             .name == $title and
-             ((.body // "") | contains($marker))' \
-            contract/draft-release.json >/dev/null
+          require_bound_draft() {
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              > contract/draft-release.json
+            jq -e \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
+              --arg marker \
+                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+              '.draft == true and
+               .prerelease == false and
+               .tag_name == $tag and
+               .name == $title and
+               ((.body // "") | contains($marker))' \
+              contract/draft-release.json >/dev/null
+          }
+          require_bound_draft
           {
             printf '%s\n' \
               "registryctl-${tag}-image-lock.json" \
@@ -699,6 +702,9 @@ jobs:
           # finalizer retry, remove only the closed final-addition roster from
           # this exact candidate draft, then regenerate the closure together.
           while IFS= read -r name; do
+            # Re-fetch the bound draft inside the loop so an early publication
+            # cannot race a later destructive asset mutation.
+            require_bound_draft
             asset_id="$(
               jq -er --arg name "${name}" \
                 '.assets[] | select(.name == $name) | .id' \
@@ -709,8 +715,7 @@ jobs:
                 "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
             fi
           done < contract/retryable-final-assets
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            > contract/draft-release.json
+          require_bound_draft
           jq -r '.[].name' contract/staged-assets.json \
             | sort > contract/expected-assets
           jq -r '.assets[].name' contract/draft-release.json \
@@ -904,6 +909,19 @@ jobs:
                   fi
                 done
           )
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > contract/final-upload-release.json
+          jq -e \
+            --arg tag "${tag}" \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '.draft == true and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
+            contract/final-upload-release.json >/dev/null
           gh release upload "${tag}" "${additions[@]}" \
             --repo "${GITHUB_REPOSITORY}"
           while IFS= read -r -d '' file; do
@@ -931,13 +949,12 @@ jobs:
       - finalize-assets
     permissions:
       actions: read
-      contents: write
+      contents: read
       id-token: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
     with:
       base64-subjects: ${{ needs.finalize-assets.outputs.provenance_subjects }}
-      upload-assets: true
-      upload-tag-name: ${{ needs.verify.outputs.tag }}
+      upload-assets: false
       provenance-name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
 
   publish:
@@ -966,6 +983,12 @@ jobs:
           name: release-final-contract-${{ github.run_id }}
           path: contract
 
+      - name: Download exact tag-bound release provenance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
+          path: provenance
+
       - name: Install pinned release verifiers
         shell: bash
         run: |
@@ -991,6 +1014,54 @@ jobs:
         with:
           cosign-release: v3.0.4
 
+      - name: Upload provenance to the exact bound draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
+          test -f "provenance/${provenance}"
+          test "$(find provenance -maxdepth 1 -type f -printf '%f\n')" = \
+            "${provenance}"
+          require_bound_draft() {
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              > provenance-release.json
+            jq -e \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
+              --arg marker \
+                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+              '.draft == true and
+               .prerelease == false and
+               .tag_name == $tag and
+               .name == $title and
+               ((.body // "") | contains($marker))' \
+              provenance-release.json >/dev/null
+          }
+          # A publish-job retry may find the prior nondeterministic provenance.
+          # Delete only that closed asset, and only while the bound release is
+          # still a draft.
+          require_bound_draft
+          matches="$(
+            jq -c --arg name "${provenance}" \
+              '[.assets[] | select(.name == $name)]' \
+              provenance-release.json
+          )"
+          count="$(jq -r length <<<"${matches}")"
+          if [[ "${count}" == 1 ]]; then
+            asset_id="$(jq -er '.[0].id' <<<"${matches}")"
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+          elif [[ "${count}" != 0 ]]; then
+            echo "Draft repeats provenance asset ${provenance}" >&2
+            exit 1
+          fi
+          require_bound_draft
+          gh release upload "${tag}" "provenance/${provenance}" \
+            --repo "${GITHUB_REPOSITORY}"
+
       - name: Recheck complete signed draft and exact public images
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1006,7 +1077,7 @@ jobs:
             --arg title "RegistryStack ${tag}" \
             --arg marker \
               "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
-            '((.draft | type) == "boolean") and
+            '.draft == true and
              .prerelease == false and
              .tag_name == $tag and
              .name == $title and
@@ -1096,7 +1167,7 @@ jobs:
               --arg marker \
                 "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
               'select(
-                ((.draft | type) == "boolean") and
+                .draft == true and
                 .prerelease == false and
                 .tag_name == $tag and
                 .name == $title and
@@ -1104,13 +1175,10 @@ jobs:
               ) | .id' \
               publish-state.json
           )"
-          is_draft="$(jq -er '.draft | tostring' publish-state.json)"
-          if [[ "${is_draft}" == true ]]; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              -F draft=false \
-              -F prerelease=false >/dev/null
-          fi
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -F draft=false \
+            -F prerelease=false >/dev/null
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > published-release.json
           jq -e \

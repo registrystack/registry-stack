@@ -99,6 +99,12 @@ class GateInventoryTest(unittest.TestCase):
                 policy_texts[".github/workflows/release.yml"]
             ),
         )
+        self.assertEqual(
+            [],
+            self.module.release_draft_mutation_barrier_violations(
+                policy_texts[".github/workflows/release.yml"]
+            ),
+        )
 
     def test_each_release_security_marker_is_fail_closed(self) -> None:
         policy_texts = self.module.policy_file_texts(
@@ -376,6 +382,55 @@ class GateInventoryTest(unittest.TestCase):
                 self.assertEqual(
                     ["Promotion first-write destination barrier"],
                     self.module.promotion_first_write_barrier_violations(mutated),
+                )
+
+    def test_final_release_mutations_reject_an_early_publication_race(
+        self,
+    ) -> None:
+        workflow = self.module.policy_file_texts(
+            ROOT,
+            self.module.RELEASE_SECURITY_POLICY_PATHS,
+        )[".github/workflows/release.yml"]
+        for marker in (
+            "name: Clean retryable final additions and reverify exact staged assets",
+            "contract/final-upload-release.json",
+            "upload-assets: false",
+            "name: Upload provenance to the exact bound draft",
+            "name: Recheck complete signed draft and exact public images",
+            "name: Publish immutable release",
+        ):
+            with self.subTest(marker=marker):
+                mutated = workflow.replace(marker, "removed-draft-barrier", 1)
+                self.assertEqual(
+                    ["Final release mutations require the bound draft"],
+                    self.module.release_draft_mutation_barrier_violations(
+                        mutated
+                    ),
+                )
+        for step_name in (
+            "Clean retryable final additions and reverify exact staged assets",
+            "Sign and upload the complete pre-provenance asset closure",
+            "Upload provenance to the exact bound draft",
+            "Recheck complete signed draft and exact public images",
+            "Publish immutable release",
+        ):
+            with self.subTest(early_publication=step_name):
+                step = next(
+                    block
+                    for block in self.module.yaml_step_blocks(workflow)
+                    if f"name: {step_name}" in block
+                )
+                mutated_step = step.replace(
+                    ".draft == true",
+                    ".draft == false",
+                    1,
+                )
+                mutated = workflow.replace(step, mutated_step, 1)
+                self.assertEqual(
+                    ["Final release mutations require the bound draft"],
+                    self.module.release_draft_mutation_barrier_violations(
+                        mutated
+                    ),
                 )
 
     def test_real_repository_has_no_tracked_nested_workflows(self) -> None:

@@ -706,7 +706,12 @@ class RegistryReleaseLockTests(unittest.TestCase):
         publish = workflow.index("- name: Publish immutable release")
         dispatch = workflow.index("\n  dispatch-docs:", publish)
         self.assertIn(
-            'if [[ "${is_draft}" == true ]]',
+            ".draft == true",
+            workflow[publish:dispatch],
+        )
+        self.assertNotIn("is_draft", workflow[publish:dispatch])
+        self.assertIn(
+            "gh api --method PATCH",
             workflow[publish:dispatch],
         )
         self.assertIn(

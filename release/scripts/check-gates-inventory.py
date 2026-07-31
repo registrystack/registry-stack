@@ -964,7 +964,9 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "release-provenance:",
             "uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@",
-            "upload-assets: true",
+            "upload-assets: false",
+            "name: Download exact tag-bound release provenance",
+            "name: Upload provenance to the exact bound draft",
         ),
     ),
     (
@@ -992,6 +994,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "first-country-release-form.py run",
             "first-country-release-form.tar.gz",
             "cosign sign-blob --yes",
+            "contract/final-upload-release.json",
             "name: Upload final reconciliation contract",
         ),
     ),
@@ -1000,6 +1003,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release.yml",
         (
             "name: Recheck complete signed draft and exact public images",
+            ".draft == true",
             "name: Publish immutable release",
             "-F draft=false",
             "-F prerelease=false",
@@ -1177,6 +1181,18 @@ ORDERED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release.yml",
         "name: Generate signed 1.x lock and run the clean released runtime",
         "release-provenance:",
+    ),
+    (
+        "Tag-bound provenance before bound-draft upload",
+        ".github/workflows/release.yml",
+        "release-provenance:",
+        "name: Upload provenance to the exact bound draft",
+    ),
+    (
+        "Bound-draft provenance upload before publication",
+        ".github/workflows/release.yml",
+        "name: Upload provenance to the exact bound draft",
+        "name: Publish immutable release",
     ),
     (
         "Candidate expiry immediately before registry login",
@@ -1495,6 +1511,123 @@ def promotion_first_write_barrier_violations(
     return []
 
 
+def release_draft_mutation_barrier_violations(
+    workflow: str | None,
+) -> list[str]:
+    """Require every final release mutation to target the bound draft."""
+
+    gate = "Final release mutations require the bound draft"
+    if workflow is None:
+        return [gate]
+    finalize = yaml_job_block(workflow, "finalize-assets")
+    provenance = yaml_job_block(workflow, "release-provenance")
+    publish = yaml_job_block(workflow, "publish")
+    if finalize is None or provenance is None or publish is None:
+        return [gate]
+
+    def step_with(job: str, marker: str) -> str | None:
+        matches = [step for step in yaml_step_blocks(job) if marker in step]
+        return matches[0] if len(matches) == 1 else None
+
+    cleanup = step_with(
+        finalize,
+        "name: Clean retryable final additions and reverify exact staged assets",
+    )
+    final_upload = step_with(
+        finalize,
+        "name: Sign and upload the complete pre-provenance asset closure",
+    )
+    provenance_upload = step_with(
+        publish,
+        "name: Upload provenance to the exact bound draft",
+    )
+    signed_recheck = step_with(
+        publish,
+        "name: Recheck complete signed draft and exact public images",
+    )
+    publication = step_with(publish, "name: Publish immutable release")
+    if any(
+        step is None
+        for step in (
+            cleanup,
+            final_upload,
+            provenance_upload,
+            signed_recheck,
+            publication,
+        )
+    ):
+        return [gate]
+    assert cleanup is not None
+    assert final_upload is not None
+    assert provenance_upload is not None
+    assert signed_recheck is not None
+    assert publication is not None
+
+    cleanup_loop = cleanup.find("while IFS= read -r name; do")
+    cleanup_guard = cleanup.find("require_bound_draft", cleanup_loop)
+    cleanup_delete = cleanup.find("gh api --method DELETE", cleanup_guard)
+    final_upload_guard = final_upload.find("contract/final-upload-release.json")
+    final_upload_write = final_upload.find(
+        'gh release upload "${tag}" "${additions[@]}"'
+    )
+    provenance_delete = provenance_upload.find("gh api --method DELETE")
+    provenance_write = provenance_upload.find(
+        'gh release upload "${tag}" "provenance/${provenance}"'
+    )
+    provenance_guard_offsets = []
+    offset = 0
+    for line in provenance_upload.splitlines(keepends=True):
+        if line.strip() == "require_bound_draft":
+            provenance_guard_offsets.append(offset)
+        offset += len(line)
+    publication_state = publication.find("publish-state.json")
+    publication_draft = publication.find(".draft == true", publication_state)
+    publication_patch = publication.find(
+        "gh api --method PATCH",
+        publication_draft,
+    )
+    if (
+        "contents: read" not in provenance
+        or "contents: write" in provenance
+        or "upload-assets: false" not in provenance
+        or "upload-assets: true" in provenance
+        or cleanup_loop < 0
+        or cleanup_guard < cleanup_loop
+        or cleanup_delete < cleanup_guard
+        or ".draft == true" not in cleanup
+        or final_upload_guard < 0
+        or final_upload_write < final_upload_guard
+        or ".draft == true" not in final_upload[
+            final_upload_guard:final_upload_write
+        ]
+        or len(provenance_guard_offsets) != 2
+        or provenance_delete < 0
+        or (
+            provenance_guard_offsets
+            and provenance_guard_offsets[0] >= provenance_delete
+        )
+        or provenance_write < provenance_delete
+        or (
+            provenance_guard_offsets
+            and provenance_guard_offsets[1] <= provenance_delete
+        )
+        or (
+            provenance_guard_offsets
+            and provenance_guard_offsets[1] >= provenance_write
+        )
+        or ".draft == true" not in provenance_upload
+        or ".draft == true" not in signed_recheck
+        or '(.draft | type) == "boolean"' in signed_recheck
+        or publication_state < 0
+        or publication_draft < publication_state
+        or publication_patch < publication_draft
+        or "is_draft" in publication
+        or '(.draft | type) == "boolean"' in publication
+    ):
+        return [gate]
+    return []
+
+
 def artifact_retention_violations(workflow: str | None) -> list[str]:
     if workflow is None:
         return ["Candidate artifact retention"]
@@ -1610,6 +1743,11 @@ def main() -> int:
     )
     policy_violations.extend(
         promotion_first_write_barrier_violations(
+            policy_texts.get(".github/workflows/release.yml")
+        )
+    )
+    policy_violations.extend(
+        release_draft_mutation_barrier_violations(
             policy_texts.get(".github/workflows/release.yml")
         )
     )

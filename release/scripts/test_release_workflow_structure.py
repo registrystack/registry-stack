@@ -272,6 +272,103 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotIn("--expected-digest", verify)
 
+    def test_every_final_release_mutation_requires_the_exact_bound_draft(
+        self,
+    ) -> None:
+        _, document = workflow("release.yml")
+        finalize_steps = document["jobs"]["finalize-assets"]["steps"]
+        cleanup = next(
+            step["run"]
+            for step in finalize_steps
+            if step.get("name")
+            == "Clean retryable final additions and reverify exact staged assets"
+        )
+        cleanup_loop = cleanup.index(
+            "while IFS= read -r name; do"
+        )
+        cleanup_guard = cleanup.index("require_bound_draft", cleanup_loop)
+        cleanup_delete = cleanup.index("gh api --method DELETE", cleanup_guard)
+        self.assertLess(cleanup_guard, cleanup_delete)
+        self.assertIn(".draft == true", cleanup)
+
+        final_upload = next(
+            step["run"]
+            for step in finalize_steps
+            if step.get("name")
+            == "Sign and upload the complete pre-provenance asset closure"
+        )
+        upload_guard = final_upload.index(
+            "contract/final-upload-release.json"
+        )
+        upload = final_upload.index(
+            'gh release upload "${tag}" "${additions[@]}"'
+        )
+        self.assertLess(upload_guard, upload)
+        self.assertIn(".draft == true", final_upload[upload_guard:upload])
+
+        provenance = document["jobs"]["release-provenance"]
+        self.assertEqual(provenance["permissions"]["contents"], "read")
+        self.assertFalse(provenance["with"]["upload-assets"])
+        self.assertNotIn("upload-tag-name", provenance["with"])
+
+        publish_steps = document["jobs"]["publish"]["steps"]
+        self.assertTrue(
+            any(
+                step.get("name")
+                == "Download exact tag-bound release provenance"
+                for step in publish_steps
+            )
+        )
+        provenance_upload = next(
+            step["run"]
+            for step in publish_steps
+            if step.get("name")
+            == "Upload provenance to the exact bound draft"
+        )
+        guard_invocations = [
+            index
+            for index, line in enumerate(provenance_upload.splitlines())
+            if line.strip() == "require_bound_draft"
+        ]
+        self.assertEqual(len(guard_invocations), 2)
+        provenance_delete = provenance_upload.index("gh api --method DELETE")
+        provenance_write = provenance_upload.index(
+            'gh release upload "${tag}" "provenance/${provenance}"'
+        )
+        first_guard = provenance_upload.index(
+            "\nrequire_bound_draft\n"
+        )
+        second_guard = provenance_upload.index(
+            "\nrequire_bound_draft\n",
+            first_guard + 1,
+        )
+        self.assertLess(first_guard, provenance_delete)
+        self.assertLess(provenance_delete, second_guard)
+        self.assertLess(second_guard, provenance_write)
+        self.assertIn(".draft == true", provenance_upload)
+
+        signed_recheck = next(
+            step["run"]
+            for step in publish_steps
+            if step.get("name")
+            == "Recheck complete signed draft and exact public images"
+        )
+        self.assertIn(".draft == true", signed_recheck)
+        self.assertNotIn('(.draft | type) == "boolean"', signed_recheck)
+
+        publication = next(
+            step["run"]
+            for step in publish_steps
+            if step.get("name") == "Publish immutable release"
+        )
+        state = publication.index("publish-state.json")
+        draft = publication.index(".draft == true", state)
+        patch = publication.index("gh api --method PATCH", draft)
+        self.assertLess(state, draft)
+        self.assertLess(draft, patch)
+        self.assertNotIn("is_draft", publication)
+        self.assertNotIn('(.draft | type) == "boolean"', publication)
+
     def test_canary_selection_uses_the_complete_shared_schema(self) -> None:
         candidate, _ = workflow("release-candidate.yml")
         release, _ = workflow("release.yml")
