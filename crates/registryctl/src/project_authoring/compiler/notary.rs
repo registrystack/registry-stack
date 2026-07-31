@@ -316,7 +316,7 @@ fn generated_notary_config(
     }
     let mut generated = json!({
         "instance": instance,
-        "server": { "bind": "127.0.0.1:8081", "request_timeout": "30s" },
+        "server": { "bind": "0.0.0.0:8081", "request_timeout": "30s" },
         "auth": auth,
         "audit": {
             "sink": "stdout",

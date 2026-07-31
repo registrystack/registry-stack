@@ -262,7 +262,7 @@ fn generated_relay_config(
             "id": instance_id,
             "environment": environment_name,
         },
-        "server": { "bind": "127.0.0.1:8080" },
+        "server": { "bind": "0.0.0.0:8080" },
         "catalog": {
             "title": format!("{} governed Registry Relay", loaded.project.registry.id),
             "base_url": relay_origin,

@@ -6132,6 +6132,26 @@ fn check_and_build_produce_deterministic_product_inputs() {
         .expect("generated Notary config");
     let notary_document: serde_norway::Value =
         serde_norway::from_str(&notary_config).expect("generated Notary config parses");
+    assert_eq!(
+        notary_document["server"]["bind"],
+        serde_norway::Value::String("0.0.0.0:8081".to_string()),
+        "the governed Notary listener must be reachable through its container port"
+    );
+    for (lane, expected_bind) in [
+        ("relay-public", "0.0.0.0:8080"),
+        ("relay-consultation", "0.0.0.0:8080"),
+    ] {
+        let relay_config =
+            std::fs::read_to_string(output.join(format!("private/{lane}/config/relay.yaml")))
+                .expect("generated Relay config");
+        let relay_document: serde_norway::Value =
+            serde_norway::from_str(&relay_config).expect("generated Relay config parses");
+        assert_eq!(
+            relay_document["server"]["bind"],
+            serde_norway::Value::String(expected_bind.to_string()),
+            "the governed Relay listener must be reachable through its container port"
+        );
+    }
     assert!(
         notary_document.get("cel").is_none(),
         "absent authoring must preserve the Notary product default"
@@ -6161,7 +6181,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "421d7552007ed5cb2501c93f303ea6358ba78516b6e769d51749416cbbec2005",
+        "2c614ac61fb2737621137c97ecfb91cca34980ee03fb15108b5be9173a4287e6",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
