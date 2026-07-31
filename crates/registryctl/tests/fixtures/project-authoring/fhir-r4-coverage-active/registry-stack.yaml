@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: fhir-r4
-  release: 0.15.2
-  content_digest: sha256:b21021a46b4af5b0e8ea6d7f231214837824311e9b53edba7a3e7e276654c7c2
+  release: 0.16.0
+  content_digest: sha256:2dbad119177d14d86dac67b288928c011ca7dd85d531928af8a89568efe34499
 registry: { id: fictional-fhir-registry }
 integrations:
   coverage: { file: integrations/coverage/integration.yaml }

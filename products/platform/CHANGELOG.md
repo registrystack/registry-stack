@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.16.0 - 2026-08-01
+
+- No separately versioned Registry Platform API changes. This release carries
+  the shared security, configuration, audit, and issuance primitives used by
+  Registryctl, Relay, and Notary v0.16.0.
+
 ## v0.15.2 - 2026-07-28
 
 - No user-visible Registry Platform changes. This release fixes forward from
