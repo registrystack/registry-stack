@@ -9,12 +9,11 @@ import io
 import json
 import tarfile
 import tempfile
-import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 SCRIPT = Path(__file__).with_name("release_candidate.py")
@@ -318,7 +317,7 @@ def fixture(root: Path, *, now: datetime) -> dict:
     }
 
 
-class ReleaseCandidateTest(unittest.TestCase):
+class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
@@ -1474,7 +1473,81 @@ class ReleaseCandidateTest(unittest.TestCase):
                         changed, workflow_revision="b" * 40, now=self.now
                     )
 
-    def test_verify_tag_binding_cli_rechecks_expiry_before_public_write(
+    def test_canary_selector_emits_the_complete_consumer_schema(self) -> None:
+        revision = "b" * 40
+        response = {
+            "workflow_runs": [
+                {
+                    "id": 455,
+                    "run_attempt": 1,
+                    "event": "schedule",
+                    "head_sha": revision,
+                    "path": ".github/workflows/release-canary.yml",
+                    "conclusion": "success",
+                    "updated_at": "2026-07-30T01:00:00Z",
+                },
+                {
+                    "id": 456,
+                    "run_attempt": 2,
+                    "event": "workflow_dispatch",
+                    "head_sha": revision,
+                    "path": ".github/workflows/release-canary.yml",
+                    "conclusion": "success",
+                    "updated_at": "2026-07-30T02:00:00Z",
+                },
+            ]
+        }
+        selected = self.module.select_canary_run(
+            response,
+            workflow_revision=revision,
+        )
+        self.assertEqual(
+            selected,
+            {
+                "id": 456,
+                "run_attempt": 2,
+                "event": "workflow_dispatch",
+                "head_sha": revision,
+                "path": ".github/workflows/release-canary.yml",
+                "conclusion": "success",
+                "completed_at": "2026-07-30T02:00:00Z",
+            },
+        )
+        self.module.validate_canary_run(
+            selected,
+            workflow_revision=revision,
+            now=datetime(2026, 7, 30, 3, tzinfo=timezone.utc),
+        )
+
+    def test_canary_selector_rejects_incomplete_or_untrusted_runs(self) -> None:
+        revision = "b" * 40
+        base = {
+            "id": 456,
+            "run_attempt": 1,
+            "event": "schedule",
+            "head_sha": revision,
+            "path": ".github/workflows/release-canary.yml",
+            "conclusion": "success",
+            "updated_at": "2026-07-30T02:00:00Z",
+        }
+        for field, value in [
+            ("id", None),
+            ("run_attempt", None),
+            ("event", "push"),
+            ("path", ".github/workflows/ci.yml"),
+            ("conclusion", "failure"),
+            ("head_sha", "c" * 40),
+        ]:
+            changed = dict(base)
+            changed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaises(self.module.CandidateError):
+                    self.module.select_canary_run(
+                        {"workflow_runs": [changed]},
+                        workflow_revision=revision,
+                    )
+
+    def test_verify_tag_binding_cli_rechecks_identity_and_expiry_before_public_write(
         self,
     ) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
@@ -1495,7 +1568,7 @@ class ReleaseCandidateTest(unittest.TestCase):
         message_path = self.root.parent / "tag-message.txt"
         metadata_path.write_text(json.dumps(run), encoding="utf-8")
 
-        def invoke(document: dict) -> int:
+        def invoke(document: dict, *, tag_target: str = SOURCE_SHA) -> int:
             manifest_path.write_bytes(self.module.canonical_json(document))
             message_path.write_text(
                 self.module.render_tag_binding(
@@ -1520,7 +1593,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                         "--trusted-run-metadata",
                         str(metadata_path),
                         "--tag-target",
-                        SOURCE_SHA,
+                        tag_target,
                         "--workflow-revision",
                         SOURCE_SHA,
                         "--version",
@@ -1531,6 +1604,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 )
 
         self.assertEqual(0, invoke(candidate))
+        self.assertEqual(1, invoke(candidate, tag_target="f" * 40))
         expired = copy.deepcopy(candidate)
         expired["validity"] = {
             "created_at": (current - timedelta(hours=24)).strftime(
@@ -1580,4 +1654,4 @@ class ReleaseCandidateTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

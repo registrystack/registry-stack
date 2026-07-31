@@ -1,6 +1,6 @@
 ---
 title: Understand generated files
-description: Know which Registry Stack files you own, which files Registryctl generates, and what to hand to an operator.
+description: Identify Registryctl-owned development, build, and deployment outputs before handoff.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,53 +13,56 @@ locale: en
 standards_referenced: []
 ---
 
-Registryctl creates `.registry-stack/` inside your project. These files show
-what Registry Stack derived from your authored configuration. They are not
-another place to configure the project.
+Registryctl writes generated material under `.registry-stack/` and into an
+explicit deployment package.
+These outputs show what Registry Stack derived from authored intent; they are
+not another configuration surface.
 
-## The rule
+## Keep one source of truth
 
-Edit the project files you created or copied, then rerun `registryctl build`.
-Never edit files under `.registry-stack/`. Registryctl may replace them.
+Edit the project, integration, entity, fixture, and environment files.
+Then rerun the Registryctl command that owns the generated output.
+Never repair a result by editing generated product configuration.
 
-## What you will find
+## Build output
 
-| Path | Purpose | What to do with it |
+| Path | Purpose | Ownership |
 | --- | --- | --- |
-| `.registry-stack/build/<environment>/artifact-manifest.json` | Lists and hashes the authored inputs and generated outputs used by the build. | Review it and retain it with the handoff evidence. |
-| `.registry-stack/build/<environment>/private/relay/` | Generated Registry Relay configuration, when the project uses Relay. | Inspect it for the expected source, fields, filters, and credential references. Do not edit or publish it. |
-| `.registry-stack/build/<environment>/private/notary/` | Generated Registry Notary configuration, when the project uses Notary. | Inspect the expected claim and source configuration. Do not edit or publish it. |
-| `.registry-stack/runtime/local/` | Local credentials, Compose input, and runtime results. | Keep it private. It is disposable local state, not project source. |
+| `.registry-stack/build/<environment>/artifact-manifest.json` | Hashes the authored inputs and generated closure | Registryctl generates; reviewer retains |
+| `.registry-stack/build/<environment>/reviewable/` | Value-free material for human review | Registryctl generates; reviewer inspects |
+| `.registry-stack/build/<environment>/signing-inputs/relay-public/` | Unsigned public Relay lane | Registryctl generates; Relay signer approves |
+| `.registry-stack/build/<environment>/signing-inputs/relay-consultation/` | Unsigned consultation Relay lane | Registryctl generates; Relay signer approves |
+| `.registry-stack/build/<environment>/signing-inputs/notary/` | Unsigned Notary lane | Registryctl generates; Notary signer approves |
 
-Your build may contain only Relay or only Notary. That is normal.
+The three signing inputs stay independent.
+An approved baseline set locates their signed bundles and anchors, but does not
+become another signature or activation authority.
 
-For the local spreadsheet path, inspect the manifest and Relay input:
+## Development output
 
-```sh
-sed -n '1,240p' .registry-stack/build/local/artifact-manifest.json
-sed -n '1,260p' .registry-stack/build/local/private/relay/config/relay.yaml
-```
+`.registry-stack/dev/` contains the bound disposable environment, local state,
+and runtime observations.
+`.registry-stack/dev-artifacts/` contains generated local trust and product
+inputs.
 
-Confirm that the source path, sheet, field mappings, projection, filters, and
-credential references match your intent. Raw credentials and source records
-must not appear.
+Registryctl may rebuild or remove both locations.
+Keep them private and separate from governed environments.
 
-## Hand off the project
+## Deployment output
 
-Give the operator:
+`registryctl deploy generate` writes a portable package into the exact
+`--output-dir` selected by the operator.
+The package contains a normalized approved-set copy, immutable product inputs,
+operator bindings, a platform-neutral deployment plan, generated Compose
+material, and a runbook.
 
-- the reviewed authored project;
-- the exact environment name and intended runtime products;
-- the generated artifact manifest;
-- the validation results; and
-- the decisions still required for production data, credentials, networking,
-  monitoring, recovery, approval, and activation.
-
-The local build directory is unsigned review material. It is not, by itself, a
-production deployment package.
+Registryctl owns the managed closure.
+The operator owns binding values, secret values, certificates, durable state,
+and declared adaptations.
+Generation never activates the package.
 
 ## Next
 
-- [Validate the project](../verify/)
+- [Validate your project](../verify/)
 - [Prepare the operator handoff](../operate/)
-- [Look up project configuration](../reference/project-configuration/)
+- [Review Registryctl commands](../reference/registryctl/)

@@ -8,6 +8,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
@@ -98,18 +100,21 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
         &fixture.state_path,
         serde_json::to_vec_pretty(&AntiRollbackRecord {
             key: AntiRollbackKey {
-                product: "registry-notary".to_string(),
-                instance_id: "notary-cli".to_string(),
-                environment: "development".to_string(),
-                stream_id: STREAM_ID.to_string(),
+                acceptance_identity: notary_acceptance_identity(),
             },
             last_sequence: 2,
             last_config_hash:
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
-            last_bundle_manifest_hash: None,
-            last_bundle_id: None,
-            root_version: None,
+            last_bundle_manifest_hash:
+                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                    .to_string(),
+            last_bundle_id: "preceding-bundle".to_string(),
+            accepted_anchor: registry_platform_ops::AcceptedAnchorPinV1::from_trust_anchor(
+                &registry_platform_config::load_trust_anchor(&fixture.anchor_path)
+                    .expect("anchor loads"),
+            )
+            .expect("anchor pin derives"),
             override_pin: Some(ConfigOverridePin {
                 active: true,
                 mode: ConfigOverrideMode::AcceptRollback,
@@ -154,6 +159,27 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
     assert_eq!(report["result"], "rejected_binding");
     assert_eq!(report["errors"][0]["code"], "rejected_binding");
     assert_rejected_output_boundary(&output, &report, "rejected_binding", &fixture, &[]);
+}
+
+#[test]
+fn config_verify_bundle_cli_rejects_missing_instance_binding_value_free() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
+    rewrite_manifest_instance_id(&fixture, None);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(&output, &report, "rejected_binding", &fixture, &[]);
+    let record = FileAntiRollbackStore::new(&fixture.state_path)
+        .load(&AntiRollbackKey {
+            acceptance_identity: notary_acceptance_identity(),
+        })
+        .expect("existing instance lane remains readable");
+    assert_eq!(record.last_sequence, 1);
 }
 
 #[test]
@@ -501,6 +527,29 @@ fn write_bundle_fixture(
     write_bundle_fixture_with_config(temp, manifest_product, last_sequence, notary_config_yaml())
 }
 
+fn notary_acceptance_identity() -> ProductAcceptanceIdentityV1 {
+    ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "notary-cli-project".to_string(),
+        environment: "development".to_string(),
+        lane: ProductAcceptanceLaneV1::Notary,
+        product: ProductAcceptanceProductV1::RegistryNotary,
+        stream: STREAM_ID.to_string(),
+        instance: "notary-cli".to_string(),
+    }
+}
+
+fn acceptance_identity_for_product(product: &str) -> ProductAcceptanceIdentityV1 {
+    let mut identity = notary_acceptance_identity();
+    if product == "registry-relay" {
+        identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+        identity.product = ProductAcceptanceProductV1::RegistryRelay;
+    } else {
+        assert_eq!(product, "registry-notary");
+    }
+    identity
+}
+
 fn write_bundle_fixture_with_config(
     temp: &TempDir,
     manifest_product: &str,
@@ -519,10 +568,7 @@ fn write_bundle_fixture_with_config(
     let kid = public.jkt().expect("thumbprint computes");
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: manifest_product.to_string(),
-        environment: "development".to_string(),
-        stream_id: STREAM_ID.to_string(),
-        instance_id: None,
+        acceptance_identity: acceptance_identity_for_product(manifest_product),
         bundle_id: BUNDLE_ID.to_string(),
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
@@ -537,14 +583,12 @@ fn write_bundle_fixture_with_config(
 
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-notary".to_string(),
-        environment: "development".to_string(),
-        stream_id: STREAM_ID.to_string(),
-        instance_id: "notary-cli".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
+        acceptance_identity: acceptance_identity_for_product(manifest_product),
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner {
             kid: kid.clone(),
             jwk: public,
-            enabled: true,
         }],
     };
     let anchor_path = temp.path().join("trust_anchor.json");
@@ -555,29 +599,45 @@ fn write_bundle_fixture_with_config(
     .expect("anchor writes");
 
     let state_path = temp.path().join("antirollback.json");
-    FileAntiRollbackStore::new(&state_path)
-        .initialize(AntiRollbackRecord {
-            key: AntiRollbackKey {
-                product: "registry-notary".to_string(),
-                instance_id: "notary-cli".to_string(),
-                environment: "development".to_string(),
-                stream_id: STREAM_ID.to_string(),
-            },
-            last_sequence,
-            last_config_hash: if last_sequence == 0 {
-                ZERO_HASH.to_string()
-            } else {
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                    .to_string()
-            },
-            last_bundle_manifest_hash: None,
-            last_bundle_id: None,
-            root_version: None,
-            override_pin: None,
-            break_glass: Default::default(),
-            local_approvals: Default::default(),
-        })
-        .expect("state initializes");
+    let verified = registry_platform_config::verify_config_bundle(&bundle_dir, &anchor_path)
+        .expect("fixture bundle verifies");
+    let accepted_anchor =
+        registry_platform_ops::AcceptedAnchorPinV1::from_trust_anchor(&verified.trust_anchor)
+            .expect("anchor pin derives");
+    let state = AntiRollbackRecord {
+        key: AntiRollbackKey {
+            acceptance_identity: notary_acceptance_identity(),
+        },
+        last_sequence: if last_sequence == 0 {
+            manifest.sequence
+        } else {
+            last_sequence
+        },
+        last_config_hash: if last_sequence == 0 {
+            config_hash.clone()
+        } else {
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string()
+        },
+        last_bundle_manifest_hash: if last_sequence == 0 {
+            verified.manifest_hash
+        } else {
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string()
+        },
+        last_bundle_id: if last_sequence == 0 {
+            BUNDLE_ID.to_string()
+        } else {
+            "preceding-bundle".to_string()
+        },
+        accepted_anchor,
+        override_pin: None,
+        break_glass: Default::default(),
+        local_approvals: Default::default(),
+    };
+    std::fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&state).expect("state serializes"),
+    )
+    .expect("pre-existing state writes");
 
     BundleFixture {
         bundle_dir,
@@ -587,6 +647,21 @@ fn write_bundle_fixture_with_config(
         config_hash,
         signer_kid: kid,
     }
+}
+
+fn rewrite_manifest_instance_id(fixture: &BundleFixture, instance_id: Option<&str>) {
+    let manifest_path = fixture.bundle_dir.join("manifest.json");
+    let mut manifest: ConfigBundleManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    manifest.acceptance_identity.instance = instance_id.unwrap_or_default().to_string();
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
+    write_manifest_and_signature(
+        &fixture.bundle_dir,
+        &manifest,
+        &private,
+        &fixture.signer_kid,
+    );
 }
 
 fn resign_config_bytes(fixture: &mut BundleFixture, config_bytes: &[u8]) {
@@ -605,6 +680,23 @@ fn resign_config_bytes(fixture: &mut BundleFixture, config_bytes: &[u8]) {
         &private,
         &fixture.signer_kid,
     );
+    let verified =
+        registry_platform_config::verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("resigned bundle verifies");
+    let key = AntiRollbackKey {
+        acceptance_identity: notary_acceptance_identity(),
+    };
+    let mut record = FileAntiRollbackStore::new(&fixture.state_path)
+        .load(&key)
+        .expect("acceptance state loads");
+    record.last_config_hash = config_hash.clone();
+    record.last_bundle_manifest_hash = verified.manifest_hash;
+    record.last_bundle_id = verified.manifest.bundle_id;
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&record).expect("updated state serializes"),
+    )
+    .expect("updated state writes");
     fixture.config_hash = config_hash;
 }
 

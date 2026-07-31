@@ -9,6 +9,8 @@ use std::fmt;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+use super::RequiredProductAction;
+
 pub use super::knowledge::{
     Availability as FieldKnowledgeAvailability, Consumer as FieldKnowledgeConsumer, FieldPathKind,
     GeneratedArtifact as FieldGeneratedArtifact, HumanOwner as FieldHumanOwner,
@@ -711,37 +713,9 @@ pub struct ProductImpact {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImpactRequirements {
-    pub signing: SigningRequirement,
-    pub activation: ActivationRequirement,
-    pub restart: RestartRequirement,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SigningRequirement {
-    None,
-    RelayBundle,
-    NotaryBundle,
-    RelayAndNotaryBundles,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActivationRequirement {
-    None,
-    RepublishArtifacts,
-    ApplyRelayConfig,
-    ApplyNotaryConfig,
-    ApplyRelayAndNotaryConfig,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RestartRequirement {
-    None,
-    RegistryRelay,
-    RegistryNotary,
-    RegistryRelayAndNotary,
+    pub signing: Vec<RequiredProductAction>,
+    pub activation: Vec<RequiredProductAction>,
+    pub restart: Vec<RequiredProductAction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

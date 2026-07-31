@@ -176,6 +176,82 @@ pub async fn verify_relay_from_config(
     Ok(activate_relay_from_config(config).await?.is_some())
 }
 
+/// Value-free signed-bundle evidence for the closed state-store preparation action.
+pub struct PrepareStateStoreAuditEvidence {
+    pub acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1,
+    pub bundle_id: String,
+    pub bundle_manifest_hash: String,
+    pub sequence: u64,
+    pub signer_kids: Vec<String>,
+    pub previous_config_hash: Option<String>,
+    pub config_hash: String,
+    pub anchor_digest: String,
+    pub anchor_version: u64,
+}
+
+/// Write the checked mutation intent for the closed state-store preparation action.
+///
+/// Product preparation cannot compile the full runtime because it must not
+/// resolve issuer, signer, source, or serving credentials. This narrow path
+/// reuses the Notary-owned audit pipeline and owns the fixed event taxonomy,
+/// action, and pending/unapplied semantics.
+pub async fn emit_prepare_state_store_mutation_intent_audit(
+    config: &registry_notary_core::EvidenceAuditConfig,
+    evidence: PrepareStateStoreAuditEvidence,
+) -> Result<(), StandaloneServerError> {
+    emit_product_action_mutation_intent_audit(config, "prepare_state_store", evidence).await
+}
+
+/// Write the checked mutation intent for a closed product action without
+/// constructing issuer, signer, source, or serving capabilities.
+pub async fn emit_product_action_mutation_intent_audit(
+    config: &registry_notary_core::EvidenceAuditConfig,
+    action: &'static str,
+    evidence: PrepareStateStoreAuditEvidence,
+) -> Result<(), StandaloneServerError> {
+    let audit = ConfigAuditEvent {
+        action: action.to_string(),
+        source: ConfigSource::SignedBundleFile.as_posture_str().to_string(),
+        acceptance_identity: Some(evidence.acceptance_identity),
+        bundle_id: Some(evidence.bundle_id),
+        bundle_manifest_hash: Some(evidence.bundle_manifest_hash),
+        sequence: Some(evidence.sequence),
+        signer_kids: evidence.signer_kids,
+        previous_config_hash: evidence.previous_config_hash,
+        previous_hash_matched: None,
+        config_hash: Some(evidence.config_hash),
+        anchor_digest: Some(evidence.anchor_digest),
+        anchor_version: Some(evidence.anchor_version),
+        product_validation_result: "accepted".to_string(),
+        apply_result: "pending".to_string(),
+        posture_result: "accepted".to_string(),
+        applied: false,
+        restart_required: false,
+        change_classes: Vec::new(),
+        break_glass: false,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: None,
+        break_glass_reason_hash: None,
+        break_glass_emergency_change_class: None,
+        break_glass_expires_at_unix_seconds: None,
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: None,
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    };
+    let pipeline = AuditPipeline::from_config(config)?;
+    pipeline
+        .emit(&config_boot_audit_event(
+            "product_action.mutation_intent",
+            audit,
+        ))
+        .await?;
+    Ok(())
+}
+
 pub fn compile_notary_runtime_with_provenance(
     config: StandaloneRegistryNotaryConfig,
     config_source: ConfigSource,

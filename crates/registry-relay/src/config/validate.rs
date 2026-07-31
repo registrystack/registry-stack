@@ -69,6 +69,25 @@ pub fn run(config: &Config) -> Result<(), Error> {
 ///
 /// Returns the corresponding [`ConfigError`] variant on the first failure.
 pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Error> {
+    run_with_source_mode(config, source, true)
+}
+
+/// Validate a signed product-action input without resolving runtime
+/// credentials.
+///
+/// Preparation, initialization, and state verification are deliberately
+/// credential-isolated one-shots. They still validate the complete authored
+/// configuration and deployment posture, but they must not require an API
+/// key, OAuth client, or source credential merely to inspect product state.
+pub fn run_product_action(config: &Config) -> Result<(), Error> {
+    run_with_source_mode(config, ConfigSource::SignedBundleFile, false)
+}
+
+fn run_with_source_mode(
+    config: &Config,
+    source: ConfigSource,
+    resolve_runtime_credentials: bool,
+) -> Result<(), Error> {
     super::vocabularies::validate_registry(&config.vocabularies).map_err(Error::from)?;
     validate_server(config).map_err(Error::from)?;
     validate_config_trust(config).map_err(Error::from)?;
@@ -77,7 +96,9 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_auth_failure_throttle(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
-    validate_env_vars_and_hashes(config).map_err(Error::from)?;
+    if resolve_runtime_credentials {
+        validate_env_vars_and_hashes(config).map_err(Error::from)?;
+    }
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
@@ -290,6 +311,34 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         }
     }
 
+    if let Some(bootstrap) = &consultation.bootstrap {
+        let database_references = [
+            consultation.state_plane.database_url_env.as_str(),
+            bootstrap.migration_database_url_env.as_str(),
+            bootstrap.keyring_maintenance_database_url_env.as_str(),
+            bootstrap.keyring_reader_database_url_env.as_str(),
+        ];
+        let distinct_database_references =
+            database_references.iter().copied().collect::<HashSet<_>>();
+        if database_references
+            .iter()
+            .any(|reference| !super::is_portable_environment_name(reference))
+            || distinct_database_references.len() != database_references.len()
+            || !is_database_role_name(&bootstrap.owner_role)
+            || !(1..=9_007_199_254_740_991).contains(&bootstrap.active_write_deadline_unix_ms)
+            || !(1..=9_007_199_254_740_991).contains(&bootstrap.audit_event_retention_ms)
+            || !key_ids.contains(bootstrap.active_key_id.as_str())
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "consultation.bootstrap",
+                "signed consultation bootstrap policy is invalid"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        source_names.extend(database_references);
+    }
+
     let credential_entries = consultation.source_credentials.entries();
     if credential_entries.len() > super::MAX_CONSULTATION_SOURCE_CREDENTIALS {
         tracing::error!(
@@ -340,6 +389,16 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+
+fn is_database_role_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' | b'_' => true,
+            b'0'..=b'9' => index > 0,
+            _ => false,
+        })
 }
 
 /// Validate the audit off-host ack cursor evidence declarations.
@@ -1750,7 +1809,7 @@ fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
                 );
                 ConfigError::ValidationError
             })?;
-            validate_oidc(oidc)?;
+            validate_oidc(config, oidc)?;
         }
     }
     Ok(())
@@ -1812,7 +1871,7 @@ const OIDC_MAX_JWKS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OIDC_MAX_LEEWAY: Duration = Duration::from_secs(5 * 60);
 const ZITADEL_PROJECT_ROLES_CLAIM: &str = "urn:zitadel:iam:org:project:roles";
 
-fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
+fn validate_oidc(config: &Config, oidc: &OidcConfig) -> Result<(), ConfigError> {
     if !is_allowed_oidc_url(&oidc.issuer, oidc.allow_dev_insecure_fetch_urls) {
         tracing::error!(
             code = "config.validation_error",
@@ -1831,30 +1890,53 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
-        (Some(_), Some(_)) => {
+    let jwks_source_count = usize::from(oidc.jwks_url.is_some())
+        + usize::from(oidc.discovery_url.is_some())
+        + usize::from(oidc.development_jwks_file.is_some());
+    if jwks_source_count != 1 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.oidc requires exactly one of jwks_url, discovery_url, or development_jwks_file"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if let Some(url) = oidc.jwks_url.as_deref().or(oidc.discovery_url.as_deref()) {
+        if !is_allowed_oidc_url(url, oidc.allow_dev_insecure_fetch_urls) {
             tracing::error!(
                 code = "config.validation_error",
-                "auth.oidc.jwks_url and auth.oidc.discovery_url are mutually exclusive"
+                field = "auth.oidc.jwks_url|discovery_url",
+                "JWKS or discovery URL must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
             );
             return Err(ConfigError::ValidationError);
         }
-        (None, None) => {
+    }
+
+    if let Some(path) = &oidc.development_jwks_file {
+        if config.deployment.profile != Some(registry_platform_ops::DeploymentProfile::Local) {
             tracing::error!(
                 code = "config.validation_error",
-                "auth.oidc requires exactly one of jwks_url or discovery_url"
+                field = "auth.oidc.development_jwks_file",
+                "development_jwks_file is allowed only when deployment.profile is local"
             );
             return Err(ConfigError::ValidationError);
         }
-        (Some(url), None) | (None, Some(url)) => {
-            if !is_allowed_oidc_url(url, oidc.allow_dev_insecure_fetch_urls) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    field = "auth.oidc.jwks_url|discovery_url",
-                    "JWKS or discovery URL must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
-                );
-                return Err(ConfigError::ValidationError);
-            }
+        let normalized: std::path::PathBuf = path.components().collect();
+        if !path.is_absolute()
+            || path.as_os_str() != normalized.as_os_str()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "auth.oidc.development_jwks_file",
+                "development_jwks_file must be an absolute normalized path without dot components"
+            );
+            return Err(ConfigError::ValidationError);
         }
     }
 
@@ -4838,6 +4920,7 @@ datasets: []
         let dev_http_issuer: Config =
             serde_saphyr::from_str(&dev_http_issuer).expect("dev OIDC config parses");
         validate_oidc(
+            &dev_http_issuer,
             dev_http_issuer
                 .auth
                 .oidc

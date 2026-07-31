@@ -108,14 +108,65 @@ fn execute_all_fixtures_with_coverage_observations(
     if loaded.integrations.is_empty() {
         return Ok((Vec::new(), Vec::new(), Vec::new(), call_budget_actual));
     }
+    if let Some(selected) = integration_filter {
+        if !loaded.integrations.contains_key(selected) {
+            bail!(
+                "selected integration {selected} does not exist; available integration ids: {}",
+                loaded
+                    .integrations
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    if let Some(selected) = fixture_filter {
+        let available = loaded
+            .integrations
+            .iter()
+            .filter(|(alias, _)| integration_filter.is_none_or(|filter| filter == alias.as_str()))
+            .flat_map(|(alias, integration)| {
+                integration
+                    .fixtures
+                    .iter()
+                    .map(|(_, fixture)| fixture)
+                    .map(move |fixture| format!("{alias}.{}", fixture.name))
+            })
+            .collect::<Vec<_>>();
+        let selected_exists = loaded
+            .integrations
+            .iter()
+            .filter(|(alias, _)| integration_filter.is_none_or(|filter| filter == alias.as_str()))
+            .any(|(_, integration)| {
+                integration
+                    .fixtures
+                    .iter()
+                    .map(|(_, fixture)| fixture)
+                    .any(|fixture| fixture.name == selected)
+            });
+        if !selected_exists {
+            let selected_id = integration_filter
+                .map_or_else(|| selected.to_string(), |integration| format!("{integration}.{selected}"));
+            bail!(
+                "selected fixture {selected_id} does not exist; available fixture ids: {}",
+                available.join(", ")
+            );
+        }
+    }
     let relay_config = compiled
-        .relay_private
-        .get(Path::new("config/relay-consultation.yaml"))
+        .relay_consultation_private
+        .get(Path::new("config/relay.yaml"))
         .or_else(|| compiled.relay_private.get(Path::new("config/relay.yaml")))
         .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
+    let relay_files = if compiled.relay_consultation_private.is_empty() {
+        &compiled.relay_private
+    } else {
+        &compiled.relay_consultation_private
+    };
     let relay_fixture = compile_generated_relay_fixture(
         relay_config,
-        &compiled.relay_private,
+        relay_files,
         Some(execution_context.worker_program()),
     )?;
     let mut reports = Vec::new();
@@ -130,7 +181,7 @@ fn execute_all_fixtures_with_coverage_observations(
                 continue;
             }
             if let Some(request) = fixture.request.as_ref() {
-                if validate_governed_request(loaded, request, false).is_err() {
+                if validate_governed_fixture_request(loaded, request).is_err() {
                     request_observations.push(AuthoredRequestBindingObservation {
                         integration: alias.clone(),
                         source_fixture_id: fixture.name.clone(),
@@ -390,9 +441,6 @@ fn execute_all_fixtures_with_coverage_observations(
                 execution_context.worker_program(),
             )?);
         }
-    }
-    if reports.is_empty() && (integration_filter.is_some() || fixture_filter.is_some()) {
-        bail!("the selected integration or fixture does not exist");
     }
     Ok((
         reports,
@@ -1803,7 +1851,7 @@ fn evaluate_authored_governed_request(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
     fixture: &FixtureDocument,
-    request: &GovernedLiveRequest,
+    request: &GovernedFixtureRequest,
     outputs: &BTreeMap<String, Value>,
     outcome: &str,
     worker_program: &Path,
@@ -1961,7 +2009,7 @@ fn runtime_consultation_identities(
 
 fn governed_request_consultation_identities(
     loaded: &LoadedRegistryProject,
-    request: &GovernedLiveRequest,
+    request: &GovernedFixtureRequest,
 ) -> Result<Vec<FixtureConsultationIdentity>> {
     let mut identities = BTreeSet::new();
     for requested_claim in &request.claims {
@@ -2320,7 +2368,7 @@ fn platform_call_budget_result(
         return Ok(None);
     }
     let compiled_script_call_bounds = compiled
-        .relay_private
+        .relay_consultation_private
         .iter()
         .filter(|(path, _)| path.to_string_lossy().contains("private-bindings"))
         .filter_map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).ok())
@@ -3272,6 +3320,60 @@ mod fixture_interface_tests {
 
     fn rhai_project() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-authoring/dhis2-script")
+    }
+
+    fn opencrvs_events_project() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-authoring/opencrvs-events-api")
+    }
+
+    #[test]
+    fn synthetic_opencrvs_generated_relay_activates_with_the_production_validator() {
+        let loaded = load_registry_project(&opencrvs_events_project(), Some("local"))
+            .expect("synthetic OpenCRVS Events API project loads");
+        let compiled =
+            compile_project(&loaded, None).expect("synthetic OpenCRVS Events API project compiles");
+        let files = &compiled.relay_consultation_private;
+        let relay_config = files
+            .get(Path::new("config/relay.yaml"))
+            .expect("generated Relay config");
+        let validation_root =
+            GeneratedValidationDirectory::create().expect("validation directory is created");
+        write_file_map(&validation_root.path, files).expect("generated files are staged");
+        let config_path = validation_root.path.join("config/relay.yaml");
+        let mut local_config: Value =
+            serde_norway::from_slice(relay_config).expect("generated Relay config parses");
+        local_config["deployment"]["profile"] = Value::String("local".to_string());
+        materialize_generated_relay_validation_fingerprints(
+            &mut local_config,
+            &validation_root.path,
+        )
+        .expect("synthetic API-key fingerprints are materialized");
+        fs::remove_file(&config_path).expect("generated Relay config is restaged");
+        write_private_file(
+            &config_path,
+            serde_norway::to_string(&local_config)
+                .expect("generated Relay config serializes")
+                .as_bytes(),
+        )
+        .expect("generated Relay config is written");
+        let mut relay = registry_relay::config::load_with_metadata(&config_path)
+            .expect("generated Relay config loads");
+        let artifacts = relay
+            .consultation_artifacts
+            .take()
+            .expect("consultation artifacts are present");
+        if let Err(error) =
+            registry_relay::consultation::ConsultationService::validate_configuration(
+                &relay.runtime,
+                artifacts,
+            )
+        {
+            panic!(
+                "generated Relay activation failed with {}",
+                error.code().as_str()
+            );
+        }
     }
 
     #[test]

@@ -73,7 +73,6 @@ test('archive generation excludes current-source generators', async () => {
     'generate-project-starters.mjs',
     'generate-authoring-reference.mjs',
     'generate-diagnostic-references.mjs',
-    'generate-standard-journeys.mjs',
   ]) {
     assert.doesNotMatch(
       archiveGeneration,

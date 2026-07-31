@@ -1,28 +1,31 @@
 use crate::*;
-use registry_platform_ops::{
-    bundle_verify_rejection_code, ApplyReportResult, BundleVerificationCode,
-    BundleVerificationFailure,
-};
+use registry_platform_ops::{ApplyReportResult, BundleVerificationCode, BundleVerificationFailure};
 
 pub(crate) async fn config_verify_bundle(
     args: ConfigVerifyBundleArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let verified = match verify_config_bundle(&args.bundle_dir, &args.anchor_path) {
+    let verified = match verify_notary_product_bundle(&args.bundle_dir, &args.anchor_path) {
         Ok(verified) => verified,
         Err(error) => {
-            let code = bundle_verify_rejection_code(&error);
+            let code = error
+                .downcast_ref::<BundleVerificationFailure>()
+                .map_or(BundleVerificationCode::REJECTED_VALIDATION, |failure| {
+                    failure.code()
+                });
             return reject_config_verify_bundle(code);
         }
     };
-    let key = antirollback_key_from_verified_bundle(&verified);
-    if let Err(error) = verify_bundle_state_read_only(
-        &args.state_path,
-        &key,
-        verified.manifest.sequence,
-        &verified.manifest.config_hash,
-        &verified.manifest_hash,
-    ) {
-        let code = error.bundle_rejection_code();
+    let candidate =
+        match registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified) {
+            Ok(candidate) => candidate,
+            Err(_) => {
+                return reject_config_verify_bundle(BundleVerificationCode::REJECTED_BINDING);
+            }
+        };
+    if let Err(error) = registry_platform_ops::FileAntiRollbackStore::new(&args.state_path)
+        .verify_state(candidate.expectation())
+    {
+        let code = ConfigBootError::Store(error).bundle_rejection_code();
         return reject_config_verify_bundle(code);
     }
     let config_text = match std::str::from_utf8(&verified.config_bytes) {
@@ -47,7 +50,7 @@ pub(crate) async fn config_verify_bundle(
     }
     print_config_verify_bundle_report(config_verify_bundle_report(
         ApplyReportResult::Verified,
-        &verified.manifest.stream_id,
+        &verified.manifest.acceptance_identity.stream,
         Some(verified.manifest.bundle_id),
         Some(verified.manifest.sequence),
         verified.manifest.previous_config_hash,

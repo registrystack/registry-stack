@@ -15,7 +15,7 @@ use crate::error::{ConfigError, Error};
 
 use super::api_key::{ApiKeyAuth, ApiKeyEntry};
 use super::middleware::AuthProviderRef;
-use super::oidc::{OidcAuth, ReqwestJwksFetcher};
+use super::oidc::{development_jwks_fetcher, JwksFetcher, OidcAuth, ReqwestJwksFetcher};
 use super::ScopeSet;
 
 /// Build the configured authentication provider.
@@ -34,7 +34,7 @@ pub async fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
                 );
                 Error::from(ConfigError::ValidationError)
             })?;
-            build_oidc_auth(oidc).await
+            build_oidc_auth(config, oidc).await
         }
     }
 }
@@ -59,11 +59,10 @@ fn build_api_key_auth(config: &Config) -> Result<AuthProviderRef, Error> {
 
 /// Build the [`OidcAuth`] provider from its config block.
 ///
-/// Resolves the JWKS URL from `discovery_url` if set; otherwise uses the
-/// explicit `jwks_url`. Discovery happens during provider construction so a
-/// governed apply can reject an unreachable or invalid candidate before the
-/// runtime snapshot is swapped.
-async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
+/// Resolves the single configured JWKS source. Discovery and development-file
+/// loading happen during provider construction so a governed apply can reject
+/// an unreachable or invalid candidate before the runtime snapshot is swapped.
+async fn build_oidc_auth(config: &Config, oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
     if oidc.allow_dev_insecure_fetch_urls {
         tracing::warn!(
             code = "oidc.dev_insecure_fetch_urls_enabled",
@@ -71,50 +70,73 @@ async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
         );
     }
 
-    let fetcher = match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
-        (Some(jwks_url), None) => {
+    let (fetcher, jwks_source): (Arc<dyn JwksFetcher>, &str) = match (
+        oidc.jwks_url.as_deref(),
+        oidc.discovery_url.as_deref(),
+        oidc.development_jwks_file.as_deref(),
+    ) {
+        (Some(jwks_url), None, None) => {
             let result = if oidc.allow_dev_insecure_fetch_urls {
                 ReqwestJwksFetcher::from_jwks_url_for_dev(jwks_url)
             } else {
                 ReqwestJwksFetcher::from_jwks_url(jwks_url)
             };
-            result.map_err(|err| {
+            let fetcher = result.map_err(|err| {
                 tracing::error!(
                     code = "config.validation_error",
                     error = %err,
                     "failed to build OIDC JWKS HTTP client"
                 );
                 Error::from(ConfigError::ValidationError)
-            })?
+            })?;
+            (Arc::new(fetcher), "jwks_url")
         }
-        (None, Some(discovery_url)) => {
+        (None, Some(discovery_url), None) => {
             let result = if oidc.allow_dev_insecure_fetch_urls {
                 ReqwestJwksFetcher::from_discovery_url_for_dev(discovery_url, &oidc.issuer).await
             } else {
                 ReqwestJwksFetcher::from_discovery_url(discovery_url, &oidc.issuer).await
             };
-            result.map_err(|err| {
+            let fetcher = result.map_err(|err| {
                 tracing::error!(
                     code = "config.validation_error",
                     error = %err,
                     "failed to resolve OIDC discovery document"
                 );
                 Error::from(ConfigError::ValidationError)
-            })?
+            })?;
+            (Arc::new(fetcher), "discovery_url")
+        }
+        (None, None, Some(path)) => {
+            if config.deployment.profile != Some(registry_platform_ops::DeploymentProfile::Local) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    "development OIDC JWKS file requires the local deployment profile"
+                );
+                return Err(Error::from(ConfigError::ValidationError));
+            }
+            let fetcher = development_jwks_fetcher(path).map_err(|err| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    error = %err,
+                    "failed to load development OIDC JWKS file"
+                );
+                Error::from(ConfigError::ValidationError)
+            })?;
+            (fetcher, "development_jwks_file")
         }
         _ => {
             tracing::error!(
                 code = "config.validation_error",
-                "auth.oidc must declare exactly one of jwks_url or discovery_url"
+                "auth.oidc must declare exactly one JWKS source"
             );
             return Err(Error::from(ConfigError::ValidationError));
         }
     };
-    let jwks_url = fetcher.jwks_url().to_string();
-    let provider = OidcAuth::new(oidc, Arc::new(fetcher));
+    let provider = OidcAuth::new(oidc, fetcher);
     tracing::info!(
         issuer = %oidc.issuer,
-        jwks_url = %jwks_url,
+        jwks_source,
         algorithms = ?oidc.allowed_algorithms,
         "oidc auth provider wired"
     );

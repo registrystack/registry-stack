@@ -2,6 +2,6 @@ include:
   - ../package/generated/compose.yaml
 
 services:
-  parent-edge-client:
-    image: example.invalid/registrystack/conformance-probe@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    networks: [registry-edge]
+  parent-runtime-client:
+    image: example.invalid/registrystack/conformance-probe@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    networks: [registry-runtime]

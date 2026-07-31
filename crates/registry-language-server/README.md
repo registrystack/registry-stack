@@ -25,7 +25,7 @@ cargo run -p registry-language-server
 The same server is available from a release installation as:
 
 ```console
-registryctl authoring language-server
+registryctl tooling language-server
 ```
 
 The server communicates over standard input and output and expects the opened workspace (or a

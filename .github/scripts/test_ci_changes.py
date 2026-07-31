@@ -16,7 +16,6 @@ from ci_changes import (
     AUTHORING_REFERENCE_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
-    STANDARD_JOURNEY_SOURCES,
     Workspace,
     authoring_reference_inputs,
     classify,
@@ -424,22 +423,6 @@ on:
                 },
             ),
             (
-                "docs/site/src/data/standard-journeys.yaml",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
-                "docs/site/scripts/generate-standard-journeys.mjs",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
                 "docs/site/src/components/JourneyGateMatrix.astro",
                 {
                     "docs": True,
@@ -513,17 +496,38 @@ on:
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
+    def test_current_reader_journey_inputs_route_the_source_journey(self) -> None:
+        inputs = (
+            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh",
+            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh.sha256",
+            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh",
+            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256",
+            "docs/site/src/content/docs/configure/oauth-client-credentials.mdx",
+            "docs/site/src/content/docs/operate/approve-initial-baseline.mdx",
+            "docs/site/src/content/docs/tutorials/author-registry-project.mdx",
+            "docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx",
+            "docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx",
+            "docs/site/src/content/docs/tutorials/use-your-spreadsheet.mdx",
+            "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
+            "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
+        )
+
+        for path in inputs:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["registryctl_tutorial"]
+                )
+
     def test_first_country_generation_inputs_run_docs(self) -> None:
         inputs = (
             "crates/registryctl/assets/project-starters/**",
             "crates/registryctl/src/main.rs",
-            "crates/registryctl/src/project_authoring/compiler/relay.rs",
             "crates/registryctl/src/project_authoring/output.rs",
+            "crates/registryctl/src/project_authoring/promotion_projection.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/templates/**",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
             "crates/registryctl/tests/fixtures/project-authoring/**",
-            "crates/registryctl/tests/project_authoring.rs",
             "crates/registry-relay/src/api/openapi.rs",
             "crates/registry-relay/src/main.rs",
             "crates/registry-relay/src/server.rs",
@@ -542,11 +546,6 @@ on:
 
         self.assertIn(fetch, docs_job)
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
-
-    def test_every_standard_journey_source_routes_to_docs(self) -> None:
-        for source in sorted(STANDARD_JOURNEY_SOURCES):
-            with self.subTest(source=source):
-                self.assertTrue(classify(self.workspace, (source,))["docs"])
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):

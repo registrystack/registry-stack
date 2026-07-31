@@ -85,7 +85,6 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 const docsetsManifest = loadDocsetsManifest();
 const {
   base,
-  isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   internalRedirect,
@@ -129,8 +128,8 @@ export default defineConfig({
     '/journeys/': internalRedirect('/'),
     '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
-    '/journeys/bounded-http/': internalRedirect('/configure/'),
-    '/journeys/bounded-multi-call-script/': internalRedirect('/configure/'),
+    '/journeys/bounded-http/': internalRedirect('/tutorials/author-registry-project/'),
+    '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/configure-project-script-adapter/'),
     '/journeys/exact-snapshot/': internalRedirect('/configure/'),
     '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
@@ -146,20 +145,17 @@ export default defineConfig({
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
     // Retired advanced tutorials land on current task, explanation, or
     // reference entry points.
-    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
-    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
-    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/author-registry-project/': internalRedirect('/configure/'),
+    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/author-registry-project/'),
+    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/author-registry-project/'),
+    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/tutorials/configure-project-api-key-authentication/': internalRedirect('/configure/'),
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/configure-project-script-adapter/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
     '/tutorials/deploy-standalone-with-own-data/': internalRedirect('/operate/'),
     '/tutorials/move-notary-to-production-signing/': internalRedirect('/operate/'),
-    '/tutorials/verify-opencrvs-claims/': internalRedirect('/explanation/integration-patterns/'),
     '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/explanation/integration-patterns/'),
-    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/explanation/integration-patterns/'),
-    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/explanation/integration-patterns/'),
+    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -296,16 +292,21 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Run your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Verify a live claim', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Expose spreadsheet evidence', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
+            { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
           ],
         },
         {
-          label: 'Connect your data',
+          label: 'Connect an existing registry',
           items: [
             { label: 'Overview', slug: 'configure' },
-            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
+            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
+            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
+            { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
             { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
@@ -315,6 +316,15 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'operate' },
+            { label: 'Approve the initial baseline', slug: 'operate/approve-initial-baseline' },
+            { label: 'Run generated Compose', slug: 'operate/single-node-compose-behind-proxy' },
+            {
+              label: 'Advanced',
+              collapsed: true,
+              items: [
+                { label: 'Approve an evidence change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
+              ],
+            },
           ],
         },
         {

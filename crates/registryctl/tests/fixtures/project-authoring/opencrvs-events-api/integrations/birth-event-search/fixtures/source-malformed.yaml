@@ -1,0 +1,28 @@
+name: birth-event-source-malformed
+classification: synthetic
+input: { tracking_id: TRK-SYNTH000001 }
+interactions:
+  - expect:
+      method: POST
+      path: /oauth/token
+      headers: { Accept: application/json, Content-Type: application/json }
+      body: { grant_type: client_credentials }
+    respond:
+      status: 200
+      headers: { Content-Type: application/json }
+      body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }
+  - expect:
+      method: POST
+      path: /api/events/events/search
+      body:
+        query:
+          type: and
+          clauses:
+            - eventType: birth
+              trackingId: { type: exact, term: TRK-SYNTH000001 }
+        limit: 2
+        offset: 0
+    respond:
+      status: 200
+      body: { total: one, results: [] }
+expect: { error: source.status_rejected, outputs: {}, claims: {} }

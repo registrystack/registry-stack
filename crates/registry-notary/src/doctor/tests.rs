@@ -132,10 +132,12 @@ fn doctor_relay_config(token_file: PathBuf) -> StandaloneRegistryNotaryConfig {
         };
     config.evidence.relay = Some(registry_notary_core::RelayConnectionConfig {
         base_url: "http://127.0.0.1:1".to_string(),
+        root_certificate_path: None,
         workload_client_id: "registry-notary".to_string(),
         token_file,
         allowed_private_cidrs: Vec::new(),
         allow_insecure_localhost: true,
+        allow_insecure_private_network: false,
         max_in_flight: 8,
     });
     config

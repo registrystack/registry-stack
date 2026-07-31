@@ -26,6 +26,15 @@ async function readSitePage(path) {
   return readFile(resolve(siteRoot, 'src/content/docs', path), 'utf8');
 }
 
+function assertOrderedFragments(source, fragments) {
+  let offset = 0;
+  for (const fragment of fragments) {
+    const position = source.indexOf(fragment, offset);
+    assert.notEqual(position, -1, `missing ordered fragment: ${fragment}`);
+    offset = position + fragment.length;
+  }
+}
+
 test('advanced operator pages are goal-oriented and include recovery evidence', async () => {
   const requiredSections = [
     '## Prerequisites',
@@ -70,7 +79,7 @@ test('advanced operations cover every FC3-E recoverable operator task', async ()
     /restore/i,
     /restart/i,
     /upgrade/i,
-    /registryctl migrate/,
+    /pre-1\.0 cutover/i,
     /roll back/i,
     /redacted posture/i,
     /audit/i,
@@ -122,15 +131,15 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
 
   assert.match(
     source,
-    /registryctl project diagnostics --catalog operator --format json/,
+    /registryctl tooling diagnostics --catalog operator --format json/,
   );
   assert.match(
     source,
-    /registryctl project diagnostics --catalog fixture --format json/,
+    /registryctl tooling diagnostics --catalog fixture --format json/,
   );
   assert.match(
     source,
-    /registryctl project diagnostics --catalog authoring --format json/,
+    /registryctl tooling diagnostics --catalog authoring --format json/,
   );
 });
 
@@ -154,33 +163,37 @@ test('advanced operations preserve product activation and confidentiality bounda
   }
 });
 
-test('bundle verification separates stateless closure from product rollback eligibility', async () => {
+test('anchor rotation uses explicit review, stateless verification, preview, and acceptance', async () => {
   const source = await readPage('rotate-credentials-and-trust.mdx');
 
-  assert.match(
-    source,
-    /SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-bundle[\s\S]*?PRODUCT_TRUST_ANCHOR=operator-inputs\/relay-trust-anchor\.json[\s\S]*?registryctl bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor-path "\$PRODUCT_TRUST_ANCHOR"/,
-  );
+  assertOrderedFragments(source, [
+    'registryctl -C "$PROJECT_DIRECTORY" build',
+    '--against "$CURRENT_APPROVED_SET"',
+    '--rotate-anchor relay-consultation',
+    'registryctl trust anchor rotate',
+    '--next-public-key operator-inputs/keys/relay-consultation-current.public.jwk',
+    '--next-public-key operator-inputs/keys/relay-consultation-next.public.jwk',
+    'registryctl trust bundle sign',
+    '--anchor "$ROTATED_TRUST/anchor.json"',
+    '--against "$CURRENT_APPROVED_SET"',
+    'registryctl trust bundle verify',
+    '--bundle-dir "$SIGNED_PRODUCT_BUNDLE"',
+    '--anchor "$SIGNED_PRODUCT_BUNDLE/anchor.json"',
+    'registryctl -C "$PROJECT_DIRECTORY" trust approved-set assemble',
+    '--from "$CURRENT_APPROVED_SET"',
+    '--relay-consultation "$SIGNED_PRODUCT_BUNDLE"',
+    'generated',
+    'RUNBOOK.md',
+    'Preview, accept, verify, and start the candidate',
+  ]);
   assert.match(
     source,
     /does not read product anti-rollback state or establish local rollback eligibility/,
   );
-  for (const [product, bundleVariable, anchorVariable, stateVariable] of [
-    ['registry-relay', 'SIGNED_RELAY_BUNDLE', 'RELAY_TRUST_ANCHOR', 'RELAY_ROLLBACK_STATE'],
-    ['registry-notary', 'SIGNED_NOTARY_BUNDLE', 'NOTARY_TRUST_ANCHOR', 'NOTARY_ROLLBACK_STATE'],
-  ]) {
-    assert.match(
-      source,
-      new RegExp(
-        `${product} config verify-bundle[\\s\\S]*?` +
-          `--bundle-dir "\\$${bundleVariable}"[\\s\\S]*?` +
-          `--anchor-path "\\$${anchorVariable}"[\\s\\S]*?` +
-          `--state-path "\\$${stateVariable}"`,
-      ),
-    );
-  }
-  assert.match(source, /require accepted state to exist/);
-  assert.match(source, /Neither command persists bundle acceptance/);
+  assert.match(source, /Do not run `stop` unless every preview succeeds/);
+  assert.match(source, /without changing durable anti-rollback state/);
+  assert.match(source, /locked audit-before-mutation path/);
+  assert.doesNotMatch(source, /config verify-bundle/);
   assert.doesNotMatch(
     source,
     /(?:registryctl )?[Bb]undle verification proves[\s\S]{0,100}anti-rollback eligibility/,
@@ -237,10 +250,7 @@ test('materialization recovery documents the exact fail-closed and recovery boun
   const retention = await readSitePage(
     'operate/retention-and-persistent-state.mdx',
   );
-  const tutorial = await readSitePage(
-    'tutorials/configure-project-snapshot-materialization.mdx',
-  );
-  const source = [refresh, backup, retention, tutorial].join('\n');
+  const source = [refresh, backup, retention].join('\n');
 
   assert.match(refresh, /any audited SnapshotExact plan/i);
   assert.match(refresh, /rejects the complete reload-all request/i);
@@ -265,4 +275,81 @@ test('materialization recovery documents the exact fail-closed and recovery boun
     /exact active generation and restricted content\s+digest/i,
   );
   assert.match(backup, /A list of unrelated artifact hashes is not evidence/i);
+});
+
+test('backup and update use only the generated 1.0 deployment lifecycle', async () => {
+  const backup = await readSitePage('operate/backup-and-restore.mdx');
+  const update = await readSitePage('operate/upgrade-and-rollback.mdx');
+  const source = [backup, update].join('\n');
+
+  assert.doesNotMatch(
+    source,
+    /\bregistryctl\s+(?:start|stop|smoke|init|add)\b/i,
+  );
+  assert.match(backup, /Keep Registryctl out of backup automation/i);
+  assert.match(backup, /`relay-public-state`/);
+  assert.match(backup, /`consultation-state`/);
+  assert.match(backup, /operator owns those controls and the recovery decision/i);
+  assert.match(update, /fresh, verified generated package/i);
+  assert.match(update, /`generated\/RUNBOOK\.md`/);
+  assert.match(update, /`generated\.previous\/`/);
+  assert.match(update, /rollback is unsupported/i);
+  assert.match(update, /Do not configure an automated rollback/i);
+  assert.doesNotMatch(source, /registry-runtime-stage-secrets/);
+
+  const ordinaryStartOrder = new RegExp(
+    [
+      'registry-relay-public-verify-state',
+      'registry-relay-consultation-verify-state',
+      'registry-notary-verify-state',
+      'registry-relay-consultation-stage-secrets',
+      'registry-notary-stage-secrets',
+      'registry-postgresql-stage-secrets',
+      'up --detach --wait --wait-timeout 120',
+    ].join('[\\s\\S]*'),
+  );
+  assert.match(backup, ordinaryStartOrder);
+  for (const page of [backup, update]) {
+    for (const stager of [
+      'registry-relay-consultation-stage-secrets',
+      'registry-notary-stage-secrets',
+      'registry-postgresql-stage-secrets',
+    ]) {
+      assert.match(page, new RegExp(`run --rm --no-deps ${stager}`));
+    }
+    assert.match(page, /generated\/compose\.empty\.env/);
+    assert.match(page, /generated\/compose\.yaml/);
+    for (const verifier of [
+      'registry-relay-public-verify-state',
+      'registry-relay-consultation-verify-state',
+      'registry-notary-verify-state',
+    ]) {
+      assert.match(page, new RegExp(`run --rm --no-deps ${verifier}`));
+    }
+  }
+  assert.match(backup, /generated\/compose\.yaml down/);
+  assert.match(backup, /generated\/compose\.yaml up --detach --wait --wait-timeout 120/);
+  assert.match(
+    update,
+    /registry-relay-public-preview-state[\s\S]*registry-relay-consultation-preview-state[\s\S]*registry-notary-preview-state[\s\S]*\n\S[^\n]* stop\n[\s\S]*registry-relay-public-accept-state[\s\S]*registry-relay-consultation-accept-state[\s\S]*registry-notary-accept-state[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state[\s\S]*registry-relay-consultation-stage-secrets[\s\S]*registry-postgresql-stage-secrets[\s\S]*\n\S[^\n]* up --detach --wait --wait-timeout 120\n[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state/,
+  );
+  assert.match(update, /\n\S[^\n]* up --detach --wait --wait-timeout 120/);
+});
+
+test('advanced recovery preserves the generated-package acceptance boundary', async () => {
+  const recovery = await readPage(
+    'recover-upgrade-migrate-and-rollback.mdx',
+  );
+
+  assert.match(recovery, /fresh candidate/i);
+  assert.match(recovery, /generated\/RUNBOOK\.md/);
+  assert.match(recovery, /`relay-public-state`/);
+  assert.match(recovery, /`consultation-state`/);
+  assert.match(recovery, /rollback\s+is unsupported/i);
+  assert.match(recovery, /Do not configure an automated rollback/i);
+  assert.doesNotMatch(
+    recovery,
+    /registry-relay consultation bootstrap-state|registry-notary[^.\n]*state install/i,
+  );
+  assert.doesNotMatch(recovery, /Use rollback after target traffic/i);
 });

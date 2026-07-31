@@ -36,10 +36,9 @@ evaluation route directly so you touch the protected API surface, not only the p
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
-For a standalone local project generated from your own data, use the `registryctl` tutorials:
-[run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
-[evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/). Clone Solmara Lab when you
-want the full multi-service country demo.
+For a standalone local project, use
+[Build and run an HTTP registry project](../author-registry-project/).
+Clone Solmara Lab when you want the full multi-service country demo.
 
 ## Prerequisites
 
@@ -137,8 +136,7 @@ directly. The topology figure shows the full port map.
 
 Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
 its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
-`openapi_requires_auth: false`. This is the same route pattern documented in
-[Evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/).
+`openapi_requires_auth: false`.
 
 ## See it: the citizen portal and the Visitor's Center
 
@@ -239,10 +237,8 @@ so you can confirm what you ran by hand against what the lab publishes.
 
 ## Next
 
-- [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/): generate a
-  smaller local Relay project from a sample workbook.
-- [Evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/): add Notary to that local
-  project.
+- [Build and run an HTTP registry project](../author-registry-project/): create the maintained
+  local project and verify Relay and Notary outcomes.
 - [When to use Registry Stack](../../start/when-to-use/): decide whether Relay, Notary, or both fit
   your integration.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration

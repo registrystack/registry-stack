@@ -134,6 +134,7 @@
     { "schema": "environment", "pointer": "/allOf/6/else/properties/relay/not", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/1", "path_kind": "branch" },
+    { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/2", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/0", "path_kind": "branch" },
@@ -335,6 +336,21 @@
       "schema": "project",
       "pointer": "/properties/entities/additionalProperties/properties/file",
       "purpose": "Selects the project-relative authored entity document for this project-local entity identifier."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/development/properties/source_mode",
+      "purpose": "Selects whether the disposable local runtime uses the maintained synthetic source or an explicitly operator-bound source integration."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/development/properties/relay_port",
+      "purpose": "Overrides the loopback port exposed by the disposable local Relay runtime without changing a deployment endpoint."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/development/properties/notary_port",
+      "purpose": "Overrides the loopback port exposed by the disposable local Notary runtime without changing a deployment endpoint."
     },
     {
       "schema": "environment",

@@ -1,0 +1,84 @@
+---
+title: Cut over a pre-1.0 project
+slug: start/pre-1.0-cutover
+description: Preserve reviewed authored intent while recreating pre-1.0 generated artifacts and runtime state for Registry Stack 1.0.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-30"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Registry Stack 1.0 starts its compatibility contract at 1.0.
+Pre-1.0 commands have no aliases, and pre-1.0 generated artifacts and runtime
+state have no automated migration path.
+
+## Before you start
+
+Keep the only pre-1.0 project and deployment copy unchanged.
+Create a separate 1.0 project, then copy reviewed authored intent only after
+checking each field against the 1.0 schemas.
+
+You can reuse decisions about integrations, entities, fixtures, services,
+claims, and environments when the 1.0 schema still represents them.
+Recreate generated build output, local runtime material, product bundles,
+anchors, approved sets, deployment packages, and anti-rollback state.
+
+## Map removed commands
+
+| Pre-1.0 concept | Registry Stack 1.0 |
+| --- | --- |
+| `registryctl init --from <starter>` or `registryctl init relay` | `registryctl init <directory> --template http` or `registryctl init <directory> --template spreadsheet` |
+| `registryctl add notary` | Declare the complete 1.0 project; both public templates contain the combined product path |
+| `registryctl start` | `registryctl dev` or `registryctl dev --detach` |
+| `registryctl stop` | `registryctl dev down` |
+| `registryctl restart` | Run `registryctl dev down`, then `registryctl dev` |
+| `registryctl status` | `registryctl dev status` |
+| `registryctl logs` | `registryctl dev logs` |
+| `registryctl smoke` | `registryctl dev smoke` |
+| `registryctl open` | Use the documented loopback endpoint with an HTTP client |
+| `registryctl preflight` | Use `registryctl check`, `registryctl doctor`, or `registryctl deploy verify` for the relevant boundary |
+| `registryctl capabilities` | Use `registryctl check --explain` |
+| `registryctl compare` | `registryctl review compare` |
+| `registryctl promote` | Review, build, sign each affected lane, assemble an approved set, then generate a deployment package |
+| `registryctl migrate` | Create a separate 1.0 project and copy reviewed authored intent |
+| `registryctl bundle ...` | `registryctl trust bundle ...` |
+| `registryctl anchor ...` | `registryctl trust anchor create` or `registryctl trust anchor rotate` |
+| `registryctl authoring ...` | `registryctl tooling schema`, `tooling reference`, `tooling editor`, or `tooling language-server` |
+| `registryctl project diagnostics ...` | `registryctl tooling diagnostics ...` |
+| `registryctl test --live` and `REGISTRY_STACK_LIVE_*` | No live test mode; keep `registryctl test` offline and use `registryctl dev smoke` or an operator-owned HTTP client |
+| Bruno generation | No replacement; Registryctl does not own an HTTP-client collection |
+
+The public 1.0 starters are `http` and `spreadsheet`.
+Use `http` for an existing registry API and `spreadsheet` for a workbook source.
+OAuth-backed Rhai is an adaptation of an HTTP project.
+The OpenCRVS material is a synthetic example of that adaptation, not a template.
+Adapt a public starter separately for DHIS2, FHIR, or another domain system.
+
+## Recreate governed material
+
+Build the reviewed 1.0 project into the three required lanes:
+`relay-public`, `relay-consultation`, and `notary`.
+Create new governed anchors, sign each lane, and assemble a new approved
+baseline set.
+
+Adopt the 1.0 runtime under a new instance identity.
+Do not translate or reset pre-1.0 anti-rollback state in place.
+Generate a fresh deployment package from the new approved set.
+
+## Verify the cutover
+
+Confirm that:
+
+- `registryctl test` passes offline against the copied fixtures
+- `registryctl check --explain` shows the intended source and disclosure plan
+- `registryctl dev smoke` passes with disposable development trust
+- `registryctl review compare` identifies the required governed approvals
+- `registryctl deploy verify` accepts the new package before operator startup
+
+Archive the pre-1.0 project and deployment evidence according to your
+institution's retention policy.
+Do not place pre-1.0 generated material into the 1.x compatibility record.

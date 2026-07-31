@@ -1948,6 +1948,16 @@
     },
     {
       "schema": "relay",
+      "pointer": "/$defs/OidcConfig/properties/development_jwks_file",
+      "key_path": "auth.oidc.development_jwks_file",
+      "path_kind": "property",
+      "profile": "relay_auth_sensitive",
+      "purpose_source": "schema_description",
+      "default_source": "schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
       "pointer": "/$defs/OidcConfig/properties/discovery_url",
       "key_path": "auth.oidc.discovery_url",
       "path_kind": "property",
@@ -2540,6 +2550,86 @@
       "schema": "relay",
       "pointer": "/$defs/ConsultationWorkloadConfig/properties/principal_id",
       "key_path": "consultation.authorized_workload.principal_id",
+      "path_kind": "property",
+      "profile": "relay_consultation_sensitive",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationConfig/properties/bootstrap",
+      "key_path": "consultation.bootstrap",
+      "path_kind": "property",
+      "profile": "relay_consultation_internal",
+      "purpose_source": "override",
+      "default_source": "reviewed_runtime_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/active_key_id",
+      "key_path": "consultation.bootstrap.active_key_id",
+      "path_kind": "property",
+      "profile": "relay_consultation_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/active_write_deadline_unix_ms",
+      "key_path": "consultation.bootstrap.active_write_deadline_unix_ms",
+      "path_kind": "property",
+      "profile": "relay_consultation_sensitive",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/audit_event_retention_ms",
+      "key_path": "consultation.bootstrap.audit_event_retention_ms",
+      "path_kind": "property",
+      "profile": "relay_consultation_sensitive",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/keyring_maintenance_database_url_env",
+      "key_path": "consultation.bootstrap.keyring_maintenance_database_url_env",
+      "path_kind": "property",
+      "profile": "relay_consultation_secret_reference",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/keyring_reader_database_url_env",
+      "key_path": "consultation.bootstrap.keyring_reader_database_url_env",
+      "path_kind": "property",
+      "profile": "relay_consultation_secret_reference",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/migration_database_url_env",
+      "key_path": "consultation.bootstrap.migration_database_url_env",
+      "path_kind": "property",
+      "profile": "relay_consultation_secret_reference",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationBootstrapPolicyConfig/properties/owner_role",
+      "key_path": "consultation.bootstrap.owner_role",
       "path_kind": "property",
       "profile": "relay_consultation_sensitive",
       "purpose_source": "profile",
@@ -7501,6 +7591,14 @@
       "key_path": "consultation.artifacts.rhai_scripts",
       "path_kind": "property",
       "runtime_default_note": "When omitted, Rust deserialization supplies the product-owned empty collection required by this runtime contract."
+    },
+    {
+      "schema": "relay",
+      "pointer": "/$defs/ConsultationConfig/properties/bootstrap",
+      "key_path": "consultation.bootstrap",
+      "path_kind": "property",
+      "purpose": "Binds the product-owned first-install policy carried only by the verified consultation bundle; deployment renderers cannot reproduce it as command arguments.",
+      "runtime_default_note": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
     },
     {
       "schema": "relay",

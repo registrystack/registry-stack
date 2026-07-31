@@ -7,10 +7,9 @@ import stat
 import subprocess
 import sys
 import tempfile
-import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 import yaml
 
@@ -21,12 +20,11 @@ POSTGRESQL_REF_PATH = ROOT / "release/registryctl-postgresql-image.ref"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 NATIVE_CLI_AUTHORING_COMMANDS = (
-    '"${registryctl}" init --from spreadsheet --project-dir "${project_dir}"',
-    '"${registryctl}" test --project-dir "${project_dir}"',
-    '"${registryctl}" preflight --project-dir "${project_dir}" --environment local',
-    '"${registryctl}" check --project-dir "${project_dir}" '
+    '"${registryctl}" init "${project_dir}" --template spreadsheet',
+    '"${registryctl}" -C "${project_dir}" test',
+    '"${registryctl}" -C "${project_dir}" check '
     "--environment local --explain",
-    '"${registryctl}" build --project-dir "${project_dir}" --environment local',
+    '"${registryctl}" -C "${project_dir}" build --environment local',
 )
 NATIVE_CLI_PROVENANCE_CONTROLS = (
     'candidate_expected_sha256="$(expected_sha256_for "${asset}")"',
@@ -85,7 +83,7 @@ def load_registry_release():
     return module
 
 
-class RegistryReleaseTest(unittest.TestCase):
+class RegistryReleaseTest(TestCase):
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -553,7 +551,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("BUILDER_IMAGE=", tutorial)
         self.assertNotIn(module.RUST_BUILDER, tutorial)
         self.assertIn(
-            "exact runtime sequence is release-gated from the sealed candidate payload",
+            "disposable runtime runs only with an explicitly installed sealed binary",
             tutorial,
         )
 
@@ -973,7 +971,7 @@ class RegistryReleaseTest(unittest.TestCase):
         assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
         scan_step = assemble.index("Verify and scan exact candidate images")
         package_step = assemble.index(
-            "Assemble public payload and run install and authoring smoke"
+            "Assemble public payload and validate version-appropriate install inputs"
         )
         self.assertLess(scan_step, package_step)
         scan_body = assemble[scan_step:package_step]
@@ -1380,6 +1378,23 @@ class RegistryReleaseTest(unittest.TestCase):
             release_dockerfile,
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
+
+    def test_release_product_images_preown_managed_audit_and_state_directories(
+        self,
+    ) -> None:
+        for product in ("relay", "notary"):
+            dockerfile = (
+                ROOT / f"release/docker/Dockerfile.registry-{product}"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry/audit", dockerfile
+            )
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry/state", dockerfile
+            )
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry \\", dockerfile
+            )
 
     def legacy_release_workflow_publishes_cross_platform_registryctl_binaries(
         self,
@@ -4285,4 +4300,4 @@ def render_capsule(
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
-const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
+pub(crate) const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
+pub(crate) const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
+const LOCAL_NOTARY_WORKLOAD_ISSUER: &str = "https://registryctl-local-notary.invalid";
+const LOCAL_NOTARY_WORKLOAD_JWKS_FILE: &str =
+    "/run/registry/dev-public/notary-workload-jwks.json";
+const LOCAL_NOTARY_RELAY_BASE_URL: &str = "http://10.89.0.4:8080";
+const LOCAL_NOTARY_RELAY_CLIENT_ID: &str = "registryctl-local-notary";
+const LOCAL_NOTARY_RELAY_TOKEN_FILE: &str = "/run/secrets/relay-workload-token";
+const LOCAL_NOTARY_RELAY_PRIVATE_CIDR: &str = "10.89.0.4/32";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeneratedRelayConfigKind {
@@ -140,40 +149,70 @@ fn generated_relay_config(
             source_credentials.push(entry);
         }
     }
-    let datasets = generated_records_datasets(loaded, environment)?;
-    let standards = generated_records_standards(loaded)?;
+    let empty_consultation_runtime =
+        kind == GeneratedRelayConfigKind::Consultation && profiles.is_empty();
+    let datasets = if empty_consultation_runtime {
+        Vec::new()
+    } else {
+        generated_records_datasets(loaded, environment)?
+    };
+    let standards = if empty_consultation_runtime {
+        json!({})
+    } else {
+        generated_records_standards(loaded)?
+    };
     let mut allowed_clients = relay.allowed_clients.clone();
     allowed_clients.sort();
     allowed_clients.dedup();
     let relay_origin = normalize_url_scheme(&relay.origin)?;
     let local_notary_add_on = kind == GeneratedRelayConfigKind::Consultation
         && matches!(environment.deployment.profile, DeploymentProfile::Local)
-        && relay.local_api_keys.is_some()
-        && environment
-            .deployment
-            .notary
-            .as_ref()
-            .is_some_and(|service| service.service == "registryctl-local-notary")
+        && relay.issuer == LOCAL_NOTARY_WORKLOAD_ISSUER
         && environment.notary_relay.as_ref().is_some_and(|binding| {
-            binding.base_url == "http://127.0.0.1:8080"
-                && binding.workload_client_id == "registryctl-local-notary"
-                && binding.token_file == Path::new("/run/secrets/relay-workload-token")
+            binding.base_url == LOCAL_NOTARY_RELAY_BASE_URL
+                && binding.workload_client_id == LOCAL_NOTARY_RELAY_CLIENT_ID
+                && binding.token_file == Path::new(LOCAL_NOTARY_RELAY_TOKEN_FILE)
         });
     let relay_issuer = if local_notary_add_on {
-        "http://127.0.0.1:4255".to_string()
+        LOCAL_NOTARY_WORKLOAD_ISSUER.to_string()
     } else {
         normalize_url_scheme(&relay.issuer)?
     };
     let relay_jwks_url = if local_notary_add_on {
-        // The consultation Relay shares the Notary container's network
-        // namespace, so it fetches the workload JWKS from Notary's container
-        // port while still validating the host-facing issuer exactly.
-        "http://127.0.0.1:8081/.well-known/evidence/jwks.json".to_string()
+        None
     } else {
-        normalize_url_scheme(&relay.jwks_url)?
+        Some(normalize_url_scheme(&relay.jwks_url)?)
     };
-    let allow_dev_insecure_fetch_urls =
-        local_notary_add_on || url_uses_http(&relay.issuer) || url_uses_http(&relay.jwks_url);
+    let allow_dev_insecure_fetch_urls = !local_notary_add_on
+        && (url_uses_http(&relay.issuer) || url_uses_http(&relay.jwks_url));
+    let oidc_auth = |allowed_clients: Vec<String>| {
+        let mut oidc = json!({
+            "issuer": relay_issuer,
+            "audiences": [relay.audience.as_str()],
+            "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
+            "allowed_clients": allowed_clients,
+        });
+        let oidc = oidc
+            .as_object_mut()
+            .expect("compiler-owned OIDC configuration is an object");
+        if local_notary_add_on {
+            oidc.insert(
+                "development_jwks_file".to_string(),
+                json!(LOCAL_NOTARY_WORKLOAD_JWKS_FILE),
+            );
+        } else {
+            oidc.insert(
+                "jwks_url".to_string(),
+                json!(relay_jwks_url
+                    .as_deref()
+                    .expect("non-local OIDC source has a JWKS URL")),
+            );
+        }
+        json!({
+            "mode": "oidc",
+            "oidc": oidc,
+        })
+    };
     let auth = if kind == GeneratedRelayConfigKind::Public {
         if let Some(local) = &relay.local_api_keys {
             if !matches!(environment.deployment.profile, DeploymentProfile::Local) {
@@ -215,32 +254,14 @@ fn generated_relay_config(
                 ],
             })
         } else {
-            json!({
-                "mode": "oidc",
-                "oidc": {
-                    "issuer": relay_issuer,
-                    "audiences": [relay.audience.as_str()],
-                    "jwks_url": relay_jwks_url,
-                    "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
-                    "allowed_clients": allowed_clients,
-                },
-            })
+            oidc_auth(allowed_clients)
         }
     } else {
         let Some(workload) = &environment.notary_relay else {
             bail!("consultation Relay requires a Notary-to-Relay workload binding");
         };
         let allowed_clients = vec![workload.workload_client_id.clone()];
-        json!({
-            "mode": "oidc",
-            "oidc": {
-                "issuer": relay_issuer,
-                "audiences": [relay.audience.as_str()],
-                "jwks_url": relay_jwks_url,
-                "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
-                "allowed_clients": allowed_clients,
-            },
-        })
+        oidc_auth(allowed_clients)
     };
     let instance_id = if kind == GeneratedRelayConfigKind::Consultation {
         format!("{}-consultation", relay_service.service)
@@ -252,7 +273,7 @@ fn generated_relay_config(
             "id": instance_id,
             "environment": environment_name,
         },
-        "server": { "bind": "127.0.0.1:8080" },
+        "server": { "bind": "0.0.0.0:8080" },
         "catalog": {
             "title": format!("{} governed Registry Relay", loaded.project.registry.id),
             "base_url": relay_origin,
@@ -260,7 +281,8 @@ fn generated_relay_config(
         },
         "auth": auth,
         "audit": {
-            "sink": "stdout",
+            "sink": "file",
+            "path": "/var/lib/registry/audit/audit.jsonl",
             "hash_secret_env": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         },
         "datasets": datasets,

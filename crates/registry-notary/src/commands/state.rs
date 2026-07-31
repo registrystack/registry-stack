@@ -8,12 +8,18 @@ pub(crate) async fn state_install(
     args: StateInstallArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let loaded = load_server_config(config_path, false)?;
-    if loaded.config.state.storage != STATE_STORAGE_POSTGRESQL {
+    prepare_postgres_state_store(&loaded.config.state, args).await
+}
+
+pub(crate) async fn prepare_postgres_state_store(
+    state: &registry_notary_core::StateConfig,
+    args: StateInstallArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if state.storage != STATE_STORAGE_POSTGRESQL {
         return Err("state install requires state.storage = postgresql".into());
     }
-    let state_config = registry_notary_server::state_plane::PostgresStatePlaneConfig::try_from(
-        &loaded.config.state.postgresql,
-    )?;
+    let state_config =
+        registry_notary_server::state_plane::PostgresStatePlaneConfig::try_from(&state.postgresql)?;
     let owner_role =
         registry_notary_server::state_plane::OwnerDatabaseRole::parse(args.owner_role)?;
     let runtime_role =

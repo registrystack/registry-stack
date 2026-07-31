@@ -9,6 +9,20 @@
   "required": ["version", "deployment"],
   "properties": {
     "version": {"x-registry-field": "public_property", "const": 1, "description": "Environment authoring format version." },
+    "development": {
+      "x-registry-field": "property",
+      "description": "Closed local-development selection. Registryctl uses the exact authored default and never prompts or guesses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_mode", "default_integration", "default_fixture"],
+      "properties": {
+        "source_mode": {"x-registry-field": "property", "enum": ["synthetic", "local_snapshot", "operator_bound"]},
+        "default_integration": {"x-registry-field": "property", "$ref": "#/$defs/stableId"},
+        "default_fixture": {"x-registry-field": "property", "$ref": "#/$defs/stableId"},
+        "relay_port": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65535},
+        "notary_port": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
     "integrations": {"x-registry-field": "property", "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/integration" } },
     "entities": {"x-registry-field": "property", "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/entity" } },
     "issuance": {
@@ -177,8 +191,9 @@
     "origin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/?$", "description": "HTTPS origin without path, query, or fragment." },
     "httpsResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/[^?#]+$", "description": "Exact HTTPS resource without query or fragment." },
     "localLoopbackOrigin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/?$", "description": "HTTP IP-loopback origin; public Relay and issuer fields restrict it to the local profile, while internal Notary-to-Relay connections allow it in any profile." },
+    "privateServiceOrigin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://[a-z][a-z0-9.-]{0,252}(?::[0-9]+)?/?$", "description": "Signed internal HTTP service origin. Runtime DNS pinning admits only eligible private addresses." },
     "localLoopbackResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/[^?#]+$", "description": "HTTP IP-loopback resource accepted only with the local deployment profile." },
-    "internalOrigin": { "description": "Deployment-internal HTTPS or HTTP IP-loopback origin.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/origin" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackOrigin" }] },
+    "internalOrigin": { "description": "Deployment-internal HTTPS, private-service HTTP, or HTTP IP-loopback origin.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/origin" }, {"x-registry-field": "branch", "$ref": "#/$defs/privateServiceOrigin" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackOrigin" }] },
     "relayOrigin": { "description": "Relay or issuer origin using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/origin" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackOrigin" }] },
     "relayResource": { "description": "Relay authentication resource using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/httpsResource" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackResource" }] },
     "oid4vci": {

@@ -659,16 +659,19 @@ fn relay_connection_is_single_closed_bounded_and_redacted() {
 base_url: https://relay.internal.example
 workload_client_id: registry-notary
 token_file: /run/secrets/private-relay.jwt
+root_certificate_path: /run/secrets/private-relay-ca.pem
 allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
 "#,
     )
     .expect("Relay connection parses");
-    relay.validate().expect("Relay connection validates");
+    relay.validate(None).expect("Relay connection validates");
     assert_eq!(relay.allowed_private_cidrs.len(), 2);
     assert_eq!(relay.max_in_flight, 8);
     let debug = format!("{relay:?}");
     assert!(!debug.contains("relay.internal.example"));
     assert!(!debug.contains("private-relay.jwt"));
+    assert!(!debug.contains("private-relay-ca.pem"));
+    assert!(debug.contains("custom_root_certificate: true"));
     assert!(!debug.contains("10.42.0.0/16"));
 
     serde_norway::from_str::<RelayConnectionConfig>(
@@ -685,7 +688,7 @@ retry_on_5xx: true
         let mut relay = relay_connection();
         relay.workload_client_id = workload_client_id.to_string();
         assert!(matches!(
-            relay.validate(),
+            relay.validate(None),
             Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
                 if reason.contains("workload_client_id")
         ));
@@ -693,9 +696,29 @@ retry_on_5xx: true
 }
 
 #[test]
+fn relay_custom_root_requires_an_https_origin_and_canonical_absolute_path() {
+    let mut relay = relay_connection();
+    relay.root_certificate_path = Some(PathBuf::from("relay-ca.pem"));
+    assert!(matches!(
+        relay.validate(None),
+        Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+            if reason.contains("root_certificate_path")
+    ));
+
+    relay.root_certificate_path = Some(PathBuf::from("/run/secrets/relay-ca.pem"));
+    relay.base_url = "http://127.0.0.1:8080".to_string();
+    relay.allow_insecure_localhost = true;
+    assert!(matches!(
+        relay.validate(None),
+        Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+            if reason.contains("requires an https")
+    ));
+}
+
+#[test]
 fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
     relay_connection()
-        .validate()
+        .validate(None)
         .expect("target POSIX token path is valid on every configuration host");
     for token_file in [
         PathBuf::from("relative/relay.jwt"),
@@ -710,7 +733,7 @@ fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
         let mut relay = relay_connection();
         relay.token_file = token_file;
         assert!(matches!(
-            relay.validate(),
+            relay.validate(None),
             Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
                 if reason.contains("token_file")
         ));
@@ -729,7 +752,7 @@ fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
             .map(|cidr| cidr.parse().expect("test CIDR parses"))
             .collect();
         assert!(matches!(
-            relay.validate(),
+            relay.validate(None),
             Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
                 if reason.contains("allowed_private_cidrs")
         ));
@@ -744,7 +767,7 @@ fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
         })
         .collect();
     assert!(matches!(
-        relay.validate(),
+        relay.validate(None),
         Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
             if reason.contains("more than 16")
     ));
@@ -775,7 +798,7 @@ fn relay_connection_concurrency_is_operator_bounded() {
         let mut relay = relay_connection();
         relay.max_in_flight = value;
         assert!(matches!(
-            relay.validate(),
+            relay.validate(None),
             Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
                 if reason.contains("max_in_flight")
         ));
@@ -783,7 +806,7 @@ fn relay_connection_concurrency_is_operator_bounded() {
 
     let mut relay = relay_connection();
     relay.max_in_flight = 64;
-    relay.validate().expect("hard ceiling is accepted");
+    relay.validate(None).expect("hard ceiling is accepted");
 }
 
 #[test]
@@ -885,6 +908,96 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     config
         .validate()
         .expect_err("a resource path must fail before URL normalization");
+}
+
+#[test]
+fn local_private_http_relay_requires_an_exact_ip_allowlist_entry() {
+    let mut config = valid_registry_backed_config();
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
+    let relay = config.evidence.relay.as_mut().expect("Relay connection");
+    relay.base_url = "http://10.89.0.4:8080".to_string();
+    relay.allowed_private_cidrs = vec!["10.89.0.4/32".parse().expect("test CIDR parses")];
+    config
+        .validate()
+        .expect("local profile accepts the exact private Relay IP and singleton CIDR");
+
+    for (base_url, cidrs) in [
+        ("http://10.89.0.4:8080", vec![]),
+        ("http://10.89.0.4:8080", vec!["10.89.0.0/24"]),
+        ("http://10.89.0.4:8080", vec!["10.89.0.5/32"]),
+        ("http://relay.internal.example:8080", vec!["10.89.0.4/32"]),
+        ("http://169.254.169.254:8080", vec!["169.254.169.254/32"]),
+        ("http://100.100.100.200:8080", vec!["100.100.100.200/32"]),
+        ("http://0.0.0.0:8080", vec!["0.0.0.0/32"]),
+    ] {
+        let mut config = valid_registry_backed_config();
+        config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
+        let relay = config.evidence.relay.as_mut().expect("Relay connection");
+        relay.base_url = base_url.to_string();
+        relay.allowed_private_cidrs = cidrs
+            .into_iter()
+            .map(|cidr| cidr.parse().expect("test CIDR parses"))
+            .collect();
+        assert!(matches!(
+            config.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { .. })
+        ));
+    }
+}
+
+#[test]
+fn private_http_relay_is_rejected_outside_the_local_profile() {
+    for profile in [
+        None,
+        Some(crate::deployment::DeploymentProfile::HostedLab),
+        Some(crate::deployment::DeploymentProfile::Production),
+        Some(crate::deployment::DeploymentProfile::EvidenceGrade),
+    ] {
+        let mut config = valid_registry_backed_config();
+        config.deployment.profile = profile;
+        let relay = config.evidence.relay.as_mut().expect("Relay connection");
+        relay.base_url = "http://10.89.0.4:8080".to_string();
+        relay.allowed_private_cidrs = vec!["10.89.0.4/32".parse().expect("test CIDR parses")];
+        assert!(matches!(
+            config.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { .. })
+        ));
+    }
+}
+
+#[test]
+fn signed_private_service_http_relay_is_profile_independent_and_explicit() {
+    for profile in [
+        crate::deployment::DeploymentProfile::Local,
+        crate::deployment::DeploymentProfile::HostedLab,
+        crate::deployment::DeploymentProfile::Production,
+        crate::deployment::DeploymentProfile::EvidenceGrade,
+    ] {
+        let mut config = valid_registry_backed_config();
+        config.deployment.profile = Some(profile);
+        let relay = config.evidence.relay.as_mut().expect("Relay connection");
+        relay.base_url = "http://registry-relay-consultation:8080".to_string();
+        relay.allow_insecure_private_network = true;
+        config
+            .validate()
+            .expect("signed private service HTTP is valid in every deployment profile");
+    }
+
+    for base_url in [
+        "http://registry-relay-consultation:8080",
+        "http://127.0.0.1:8080",
+        "https://registry-relay-consultation:8080",
+    ] {
+        let mut config = valid_registry_backed_config();
+        let relay = config.evidence.relay.as_mut().expect("Relay connection");
+        relay.base_url = base_url.to_string();
+        relay.allow_insecure_private_network =
+            base_url != "http://registry-relay-consultation:8080";
+        assert!(matches!(
+            config.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { .. })
+        ));
+    }
 }
 
 #[test]

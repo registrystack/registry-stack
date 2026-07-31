@@ -45,6 +45,33 @@ mod tests {
                 ));
             }
         }
+        for (expected_id, directory) in [
+            ("http", "bounded-http"),
+            ("spreadsheet", "spreadsheet"),
+        ] {
+            let temporary = tempfile::tempdir().expect("temporary embedded starter");
+            copy_embedded_dir(
+                PROJECT_STARTERS
+                    .get_dir(directory)
+                    .expect("embedded starter exists"),
+                temporary.path(),
+            )
+            .expect("embedded starter copies");
+            let loaded =
+                load_registry_project(temporary.path(), None).expect("embedded starter loads");
+            let provenance = loaded
+                .project
+                .starter
+                .as_ref()
+                .expect("embedded starter provenance");
+            assert_eq!(provenance.id, expected_id);
+            if provenance.content_digest != loaded.project_content_digest {
+                mismatches.push(format!(
+                    "{expected_id} embedded: expected {}, calculated {}",
+                    provenance.content_digest, loaded.project_content_digest
+                ));
+            }
+        }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
@@ -1346,8 +1373,8 @@ outputs:
         let loaded = load_registry_project(&project, Some("local")).expect("golden project loads");
         let compiled = compile_project(&loaded, None).expect("golden project compiles");
         let relay = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
             .expect("consultation Relay config exists");
         let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
 
@@ -1358,8 +1385,8 @@ outputs:
             let bytes = serde_norway::to_string(&tampered).expect("tampered config serializes");
             let error = validate_generated_relay(
                 bytes.as_bytes(),
-                &compiled.relay_private,
-                "config/relay-consultation.yaml",
+                &compiled.relay_consultation_private,
+                "config/relay.yaml",
             )
             .expect_err("tampered binding pin must fail closed");
             let diagnostic = format!("{error:#}");
@@ -1377,19 +1404,59 @@ outputs:
             .expect("golden project loads");
         let compiled = compile_project(&loaded, None).expect("golden project compiles");
         let public_path = Path::new("config/relay.yaml");
-        let consultation_path = Path::new("config/relay-consultation.yaml");
+        let consultation_path = Path::new("config/relay.yaml");
         let public_bytes = compiled
             .relay_private
             .get(public_path)
             .expect("public Relay config exists");
         let consultation_bytes = compiled
-            .relay_private
+            .relay_consultation_private
             .get(consultation_path)
             .expect("consultation Relay config exists");
         let public: Value =
             serde_norway::from_slice(public_bytes).expect("public Relay config parses");
         let consultation: Value =
             serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
+
+        assert_eq!(
+            compiled
+                .relay_private
+                .keys()
+                .map(PathBuf::as_path)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                Path::new("config/relay.yaml"),
+                Path::new("descriptors/operations.json"),
+                Path::new("descriptors/secret-consumers.json"),
+            ]),
+            "the public Relay input contains only instance-applicable generated members"
+        );
+        let referenced_artifacts = consultation["consultation"]["artifacts"]
+            .as_object()
+            .expect("consultation artifact closure exists")
+            .values()
+            .flat_map(|entries| {
+                entries
+                    .as_array()
+                    .expect("consultation artifact class is a list")
+            })
+            .map(|entry| {
+                entry["path"]
+                    .as_str()
+                    .expect("consultation artifact has a path")
+            })
+            .collect::<BTreeSet<_>>();
+        let vendored_artifacts = compiled
+            .relay_consultation_private
+            .keys()
+            .filter_map(|path| path.strip_prefix("config").ok())
+            .filter_map(|path| path.to_str())
+            .filter(|path| path.starts_with("artifacts/"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            vendored_artifacts, referenced_artifacts,
+            "the consultation Relay input vendors exactly its selected artifacts"
+        );
 
         assert!(public.get("consultation").is_none());
         assert!(consultation.get("consultation").is_some());
@@ -1410,18 +1477,70 @@ outputs:
             consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
             false
         );
+        let public_operations: Value = serde_json::from_slice(
+            compiled
+                .relay_private
+                .get(Path::new("descriptors/operations.json"))
+                .expect("public Relay operations descriptor exists"),
+        )
+        .expect("public Relay operations descriptor parses");
+        let consultation_operations: Value = serde_json::from_slice(
+            compiled
+                .relay_consultation_private
+                .get(Path::new("descriptors/operations.json"))
+                .expect("consultation Relay operations descriptor exists"),
+        )
+        .expect("consultation Relay operations descriptor parses");
+        assert_eq!(public_operations["service"], "household-relay");
+        assert_eq!(public_operations["consultation_profiles"], 0);
+        assert_eq!(
+            consultation_operations["service"],
+            "household-relay-consultation"
+        );
+        assert_eq!(consultation_operations["consultation_profiles"], 1);
+
+        for (files, config) in [
+            (&compiled.relay_private, &public),
+            (&compiled.relay_consultation_private, &consultation),
+        ] {
+            let descriptor: Value = serde_json::from_slice(
+                files
+                    .get(Path::new("descriptors/secret-consumers.json"))
+                    .expect("Relay secret-consumer descriptor exists"),
+            )
+            .expect("Relay secret-consumer descriptor parses");
+            assert_eq!(
+                descriptor,
+                secret_consumer_descriptor("registry-relay", config),
+                "each Relay instance describes only the secrets selected by its primary config"
+            );
+        }
+        assert_eq!(
+            compiled.approval_state["generated_closure_digests"]["relay"],
+            json!(closure_digest(&compiled.relay_private).expect("public Relay closure digests"))
+        );
+        assert_eq!(
+            compiled.approval_state["generated_closure_digests"]["relay_consultation"],
+            json!(closure_digest(&compiled.relay_consultation_private)
+                .expect("consultation Relay closure digests"))
+        );
+        assert_ne!(
+            compiled.approval_state["generated_closure_digests"]["relay"],
+            compiled.approval_state["generated_closure_digests"]["relay_consultation"],
+            "the approval state independently binds both Relay instances"
+        );
         validate_generated_relay(public_bytes, &compiled.relay_private, "config/relay.yaml")
             .expect("public Relay passes production loading");
         validate_generated_relay(
             consultation_bytes,
-            &compiled.relay_private,
-            "config/relay-consultation.yaml",
+            &compiled.relay_consultation_private,
+            "config/relay.yaml",
         )
         .expect("consultation Relay passes production loading and activation");
     }
 
     #[test]
-    fn local_notary_add_on_uses_exact_private_consultation_issuer_and_jwks_endpoint() {
+    fn local_notary_add_on_uses_stable_issuer_and_mounted_jwks_file() {
         let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
             .expect("golden project loads");
         let environment = loaded.environment.as_mut().expect("environment exists");
@@ -1445,8 +1564,8 @@ outputs:
             compile_project(&loaded, None).expect("non-canonical local project compiles");
         let unrelated_consultation: Value = serde_norway::from_slice(
             unrelated
-                .relay_private
-                .get(Path::new("config/relay-consultation.yaml"))
+                .relay_consultation_private
+                .get(Path::new("config/relay.yaml"))
                 .expect("consultation Relay config exists"),
         )
         .expect("consultation Relay config parses");
@@ -1470,9 +1589,17 @@ outputs:
             .notary_relay
             .as_mut()
             .expect("Notary-to-Relay binding exists");
-        binding.base_url = "http://127.0.0.1:8080".to_string();
+        binding.base_url = "http://10.89.0.4:8080".to_string();
         binding.workload_client_id = "registryctl-local-notary".to_string();
         binding.token_file = PathBuf::from("/run/secrets/relay-workload-token");
+        loaded
+            .environment
+            .as_mut()
+            .expect("environment exists")
+            .relay
+            .as_mut()
+            .expect("Relay binding exists")
+            .issuer = "https://registryctl-local-notary.invalid".to_string();
 
         let compiled = compile_project(&loaded, None).expect("local add-on project compiles");
         let public: Value = serde_norway::from_slice(
@@ -1483,8 +1610,8 @@ outputs:
         )
         .expect("public Relay config parses");
         let consultation_bytes = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
             .expect("consultation Relay config exists");
         let consultation: Value =
             serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
@@ -1493,18 +1620,22 @@ outputs:
         assert_eq!(consultation["auth"]["mode"], "oidc");
         assert_eq!(
             consultation["auth"]["oidc"]["issuer"],
-            "http://127.0.0.1:4255"
+            "https://registryctl-local-notary.invalid"
         );
         assert_eq!(
-            consultation["auth"]["oidc"]["jwks_url"],
-            "http://127.0.0.1:8081/.well-known/evidence/jwks.json"
+            consultation["auth"]["oidc"]["development_jwks_file"],
+            "/run/registry/dev-public/notary-workload-jwks.json"
         );
+        assert!(consultation["auth"]["oidc"].get("jwks_url").is_none());
+        assert!(consultation["auth"]["oidc"]
+            .get("discovery_url")
+            .is_none());
         assert_eq!(
             consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
-            true
+            false
         );
         validate_generated_product_configs(&compiled)
-            .expect("both local add-on Relay configs pass production validation");
+            .expect("local add-on product configs pass production validation");
     }
 
     #[test]
@@ -1623,1375 +1754,6 @@ outputs:
         assert!(
             !root_path.exists(),
             "temporary validation material must be removed"
-        );
-    }
-
-    fn governed_live_claim_result(
-        claim_id: &str,
-        value: Value,
-        satisfied: Option<bool>,
-        disclosure: &str,
-    ) -> Value {
-        serde_json::to_value(registry_notary_core::ClaimResultView {
-            evaluation_id: "eval-live-1".to_string(),
-            claim_id: claim_id.to_string(),
-            claim_version: "1.0.0".to_string(),
-            subject_type: EvidenceSubjectType::Person.as_str().to_string(),
-            requester_ref: Some(registry_notary_core::EvidenceEntityRef {
-                entity_type: "Organisation".to_string(),
-                handle: format!("rnref:v1:hmac-sha256:{}", "1".repeat(64)),
-                identifier_schemes: Vec::new(),
-                profile: None,
-            }),
-            target_ref: registry_notary_core::TargetRefView {
-                entity_type: "Person".to_string(),
-                handle: format!("rnref:v1:hmac-sha256:{}", "2".repeat(64)),
-                identifier_schemes: vec!["openspp_individual_id".to_string()],
-                profile: Some("openspp".to_string()),
-            },
-            value: Some(value),
-            satisfied,
-            disclosure: disclosure.to_string(),
-            redacted_fields: Vec::new(),
-            format: registry_notary_core::FORMAT_CLAIM_RESULT_JSON.to_string(),
-            issued_at: "2026-07-23T00:00:00Z".to_string(),
-            expires_at: None,
-            provenance: registry_notary_core::ClaimProvenance::new(
-                "registry-notary".to_string(),
-                "eval-live-1".to_string(),
-                claim_id.to_string(),
-                "1.0.0".to_string(),
-                registry_notary_core::ProvenanceUsed {
-                    relay_consultation_count: 1,
-                },
-            ),
-        })
-        .expect("actual claim result serializes")
-    }
-
-    fn governed_live_validated_request(claims: &[&str]) -> ValidatedLiveRequest {
-        ValidatedLiveRequest {
-            claims: claims.iter().map(|claim| (*claim).to_string()).collect(),
-            claim_versions: claims
-                .iter()
-                .map(|claim| ((*claim).to_string(), "1.0.0".to_string()))
-                .collect(),
-            notary_service_id: "registry-notary".to_string(),
-            subject_type: EvidenceSubjectType::Person.as_str().to_string(),
-        }
-    }
-
-    fn governed_live_eligible_fixture() -> (ValidatedLiveRequest, Value, Value) {
-        (
-            governed_live_validated_request(&["eligible"]),
-            json!({
-                "claims": {
-                    "eligible": {
-                        "value": true,
-                        "satisfied": true,
-                        "disclosure": "predicate",
-                    },
-                },
-            }),
-            json!({
-                "results": [governed_live_claim_result(
-                    "eligible",
-                    json!(true),
-                    Some(true),
-                    "predicate",
-                )],
-            }),
-        )
-    }
-
-    fn governed_live_validation_window() -> GovernedLiveValidationWindow {
-        GovernedLiveValidationWindow {
-            request_started_at: time::macros::datetime!(2026-07-23 0:00 UTC),
-            response_received_at: time::macros::datetime!(2026-07-23 0:00:01 UTC),
-        }
-    }
-
-    fn validate_live_response(
-        response: &Value,
-        request: &ValidatedLiveRequest,
-        expected: &Value,
-    ) -> Result<Vec<String>> {
-        super::validate_live_response(
-            response,
-            request,
-            expected,
-            governed_live_validation_window(),
-        )
-    }
-
-    fn set_governed_live_result_pointer(response: &mut Value, pointer: &str, value: Value) {
-        let result = response
-            .pointer_mut("/results/0")
-            .expect("actual claim result exists");
-        let (parent_pointer, field) = pointer
-            .rsplit_once('/')
-            .expect("result field pointer has a parent");
-        let parent = if parent_pointer.is_empty() {
-            result.as_object_mut()
-        } else {
-            result
-                .pointer_mut(parent_pointer)
-                .and_then(Value::as_object_mut)
-        }
-        .expect("actual result field parent exists");
-        parent.insert(field.to_string(), value);
-    }
-
-    #[test]
-    fn governed_live_production_guard_covers_name_and_profile_symmetry() {
-        for environment in [
-            "prod",
-            "production",
-            "prod-us",
-            "production-us",
-            "us-prod",
-            "us-production",
-            "prod_us",
-            "production.eu",
-            "eu_prod",
-            "eu.production",
-            "owner-prod-copy",
-        ] {
-            assert!(
-                governed_live_environment_is_production(
-                    environment,
-                    Some(DeploymentProfile::Local)
-                ),
-                "production-shaped environment name {environment} was accepted"
-            );
-        }
-        for environment in [
-            "owner-pilot",
-            "preproduction",
-            "productionish",
-            "product-copy-us",
-            "owner-productionish-copy",
-            "eu_product",
-        ] {
-            assert!(
-                !governed_live_environment_is_production(
-                    environment,
-                    Some(DeploymentProfile::Local)
-                ),
-                "non-production-shaped environment name {environment} was rejected"
-            );
-        }
-        for (profile, rejected) in [
-            (DeploymentProfile::Local, false),
-            (DeploymentProfile::HostedLab, false),
-            (DeploymentProfile::Production, true),
-            (DeploymentProfile::EvidenceGrade, true),
-        ] {
-            assert_eq!(
-                governed_live_environment_is_production("owner-pilot", Some(profile)),
-                rejected,
-                "unexpected live classification for deployment profile {}",
-                profile.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_result_accepts_actual_shape_and_requires_source_provenance() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        assert_eq!(
-            validate_live_response(&response, &request, &expected).expect("exact result passes"),
-            request.claims
-        );
-
-        let mut missing_provenance = response;
-        missing_provenance["results"][0]["provenance"]["used"]["relay_consultation_count"] =
-            json!(0);
-        assert!(
-            validate_live_response(&missing_provenance, &request, &expected)
-                .expect_err("a result without Relay provenance must fail")
-                .to_string()
-                .contains("source-backed provenance")
-        );
-    }
-
-    #[test]
-    fn governed_live_result_requires_explicit_expires_at() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-
-        assert_eq!(
-            response.pointer("/results/0/expires_at"),
-            Some(&Value::Null)
-        );
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("explicit null expires_at passes"),
-            request.claims
-        );
-
-        let mut missing_expires_at = response;
-        assert_eq!(
-            missing_expires_at["results"][0]
-                .as_object_mut()
-                .expect("actual result is an object")
-                .remove("expires_at"),
-            Some(Value::Null)
-        );
-        assert!(
-            validate_live_response(&missing_expires_at, &request, &expected)
-                .expect_err("missing expires_at must fail closed")
-                .to_string()
-                .contains("expires_at is required")
-        );
-    }
-
-    #[test]
-    fn governed_live_result_requires_canonical_provenance_constants() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-
-        assert_eq!(
-            response.pointer("/results/0/provenance/schema_version"),
-            Some(&json!(
-                registry_notary_core::CLAIM_PROVENANCE_SCHEMA_VERSION
-            ))
-        );
-        assert_eq!(
-            response.pointer("/results/0/provenance/generated_by/type"),
-            Some(&json!(
-                registry_notary_core::PROVENANCE_GENERATED_BY_CLAIM_EVALUATION
-            ))
-        );
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("canonical provenance constants pass"),
-            request.claims
-        );
-
-        for (pointer, value) in [
-            (
-                "/results/0/provenance/schema_version",
-                json!("registry-notary-claim-provenance/v1"),
-            ),
-            (
-                "/results/0/provenance/generated_by/type",
-                json!("stale_evaluation"),
-            ),
-        ] {
-            let mut invalid = response.clone();
-            *invalid
-                .pointer_mut(pointer)
-                .expect("actual provenance constant exists") = value;
-
-            assert!(
-                validate_live_response(&invalid, &request, &expected)
-                    .expect_err("non-canonical provenance constant must fail closed")
-                    .to_string()
-                    .contains("provenance constants"),
-                "provenance constant {pointer} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_result_binds_provenance_to_returned_result() {
-        let (request, expected, response) = governed_live_eligible_fixture();
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("canonical provenance binding passes"),
-            request.claims
-        );
-
-        for (pointer, value) in [
-            (
-                "/provenance/generated_by/evaluation_id",
-                json!("eval-other"),
-            ),
-            ("/provenance/generated_by/claim_id", json!("other-claim")),
-            ("/provenance/generated_by/claim_version", json!("0.9.0")),
-        ] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, pointer, value);
-
-            assert!(
-                validate_live_response(&invalid, &request, &expected)
-                    .expect_err("misbound provenance must fail closed")
-                    .to_string()
-                    .contains("does not identify the returned claim result"),
-                "provenance binding {pointer} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_result_requires_public_date_time_timestamps() {
-        let (request, expected, mut response) = governed_live_eligible_fixture();
-        set_governed_live_result_pointer(
-            &mut response,
-            "/expires_at",
-            json!("2026-07-24T07:30:00+07:00"),
-        );
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("canonical RFC3339 timestamps pass"),
-            request.claims
-        );
-
-        for pointer in ["/issued_at", "/expires_at"] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, pointer, json!("not-rfc3339"));
-
-            assert!(
-                validate_live_response(&invalid, &request, &expected)
-                    .expect_err("invalid public timestamp must fail closed")
-                    .to_string()
-                    .contains("public date-time schema"),
-                "invalid timestamp {pointer} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_result_timestamps_bind_to_the_current_request_window() {
-        let (request, expected, response) = governed_live_eligible_fixture();
-        let validation_window = GovernedLiveValidationWindow {
-            request_started_at: time::macros::datetime!(2026-07-23 0:00 UTC),
-            response_received_at: time::macros::datetime!(2026-07-23 0:00:10 UTC),
-        };
-
-        for issued_at in ["2026-07-22T23:59:30Z", "2026-07-23T00:00:40Z"] {
-            let mut boundary = response.clone();
-            set_governed_live_result_pointer(&mut boundary, "/issued_at", json!(issued_at));
-            assert_eq!(
-                super::validate_live_response(&boundary, &request, &expected, validation_window,)
-                    .expect("inclusive remote clock-skew boundary passes"),
-                request.claims
-            );
-        }
-
-        let mut unexpired = response.clone();
-        set_governed_live_result_pointer(
-            &mut unexpired,
-            "/expires_at",
-            json!("2026-07-23T00:00:11Z"),
-        );
-        assert_eq!(
-            super::validate_live_response(&unexpired, &request, &expected, validation_window)
-                .expect("expiry strictly after response receipt passes"),
-            request.claims
-        );
-
-        for (issued_at, expires_at) in [
-            ("2026-07-22T23:59:29Z", None),
-            ("2026-07-23T00:00:41Z", None),
-            ("2026-07-23T00:00:00Z", Some("2026-07-23T00:00:10Z")),
-            ("2026-07-23T00:00:40Z", Some("2026-07-23T00:00:20Z")),
-            ("2026-07-23T00:00:20Z", Some("2026-07-23T00:00:20Z")),
-        ] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, "/issued_at", json!(issued_at));
-            if let Some(expires_at) = expires_at {
-                set_governed_live_result_pointer(&mut invalid, "/expires_at", json!(expires_at));
-            }
-            let error =
-                super::validate_live_response(&invalid, &request, &expected, validation_window)
-                    .expect_err("stale, future, or expired result must fail closed")
-                    .to_string();
-            assert!(error.contains("current live evaluation"));
-            assert!(!error.contains(issued_at));
-            assert!(expires_at.is_none_or(|expires_at| !error.contains(expires_at)));
-        }
-    }
-
-    #[test]
-    fn governed_live_result_accepts_runtime_redaction_evidence() {
-        let request = governed_live_validated_request(&["household-reference"]);
-        let expected = json!({
-            "claims": {
-                "household-reference": {
-                    "value": null,
-                    "satisfied": null,
-                    "disclosure": "redacted",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "household-reference",
-                Value::Null,
-                None,
-                "redacted",
-            )],
-        });
-        assert!(
-            response.pointer("/results/0/redacted_fields").is_none(),
-            "empty redaction metadata is omitted"
-        );
-        set_governed_live_result_pointer(
-            &mut response,
-            "/redacted_fields",
-            json!(["household-reference"]),
-        );
-
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("runtime full-redaction evidence passes"),
-            request.claims
-        );
-
-        let mut missing_evidence = response.clone();
-        missing_evidence["results"][0]
-            .as_object_mut()
-            .expect("actual result is an object")
-            .remove("redacted_fields");
-        assert!(
-            validate_live_response(&missing_evidence, &request, &expected)
-                .expect_err("full redaction without redaction evidence must fail closed")
-                .to_string()
-                .contains("full-redaction semantics")
-        );
-
-        let mut configured_expected = expected.clone();
-        configured_expected["claims"]["household-reference"]["redacted_fields"] =
-            json!(["status", "private_field"]);
-        let mut configured_response = response.clone();
-        set_governed_live_result_pointer(
-            &mut configured_response,
-            "/redacted_fields",
-            json!(["private_field", "status"]),
-        );
-        assert_eq!(
-            validate_live_response(&configured_response, &request, &configured_expected)
-                .expect("owner-approved configured redaction fields pass"),
-            request.claims
-        );
-
-        for invalid_markers in [
-            json!([]),
-            json!(["private_field", "private_field"]),
-            json!(["private_field", "other_claim"]),
-            json!(["IND-AB12CD34"]),
-        ] {
-            let mut invalid = configured_response.clone();
-            set_governed_live_result_pointer(
-                &mut invalid,
-                "/redacted_fields",
-                invalid_markers.clone(),
-            );
-            let error = validate_live_response(&invalid, &request, &configured_expected)
-                .expect_err("runtime redaction fields must match the owner-approved set")
-                .to_string();
-            assert!(error.contains("full-redaction semantics"));
-            assert!(!error.contains("IND-AB12CD34"));
-        }
-
-        for invalid_markers in [
-            json!([]),
-            json!([""]),
-            json!(["household-reference", "household-reference"]),
-            json!(["other-claim"]),
-            json!(["IND-AB12CD34"]),
-        ] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(
-                &mut invalid,
-                "/redacted_fields",
-                invalid_markers.clone(),
-            );
-            let error = validate_live_response(&invalid, &request, &expected)
-                .expect_err("invalid full-redaction marker set must fail closed")
-                .to_string();
-            assert!(error.contains("full-redaction semantics"));
-            assert!(!error.contains("IND-AB12CD34"));
-        }
-
-        for invalid_expected_markers in [
-            json!([]),
-            json!(["private_field", "private_field"]),
-            json!(["profile.value"]),
-            json!(["IND-AB12CD34"]),
-            json!(["ssn=123"]),
-        ] {
-            let mut invalid_expected = expected.clone();
-            invalid_expected["claims"]["household-reference"]["redacted_fields"] =
-                invalid_expected_markers.clone();
-            let error = validate_live_response(&configured_response, &request, &invalid_expected)
-                .expect_err("invalid owner redaction fields must fail closed")
-                .to_string();
-            assert!(error.contains("invalid bounded shape"));
-            assert!(!error.contains("IND-AB12CD34"));
-            assert!(!error.contains("ssn=123"));
-        }
-    }
-
-    #[test]
-    fn governed_live_result_enforces_value_evidence_semantics() {
-        let request = governed_live_validated_request(&["programme-code"]);
-
-        for (value, satisfied) in [
-            (json!(true), Some(true)),
-            (json!(false), Some(false)),
-            (json!("SUPPORT"), None),
-            (json!(1), None),
-            (json!({ "status": "eligible" }), None),
-            (Value::Null, None),
-        ] {
-            let expected = json!({
-                "claims": {
-                    "programme-code": {
-                        "value": value.clone(),
-                        "satisfied": satisfied,
-                        "disclosure": "value",
-                    },
-                },
-            });
-            let response = json!({
-                "results": [governed_live_claim_result(
-                    "programme-code",
-                    value,
-                    satisfied,
-                    "value",
-                )],
-            });
-            assert_eq!(
-                validate_live_response(&response, &request, &expected)
-                    .expect("producer-consistent value evidence passes"),
-                request.claims
-            );
-        }
-
-        for (value, satisfied) in [
-            (json!(true), None),
-            (json!(true), Some(false)),
-            (json!(false), Some(true)),
-            (json!("SUPPORT"), Some(false)),
-            (json!(0), Some(false)),
-            (json!({ "status": "eligible" }), Some(true)),
-            (Value::Null, Some(false)),
-        ] {
-            let expected = json!({
-                "claims": {
-                    "programme-code": {
-                        "value": value.clone(),
-                        "satisfied": satisfied,
-                        "disclosure": "value",
-                    },
-                },
-            });
-            let response = json!({
-                "results": [governed_live_claim_result(
-                    "programme-code",
-                    value,
-                    satisfied,
-                    "value",
-                )],
-            });
-            assert!(validate_live_response(&response, &request, &expected)
-                .expect_err("producer-inconsistent copied value fixture must fail closed")
-                .to_string()
-                .contains("value evidence semantics"));
-        }
-    }
-
-    #[test]
-    fn governed_live_result_enforces_field_redaction_semantics() {
-        let request = governed_live_validated_request(&["profile"]);
-        let expected = json!({
-            "claims": {
-                "profile": {
-                    "value": { "status": "eligible" },
-                    "satisfied": null,
-                    "disclosure": "value",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "profile",
-                json!({ "status": "eligible" }),
-                None,
-                "value",
-            )],
-        });
-        set_governed_live_result_pointer(
-            &mut response,
-            "/redacted_fields",
-            json!(["private_field"]),
-        );
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("field-redacted object evidence passes"),
-            request.claims
-        );
-
-        let mut leaked = response.clone();
-        leaked["results"][0]["value"]["private_field"] = json!("private source value");
-        let error = validate_live_response(&leaked, &request, &expected)
-            .expect_err("listed redacted field must be absent from the returned value")
-            .to_string();
-        assert!(error.contains("field-redaction semantics"));
-        assert!(!error.contains("private source value"));
-
-        for (invalid_markers, sensitive_marker) in [
-            (json!(["ssn=123"]), "ssn=123"),
-            (json!(["IND-AB12CD34"]), "IND-AB12CD34"),
-            (json!(["profile.ssn"]), "profile.ssn"),
-            (json!(["profile/ssn"]), "profile/ssn"),
-            (json!(["private_field", "private_field"]), "private_field"),
-        ] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, "/redacted_fields", invalid_markers);
-            let error = validate_live_response(&invalid, &request, &expected)
-                .expect_err("invalid runtime field-redaction marker must fail closed")
-                .to_string();
-            assert!(error.contains("field-redaction semantics"));
-            assert!(!error.contains(sensitive_marker));
-        }
-
-        let excessive_markers = (0..=MAX_OUTPUTS)
-            .map(|index| format!("private_field_{index}"))
-            .collect::<Vec<_>>();
-        let mut excessive = response.clone();
-        set_governed_live_result_pointer(
-            &mut excessive,
-            "/redacted_fields",
-            json!(excessive_markers),
-        );
-        let error = validate_live_response(&excessive, &request, &expected)
-            .expect_err("runtime field-redaction markers must stay bounded")
-            .to_string();
-        assert!(error.contains("field-redaction semantics"));
-        assert!(!error.contains("private_field_64"));
-
-        let (predicate_request, predicate_expected, mut predicate_response) =
-            governed_live_eligible_fixture();
-        set_governed_live_result_pointer(
-            &mut predicate_response,
-            "/redacted_fields",
-            json!(["private_field"]),
-        );
-        assert!(validate_live_response(
-            &predicate_response,
-            &predicate_request,
-            &predicate_expected,
-        )
-        .expect_err("predicate over redacted fields must fail closed")
-        .to_string()
-        .contains("predicate over redacted fields"));
-    }
-
-    #[test]
-    fn governed_live_result_enforces_predicate_evidence_semantics() {
-        let (request, expected, response) = governed_live_eligible_fixture();
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("matching boolean predicate evidence passes"),
-            request.claims
-        );
-
-        for invalid_value in [json!({ "status": true }), json!("IND-AB12CD34")] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, "/value", invalid_value);
-            let error = validate_live_response(&invalid, &request, &expected)
-                .expect_err("non-boolean predicate value must fail closed")
-                .to_string();
-            assert!(error.contains("predicate evidence semantics"));
-            assert!(!error.contains("IND-AB12CD34"));
-        }
-
-        let mut non_boolean_satisfied = response.clone();
-        set_governed_live_result_pointer(
-            &mut non_boolean_satisfied,
-            "/satisfied",
-            json!("IND-AB12CD34"),
-        );
-        let error = validate_live_response(&non_boolean_satisfied, &request, &expected)
-            .expect_err("non-boolean predicate satisfaction must fail closed")
-            .to_string();
-        assert!(error.contains("closed public claim-result schema"));
-        assert!(!error.contains("IND-AB12CD34"));
-
-        for (value, satisfied) in [(true, false), (false, true)] {
-            let mut mismatched = response.clone();
-            set_governed_live_result_pointer(&mut mismatched, "/value", json!(value));
-            set_governed_live_result_pointer(&mut mismatched, "/satisfied", json!(satisfied));
-            assert!(validate_live_response(&mismatched, &request, &expected)
-                .expect_err("mismatched predicate booleans must fail closed")
-                .to_string()
-                .contains("predicate evidence semantics"));
-        }
-    }
-
-    #[test]
-    fn governed_live_response_requires_one_evaluation_id() {
-        let request = governed_live_validated_request(&["eligible", "active"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-                "active": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [
-                governed_live_claim_result("eligible", json!(true), Some(true), "predicate"),
-                governed_live_claim_result("active", json!(true), Some(true), "predicate"),
-            ],
-        });
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("one evaluation id across all results passes"),
-            request.claim_versions.keys().cloned().collect::<Vec<_>>()
-        );
-
-        for (pointer, value, sensitive_value) in [
-            (
-                "/results/1/target_ref/handle",
-                json!(format!("rnref:v1:hmac-sha256:{}", "3".repeat(64))),
-                "33333333",
-            ),
-            (
-                "/results/1/requester_ref/handle",
-                json!(format!("rnref:v1:hmac-sha256:{}", "4".repeat(64))),
-                "44444444",
-            ),
-            (
-                "/results/1/target_ref/profile",
-                json!("IND-AB12CD34"),
-                "IND-AB12CD34",
-            ),
-            (
-                "/results/1/target_ref/identifier_schemes",
-                json!(["sensitive_scheme"]),
-                "sensitive_scheme",
-            ),
-        ] {
-            let mut inconsistent = response.clone();
-            *inconsistent
-                .pointer_mut(pointer)
-                .expect("second result reference field exists") = value;
-            let error = validate_live_response(&inconsistent, &request, &expected)
-                .expect_err("inconsistent multi-claim reference must fail closed")
-                .to_string();
-            assert!(error.contains("inconsistent evaluation references"));
-            assert!(!error.contains(sensitive_value));
-        }
-
-        let mut missing_requester = response.clone();
-        missing_requester["results"][1]
-            .as_object_mut()
-            .expect("second result is an object")
-            .remove("requester_ref");
-        assert!(
-            validate_live_response(&missing_requester, &request, &expected)
-                .expect_err("mixed requester presence must fail closed")
-                .to_string()
-                .contains("inconsistent evaluation references")
-        );
-
-        let mut mixed = response;
-        mixed["results"][1]["evaluation_id"] = json!("eval-live-2");
-        mixed["results"][1]["provenance"]["generated_by"]["evaluation_id"] = json!("eval-live-2");
-        assert!(validate_live_response(&mixed, &request, &expected)
-            .expect_err("mixed evaluation ids must fail closed")
-            .to_string()
-            .contains("different evaluations"));
-    }
-
-    #[test]
-    fn governed_live_result_claim_identity_matches_authored_project() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
-            .expect("OpenSPP golden project loads");
-        let request = validate_live_request(
-            &loaded,
-            &json!({
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{
-                        "scheme": "openspp_individual_id",
-                        "value": "IND-AB12CD34",
-                    }],
-                },
-                "purpose": "social-programme-verification",
-                "claims": ["social-registry-record-exists"],
-                "disclosure": "predicate",
-            }),
-        )
-        .expect("authored request validates");
-        let expected = json!({
-            "claims": {
-                "social-registry-record-exists": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "social-registry-record-exists",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        response["results"][0]["claim_version"] = json!("1");
-        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
-        response["results"][0]["provenance"]["generated_by"]["service_id"] =
-            json!("social-registry-notary");
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("authored claim version passes"),
-            request.claims
-        );
-
-        let mut wrong_version = response;
-        wrong_version["results"][0]["claim_version"] = json!("2.0.0");
-        wrong_version["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("2.0.0");
-        assert!(validate_live_response(&wrong_version, &request, &expected)
-            .expect_err("result from a different claim version must fail closed")
-            .to_string()
-            .contains("does not match the authored project"));
-
-        let mut wrong_subject_type = wrong_version;
-        wrong_subject_type["results"][0]["claim_version"] = json!("1");
-        wrong_subject_type["results"][0]["provenance"]["generated_by"]["claim_version"] =
-            json!("1");
-        wrong_subject_type["results"][0]["subject_type"] = json!("organisation");
-        assert!(
-            validate_live_response(&wrong_subject_type, &request, &expected)
-                .expect_err("result for a different claim subject type must fail closed")
-                .to_string()
-                .contains("subject type does not match the authored project")
-        );
-    }
-
-    #[test]
-    fn governed_live_target_and_result_use_the_selected_project_subject_type() {
-        let mut loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
-            .expect("OpenSPP golden project loads");
-        loaded
-            .project
-            .services
-            .get_mut("social-registry-verification")
-            .expect("evidence service exists")
-            .subject_type = Some(EvidenceSubjectType::Project);
-        let request_document = |subject_type| {
-            json!({
-                "target": {
-                    "type": subject_type,
-                    "identifiers": [{
-                        "scheme": "openspp_individual_id",
-                        "value": "IND-AB12CD34",
-                    }],
-                },
-                "purpose": "social-programme-verification",
-                "claims": ["social-registry-record-exists"],
-                "disclosure": "predicate",
-            })
-        };
-        assert!(validate_live_request(&loaded, &request_document("Person"))
-            .expect_err("person target must not select a project-subject service")
-            .to_string()
-            .contains("target type does not match the authored project"));
-        let request = validate_live_request(&loaded, &request_document("Project"))
-            .expect("project target matches the selected evidence service");
-        assert_eq!(request.subject_type, "project");
-
-        let expected = json!({
-            "claims": {
-                "social-registry-record-exists": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "social-registry-record-exists",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        response["results"][0]["claim_version"] = json!("1");
-        response["results"][0]["subject_type"] = json!("project");
-        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
-        response["results"][0]["provenance"]["generated_by"]["service_id"] =
-            json!("social-registry-notary");
-        validate_live_response(&response, &request, &expected)
-            .expect("project-subject result matches the selected service");
-        response["results"][0]["subject_type"] = json!("person");
-        assert!(validate_live_response(&response, &request, &expected)
-            .expect_err("person result must not satisfy a project-subject request")
-            .to_string()
-            .contains("subject type does not match the authored project"));
-    }
-
-    #[test]
-    fn governed_live_result_service_matches_selected_environment() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
-            .expect("OpenSPP golden project and environment load");
-        let request = validate_live_request(
-            &loaded,
-            &json!({
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{
-                        "scheme": "openspp_individual_id",
-                        "value": "IND-AB12CD34",
-                    }],
-                },
-                "purpose": "social-programme-verification",
-                "claims": ["social-registry-record-exists"],
-                "disclosure": "predicate",
-            }),
-        )
-        .expect("authored request validates");
-        assert_eq!(request.notary_service_id, "social-registry-notary");
-        let expected = json!({
-            "claims": {
-                "social-registry-record-exists": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "social-registry-record-exists",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        response["results"][0]["claim_version"] = json!("1");
-        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
-        response["results"][0]["provenance"]["generated_by"]["service_id"] =
-            json!("social-registry-notary");
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("selected Notary service passes"),
-            request.claims
-        );
-
-        response["results"][0]["provenance"]["generated_by"]["service_id"] = json!("stale-notary");
-        let error = validate_live_response(&response, &request, &expected)
-            .expect_err("wrong Notary service must fail closed")
-            .to_string();
-        assert!(error.contains("does not identify the selected Notary service"));
-        assert!(!error.contains("stale-notary"));
-    }
-
-    #[test]
-    fn governed_live_result_requires_notary_pseudonymous_reference_handles() {
-        let (request, expected, response) = governed_live_eligible_fixture();
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("keyed Notary pseudonymous references pass"),
-            request.claims
-        );
-
-        let mut local = response.clone();
-        for pointer in ["/target_ref/handle", "/requester_ref/handle"] {
-            set_governed_live_result_pointer(
-                &mut local,
-                pointer,
-                json!(format!("rnref:v1:sha256:{}", "a".repeat(64))),
-            );
-        }
-        assert_eq!(
-            validate_live_response(&local, &request, &expected)
-                .expect("local-development Notary pseudonymous references pass"),
-            request.claims
-        );
-
-        for pointer in ["/target_ref/handle", "/requester_ref/handle"] {
-            for invalid_handle in [
-                "person-123".to_string(),
-                "rnref:v1:hmac-sha256:abcd".to_string(),
-                format!("rnref:v1:hmac-sha256:{}", "A".repeat(64)),
-                format!("rnref:v1:sha512:{}", "a".repeat(64)),
-                "rnref:v1:IND-AB12CD34".to_string(),
-            ] {
-                let mut invalid = response.clone();
-                set_governed_live_result_pointer(
-                    &mut invalid,
-                    pointer,
-                    json!(invalid_handle.clone()),
-                );
-                let error = validate_live_response(&invalid, &request, &expected)
-                    .expect_err("invalid Notary reference handle must fail closed")
-                    .to_string();
-                assert!(error.contains("invalid pseudonymous reference handle"));
-                assert!(!error.contains("IND-AB12CD34"));
-            }
-        }
-    }
-
-    #[test]
-    fn governed_live_result_rejects_null_optional_public_fields_recursively() {
-        let (request, expected, mut response) = governed_live_eligible_fixture();
-        set_governed_live_result_pointer(&mut response, "/redacted_fields", json!([]));
-        for (pointer, value) in [
-            ("/requester_ref/identifier_schemes", json!([])),
-            ("/requester_ref/profile", json!("requester")),
-        ] {
-            set_governed_live_result_pointer(&mut response, pointer, value);
-        }
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("canonical optional public fields pass"),
-            request.claims
-        );
-
-        for pointer in LIVE_RESULT_OPTIONAL_NON_NULL_PATHS {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, pointer, Value::Null);
-
-            assert!(
-                validate_live_response(&invalid, &request, &expected)
-                    .expect_err("null optional public field must fail closed")
-                    .to_string()
-                    .contains("optional public field cannot be null"),
-                "null optional public field {pointer} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_api_key_result_rejects_named_policy_provenance() {
-        let (request, expected, response) = governed_live_eligible_fixture();
-        for field in ["policy_id", "policy_version", "policy_hash"] {
-            assert!(
-                response
-                    .pointer(&format!("/results/0/provenance/generated_by/{field}"))
-                    .is_none(),
-                "machine-client runtime fixture unexpectedly carries {field}"
-            );
-        }
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("API-key result without named policy provenance passes"),
-            request.claims
-        );
-
-        for (pointer, value, sensitive_value) in [
-            (
-                "/provenance/generated_by/policy_id",
-                json!("IND-AB12CD34"),
-                "IND-AB12CD34",
-            ),
-            (
-                "/provenance/generated_by/policy_version",
-                json!("secret-policy-v1"),
-                "secret-policy-v1",
-            ),
-            (
-                "/provenance/generated_by/policy_hash",
-                json!("sha256:sensitive-policy-hash"),
-                "sha256:sensitive-policy-hash",
-            ),
-        ] {
-            let mut invalid = response.clone();
-            set_governed_live_result_pointer(&mut invalid, pointer, value);
-            let error = validate_live_response(&invalid, &request, &expected)
-                .expect_err("API-key result with named policy provenance must fail closed")
-                .to_string();
-            assert!(error.contains("unexpected named policy provenance"));
-            assert!(!error.contains(sensitive_value));
-        }
-    }
-
-    #[test]
-    fn governed_live_result_requires_claim_result_format() {
-        let (request, expected, mut response) = governed_live_eligible_fixture();
-        assert_eq!(
-            response.pointer("/results/0/format"),
-            Some(&json!(registry_notary_core::FORMAT_CLAIM_RESULT_JSON))
-        );
-        assert_eq!(
-            validate_live_response(&response, &request, &expected)
-                .expect("canonical claim-result format passes"),
-            request.claims
-        );
-
-        set_governed_live_result_pointer(&mut response, "/format", json!("application/json"));
-        assert!(validate_live_response(&response, &request, &expected)
-            .expect_err("wrong result format must fail closed")
-            .to_string()
-            .contains("invalid claim-result format"));
-    }
-
-    #[test]
-    fn governed_live_result_rejects_partial_disclosure_expectations() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!("unexpected source value"),
-                Some(true),
-                "predicate",
-            )],
-        });
-
-        assert!(validate_live_response(&response, &request, &expected)
-            .expect_err("partial expected disclosure must fail closed")
-            .to_string()
-            .contains("must contain value, satisfied, disclosure"));
-    }
-
-    #[test]
-    fn governed_live_result_rejects_unknown_result_fields() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        response["results"][0]["raw_value"] = json!("unexpected source value");
-
-        assert!(validate_live_response(&response, &request, &expected)
-            .expect_err("unknown result fields must fail closed")
-            .to_string()
-            .contains("closed public claim-result schema"));
-    }
-
-    #[test]
-    fn governed_live_result_rejects_nested_unknown_fields() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-
-        for (pointer, field) in [
-            ("/results/0/target_ref", "raw_identifier"),
-            ("/results/0/requester_ref", "raw_principal"),
-            ("/results/0/provenance", "raw_source"),
-            ("/results/0/provenance/generated_by", "raw_policy"),
-            ("/results/0/provenance/used", "raw_source_count"),
-        ] {
-            let mut over_disclosed = response.clone();
-            over_disclosed
-                .pointer_mut(pointer)
-                .and_then(Value::as_object_mut)
-                .expect("actual nested result object exists")
-                .insert(field.to_string(), json!("private"));
-
-            assert!(
-                validate_live_response(&over_disclosed, &request, &expected)
-                    .expect_err("nested unknown fields must fail closed")
-                    .to_string()
-                    .contains("closed public claim-result schema"),
-                "nested field {pointer}/{field} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn governed_live_result_requires_empty_derived_from() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let mut response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-        response["results"][0]["provenance"]["derived_from"] =
-            json!([{ "raw_source_row": "private" }]);
-
-        assert!(validate_live_response(&response, &request, &expected)
-            .expect_err("non-empty derived_from must fail closed")
-            .to_string()
-            .contains("derived_from must remain empty"));
-    }
-
-    #[test]
-    fn governed_live_result_rejects_provenance_fields_outside_public_schema() {
-        let request = governed_live_validated_request(&["eligible"]);
-        let expected = json!({
-            "claims": {
-                "eligible": {
-                    "value": true,
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "eligible",
-                json!(true),
-                Some(true),
-                "predicate",
-            )],
-        });
-
-        for field in ["pack_id", "pack_version"] {
-            for value in [json!("unsupported"), Value::Null] {
-                let mut unsupported = response.clone();
-                unsupported["results"][0]["provenance"]["generated_by"][field] = value;
-
-                assert!(
-                    validate_live_response(&unsupported, &request, &expected)
-                        .expect_err("fields outside the public schema must fail closed")
-                        .to_string()
-                        .contains("exceeds the closed public claim-result schema"),
-                    "provenance field {field} was accepted"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn governed_live_request_negotiates_the_claim_result_media_type() {
-        let endpoint =
-            url::Url::parse("http://127.0.0.1:8080/v1/evaluations").expect("endpoint parses");
-        let request = governed_live_evaluation_request(&endpoint, "test-api-key");
-
-        assert_eq!(request.header("content-type"), Some("application/json"));
-        assert_eq!(
-            request.header("accept"),
-            Some(registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
-        );
-    }
-
-    #[test]
-    fn governed_live_report_does_not_infer_a_source_outcome() {
-        let request = governed_live_validated_request(&["record-exists"]);
-        let expected = json!({
-            "claims": {
-                "record-exists": {
-                    "value": false,
-                    "satisfied": false,
-                    "disclosure": "predicate",
-                },
-            },
-        });
-        let response = json!({
-            "results": [governed_live_claim_result(
-                "record-exists",
-                json!(false),
-                Some(false),
-                "predicate",
-            )],
-        });
-        let returned_claims =
-            validate_live_response(&response, &request, &expected).expect("no-match result passes");
-        let report = governed_live_fixture_report(returned_claims);
-
-        assert_eq!(report.claims, request.claims);
-        assert_eq!(report.outcome, None);
-        assert!(
-            serde_json::to_value(report)
-                .expect("report serializes")
-                .get("outcome")
-                .is_none(),
-            "neutral live evidence must not serialize a source outcome"
         );
     }
 
@@ -3121,202 +1883,6 @@ outputs:
     }
 
     #[test]
-    fn live_request_requires_one_compatible_disclosure_profile() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
-            .expect("OpenSPP golden project loads");
-
-        for (disclosure, claims) in [
-            (
-                "predicate",
-                vec!["social-registry-record-exists", "social-registry-active"],
-            ),
-            ("value", vec!["programme-code"]),
-            ("redacted", vec!["household-reference"]),
-        ] {
-            let request = json!({
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{
-                        "scheme": "openspp_individual_id",
-                        "value": "IND-AB12CD34",
-                    }],
-                },
-                "purpose": "social-programme-verification",
-                "claims": claims,
-                "disclosure": disclosure,
-            });
-            let validated = validate_live_request(&loaded, &request)
-                .expect("compatible disclosure request passes");
-            assert!(validated
-                .claim_versions
-                .values()
-                .all(|version| version == "1"));
-        }
-
-        let mixed = json!({
-            "target": {
-                "type": "Person",
-                "identifiers": [{
-                    "scheme": "openspp_individual_id",
-                    "value": "IND-AB12CD34",
-                }],
-            },
-            "purpose": "social-programme-verification",
-            "claims": [
-                "social-registry-record-exists",
-                "programme-code",
-                "household-reference",
-            ],
-        });
-        assert!(validate_live_request(&loaded, &mixed)
-            .expect_err("mixed defaults must fail before source access")
-            .to_string()
-            .contains("not allowed for every selected project claim"));
-    }
-
-    #[test]
-    fn live_request_claim_version_must_match_the_authored_service() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
-            .expect("OpenSPP golden project loads");
-        let request = |version| {
-            json!({
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{
-                        "scheme": "openspp_individual_id",
-                        "value": "IND-AB12CD34",
-                    }],
-                },
-                "purpose": "social-programme-verification",
-                "claims": [{
-                    "id": "social-registry-record-exists",
-                    "version": version,
-                }],
-                "disclosure": "predicate",
-            })
-        };
-
-        let validated =
-            validate_live_request(&loaded, &request("1")).expect("authored version passes");
-        assert_eq!(
-            validated.claim_versions,
-            BTreeMap::from([("social-registry-record-exists".to_string(), "1".to_string(),)])
-        );
-        assert!(validate_live_request(&loaded, &request("2"))
-            .expect_err("non-authored request version must fail closed")
-            .to_string()
-            .contains("does not match the authored project"));
-    }
-
-    #[test]
-    fn live_request_resolves_claims_across_services_with_the_same_purpose() {
-        let project = project_golden("custom-system");
-        let mut loaded =
-            load_registry_project(&project, Some("local")).expect("golden project loads");
-        let original_id = "household-eligibility";
-        let mut second: ServiceDeclaration = serde_json::from_value(
-            serde_json::to_value(&loaded.project.services[original_id])
-                .expect("service serializes"),
-        )
-        .expect("service clones through its strict model");
-        let second_claim = second
-            .claims
-            .remove("household-category")
-            .expect("second service claim exists");
-        second.claims.clear();
-        second
-            .claims
-            .insert("household-category".to_string(), second_claim);
-        loaded
-            .project
-            .services
-            .get_mut(original_id)
-            .expect("original service exists")
-            .claims
-            .remove("household-category");
-        loaded
-            .project
-            .services
-            .insert("zz-secondary-service".to_string(), second);
-        for service_id in [original_id, "zz-secondary-service"] {
-            let service = loaded
-                .project
-                .services
-                .get_mut(service_id)
-                .expect("split service exists");
-            let claims = service.claims.keys().cloned().collect::<BTreeSet<_>>();
-            for credential in service.credential_profiles.values_mut() {
-                credential.claims.retain(|claim| claims.contains(claim));
-            }
-        }
-        validate_project_shape(&loaded.project).expect("split service project remains valid");
-        let offline_environment =
-            offline_fixture_environment(&loaded).expect("offline environment compiles");
-        let compiled =
-            compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)
-                .expect("split service project compiles");
-        validate_generated_notary(&compiled).expect("split service Notary config activates");
-
-        let request = validate_live_request(
-            &loaded,
-            &json!({
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{
-                        "scheme": "household_reference",
-                        "value": "HH-AB12CD34",
-                    }],
-                },
-                "purpose": "household-support-screening",
-                "claims": ["household-category", "source-household-approval-decision"],
-                "disclosure": "redacted",
-            }),
-        )
-        .expect("claims from both same-purpose services are valid");
-        assert_eq!(
-            request.claims,
-            ["household-category", "source-household-approval-decision"]
-        );
-        assert_eq!(
-            request.claim_versions,
-            BTreeMap::from([
-                ("household-category".to_string(), "1".to_string()),
-                (
-                    "source-household-approval-decision".to_string(),
-                    "1".to_string(),
-                ),
-            ])
-        );
-
-        loaded
-            .project
-            .services
-            .get_mut("zz-secondary-service")
-            .expect("secondary service exists")
-            .subject_type = Some(EvidenceSubjectType::Project);
-        let mixed_request = json!({
-            "target": {
-                "type": "Person",
-                "identifiers": [{
-                    "scheme": "household_reference",
-                    "value": "HH-AB12CD34",
-                }],
-            },
-            "purpose": "household-support-screening",
-            "claims": ["household-category", "source-household-approval-decision"],
-            "disclosure": "redacted",
-        });
-        assert!(validate_live_request(&loaded, &mixed_request)
-            .expect_err("live selection must reject mixed subject types")
-            .to_string()
-            .contains("different subject types"));
-        assert!(fixture_subject_type(&loaded, "eligibility")
-            .expect_err("offline selection must reject mixed subject types")
-            .to_string()
-            .contains("different subject types"));
-    }
-
-    #[test]
     fn duplicate_project_claim_ids_fail_before_generation() {
         let project = project_golden("custom-system");
         let mut loaded = load_registry_project(&project, None).expect("golden project loads");
@@ -3363,6 +1929,51 @@ outputs:
         let diagnostic = format!("{error:#}");
         assert!(diagnostic.contains("formats must not be empty"));
         assert!(diagnostic.contains("omit formats"));
+    }
+
+    #[test]
+    fn generated_products_persist_audit_records_to_the_managed_volume() {
+        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let compiled = compile_project(&loaded, None).expect("golden project compiles");
+        let product_configs = [
+            (
+                "Relay",
+                compiled
+                    .relay_private
+                    .get(Path::new("config/relay.yaml"))
+                    .expect("Relay config exists"),
+            ),
+            (
+                "consultation Relay",
+                compiled
+                    .relay_consultation_private
+                    .get(Path::new("config/relay.yaml"))
+                    .expect("consultation Relay config exists"),
+            ),
+            (
+                "Notary",
+                compiled
+                    .notary_private
+                    .get(Path::new("config/notary.yaml"))
+                    .expect("Notary config exists"),
+            ),
+        ];
+
+        for (product, bytes) in product_configs {
+            let config: Value =
+                serde_norway::from_slice(bytes).expect("generated product config parses");
+            assert_eq!(
+                config.pointer("/audit/sink"),
+                Some(&json!("file")),
+                "{product} must use a durable audit sink"
+            );
+            assert_eq!(
+                config.pointer("/audit/path"),
+                Some(&json!("/var/lib/registry/audit/audit.jsonl")),
+                "{product} must write to the managed audit volume"
+            );
+        }
     }
 
     #[test]
@@ -3455,14 +2066,24 @@ outputs:
         validate_signed_review_record(&review).expect("current review record is valid");
         validate_signed_approval_state(&approval_state).expect("current approval state is valid");
 
-        let mut legacy_state = approval_state.clone();
-        legacy_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
-        legacy_state
-            .as_object_mut()
-            .expect("legacy approval state is an object")
-            .remove("promotion_projection");
-        validate_signed_approval_state(&legacy_state)
-            .expect("legacy signed state remains parseable for fail-closed migration reporting");
+        for unsupported_schema in [
+            "registry.project.approval-state.v1",
+            "registry.project.approval-state.v2",
+            "registry.project.approval-state.v3",
+        ] {
+            let mut unsupported_state = approval_state.clone();
+            unsupported_state["schema"] = json!(unsupported_schema);
+            let error = validate_signed_approval_state(&unsupported_state)
+                .expect_err("pre-1.0 approval state must not enter semantic validation");
+            let message = error.to_string();
+            assert_eq!(
+                message,
+                "baseline approval state uses an unsupported schema; recreate pre-1.0 generated \
+                 artifacts before rebuilding"
+            );
+            assert!(!message.contains(unsupported_schema));
+            assert!(!message.contains("fictional-citizen-registry"));
+        }
 
         let mut leaked_digest = review.clone();
         leaked_digest

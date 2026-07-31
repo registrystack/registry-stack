@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 const TEST_VERSION: &str = "v9.8.7";
 const TEST_LOCK_ASSET: &str = "registryctl-v9.8.7-image-lock.json";
+const TEST_RELEASE_LOCK_ASSET: &str = "registry-release-lock.v1.json";
 
 #[test]
 fn installer_rejects_shell_active_and_noncanonical_release_tags() {
@@ -58,15 +59,13 @@ fn installer_help_describes_version_aware_release_assets() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("Releases v0.9.0 and later install"),
+        stdout.contains("Releases from v0.9.0 through the"),
         "{stdout}"
     );
     assert!(stdout.contains("matching release image lock"), "{stdout}");
+    assert!(stdout.contains("signed RegistryReleaseLockV1"), "{stdout}");
     assert!(stdout.contains("REGISTRYCTL_ASSET_DIR"), "{stdout}");
-    assert!(
-        stdout.contains("higher-assurance installation mode"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("higher-assurance mode"), "{stdout}");
 }
 
 #[test]
@@ -226,6 +225,30 @@ fn installer_preserves_binary_only_compatibility_for_v0_8_4() {
 
 #[cfg(unix)]
 #[test]
+fn installer_preserves_image_lock_compatibility_for_late_zero_x() {
+    let fixture = InstallerFixture::for_release("v0.15.2", true);
+    let output = fixture.run();
+
+    assert!(
+        output.status.success(),
+        "0.x installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        b"registryctl release image lock\n",
+        fs::read(
+            fixture
+                .install_dir
+                .join("registryctl-v0.15.2-image-lock.json")
+        )
+        .unwrap()
+        .as_slice()
+    );
+    assert!(!fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET).exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
     let fixture = InstallerFixture::new();
     let output = fixture.run();
@@ -242,11 +265,15 @@ fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
             .as_slice()
     );
     assert_eq!(
-        b"registryctl release image lock\n",
-        fs::read(fixture.install_dir.join(TEST_LOCK_ASSET))
+        b"signed RegistryReleaseLockV1\n",
+        fs::read(fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET))
             .unwrap()
             .as_slice()
     );
+    assert!(!fixture.install_dir.join(TEST_LOCK_ASSET).exists());
+    let downloads = fs::read_to_string(fixture.fake_curl_log()).unwrap();
+    assert!(downloads.contains(TEST_RELEASE_LOCK_ASSET), "{downloads}");
+    assert!(!downloads.contains("image-lock"), "{downloads}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("matched SHA256SUMS"), "{stdout}");
     assert!(
@@ -258,11 +285,16 @@ fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("registryctl init --from spreadsheet --project-dir my-first-api"),
+        stdout.contains("registryctl init my-first-registry --template spreadsheet"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("registryctl doctor --profile local"),
+        stdout.contains("registryctl init my-registry-integration --template http"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("registryctl test"), "{stdout}");
+    assert!(
+        !stdout.contains("registryctl doctor --profile local"),
         "{stdout}"
     );
     assert!(!stdout.contains("registryctl init relay"), "{stdout}");
@@ -271,7 +303,7 @@ fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
 
 #[cfg(unix)]
 #[test]
-fn installer_checksum_failure_preserves_existing_binary_and_lock() {
+fn installer_checksum_failure_preserves_existing_binary_and_release_lock() {
     let fixture = InstallerFixture::new();
     fs::create_dir_all(&fixture.install_dir).unwrap();
     fs::write(
@@ -280,12 +312,12 @@ fn installer_checksum_failure_preserves_existing_binary_and_lock() {
     )
     .unwrap();
     fs::write(
-        fixture.install_dir.join(TEST_LOCK_ASSET),
-        b"existing lock\n",
+        fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET),
+        b"existing release lock\n",
     )
     .unwrap();
     fs::write(
-        fixture.release_dir.join(TEST_LOCK_ASSET),
+        fixture.release_dir.join(TEST_RELEASE_LOCK_ASSET),
         b"corrupted after checksums\n",
     )
     .unwrap();
@@ -294,7 +326,7 @@ fn installer_checksum_failure_preserves_existing_binary_and_lock() {
 
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("Checksum verification failed for registryctl-v9.8.7-image-lock.json"));
+        .contains("Checksum verification failed for registry-release-lock.v1.json"));
     assert_eq!(
         b"existing binary\n",
         fs::read(fixture.install_dir.join("registryctl"))
@@ -302,8 +334,8 @@ fn installer_checksum_failure_preserves_existing_binary_and_lock() {
             .as_slice()
     );
     assert_eq!(
-        b"existing lock\n",
-        fs::read(fixture.install_dir.join(TEST_LOCK_ASSET))
+        b"existing release lock\n",
+        fs::read(fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET))
             .unwrap()
             .as_slice()
     );
@@ -311,7 +343,7 @@ fn installer_checksum_failure_preserves_existing_binary_and_lock() {
 
 #[cfg(unix)]
 #[test]
-fn installer_rolls_back_pair_when_binary_replacement_fails_after_lock_replacement() {
+fn installer_rolls_back_pair_when_binary_replacement_fails_after_release_lock_replacement() {
     for existing in [false, true] {
         let fixture = InstallerFixture::new();
         if existing {
@@ -322,8 +354,8 @@ fn installer_rolls_back_pair_when_binary_replacement_fails_after_lock_replacemen
             )
             .unwrap();
             fs::write(
-                fixture.install_dir.join(TEST_LOCK_ASSET),
-                b"existing lock\n",
+                fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET),
+                b"existing release lock\n",
             )
             .unwrap();
         }
@@ -332,21 +364,30 @@ fn installer_rolls_back_pair_when_binary_replacement_fails_after_lock_replacemen
 
         assert!(!output.status.success());
         let binary_path = fixture.install_dir.join("registryctl");
-        let lock_path = fixture.install_dir.join(TEST_LOCK_ASSET);
+        let lock_path = fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET);
         if existing {
             assert_eq!(
                 b"existing binary\n",
                 fs::read(&binary_path).unwrap().as_slice()
             );
-            assert_eq!(b"existing lock\n", fs::read(&lock_path).unwrap().as_slice());
+            assert_eq!(
+                b"existing release lock\n",
+                fs::read(&lock_path).unwrap().as_slice()
+            );
         } else {
             assert!(!binary_path.exists(), "rollback left a new binary behind");
-            assert!(!lock_path.exists(), "rollback left a new image lock behind");
+            assert!(
+                !lock_path.exists(),
+                "rollback left a new release lock behind"
+            );
         }
         let moves = fs::read_to_string(fixture.fake_mv_log()).unwrap();
         let destinations = moves.lines().collect::<Vec<_>>();
         assert_eq!(2, destinations.len());
-        assert!(destinations[0].ends_with(TEST_LOCK_ASSET), "{moves}");
+        assert!(
+            destinations[0].ends_with(TEST_RELEASE_LOCK_ASSET),
+            "{moves}"
+        );
         assert!(destinations[1].ends_with("/registryctl"), "{moves}");
     }
 }
@@ -362,8 +403,8 @@ fn installer_term_during_install_restores_pair_and_exits_143() {
     )
     .unwrap();
     fs::write(
-        fixture.install_dir.join(TEST_LOCK_ASSET),
-        b"existing lock\n",
+        fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET),
+        b"existing release lock\n",
     )
     .unwrap();
 
@@ -377,21 +418,24 @@ fn installer_term_during_install_restores_pair_and_exits_143() {
             .as_slice()
     );
     assert_eq!(
-        b"existing lock\n",
-        fs::read(fixture.install_dir.join(TEST_LOCK_ASSET))
+        b"existing release lock\n",
+        fs::read(fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET))
             .unwrap()
             .as_slice()
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("registryctl installed to"), "{stdout}");
     assert!(
-        !stdout.contains("release image lock installed to"),
+        !stdout.contains("signed release lock installed to"),
         "{stdout}"
     );
     let moves = fs::read_to_string(fixture.fake_mv_log()).unwrap();
     let destinations = moves.lines().collect::<Vec<_>>();
     assert_eq!(2, destinations.len());
-    assert!(destinations[0].ends_with(TEST_LOCK_ASSET), "{moves}");
+    assert!(
+        destinations[0].ends_with(TEST_RELEASE_LOCK_ASSET),
+        "{moves}"
+    );
     assert!(destinations[1].ends_with("/registryctl"), "{moves}");
 }
 
@@ -406,8 +450,8 @@ fn installer_cleans_staging_without_touching_pair_when_chmod_fails_before_mutati
     )
     .unwrap();
     fs::write(
-        fixture.install_dir.join(TEST_LOCK_ASSET),
-        b"existing lock\n",
+        fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET),
+        b"existing release lock\n",
     )
     .unwrap();
 
@@ -421,8 +465,8 @@ fn installer_cleans_staging_without_touching_pair_when_chmod_fails_before_mutati
             .as_slice()
     );
     assert_eq!(
-        b"existing lock\n",
-        fs::read(fixture.install_dir.join(TEST_LOCK_ASSET))
+        b"existing release lock\n",
+        fs::read(fixture.install_dir.join(TEST_RELEASE_LOCK_ASSET))
             .unwrap()
             .as_slice()
     );
@@ -453,7 +497,7 @@ impl InstallerFixture {
         Self::for_release(TEST_VERSION, true)
     }
 
-    fn for_release(version: &str, include_image_lock: bool) -> Self {
+    fn for_release(version: &str, include_required_lock: bool) -> Self {
         let temp = TempDir::new().unwrap();
         let fake_bin = temp.path().join("fake-bin");
         let release_dir = temp.path().join("release");
@@ -501,16 +545,22 @@ esac
             sha256(&release_dir.join(&binary_asset)),
             binary_asset,
         )];
-        if include_image_lock {
-            fs::write(
-                release_dir.join(&lock_asset),
-                b"registryctl release image lock\n",
-            )
-            .unwrap();
+        if include_required_lock {
+            let required_lock = if version.starts_with("v0.") {
+                lock_asset.as_str()
+            } else {
+                TEST_RELEASE_LOCK_ASSET
+            };
+            let contents: &[u8] = if version.starts_with("v0.") {
+                b"registryctl release image lock\n"
+            } else {
+                b"signed RegistryReleaseLockV1\n"
+            };
+            fs::write(release_dir.join(required_lock), contents).unwrap();
             checksums.push(format!(
                 "{}  {}\n",
-                sha256(&release_dir.join(&lock_asset)),
-                lock_asset,
+                sha256(&release_dir.join(required_lock)),
+                required_lock,
             ));
         }
         fs::write(release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();

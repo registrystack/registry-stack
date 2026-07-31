@@ -42,9 +42,9 @@
         }
       ],
       "requirements": {
-        "signing": "relay_bundle",
-        "activation": "apply_relay_config",
-        "restart": "registry_relay"
+        "signing": ["relay-public"],
+        "activation": ["relay-public"],
+        "restart": ["relay-public"]
       }
     }
   ]

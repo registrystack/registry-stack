@@ -1,210 +1,430 @@
 ---
-title: Configure OpenCRVS claims
-description: Copy the OpenCRVS starter, verify its synthetic DCI journey offline, and build Relay and Notary configuration inputs.
-status: draft
-draft: true
+title: Exercise a synthetic OpenCRVS Events API-shaped search
+description: Apply the generic OAuth, bounded HTTP, and Rhai path to one synthetic event search without claiming OpenCRVS compatibility.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-19"
+  - registry-relay
+last_reviewed: "2026-07-30"
 doc_type: how-to
 locale: en
-standards_referenced:
-  - openapi
+standards_referenced: []
 ---
 
-import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
-
-Use this guide when a Registry Stack project needs birth-record claims from an OpenCRVS
-deployment. Registry Relay owns the Digital Convergence Initiative (DCI) source interaction and
-returns only the typed outputs in the compiled consultation. Registry Notary evaluates and
-discloses the configured claims from that Relay result.
-
-{/* Evidence: crates/registryctl tests and fixtures under
-    tests/fixtures/project-authoring/opencrvs/. */}
+Use this case study to exercise an OpenCRVS Events API-shaped event search through Registry
+Stack's generic OAuth, bounded HTTP, and Rhai path.
+The example is synthetic and does not establish compatibility with an OpenCRVS deployment.
 
 ## When to use this
 
-Use the starter as a reviewed starting point for an OpenCRVS DCI search journey. The built-in
-fixtures are synthetic. They prove the canonical token, key, and search requests, signed response
-verification, exact identifier matching, ambiguity handling, output minimization, and claim
-evaluation without contacting OpenCRVS, Relay, or Notary.
+Use this shape when an integration team wants to review the Registry Stack source boundary before
+testing a named OpenCRVS release and country configuration.
 
-The starter does not prove compatibility with a particular OpenCRVS deployment. Record that
-evidence separately before marking a source version verified.
+Registryctl 1.0 does not ship an OpenCRVS template or privileged OpenCRVS connector.
+Start with the `http` template and adapt it.
+
+## Case-study scope
+
+This page exercises exactly this synthetic example:
+
+- OAuth client credentials with JSON request encoding
+- `oauth2_bearer_no_expiry` with only `access_token` and `token_type: Bearer`
+- One read-only `POST /api/events/events/search`
+- An exact `and` query on birth-event type and one synthetic tracking id
+- A response limited to two results with `id`, `type`, `status`, and `trackingId`
+- One Rhai mapping that checks cardinality, event type, and the returned tracking id
+- Minimized outputs `event_type` and `registered`
+- Two Notary predicate claims, `birth-event-found` and `birth-event-registered`, rooted in one
+  Relay consultation
+- Match, no match, ambiguity, source rejection, subject mismatch, malformed source response,
+  timeout, OAuth redirect, OAuth media type, token type, extra-member, expiry, oversize response,
+  and authorization denial cases
+
+The request and response are example test files.
+They are not asserted to be a native OpenCRVS contract or release-specific API shape.
+An OpenCRVS deployment owner must replace them from the exact deployment's reviewed API
+documentation before any interoperability test.
 
 ## Before you start
 
-You need:
-
-- A `registryctl` build with Registry Stack project authoring commands
-- A shell and a text editor
-- The reviewed OpenCRVS DCI endpoint, sender and receiver identifiers, registry profile, and
-  signing-key policy for the target deployment
-
-Keep OAuth credentials and signing keys out of authored files, fixtures, commands, and test
-output.
-
-## Copy the OpenCRVS starter
-
-Create the project workspace:
+Create the HTTP project, then use `curl` and Python 3 to download and verify the public example
+from the installed Registryctl release:
 
 ```sh
-registryctl init --from opencrvs-dci --project-dir opencrvs-project
+registryctl init opencrvs-events-api --template http
+cd opencrvs-events-api
+(
+  set -eu
+  REGISTRYCTL_VERSION=$(registryctl --version)
+  REGISTRYCTL_VERSION=${REGISTRYCTL_VERSION#registryctl }
+  case "$REGISTRYCTL_VERSION" in
+    ''|*[!0-9A-Za-z.-]*|[!0-9]*)
+      printf '%s\n' "unexpected Registryctl version: $REGISTRYCTL_VERSION" >&2
+      exit 1
+      ;;
+  esac
+  OVERLAY=opencrvs-events-api-overlay-v1.sh
+  OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"
+  curl -fsS "$OVERLAY_URL" -o "$OVERLAY"
+  curl -fsS "$OVERLAY_URL.sha256" -o "$OVERLAY.sha256"
+  python3 - "$OVERLAY" "$OVERLAY.sha256" <<'PY'
+import hashlib
+import hmac
+import sys
+from pathlib import Path
+
+overlay = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="ascii").splitlines()
+if len(lines) != 1:
+    raise SystemExit("overlay checksum file must contain exactly one line")
+expected, separator, filename = lines[0].partition("  ")
+if separator != "  " or filename != overlay.name:
+    raise SystemExit("overlay checksum file names the wrong asset")
+actual = hashlib.sha256(overlay.read_bytes()).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("overlay checksum mismatch")
+PY
+  sh "$OVERLAY"
+  rm "$OVERLAY" "$OVERLAY.sha256"
+)
 ```
 
-The result confirms the initialized project and next command:
+The overlay first verifies that the complete authored closure still matches the pristine HTTP
+starter embedded in that Registryctl release.
+It stops before replacing any file when the starter is missing, changed, or contains another
+authored file.
+The overlay reports:
 
 ```text
-Initialized Registry Stack project "fictional-civil-registry".
-  Directory: opencrvs-project
-  Starter: opencrvs-dci (Registry Stack 0.13.0)
-  Starter content: matches bundled digest
-  Editor support: VS Code and Zed (opencrvs-project/.registry-stack-editor/manifest.json)
-
-Next:
-  cd opencrvs-project
-  registryctl test --project-dir .
+Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay.
 ```
 
-The project contains one combined topology. Relay owns the OpenCRVS integration and consultation.
-Notary owns the evidence service, claims, disclosure policy, and optional credential profiles.
+The overlay is a released documentation asset, not a third Registryctl template.
+It contains every authored file and fixture used by this page.
+The documentation gate applies the same overlay to a fresh `http` starter without reading or
+copying a source-tree fixture.
 
-## Run the canonical starter sequence
+Keep every identifier, credential, token, and source response synthetic.
+The maintained executable example uses registry id `synthetic-opencrvs-events-api`, integration
+alias `birth-event-search`, and evidence service `birth-event-verification`.
+These names identify the synthetic project only.
 
-Use the focused trace and watch smoke before adapting the OpenCRVS profile. The complete fixture
-test remains offline and uses only synthetic token, key, and DCI search interactions.
+## Declare the synthetic event lookup
 
-<ProjectStarterSequence starter="opencrvs-dci" />
+The overlay creates `integrations/birth-event-search/integration.yaml` with this exact contract:
 
-## Prove the synthetic journey
+```yaml
+version: 1
+id: synthetic-opencrvs-events-search
+revision: 1
 
-Run every fixture without a network connection:
+source:
+  product: opencrvs-events-api
+  versions:
+    unverified: [develop-synthetic-shape-2026-07-30]
+  auth:
+    type: oauth2_client_credentials
+    request: json
+    response_profile: oauth2_bearer_no_expiry
+  allow:
+    - method: POST
+      path: /api/events/events/search
+      semantics: read_only
+  response:
+    format: json
+    max_bytes: 64KiB
 
-```sh
-registryctl test --project-dir opencrvs-project
+input:
+  tracking_id:
+    role: selector
+    type: string
+    maxLength: 32
+    pattern: "^TRK-SYNTH[0-9]{6}$"
+
+capability:
+  script:
+    file: adapter.rhai
+
+outputs:
+  event_type:
+    type: string
+    maxLength: 32
+  registered:
+    type: boolean
+
+limits:
+  calls: 1
+  source_bytes: 128KiB
+  request_bytes: 16KiB
+  deadline: 10s
 ```
 
-The human-readable report starts with:
+The product and version fields record review context.
+They do not select an executor or grant source access.
+The allow policy and environment binding own that authority.
 
-```text
-PASS: <passed>/<total> fixtures passed
+The overlay replaces the integration entry in `registry-stack.yaml` with:
+
+```yaml
+integrations:
+  birth-event-search:
+    file: integrations/birth-event-search/integration.yaml
 ```
 
-The match fixture proves the exact identifier and minimized birth-record outputs. The no-match and
-ambiguity fixtures prove that Relay does not choose a record when the source result is absent or
-non-unique. Derived checks reject malformed signatures, unexpected response shapes, excessive
-data, and source work before authorization.
+## Bind OAuth and source origins
 
-The match fixture also proves the closed `parents` array:
+The overlay binds the integration in `environments/local.yaml`:
 
-```json
-{
-  "parents": [
-    {
-      "type": "mother",
-      "name": "Mira Example",
-      "identifier": "PARENT-0001"
-    },
-    {
-      "type": "father",
-      "name": "Noah Example",
-      "identifier": "PARENT-0002"
+```yaml
+integrations:
+  birth-event-search:
+    source:
+      origin: https://events.opencrvs.invalid
+      credential:
+        client_id: { secret: OPENCRVS_EVENTS_CLIENT_ID }
+        client_secret: { secret: OPENCRVS_EVENTS_CLIENT_SECRET }
+        generation: 1
+      oauth:
+        origin: https://identity.opencrvs.invalid
+        path: /oauth/token
+        generation: 1
+```
+
+The same file selects the maintained synthetic scenario:
+
+```yaml
+development:
+  source_mode: synthetic
+  default_integration: birth-event-search
+  default_fixture: birth-event-match
+```
+
+The `.invalid` origins prevent accidental contact with a real deployment.
+The environment stores secret references, not values.
+Relay owns token acquisition, the authorization header, and the source call.
+Rhai and Notary receive no client secret, token, or token response.
+
+## Map the minimized outputs
+
+The overlay creates `integrations/birth-event-search/adapter.rhai`:
+
+```rhai
+fn consult(ctx) {
+    let exact_tracking_id = #{
+        type: "exact",
+        term: ctx.input.tracking_id
+    };
+    let birth_event_clause = #{
+        eventType: "birth",
+        trackingId: exact_tracking_id
+    };
+    let response = source.post_json("/api/events/events/search", #{
+        query: #{
+            type: "and",
+            clauses: [birth_event_clause]
+        },
+        limit: 2,
+        offset: 0
+    });
+    if response.status != 200 {
+        return result.fail(failure.source_rejected);
     }
-  ]
+
+    let events = response.body.results;
+    if response.body.total == 0 && events.len == 0 {
+        return result.no_match();
+    }
+    if response.body.total > 1 || events.len > 1 {
+        return result.ambiguous();
+    }
+    if response.body.total != 1 || events.len != 1 {
+        return result.fail(failure.source_rejected);
+    }
+
+    let event = events[0];
+    if event.trackingId != ctx.input.tracking_id {
+        return result.fail(failure.subject_mismatch);
+    }
+    if event.type != "birth" {
+        return result.fail(failure.source_rejected);
+    }
+
+    result.match(#{
+        event_type: event.type,
+        registered: event.status == "REGISTERED"
+    })
 }
 ```
 
-The source observation includes a fictional `source_only_reference` for each parent. The adapter
-constructs each released object from `type`, `name`, and `identifier`, so that source-only member
-cannot cross the Relay boundary.
+The adapter constructs the closed output object field by field.
+It does not return the response, event id, tracking id, declaration, OAuth material, or
+source-only metadata.
 
-The output contract limits `parents` to two items and 1,024 canonical serialized bytes. Each item
-is a closed object limited to 384 bytes. Unknown keys, missing required fields, invalid nested
-types, excessive items, and over-bound serialized values fail the fixture or consultation.
+## Keep one consultation-backed claim
 
-When a credential profile includes this direct structured claim, Registry Notary stores and issues
-the exact validated array from the compiler-pinned Relay result. The `parents` claim is one
-top-level Selective Disclosure JSON Web Token (SD-JWT) disclosure. A holder can disclose or
-withhold the complete array. Individual parent objects and their fields are not independently
-disclosable.
+The overlay replaces the starter evidence service in `registry-stack.yaml` with:
 
-## Adapt the project contract
-
-Review and update these surfaces:
-
-1. In `registry-stack.yaml`, set the registry id, service purpose, caller scopes, consultation
-   input mapping, claims, disclosure modes, and credential profiles.
-2. In `integrations/birth-record/integration.yaml`, set the OpenCRVS product evidence, allowed
-   source version, DCI endpoint path, sender and receiver identifiers, registry and record types,
-   selector mapping, outputs, and limits.
-3. In `integrations/birth-record/adapter.rhai`, keep the source calls and response handling within
-   the declared method, path, origin, output, and limit authority.
-4. In `integrations/birth-record/fixtures/`, replace the fictional observations with wholly
-   synthetic examples of the reviewed request and response contract.
-5. In `environments/<environment>.yaml`, bind the private source, OAuth, trust, Relay workload,
-   caller, issuance, and deployment settings through secret references.
-
-`source.product` and `source.versions` are interoperability evidence. They do not enable DCI,
-Rhai, or another executor. The script capability remains available for any source product whose
-reviewed integration needs bounded multi-request adaptation.
-
-## Check and build the combined topology
-
-Validate the adapted project and inspect its redacted plan:
-
-```sh
-registryctl check \
-  --project-dir opencrvs-project \
-  --environment local \
-  --explain
+```yaml
+services:
+  birth-event-verification:
+    kind: evidence
+    version: 1
+    purpose: birth-event-registration-verification
+    legal_basis: public-service-delivery
+    consent: not_required
+    access:
+      scopes: ["evidence:birth-event:read"]
+    consultations:
+      event:
+        integration: birth-event-search
+        input:
+          tracking_id: request.target.identifiers.opencrvs_tracking_id
+    claims:
+      birth-event-found:
+        cel: event.matched
+        disclosure: predicate
+      birth-event-registered:
+        cel: >-
+          event.matched
+            && event.event_type == "birth"
+            && event.registered
+        disclosure: predicate
 ```
 
-The human-readable report marks the project `valid`. Review the fixed source authority, required
-caller scopes, consultation input mapping, output projection, claims, disclosure modes, and required
-review classes. Add `--format json` only for machine processing.
+Both claims have exactly one Relay consultation.
+There is no self-attested, source-free, or caller-defined fallback.
 
-Generate deterministic unsigned inputs for both products:
+## Author the synthetic match fixture
 
-```sh
-registryctl build \
-  --project-dir opencrvs-project \
-  --environment local
+The exact `integrations/birth-event-search/fixtures/match.yaml` file is:
+
+```yaml
+name: birth-event-match
+classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers:
+      - { scheme: opencrvs_tracking_id, value: TRK-SYNTH000001 }
+  claims: [birth-event-found, birth-event-registered]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: birth-event-registration-verification
+input: { tracking_id: TRK-SYNTH000001 }
+interactions:
+  - expect:
+      method: POST
+      path: /oauth/token
+      headers: { Accept: application/json, Content-Type: application/json }
+      body: { grant_type: client_credentials }
+    respond:
+      status: 200
+      headers: { Content-Type: application/json }
+      body:
+        access_token: SYNTHETIC_FIXTURE_TOKEN
+        token_type: Bearer
+  - expect:
+      method: POST
+      path: /api/events/events/search
+      body:
+        query:
+          type: and
+          clauses:
+            - eventType: birth
+              trackingId: { type: exact, term: TRK-SYNTH000001 }
+        limit: 2
+        offset: 0
+    respond:
+      status: 200
+      body:
+        total: 1
+        results:
+          - id: 00000000-0000-4000-8000-000000000001
+            type: birth
+            status: REGISTERED
+            trackingId: TRK-SYNTH000001
+            declaration:
+              child:
+                name: Synthetic Source-Only Name
+            ignored_source_metadata: synthetic-source-only
+expect:
+  outcome: match
+  outputs:
+    event_type: birth
+    registered: true
+  claims:
+    birth-event-found: true
+    birth-event-registered: true
 ```
 
-The human-readable report starts with `Built Registry Stack project` and identifies the output
-directory. The output has separate Relay and Notary Config Bundle input directories under
-`.registry-stack/build/local/private/`. It contains secret references, not secret values. Package,
-sign, verify, and activate each product input through that product's Config Bundle workflow.
+The public overlay also contains the exact synthetic fixtures for no match, ambiguity, source
+rejection, subject mismatch, malformed source response, timeout, OAuth redirect, OAuth media type,
+token type, extra-member, and expiry rejection.
+The complete test also derives authorization-before-source and output-minimization cases.
 
-## Verify the boundary
+## Prove the offline cases
 
-Before deployment approval, confirm:
+Run the focused synthetic trace, then every fixture:
 
-- Only Relay has source origin, credential, token, and source-trust bindings.
-- Notary has a Relay workload binding for registry-backed claims and no direct OpenCRVS connector.
-- The source product and version do not select the script capability.
-- Each fixture proves the canonical source request and a minimized typed result.
-- Structured output schemas are closed, byte-bounded, item-bounded, and identical in the Relay
-  public contract and Notary consultation expectation.
-- The generated review record identifies every semantic and operator-security review required by
-  the adapted project.
+```sh
+registryctl test \
+  --integration birth-event-search \
+  --fixture birth-event-match \
+  --trace
+registryctl test
+```
+
+The trace may contain fixture-authored synthetic values.
+It must not contain a client secret, access token, or token response.
+
+## Prove the local product path
+
+Run the generic development path:
+
+```sh
+registryctl dev --detach
+registryctl dev smoke
+registryctl dev down
+```
+
+The denial scenario reports zero token and source calls.
+The authorized scenario reports one token call, one source call, and only
+`birth-event-found,birth-event-registered` as minimized claim identifiers.
+
+## Review and build
+
+Review the redacted plan and build the three product-lane inputs:
+
+```sh
+registryctl check --explain
+registryctl build
+```
+
+Confirm that OAuth, Rhai, source access, and minimized outputs remain in `relay-consultation`.
+Confirm that claim evaluation and disclosure remain in `notary`.
+The generated result is still synthetic fixture evidence.
+
+## Record the evidence limits
+
+State all of these limits with the case-study result:
+
+- The request and response are synthetic.
+- The OAuth profile is the exact closed profile declared in the project.
+- The Rhai mapping is the reviewed script digest.
+- The output and claim are the exact ids declared in the project.
+- Only the executed negative cases have evidence.
+
+Do not claim live OpenCRVS compatibility, maintainer endorsement, country-configuration
+conformance, native deployment support, or correctness for another API shape.
+Real interoperability evidence requires a separately authorized test against a named release and
+country configuration.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| A fixture request differs from the trace | The expected DCI interaction does not match the compiled integration. | Correct the integration or update the wholly synthetic interaction proof. |
-| Signature verification fails | The synthetic response, key set, algorithm, or configured key policy is inconsistent. | Regenerate only synthetic fixture evidence from the reviewed contract. |
-| A source response is ambiguous | More than one record matches the exact identifier. | Correct the source data or strengthen the reviewed selector contract. |
-| Notary contains an OpenCRVS source credential | Source authority crossed the Relay boundary. | Remove the Notary binding and bind the credential only to the Relay integration environment. |
-| A product or version change enables script execution | Runtime dispatch is coupled to interoperability metadata. | Keep `capability.script` explicit and treat product and version only as evidence. |
-
-## Next
-
-- Return to [Author an HTTP Registry Stack project](../author-registry-project/) for the complete
-  fixture, review, and unsigned-build workflow.
-- Use [Configure a script source adapter](../configure-project-script-adapter/) to review the
-  product-neutral Rhai host boundary.
-- Read [Integration patterns](../../explanation/integration-patterns/) for the Relay and Notary
-  topology around a domain system.
+| The real OpenCRVS contract differs | This page uses a synthetic shape. | Replace the path, OAuth profile, mapping, and fixtures from source-owner review before testing. |
+| The token fixture accepts extra fields | The selected OAuth profile is not enforced strictly. | Use the closed profile and rejection fixtures for unaccepted members. |
+| The adapter returns the source event | The output contract is wider than the claim requires. | Construct the smallest typed output object. |
+| A denied request increments a source counter | Authorization did not precede token acquisition or source access. | Stop the runtime and report the failure through the repository security process. |

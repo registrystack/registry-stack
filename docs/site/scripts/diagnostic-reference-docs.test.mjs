@@ -38,7 +38,7 @@ async function executableBytes(catalog) {
       '-p',
       'registryctl',
       '--',
-      'project',
+      'tooling',
       'diagnostics',
       '--catalog',
       catalog,
@@ -148,9 +148,9 @@ test('published diagnostic pages state the pure CLI and evidence boundaries', as
   );
   const source = pages.join('\n');
   assert.doesNotMatch(source, /\/reference\/registryctl\/(?:authoring-diagnostics|fixture-errors|preflight-errors)\//);
-  assert.match(source, /registryctl project diagnostics --catalog authoring --format json/);
-  assert.match(source, /registryctl project diagnostics --catalog fixture --format json/);
-  assert.match(source, /registryctl project diagnostics --catalog operator --format json/);
+  assert.match(source, /registryctl tooling diagnostics --catalog authoring --format json/);
+  assert.match(source, /registryctl tooling diagnostics --catalog fixture --format json/);
+  assert.match(source, /registryctl tooling diagnostics --catalog operator --format json/);
   assert.match(source, /does not open a country project/);
   assert.match(source, /do not disclose the received configuration/);
   assert.doesNotMatch(

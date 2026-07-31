@@ -1,216 +1,228 @@
 ---
-title: Upgrade and roll back a deployment
-description: How to move a self-hosted Registry Relay or Registry Notary deployment to a new release, verify it, and revert if needed.
-status: draft
+title: Upgrade and recover a deployment
+description: How to generate, verify, activate, or safely abort a product or image update.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-31"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure to move a self-hosted Registry Relay or Registry Notary deployment from
-one release to another, and to revert to the previous release if the new one misbehaves.
-It applies to deployments that consume release artifacts (binaries or the
-`ghcr.io/registrystack/*` container images) pinned to a version tag or image digest.
+Use this procedure to update a single-node deployment created by
+`registryctl deploy generate`. The update unit is a fresh, verified generated package,
+not an edited Compose file or an image tag.
 
-One term needs disambiguating up front. This page uses "roll back" for redeploying the
-previous release of the software. The governed-configuration feature has a separate control
-called anti-rollback, which rejects config bundles older than the last applied sequence.
-The two interact, but anti-rollback state formats can also change between releases. Keep
-version-specific config and state restore sets, and restore the previous release's exact
-anti-rollback state before starting its binary. The
-[revert section](#roll-back-to-the-previous-release) covers this.
+The procedure has a manual abort boundary. Before the first successful product
+acceptance advances durable anti-rollback state, an operator can stop the candidate
+and restart the intact current package. After that acceptance, rollback is unsupported.
+The allowed outcomes are to complete the forward update, restore a coherent recovery
+group at the same or newer accepted sequence, or replace the affected instance
+identity.
 
-This page remains draft until the complete procedure passes against the exact independently
-verified 1.0 candidate and a pinned standalone Solmara release.
-The candidate-neutral record template is
-`release/exercises/upgrade-exercise-v1.template.json`; a validated template is preparation, not
-release evidence.
+The generated `RUNBOOK.md` remains the package-specific authority for service order and
+locked commands. This procedure does not certify that a target release is compatible
+with an operator's data or deployment.
 
 ## Prerequisites
 
-- Your deployment pins a version tag (`v0.13.0`) or an image digest, never `latest`.
-- You know where your deployment keeps its persistent state. At minimum: the audit log
-  directory of each product, the anti-rollback state file if `config_trust` is enabled
-  (`antirollback_state_path`), each PostgreSQL database backing Relay consultation or Registry
-  Notary correctness state, the matching role-provisioning and key-lifecycle records, and your
-  config files and secrets. For generated and single-node
-  Compose deployments, follow [Back up and restore a deployment](../backup-and-restore/)
-  before changing the running containers. Store each release's config and anti-rollback
-  state as a separate restore set; do not overwrite an older set with a newer file.
-- You can run the release-verification steps in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.13.0/SECURITY.md)
-  (cosign, and slsa-verifier for releases with provenance).
+- Keep the current package intact, including `binding.yaml`, `operator/`, `generated/`,
+  its approved set, and its externally recorded closure digest.
+- Verify the target Registryctl binary and matching release lock with the target
+  release's published authenticity and integrity evidence.
+- Obtain a reviewed target approved set for the same signed project and environment
+  identity as the current package.
+- Read the release notes for every applicable product and state transition.
+- Complete [Back up and restore a deployment](../backup-and-restore/) for every affected
+  `relay-public-state` and `consultation-state` recovery consistency group.
+- Keep enough capacity for an isolated candidate package and an encrypted duplicate of
+  operator files.
+- Remove any unresolved `generated.previous/` only after confirming that every affected
+  lane accepted the current sequence and the retention decision is recorded. Package
+  generation refuses to overwrite an unresolved preceding closure.
 
-## Upgrade
+## Prepare a fresh candidate
 
-1. Read the release notes and CHANGELOGs for every release between your current version and
-   the target, in order. Collect every `BREAKING:` and `Deprecated` entry that names a config
-   key, route, metric, or environment variable you use. Within a major line there are no
-   breaking changes once the stack is at `v1.0.0`; before that, minors may contain them.
-   Follow every sequential release hop unless the target release explicitly certifies a direct
-   state path.
+Run a read-only verification of the current package:
 
-2. Download and verify the target release artifacts (cosign signature and, where present,
-   SLSA provenance) before anything else touches them.
+```sh
+registryctl deploy verify \
+  --package ./registry-stack-current \
+  --approved-set ./approved-set.current.v1.json \
+  --check-operator-files
+```
 
-   When upgrading `registryctl` to `v0.9.0` or later, keep its versioned
-   `registryctl-vX.Y.Z-image-lock.json` beside the binary and verify both against the
-   release `SHA256SUMS` and available authenticity evidence. Existing generated projects
-   can keep starting from the immutable image references already stored in their project
-   files. Any later `registryctl init` or `registryctl add` requires the matching new lock
-   before it changes those files. Do not reuse a lock from another CLI version or replace
-   its digest references with mutable tags. For an intentionally separate verified lock
-   location, set `REGISTRYCTL_IMAGE_LOCK` to that exact file.
+Compare its reported closure digest with the external record.
 
-3. Validate your current config against the committed Draft 2020-12 product schemas at
-   `schemas/registry-relay.config.schema.json` and
-   `schemas/registry-notary.config.schema.json`.
-   Then validate it against the new binary offline, before deploying it:
+Use an operator-owned copy mechanism to create an isolated candidate. The copy contains
+secrets, so keep its ownership, mode, encryption, and access boundary unchanged:
 
-   ```sh
-   registry-relay doctor --config <your-config.yaml> --format json
-   registry-notary doctor --config <your-config.yaml> --format json
-   ```
+```sh
+cp -a ./registry-stack-current ./registry-stack-candidate
+```
 
-   Run the new binary's `doctor`, not the old one's. It applies the new release's validation,
-   including rejection of config keys the new release removed, and evaluates the deployment
-   profile gates. Resolve every startup-failure finding before proceeding. Use
-   `explain-config` to confirm the resolved configuration and required environment variables
-   match your expectation.
+Install the verified target Registryctl and matching release lock. Regenerate only the
+candidate package:
 
-4. Back up state that a failed upgrade must not lose: `secrets/local.env`, the audit log
-   directory (copy, never truncate or edit; the hash chain makes hand-edited files
-   unverifiable), the anti-rollback state file, every complete Relay consultation and Notary
-   PostgreSQL database, and your config and source files as currently deployed. Record hashes and
-   permissions without printing secrets, label the restore set with the running release, and
-   leave it unchanged when the target release creates or updates its own state.
+```sh
+registryctl deploy generate \
+  --approved-set ./approved-set.target.v1.json \
+  --output-dir ./registry-stack-candidate
+```
 
-5. For a consultation-enabled Relay upgrade, remove Notary caller traffic, stop the active Relay
-   fence holder, and prevent another Relay process from acquiring the fence. Run the target
-   release's `registry-relay consultation bootstrap-state` with the existing database and the
-   exact recorded owner, role connections, lock keys, chain-key epoch, active key, deadline, and
-   retention inputs. The command is a clean-or-attested exact-schema installer, not a general
-   migration framework. Continue only when it reports `installed_or_attested` and `identical`.
-   If it reports capability or keyring drift, abort the upgrade without dropping schemas or
-   changing bootstrap inputs. Start one target Relay without traffic and require `/ready` to
-   return `200` before admitting callers.
+The command verifies the existing managed package, renders the target closure without
+activating it, retains the preceding generated closure as
+`registry-stack-candidate/generated.previous/`, and prints a new closure digest. Record
+that digest outside both package directories.
 
-6. For a Notary schema upgrade, remove traffic and stop every old Notary writer. Run the target
-   release's `state install` as the migration role, then run `state doctor` as the runtime role.
-   Do not run old and new Notary binaries concurrently across a schema change. Start one target
-   replica without traffic and admit the rest only after every replica attests the same schema
-   fingerprint. Keep the old release's binary or image reference, config, database backup, role
-   provisioning, and sensitive-state key version until the soak period ends.
-   Never start the previous Notary binary against the target schema, including as a diagnostic
-   shortcut.
+Verify the candidate against its approved set, recorded closure digest, and operator
+file inventory:
 
-7. Verify the new deployment:
+```sh
+registryctl deploy verify \
+  --package ./registry-stack-candidate \
+  --approved-set ./approved-set.target.v1.json \
+  --expected-closure-sha256 "$CANDIDATE_CLOSURE_SHA256" \
+  --check-operator-files
+```
 
-   - `/healthz` returns 200 and `/ready` returns 200 on both products.
-   - On Registry Relay, a 503 from `/ready` with a `deployment/not_ready` problem body means a
-     profile gate is failing; check the admin posture surface for the finding.
-   - On Registry Notary, a 503 from `/ready` returns the generic `readiness.not_ready` problem
-     body for any failing readiness check, including a profile gate; check the admin posture
-     surface's deployment object to confirm whether a gate finding caused the failure.
-   - The audit sink is writing: confirm new records appear in the audit log after a probe
-     request.
-   - A canary request per critical path: one governed read and, when enabled, one native
-     consultation on Registry Relay; one claim evaluation and, if you issue credentials, one
-     issuance on Registry Notary.
-   - Metrics are flowing to your monitoring.
+`CANDIDATE_CLOSURE_SHA256` is the exact value recorded from generation. An absent,
+unrecorded, or mismatched value is a manual abort.
 
-   This procedure has been partially exercised against a real topology: the
-   [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/v0.13.0/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
-   covers the upgrade and roll-back steps above; release-artifact verification, credential
-   issuance, metrics, the historical Redis replay/nonce path used by that release, and
-   anti-rollback monotonicity were not exercised by that run. Current Registry Notary releases
-   keep replay and nonce correctness state in PostgreSQL.
+Read `registry-stack-candidate/generated/RUNBOOK.md`. Render the candidate Compose
+model without resolving or printing environment values:
 
-   The current
-   [v0.10.0 -> v0.11.0 -> v0.10.0 release-gate procedure](https://github.com/registrystack/registry-stack/blob/v0.13.0/release/exercises/upgrade-v0.10.0-to-v0.11.0.md)
-   adds old-evaluation rejection and re-evaluation before issuance,
-   candidate-neutral multiple-credential rejection, and retained audit-chain
-   recovery. It is a prepared procedure and does not claim a successful run
-   until finalized-source and published-asset evidence are attached.
+```sh
+cd ./registry-stack-candidate
+docker compose \
+  --env-file generated/compose.empty.env \
+  -f generated/compose.yaml \
+  config --no-interpolate --no-env-resolution --quiet
+```
 
-8. Keep the previous release's artifacts, config, exact anti-rollback state, database backups,
-   role records, and key-lifecycle restore sets until the new release has run through your soak
-   period. Only then remove them under your retention policy.
+Return to the parent directory before continuing. Do not edit `generated/`, substitute
+mutable image tags, or combine a binding change with this product or evidence update.
 
-## Roll back to the previous release
+## Verify current state before shutdown
 
-Before target-version traffic is admitted, the general rollback path restores the complete
-previous-release recovery set.
-After the target accepts traffic that writes correctness state, audit evidence, or credentials,
-fix forward by default.
-Rollback after target writes is permitted only when that release documents and proves a safe
-recovery conversion.
+From the current package root, follow its `generated/RUNBOOK.md`. Verify the effective
+Compose model and run all three dedicated, networkless state checks. Use the same explicit
+Compose project name for the current and candidate packages:
 
-If rollback remains permitted:
+```sh
+export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<package-id-from-generated-RUNBOOK.md>}"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
+```
 
-1. Stop the target release. Restore the previous release's binary or image, the config that
-   was running before the upgrade, and that release's exact anti-rollback state at its
-   configured path. For Notary, also restore the matching complete database backup, role
-   provisioning, and sensitive-state key version. Retain the target release's state separately.
-   Never start the previous binary against a newer schema or anti-rollback state file.
-   For a consultation-enabled Relay, reuse the current database only when the previous release's
-   bootstrap command attests the same schema and keyring. Restore a pre-upgrade Relay database
-   only when the target release acknowledged no consultation after that recovery point. If target
-   traffic wrote state, keep the current database and fix forward unless a release-specific
-   recovery procedure proves a safe conversion.
+Abort before shutdown if package, operator-file, bundle, anchor, Compose, or state
+verification fails. Resolve a coherent current-state failure before attempting the
+update.
 
-2. Respect the constraints that survive a software roll-back:
+## Preview, accept, verify, and start the candidate
 
-   - Anti-rollback state is release-specific durable evidence. Restore the exact prior
-     release file, including its hash and permissions. Do not delete or reinitialize either
-     release's state to make a bundle boot, and do not copy a newer state file over the
-     prior restore set. Sequence monotonicity continues within each retained state lineage.
-   - The audit chain must stay continuous. Never truncate or rewrite audit files to "match"
-     the previous state; the chain verifies across the retained files, and the record of the
-     failed upgrade is evidence, not noise.
-   - Relay readiness does not prove restore freshness. A stale Relay database can omit durable
-     consultation audit, replay, quota, materialization, or keyring history while retaining a
-     valid catalog. Keep a questionable recovery point offline and recover forward to the last
-     acknowledged write and external audit watermark.
-   - If the upgrade rotated or introduced signing keys and credentials were issued with
-     them, keep the new public keys published until those credentials expire; removing them
-     breaks verification for holders. This mirrors the rollback plan in the Registry Notary
-     deployment hardening runbook.
-   - Do not rotate the audit hash secret as part of a roll-back; rotating it breaks
-     correlation of records written before the rotation.
+Keep all current services running while you preview every affected product lane using the
+candidate's operator files.
+The preview actions verify the later candidate without changing durable anti-rollback state.
+Do not stop any service unless every preview succeeds.
 
-3. Re-run the verification list from the upgrade procedure against the reverted deployment.
+In the literal generated order below, keep current services running through all three preview
+commands.
+After those previews succeed, remove externally reachable traffic before the `stop` command and
+keep the source and write freeze required by the pre-update recovery groups.
+Run the sequence from the candidate package root:
 
-4. Before retrying the upgrade, capture what failed: the problem responses, the posture
-   findings, and the audit records from the failed window.
+```sh
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml stop
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml ps
+```
+
+Each `accept_state` action uses the locked audit-before-mutation path.
+The first successful acceptance that advances durable anti-rollback state is the manual abort
+boundary.
+Before that boundary, restart the intact current package if the services were stopped.
+After that boundary, only complete the forward update, restore a coherent snapshot at the same or
+newer accepted sequence, or replace the affected instance identity.
+Keep traffic blocked while the updated services and product canaries are evaluated.
+Do not configure an automated rollback across this boundary.
+
+## Verify the updated deployment
+
+- Confirm the expected services are healthy in `docker compose ... ps`.
+- Verify PostgreSQL and consultation Relay before admitting a Notary caller.
+- Exercise one authenticated canary for each affected public, consultation, evaluation,
+  issuance, and status path.
+- Exercise every affected SnapshotExact materialization because global readiness does
+  not prove execution-time freshness.
+- Confirm audit records extend the retained chains without logging their values.
+- Confirm every affected lane reports the target accepted sequence before ending the
+  change window.
+
+Only after those checks and the operator's soak period may the operator remove the
+candidate's `generated.previous/` and retire the intact current package under the
+retention policy.
+
+Package verification proves the generated closure, release projection, and structural
+operator-file boundary. It does not prove application compatibility, database
+freshness, canary coverage, or safe rollback after product acceptance.
+
+## Abort or recover
+
+Before the manual abort boundary, leave the current package running when a preview fails.
+If the current services were stopped after successful previews but no acceptance completed,
+restart the still-intact current package with its `generated/RUNBOOK.md`.
+Verify the current closure and run all three current `verify_state` actions before its ordinary
+`up`.
+
+After the boundary, never start the older closure or restore a pre-update accepted
+sequence. Choose one of these manual recovery paths:
+
+1. Complete the forward update after correcting the candidate's operator-controlled
+   dependency.
+2. Restore a complete `relay-public-state` or `consultation-state` group at the same or
+   newer accepted sequence, then run all three read-only `verify_state` actions.
+3. Provision a new instance identity, review and sign every affected lane, generate a
+   new package, and follow first installation.
+
+An anti-rollback rejection is a correct fail-closed result. Do not delete, copy, edit,
+or reinitialize anti-rollback state to make an older bundle or closure start.
+Reinitializing the same identity is not recovery.
 
 ## Troubleshooting
 
-- The new binary refuses to start with a config validation error naming a key you use: the
-  key was removed or renamed. The error message and the release's migration notes name the
-  replacement. Fix the config; do not downgrade to avoid the message.
-- `/ready` stays 503 after upgrade: read the problem body. On Registry Relay,
-  `deployment/not_ready` is a profile gate, inspect the admin posture surface;
-  `schema/resource_unavailable` means a configured resource failed ingest. On Registry Notary,
-  the problem body reports the generic code `readiness.not_ready` for any failing readiness
-  check, including a profile gate; check the admin posture surface's deployment object to
-  confirm whether a gate finding is the cause.
-- Config bundle activation is rejected with a rollback outcome after reverting: confirm the
-  previous release's exact config and anti-rollback state restore set is in place. Do not
-  delete or reinitialize state. If the restored lineage itself has already accepted a newer
-  sequence, issue a valid bundle with a higher sequence instead of activating an older one.
-- Relay consultation bootstrap reports capability or keyring drift: the target binary, schema,
-  roles, lock identity, or keyring lifecycle does not match the current database. Keep traffic
-  blocked and restore the matching complete recovery set. Do not drop or rebootstrap the schemas.
+| Symptom | Required response |
+|---|---|
+| Candidate generation rejects the package as unmanaged or modified | Discard the candidate copy and begin again from the intact verified current package |
+| Candidate generation reports an unresolved `generated.previous/` | Resolve the prior change and retention decision; do not delete the closure to bypass the guard |
+| Candidate verification reports a closure or approved-set mismatch | Keep the candidate offline and regenerate it from the intended verified inputs |
+| `verify_state` rejects the target as older | Keep services and traffic stopped; use a signed target with a higher sequence or restore a coherent same-or-newer group |
+| PostgreSQL or consultation Relay does not become healthy | Keep Notary and external dependants stopped; restore or repair the coherent private recovery group |
+| A failure appears after product acceptance | Do not restart the previous closure; complete forward, restore same-or-newer coherent state, or replace the instance identity |
 
 ## Next
 
+- [Back up and restore a deployment](../backup-and-restore/)
 - [Run single-node Compose behind your reverse proxy](../single-node-compose-behind-proxy/)
 - [API stability and versioning](../../reference/api-stability/)
-- [Back up and restore a deployment](../backup-and-restore/)
 - [Security support window](../../security/support-window/)
 - [Report a vulnerability](../../security/report-a-vulnerability/)

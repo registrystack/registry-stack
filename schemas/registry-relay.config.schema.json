@@ -862,6 +862,49 @@
       ],
       "type": "object"
     },
+    "ConsultationBootstrapPolicyConfig": {
+      "additionalProperties": false,
+      "description": "Signed, bounded policy for preparing and initializing consultation state.\n\nEvery string is an environment-reference or database role name, never a\nconnection URL or credential value. The policy is optional only for the\npre-1.0 local startup path. Governed consultation product actions require\nit, while the public Relay lane rejects consultation configuration\nentirely.",
+      "properties": {
+        "active_key_id": {
+          "type": "string"
+        },
+        "active_write_deadline_unix_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "audit_event_retention_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "keyring_maintenance_database_url_env": {
+          "type": "string"
+        },
+        "keyring_reader_database_url_env": {
+          "type": "string"
+        },
+        "migration_database_url_env": {
+          "type": "string"
+        },
+        "owner_role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "migration_database_url_env",
+        "owner_role",
+        "keyring_maintenance_database_url_env",
+        "keyring_reader_database_url_env",
+        "active_key_id",
+        "active_write_deadline_unix_ms",
+        "audit_event_retention_ms"
+      ],
+      "type": "object"
+    },
     "ConsultationClientClaimSelectorConfig": {
       "description": "Closed set of verified OAuth claims that may identify Registry Notary.",
       "enum": [
@@ -891,6 +934,17 @@
         "authorized_workload": {
           "$ref": "#/$defs/ConsultationWorkloadConfig",
           "description": "Exact OIDC claims that identify the only caller allowed to execute\nconsultation profiles. The issuer is inherited from `auth.oidc`; the\nworkload, scope, tenant, and registry bindings come from each compiled\nprofile."
+        },
+        "bootstrap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsultationBootstrapPolicyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Product-owned first-install policy. Governed product actions accept\nthese settings only from the verified consultation bundle; deployment\nrenderers cannot reproduce them as command arguments."
         },
         "source_credentials": {
           "$ref": "#/$defs/ConsultationSourceCredentialCatalogConfig",
@@ -2250,6 +2304,14 @@
           },
           "type": "array"
         },
+        "development_jwks_file": {
+          "default": null,
+          "description": "Development-only public JWKS file loaded once into memory at startup.\nThis source is accepted only when `deployment.profile` is `local` and\nis mutually exclusive with `jwks_url` and `discovery_url`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "discovery_url": {
           "default": null,
           "description": "OIDC discovery document URL\n(`.well-known/openid-configuration`). The JWKS URL is resolved\nfrom `jwks_uri` in the discovered document.",
@@ -2272,7 +2334,7 @@
         },
         "jwks_url": {
           "default": null,
-          "description": "JWKS endpoint. Either this or `discovery_url` must be set.\n`discovery_url` takes precedence: when both are configured the\nvalidator rejects the document.",
+          "description": "JWKS endpoint. Exactly one JWKS source must be configured.",
           "type": [
             "string",
             "null"

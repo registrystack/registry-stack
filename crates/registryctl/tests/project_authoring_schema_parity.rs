@@ -248,7 +248,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_schema(),
         [
             (SchemaKind::Project, 220),
-            (SchemaKind::Environment, 206),
+            (SchemaKind::Environment, 213),
             (SchemaKind::Integration, 171),
             (SchemaKind::Fixture, 63),
             (SchemaKind::Entity, 35),
@@ -261,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 486),
+            (FieldPathKind::Property, 492),
             (FieldPathKind::MapKey, 26),
             (FieldPathKind::MapValue, 33),
             (FieldPathKind::ArrayItem, 34),
-            (FieldPathKind::Branch, 111),
+            (FieldPathKind::Branch, 112),
         ]
         .into_iter()
         .collect(),
@@ -275,11 +275,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 439),
+            (Sensitivity::Internal, 445),
             (Sensitivity::Sensitive, 69),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 51),
-            (Sensitivity::Structural, 116),
+            (Sensitivity::Structural, 117),
         ]
         .into_iter()
         .collect(),
@@ -287,12 +287,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        695,
+        702,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        276,
+        279,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -788,27 +788,27 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "environment",
                 PublishedStructuralInventory {
-                    nodes: 231,
-                    local_refs: 89,
+                    nodes: 239,
+                    local_refs: 92,
                     union_nodes: 6,
-                    union_branches: 16,
+                    union_branches: 17,
                     conditionals: 7,
-                    objects: 41,
-                    closed_objects: 37,
+                    objects: 42,
+                    closed_objects: 38,
                     typed_maps: 4,
                     open_maps: 0,
                     arrays: 6,
-                    scalar_types: 43,
+                    scalar_types: 46,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 17,
-                    integer_upper_bounds: 17,
+                    integer_lower_bounds: 19,
+                    integer_upper_bounds: 19,
                     string_length_bounds: 17,
-                    string_patterns: 14,
+                    string_patterns: 15,
                     array_size_bounds: 6,
                     unique_arrays: 6,
                     object_size_bounds: 5,
                     property_name_constraints: 4,
-                    enums: 2,
+                    enums: 3,
                     consts: 6,
                     defaults: 4,
                     deprecations: 0,

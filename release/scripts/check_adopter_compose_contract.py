@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the adopter-runtime Compose conformance fixtures.
-
-This is a pre-renderer proof over deliberately inert fixtures. It validates
-effective Compose models; it does not implement rendering or trust decisions.
-"""
+"""Validate the package-only adopter Compose conformance fixtures."""
 
 from __future__ import annotations
 
@@ -13,204 +9,95 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = REPO_ROOT / "release/conformance/adopter-runtime"
-PRODUCT_SERVICES = frozenset(
+PROJECT_NAME = "registry-adopter-probe"
+NETWORK_RUNTIME = "registry-runtime"
+IMAGE_IDENTITY = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+SENTINEL_FRAGMENT = "value-must-not-enter-compose"
+BOUNDED_LOCAL_LOGGING = {
+    "driver": "local",
+    "options": {
+        "max-size": "10m",
+        "max-file": "3",
+    },
+}
+
+WORKLOAD_SERVICES = frozenset(
     {
-        "registry-private-namespace",
         "registry-postgres",
         "registry-relay-public",
         "registry-relay-consultation",
         "registry-notary",
     }
 )
+STAGER_SERVICES = frozenset(
+    {
+        "registry-postgresql-stage-secrets",
+        "registry-relay-consultation-stage-secrets",
+        "registry-notary-stage-secrets",
+    }
+)
+ACTION_STAGER_SERVICES = frozenset(
+    {
+        "registry-postgresql-actions-stage-secrets",
+        "registry-relay-consultation-actions-stage-secrets",
+        "registry-notary-actions-stage-secrets",
+    }
+)
+ORDINARY_SERVICES = WORKLOAD_SERVICES | STAGER_SERVICES
 INITIALIZATION_SERVICES = frozenset(
     {
+        "registry-postgres-bootstrap",
         "registry-relay-public-prepare-state",
         "registry-relay-consultation-prepare-state",
         "registry-notary-prepare-state",
         "registry-relay-public-initialize",
         "registry-relay-consultation-initialize",
         "registry-notary-initialize",
+        "registry-relay-public-preview-state",
+        "registry-relay-consultation-preview-state",
+        "registry-notary-preview-state",
+        "registry-relay-public-accept-state",
+        "registry-relay-consultation-accept-state",
+        "registry-notary-accept-state",
+        "registry-relay-public-verify-state",
+        "registry-relay-consultation-verify-state",
+        "registry-notary-verify-state",
     }
 )
-INITIALIZATION_IMAGE_SERVICE = {
-    "registry-relay-public-prepare-state": "registry-relay-public",
-    "registry-relay-consultation-prepare-state": "registry-relay-consultation",
-    "registry-notary-prepare-state": "registry-notary",
-    "registry-relay-public-initialize": "registry-relay-public",
-    "registry-relay-consultation-initialize": "registry-relay-consultation",
-    "registry-notary-initialize": "registry-notary",
-}
-PRIVATE_NETWORK = "registry-private"
-PRIVATE_NAMESPACE = "service:registry-private-namespace"
-IMAGE_IDENTITY_PATTERN = re.compile(
-    r"^[^@\s]+@sha256:[0-9a-f]{64}$"
+
+OPERATOR_ENVIRONMENT_FILES = frozenset(
+    {
+        "relay-public-environment",
+        "relay-consultation-environment",
+        "notary-environment",
+        "postgresql-bootstrap-environment",
+    }
 )
-COMPOSE_SERVICE_FOR_WORKLOAD = {
-    "relay-public": "registry-relay-public",
-    "relay-consultation": "registry-relay-consultation",
-    "notary": "registry-notary",
-    "postgresql-state-plane": "registry-postgres",
-    "private-namespace-holder": "registry-private-namespace",
+OPERATOR_SECRET_FILES = frozenset(
+    {
+        "notary-relay-workload-credential",
+        "notary-signing-key",
+        "postgresql-admin-password",
+        "postgresql-tls-certificate",
+        "postgresql-tls-private-key",
+    }
+)
+EXPECTED_OPERATOR_FILES = OPERATOR_ENVIRONMENT_FILES | OPERATOR_SECRET_FILES
+
+LANE_ENVIRONMENTS = {
+    "registry-relay-public": "relay-public-environment",
+    "registry-relay-consultation": "relay-consultation-environment",
+    "registry-notary": "notary-environment",
 }
-COMPOSE_SECRET_FOR_CONSUMER = {
-    "relay-public-tls": "registry-relay-public-tls",
-    "relay-consultation-tls": "registry-relay-consultation-tls",
-    "notary-tls": "registry-notary-tls",
-    "notary-signing-key": "registry-notary-signing-key",
-    "postgresql-tls": "registry-postgres-tls",
-    "postgresql-credentials": "registry-postgres-credentials",
-}
-COMPOSE_STATE_FOR_ROLE = {
-    "relay-public-anti-rollback": (
-        "registry-relay-public-state",
-        "/var/lib/registry/state",
-    ),
-    "relay-public-audit": (
-        "registry-relay-public-audit",
-        "/var/lib/registry/audit",
-    ),
-    "relay-consultation-anti-rollback": (
-        "registry-relay-consultation-state",
-        "/var/lib/registry/state",
-    ),
-    "relay-consultation-audit": (
-        "registry-relay-consultation-audit",
-        "/var/lib/registry/audit",
-    ),
-    "notary-anti-rollback": (
-        "registry-notary-state",
-        "/var/lib/registry/state",
-    ),
-    "notary-audit": (
-        "registry-notary-audit",
-        "/var/lib/registry/audit",
-    ),
-    "postgresql-data": (
-        "registry-postgres-data",
-        "/var/lib/postgresql/data",
-    ),
-}
-EXPECTED_PLAN_WORKLOADS = {
-    "relay-public": {
-        "kind": "product",
-        "product_lane": "relay-public",
-        "action": "serve",
-        "immutable_inputs": ["relay-public-bundle", "relay-public-anchor"],
-        "mount_roles": [
-            "bundle",
-            "anchor",
-            "anti-rollback-state",
-            "certificate",
-            "audit",
-        ],
-        "secret_consumers": ["relay-public-tls"],
-        "state_roles": [
-            "relay-public-anti-rollback",
-            "relay-public-audit",
-        ],
-        "endpoint_classes": ["public-application", "metrics", "posture"],
-        "network_relationships": ["edge"],
-        "dependencies": [],
-        "health_semantics": "relay-public-health",
-        "restart_action": "restart",
-        "reactivation_action": "verify_state",
-    },
-    "relay-consultation": {
-        "kind": "product",
-        "product_lane": "relay-consultation",
-        "action": "serve",
-        "immutable_inputs": [
-            "relay-consultation-bundle",
-            "relay-consultation-anchor",
-        ],
-        "mount_roles": [
-            "bundle",
-            "anchor",
-            "anti-rollback-state",
-            "certificate",
-            "audit",
-        ],
-        "secret_consumers": ["relay-consultation-tls"],
-        "state_roles": [
-            "relay-consultation-anti-rollback",
-            "relay-consultation-audit",
-        ],
-        "endpoint_classes": ["private-application", "metrics", "posture"],
-        "network_relationships": ["private-consultation-namespace"],
-        "dependencies": [
-            "postgresql-state-plane",
-            "private-namespace-holder",
-        ],
-        "health_semantics": "relay-consultation-health",
-        "restart_action": "restart",
-        "reactivation_action": "verify_state",
-    },
-    "notary": {
-        "kind": "product",
-        "product_lane": "notary",
-        "action": "serve",
-        "immutable_inputs": ["notary-bundle", "notary-anchor"],
-        "mount_roles": [
-            "bundle",
-            "anchor",
-            "anti-rollback-state",
-            "secret",
-            "certificate",
-            "audit",
-        ],
-        "secret_consumers": ["notary-tls", "notary-signing-key"],
-        "state_roles": ["notary-anti-rollback", "notary-audit"],
-        "endpoint_classes": [
-            "private-application",
-            "administration",
-            "metrics",
-            "posture",
-        ],
-        "network_relationships": ["private-consultation-namespace"],
-        "dependencies": [
-            "relay-consultation",
-            "postgresql-state-plane",
-            "private-namespace-holder",
-        ],
-        "health_semantics": "notary-health",
-        "restart_action": "restart",
-        "reactivation_action": "verify_state",
-    },
-    "postgresql-state-plane": {
-        "kind": "supporting",
-        "recipe": "postgresql_state_plane",
-        "secret_consumers": [
-            "postgresql-tls",
-            "postgresql-credentials",
-        ],
-        "state_roles": ["postgresql-data"],
-        "endpoint_classes": ["private-application"],
-        "network_relationships": ["private-consultation-namespace"],
-        "dependencies": ["private-namespace-holder"],
-        "health_semantics": "postgresql-health",
-        "restart_action": "restart",
-        "reactivation_action": "restore_consistency_group",
-    },
-    "private-namespace-holder": {
-        "kind": "supporting",
-        "recipe": "private_namespace_holder",
-        "secret_consumers": [],
-        "state_roles": [],
-        "endpoint_classes": [],
-        "network_relationships": ["private"],
-        "dependencies": [],
-        "health_semantics": "namespace-holder-health",
-        "restart_action": "restart",
-        "reactivation_action": "restart_consistency_group",
-    },
-}
-PRODUCT_COMMANDS = {
+ORDINARY_COMMANDS = {
+    "registry-postgres": ["postgres"],
     "registry-relay-public": ["product-action", "relay-public", "serve"],
     "registry-relay-consultation": [
         "product-action",
@@ -219,7 +106,46 @@ PRODUCT_COMMANDS = {
     ],
     "registry-notary": ["product-action", "serve"],
 }
+POSTGRESQL_ORDINARY_ENTRYPOINT = [
+    "/bin/bash",
+    "-ceu",
+    (
+        'test -s "$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION" '
+        "|| { echo 'PostgreSQL data directory is empty; run the explicit "
+        "initialization workflow first' >&2; exit 1; }\n"
+        'exec "$@"'
+    ),
+    "--",
+]
+POSTGRESQL_INITIALIZATION_ENTRYPOINT = [
+    "/bin/bash",
+    "-ceu",
+    (
+        'pgdata="$${PGDATA:-/var/lib/postgresql/data}"\n'
+        'test -z "$$(find "$$pgdata" -mindepth 1 -maxdepth 1 -print -quit)" '
+        "|| { echo 'PostgreSQL data directory is not empty; refusing explicit "
+        "initialization' >&2; exit 1; }\n"
+        'exec /usr/local/bin/docker-entrypoint.sh "$@"'
+    ),
+    "--",
+]
+ORDINARY_DEPENDENCIES = {
+    "registry-postgres": {
+        "registry-postgresql-stage-secrets": "service_completed_successfully"
+    },
+    "registry-relay-public": {},
+    "registry-relay-consultation": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+    },
+    "registry-notary": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation": "service_healthy",
+        "registry-notary-stage-secrets": "service_completed_successfully",
+    },
+}
 INITIALIZATION_COMMANDS = {
+    "registry-postgres-bootstrap": ["postgresql-action", "bootstrap"],
     "registry-relay-public-prepare-state": [
         "product-action",
         "relay-public",
@@ -245,40 +171,653 @@ INITIALIZATION_COMMANDS = {
         "initialize_state",
     ],
     "registry-notary-initialize": ["product-action", "initialize_state"],
+    "registry-relay-public-preview-state": [
+        "product-action",
+        "relay-public",
+        "preview_state",
+    ],
+    "registry-relay-consultation-preview-state": [
+        "product-action",
+        "relay-consultation",
+        "preview_state",
+    ],
+    "registry-notary-preview-state": ["product-action", "preview_state"],
+    "registry-relay-public-accept-state": [
+        "product-action",
+        "relay-public",
+        "accept_state",
+    ],
+    "registry-relay-consultation-accept-state": [
+        "product-action",
+        "relay-consultation",
+        "accept_state",
+    ],
+    "registry-notary-accept-state": ["product-action", "accept_state"],
+    "registry-relay-public-verify-state": [
+        "product-action",
+        "relay-public",
+        "verify_state",
+    ],
+    "registry-relay-consultation-verify-state": [
+        "product-action",
+        "relay-consultation",
+        "verify_state",
+    ],
+    "registry-notary-verify-state": ["product-action", "verify_state"],
 }
-EXPECTED_INITIALIZATION_ACTIONS = (
-    ("prepare-relay-public-state", "relay-public", "prepare_state_store"),
-    (
-        "prepare-relay-consultation-state",
-        "relay-consultation",
-        "prepare_state_store",
+INITIALIZATION_METADATA = {
+    "registry-relay-public-prepare-state": (
+        "registry-relay-public",
+        "relay-public",
+        "prepare",
     ),
-    ("prepare-notary-state", "notary", "prepare_state_store"),
-    ("initialize-relay-public", "relay-public", "initialize_state"),
-    (
-        "initialize-relay-consultation",
+    "registry-relay-consultation-prepare-state": (
+        "registry-relay-consultation",
         "relay-consultation",
-        "initialize_state",
+        "prepare",
     ),
-    ("initialize-notary", "notary", "initialize_state"),
+    "registry-notary-prepare-state": (
+        "registry-notary",
+        "notary",
+        "prepare",
+    ),
+    "registry-relay-public-initialize": (
+        "registry-relay-public",
+        "relay-public",
+        "initialize",
+    ),
+    "registry-relay-consultation-initialize": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "initialize",
+    ),
+    "registry-notary-initialize": (
+        "registry-notary",
+        "notary",
+        "initialize",
+    ),
+    "registry-relay-public-preview-state": (
+        "registry-relay-public",
+        "relay-public",
+        "preview",
+    ),
+    "registry-relay-consultation-preview-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "preview",
+    ),
+    "registry-notary-preview-state": (
+        "registry-notary",
+        "notary",
+        "preview",
+    ),
+    "registry-relay-public-accept-state": (
+        "registry-relay-public",
+        "relay-public",
+        "accept",
+    ),
+    "registry-relay-consultation-accept-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "accept",
+    ),
+    "registry-notary-accept-state": (
+        "registry-notary",
+        "notary",
+        "accept",
+    ),
+    "registry-relay-public-verify-state": (
+        "registry-relay-public",
+        "relay-public",
+        "verify",
+    ),
+    "registry-relay-consultation-verify-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "verify",
+    ),
+    "registry-notary-verify-state": (
+        "registry-notary",
+        "notary",
+        "verify",
+    ),
+}
+INITIALIZATION_DEPENDENCIES = {
+    "registry-relay-public-prepare-state": {},
+    "registry-relay-public-initialize": {},
+    "registry-relay-consultation-prepare-state": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
+    },
+    "registry-relay-consultation-initialize": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
+    },
+    "registry-notary-prepare-state": {
+        "registry-postgres": "service_healthy",
+        "registry-notary-actions-stage-secrets": "service_completed_successfully",
+    },
+    "registry-notary-initialize": {},
+    "registry-relay-public-preview-state": {},
+    "registry-relay-public-accept-state": {},
+    "registry-relay-consultation-preview-state": {},
+    "registry-relay-consultation-accept-state": {},
+    "registry-notary-preview-state": {},
+    "registry-notary-accept-state": {},
+    "registry-relay-public-verify-state": {},
+    "registry-relay-consultation-verify-state": {},
+    "registry-notary-verify-state": {},
+}
+
+STAGER_COMMAND = ["umask 077\nexit 0\n"]
+STAGER_SPECS = {
+    "registry-postgresql-stage-secrets": {
+        "outputs": {
+            "postgresql-serve": "registry-operator-files-postgresql-serve",
+        },
+        "secrets": {
+            "registry-postgresql-admin-password",
+            "registry-postgresql-tls-certificate",
+            "registry-postgresql-tls-private-key",
+        },
+    },
+    "registry-relay-consultation-stage-secrets": {
+        "outputs": {
+            "relay-consultation-serve": (
+                "registry-operator-files-relay-consultation-serve"
+            ),
+        },
+        "secrets": {
+            "registry-postgresql-tls-certificate",
+        },
+    },
+    "registry-notary-stage-secrets": {
+        "outputs": {
+            "notary-serve": "registry-operator-files-notary-serve",
+        },
+        "secrets": {
+            "registry-notary-relay-workload-credential",
+            "registry-notary-signing-key",
+            "registry-postgresql-tls-certificate",
+        },
+    },
+}
+
+ACTION_STAGER_SPECS = {
+    "registry-postgresql-actions-stage-secrets": {
+        "outputs": {
+            "postgresql-bootstrap": "registry-operator-files-postgresql-bootstrap",
+        },
+        "secrets": {
+            "registry-postgresql-admin-password",
+            "registry-postgresql-tls-certificate",
+        },
+    },
+    "registry-relay-consultation-actions-stage-secrets": {
+        "outputs": {
+            "relay-consultation-prepare": (
+                "registry-operator-files-relay-consultation-prepare"
+            ),
+            "relay-consultation-initialize": (
+                "registry-operator-files-relay-consultation-initialize"
+            ),
+        },
+        "secrets": {"registry-postgresql-tls-certificate"},
+    },
+    "registry-notary-actions-stage-secrets": {
+        "outputs": {
+            "notary-prepare": "registry-operator-files-notary-prepare",
+        },
+        "secrets": {"registry-postgresql-tls-certificate"},
+    },
+}
+
+ORDINARY_STAGER_RUNTIME_ACTIONS = {
+    "registry-postgresql-stage-secrets": [
+        ("postgresql-serve", "postgresql_state_plane", "serve"),
+    ],
+    "registry-relay-consultation-stage-secrets": [
+        ("relay-consultation-serve", "relay_consultation", "serve"),
+    ],
+    "registry-notary-stage-secrets": [
+        ("notary-serve", "notary", "serve"),
+    ],
+}
+
+ACTION_STAGER_RUNTIME_ACTIONS = {
+    "registry-postgresql-actions-stage-secrets": [
+        ("postgresql-bootstrap", "postgresql_state_plane", "bootstrap"),
+    ],
+    "registry-relay-consultation-actions-stage-secrets": [
+        (
+            "relay-consultation-prepare",
+            "relay_consultation",
+            "prepare_state_store",
+        ),
+        (
+            "relay-consultation-initialize",
+            "relay_consultation",
+            "initialize_state",
+        ),
+    ],
+    "registry-notary-actions-stage-secrets": [
+        ("notary-prepare", "notary", "prepare_state_store"),
+    ],
+}
+
+DURABLE_VOLUMES = frozenset(
+    {
+        "registry-postgresql-data",
+        "registry-relay-public-state",
+        "registry-relay-public-audit",
+        "registry-relay-consultation-state",
+        "registry-relay-consultation-audit",
+        "registry-notary-state",
+        "registry-notary-audit",
+    }
 )
+ORDINARY_STAGED_SECRET_VOLUMES = frozenset(
+    volume for spec in STAGER_SPECS.values() for volume in spec["outputs"].values()
+)
+INITIALIZATION_STAGED_SECRET_VOLUMES = frozenset(
+    volume
+    for spec in ACTION_STAGER_SPECS.values()
+    for volume in spec["outputs"].values()
+)
+STAGED_SECRET_VOLUMES = (
+    ORDINARY_STAGED_SECRET_VOLUMES | INITIALIZATION_STAGED_SECRET_VOLUMES
+)
+EXPECTED_VOLUMES = DURABLE_VOLUMES | ORDINARY_STAGED_SECRET_VOLUMES
+EXPECTED_INITIALIZATION_VOLUMES = DURABLE_VOLUMES | STAGED_SECRET_VOLUMES
+
+EXPECTED_PLAN_WORKLOADS = {
+    "relay-public": {
+        "kind": "product",
+        "product_lane": "relay-public",
+        "action": "serve",
+        "immutable_inputs": [
+            "relay-public-bundle",
+            "relay-public-anchor",
+        ],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "audit",
+        ],
+        "secret_consumers": [],
+        "state_roles": [
+            "relay-public-anti-rollback",
+            "relay-public-audit",
+        ],
+        "endpoint_classes": ["public-application", "posture"],
+        "network_relationships": ["runtime"],
+        "dependencies": [],
+        "health_semantics": "relay-public-health",
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
+    },
+    "relay-consultation": {
+        "kind": "product",
+        "product_lane": "relay-consultation",
+        "action": "serve",
+        "immutable_inputs": [
+            "relay-consultation-bundle",
+            "relay-consultation-anchor",
+        ],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "audit",
+        ],
+        "secret_consumers": [],
+        "state_roles": [
+            "relay-consultation-anti-rollback",
+            "relay-consultation-audit",
+        ],
+        "endpoint_classes": ["private-application", "posture"],
+        "network_relationships": ["runtime"],
+        "dependencies": ["postgresql-state-plane"],
+        "health_semantics": "relay-consultation-health",
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
+    },
+    "notary": {
+        "kind": "product",
+        "product_lane": "notary",
+        "action": "serve",
+        "immutable_inputs": ["notary-bundle", "notary-anchor"],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "secret",
+            "audit",
+        ],
+        "secret_consumers": [
+            "notary-relay-workload-credential",
+            "notary-signing-key",
+        ],
+        "state_roles": ["notary-anti-rollback", "notary-audit"],
+        "endpoint_classes": [
+            "public-application",
+            "administration",
+            "posture",
+        ],
+        "network_relationships": ["runtime"],
+        "dependencies": [
+            "relay-consultation",
+            "postgresql-state-plane",
+        ],
+        "health_semantics": "notary-health",
+        "restart_action": "restart",
+        "reactivation_action": "verify_state",
+    },
+    "postgresql-state-plane": {
+        "kind": "supporting",
+        "recipe": "postgresql_state_plane",
+        "secret_consumers": [
+            "postgresql-tls",
+            "postgresql-credentials",
+        ],
+        "state_roles": ["postgresql-data"],
+        "endpoint_classes": ["private-application"],
+        "network_relationships": ["runtime"],
+        "dependencies": [],
+        "health_semantics": "postgresql-health",
+        "restart_action": "restart",
+        "reactivation_action": "restore_consistency_group",
+    },
+}
+EXPECTED_INITIALIZATION_ACTIONS = [
+    {
+        "id": "bootstrap-postgresql-state-plane",
+        "workload": "postgresql-state-plane",
+        "action": "bootstrap_state_plane",
+    },
+    {
+        "id": "prepare-relay-public-state",
+        "workload": "relay-public",
+        "action": "prepare_state_store",
+    },
+    {
+        "id": "prepare-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "prepare_state_store",
+    },
+    {
+        "id": "prepare-notary-state",
+        "workload": "notary",
+        "action": "prepare_state_store",
+    },
+    {
+        "id": "initialize-relay-public",
+        "workload": "relay-public",
+        "action": "initialize_state",
+    },
+    {
+        "id": "initialize-relay-consultation",
+        "workload": "relay-consultation",
+        "action": "initialize_state",
+    },
+    {
+        "id": "initialize-notary",
+        "workload": "notary",
+        "action": "initialize_state",
+    },
+    {
+        "id": "preview-relay-public-state",
+        "workload": "relay-public",
+        "action": "preview_state",
+    },
+    {
+        "id": "preview-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "preview_state",
+    },
+    {
+        "id": "preview-notary-state",
+        "workload": "notary",
+        "action": "preview_state",
+    },
+    {
+        "id": "accept-relay-public-state",
+        "workload": "relay-public",
+        "action": "accept_state",
+    },
+    {
+        "id": "accept-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "accept_state",
+    },
+    {
+        "id": "accept-notary-state",
+        "workload": "notary",
+        "action": "accept_state",
+    },
+    {
+        "id": "verify-relay-public-state",
+        "workload": "relay-public",
+        "action": "verify_state",
+    },
+    {
+        "id": "verify-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "verify_state",
+    },
+    {
+        "id": "verify-notary-state",
+        "workload": "notary",
+        "action": "verify_state",
+    },
+]
+EXPECTED_RECOVERY_GROUPS = [
+    {
+        "id": "consultation-state",
+        "members": [
+            "relay-consultation",
+            "notary",
+            "postgresql-state-plane",
+        ],
+    },
+    {"id": "relay-public-state", "members": ["relay-public"]},
+]
+EXPECTED_EXPOSURES = [
+    {
+        "endpoint_class": "public-application",
+        "exposure": "operator-bound",
+    },
+    {
+        "endpoint_class": "private-application",
+        "exposure": "private-network-only",
+    },
+    {
+        "endpoint_class": "administration",
+        "exposure": "private-network-only",
+    },
+    {
+        "endpoint_class": "posture",
+        "exposure": "private-network-only",
+    },
+]
 
 
 class ContractError(RuntimeError):
-    """Raised when a rendered model violates the conformance contract."""
+    """Raised when a normalized fixture violates the package contract."""
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ContractError(f"deployment plan probe repeats object field {name}")
+        result[name] = value
+    return result
+
+
+def fixture_runtime_contract() -> dict[str, Any]:
+    return {
+        "ordinary_commands": ORDINARY_COMMANDS,
+        "initialization_commands": INITIALIZATION_COMMANDS,
+        "health_probes": {
+            name: ["CMD", "/conformance-only-healthcheck"]
+            for name in WORKLOAD_SERVICES
+        },
+        "ordinary_stager_commands": {
+            name: STAGER_COMMAND for name in STAGER_SERVICES
+        },
+        "initialization_stager_commands": {
+            name: STAGER_COMMAND for name in ACTION_STAGER_SERVICES
+        },
+        "declared_compose_files": OPERATOR_SECRET_FILES,
+    }
+
+
+def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        runtime = payload["runtime"]
+        products = {
+            "registry-relay-public": runtime["relay_public"],
+            "registry-relay-consultation": runtime["relay_consultation"],
+            "registry-notary": runtime["notary"],
+        }
+        postgresql = runtime["postgresql_state_plane"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ContractError(
+            "RegistryReleaseLockV1 parity payload is incomplete"
+        ) from error
+
+    ordinary_commands = {
+        name: recipe["serve"]["command"] for name, recipe in products.items()
+    }
+    ordinary_commands["registry-postgres"] = postgresql["serve"]["command"]
+    initialization_commands = {
+        "registry-postgres-bootstrap": postgresql["bootstrap"]["command"],
+        "registry-relay-public-prepare-state": (
+            products["registry-relay-public"]["prepare_state_store"]["command"]
+        ),
+        "registry-relay-consultation-prepare-state": (
+            products["registry-relay-consultation"][
+                "prepare_state_store"
+            ]["command"]
+        ),
+        "registry-notary-prepare-state": (
+            products["registry-notary"]["prepare_state_store"]["command"]
+        ),
+        "registry-relay-public-initialize": (
+            products["registry-relay-public"]["initialize_state"]["command"]
+        ),
+        "registry-relay-consultation-initialize": (
+            products["registry-relay-consultation"][
+                "initialize_state"
+            ]["command"]
+        ),
+        "registry-notary-initialize": (
+            products["registry-notary"]["initialize_state"]["command"]
+        ),
+        "registry-relay-public-preview-state": (
+            products["registry-relay-public"]["preview_state"]["command"]
+        ),
+        "registry-relay-consultation-preview-state": (
+            products["registry-relay-consultation"]["preview_state"]["command"]
+        ),
+        "registry-notary-preview-state": (
+            products["registry-notary"]["preview_state"]["command"]
+        ),
+        "registry-relay-public-accept-state": (
+            products["registry-relay-public"]["accept_state"]["command"]
+        ),
+        "registry-relay-consultation-accept-state": (
+            products["registry-relay-consultation"]["accept_state"]["command"]
+        ),
+        "registry-notary-accept-state": (
+            products["registry-notary"]["accept_state"]["command"]
+        ),
+        "registry-relay-public-verify-state": (
+            products["registry-relay-public"]["verify_state"]["command"]
+        ),
+        "registry-relay-consultation-verify-state": (
+            products["registry-relay-consultation"]["verify_state"]["command"]
+        ),
+        "registry-notary-verify-state": (
+            products["registry-notary"]["verify_state"]["command"]
+        ),
+    }
+    health_probes = {
+        name: recipe["health_probe"] for name, recipe in products.items()
+    }
+    health_probes["registry-postgres"] = postgresql["health_probe"]
+
+    def stager_commands_for(
+        action_inventory: dict[str, list[tuple[str, str, str]]],
+    ) -> tuple[dict[str, list[str]], set[str]]:
+        commands = {}
+        files = set()
+        for service, actions in action_inventory.items():
+            script = "umask 077\n"
+            for stage_id, recipe_id, action_id in actions:
+                projections = runtime[recipe_id][action_id]["secret_files"]
+                if not projections:
+                    continue
+                files.update(projection["file_id"] for projection in projections)
+                output = f"/registryctl-stage/output/{stage_id}"
+                script += (
+                    f"/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
+                )
+                for projection in projections:
+                    target = Path(projection["target"]).name
+                    script += (
+                        f"/usr/bin/install -m {projection['mode']} "
+                        f"/run/secrets/{projection['file_id']} {output}/{target}\n"
+                        f"/usr/bin/chown {projection['uid']}:{projection['gid']} "
+                        f"{output}/{target}\n"
+                    )
+            commands[service] = [script]
+        return commands, files
+
+    ordinary_stager_commands, ordinary_files = stager_commands_for(
+        ORDINARY_STAGER_RUNTIME_ACTIONS
+    )
+    initialization_stager_commands, initialization_files = stager_commands_for(
+        ACTION_STAGER_RUNTIME_ACTIONS
+    )
+    declared_compose_files = set()
+    declared_compose_files.update(ordinary_files)
+    declared_compose_files.update(initialization_files)
+
+    return {
+        "ordinary_commands": ordinary_commands,
+        "initialization_commands": initialization_commands,
+        "health_probes": health_probes,
+        "ordinary_stager_commands": ordinary_stager_commands,
+        "initialization_stager_commands": initialization_stager_commands,
+        "declared_compose_files": declared_compose_files,
+    }
 
 
 def _compose_config(
-    compose_command: Sequence[str], fixture_root: Path, *files: str
+    compose_command: Sequence[str],
+    fixture_root: Path,
+    *files: str,
+    package_root: Path | None = None,
+    project_name: str | None = PROJECT_NAME,
 ) -> dict[str, Any]:
-    empty_env = fixture_root / "package/generated/compose.empty.env"
-    command = [
-        *compose_command,
-        "--project-name",
-        "registry-adopter-probe",
-        "--env-file",
-        str(empty_env),
-    ]
+    package_root = package_root or fixture_root / "package"
+    command = [*compose_command]
+    if project_name is not None:
+        command.extend(("--project-name", project_name))
+    command.extend(
+        (
+            "--env-file",
+            str(package_root / "generated/compose.empty.env"),
+        )
+    )
     for relative_file in files:
         command.extend(("-f", str(fixture_root / relative_file)))
     command.extend(
@@ -293,10 +832,7 @@ def _compose_config(
     result = subprocess.run(
         command,
         cwd=fixture_root,
-        env={
-            **os.environ,
-            "COMPOSE_IGNORE_ORPHANS": "true",
-        },
+        env={**os.environ, "COMPOSE_IGNORE_ORPHANS": "true"},
         capture_output=True,
         text=True,
         check=False,
@@ -304,15 +840,12 @@ def _compose_config(
     if result.returncode:
         diagnostic = (result.stderr or result.stdout).strip()
         raise ContractError(
-            f"Compose normalization failed for {', '.join(files)}: "
-            f"{diagnostic[:1200]}"
+            f"Compose normalization failed for {', '.join(files)}: {diagnostic[:1200]}"
         )
     try:
         model = json.loads(result.stdout)
     except json.JSONDecodeError as error:
-        raise ContractError(
-            f"Compose returned invalid JSON for {', '.join(files)}"
-        ) from error
+        raise ContractError("Compose returned invalid JSON") from error
     if not isinstance(model, dict):
         raise ContractError("Compose effective model must be an object")
     return model
@@ -325,1037 +858,917 @@ def _services(model: dict[str, Any]) -> dict[str, Any]:
     return services
 
 
-def _labels(service: dict[str, Any]) -> dict[str, str]:
-    raw = service.get("labels", {})
-    if isinstance(raw, dict):
-        return {str(key): str(value) for key, value in raw.items()}
-    if isinstance(raw, list):
-        labels: dict[str, str] = {}
-        for item in raw:
-            key, separator, value = str(item).partition("=")
-            labels[key] = value if separator else ""
-        return labels
-    raise ContractError("service labels must be a mapping or list")
+def _env_file_paths(service: dict[str, Any]) -> list[Path]:
+    env_files = service.get("env_file", [])
+    if not isinstance(env_files, list):
+        raise ContractError("service env_file must remain a list")
+    paths = []
+    for entry in env_files:
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if not isinstance(path, str):
+            raise ContractError("service env_file entry has no path")
+        paths.append(Path(path))
+    return paths
+
+
+def _dependencies(service: dict[str, Any]) -> dict[str, str]:
+    dependencies = service.get("depends_on", {})
+    if not isinstance(dependencies, dict):
+        raise ContractError("service dependencies must remain an object")
+    observed: dict[str, str] = {}
+    for name, dependency in dependencies.items():
+        if (
+            not isinstance(dependency, dict)
+            or dependency.get("required") is not True
+            or not isinstance(dependency.get("condition"), str)
+        ):
+            raise ContractError("service dependency lost its required condition")
+        observed[name] = dependency["condition"]
+    return observed
+
+
+def _mounts(service: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    volumes = service.get("volumes", [])
+    if not isinstance(volumes, list):
+        raise ContractError("service volumes must remain a list")
+    mounts: dict[str, dict[str, Any]] = {}
+    for mount in volumes:
+        target = mount.get("target") if isinstance(mount, dict) else None
+        if not isinstance(target, str) or target in mounts:
+            raise ContractError("service mount targets are invalid or duplicated")
+        mounts[target] = mount
+    return mounts
+
+
+def _secret_projections(service: dict[str, Any]) -> dict[str, str]:
+    secrets = service.get("secrets", [])
+    if not isinstance(secrets, list):
+        raise ContractError("service secrets must remain a list")
+    projections = {}
+    for secret in secrets:
+        source = secret.get("source") if isinstance(secret, dict) else None
+        target = secret.get("target") if isinstance(secret, dict) else None
+        if (
+            not isinstance(source, str)
+            or not isinstance(target, str)
+            or source in projections
+        ):
+            raise ContractError("service secret sources are invalid or duplicated")
+        projections[source] = target
+    return projections
+
+
+def _assert_product_hardening(
+    name: str,
+    service: dict[str, Any],
+    *,
+    health_probe: list[str] | None,
+) -> None:
+    if (
+        service.get("platform") != "linux/amd64"
+        or service.get("user") != "65532:65532"
+        or service.get("read_only") is not True
+        or service.get("cap_drop") != ["ALL"]
+        or service.get("security_opt") != ["no-new-privileges:true"]
+        or service.get("tmpfs") != ["/tmp"]
+        or service.get("logging") != BOUNDED_LOCAL_LOGGING
+        or "cap_add" in service
+        or service.get("privileged", False) is not False
+    ):
+        raise ContractError(f"{name} lost product hardening")
+    expected_healthcheck = (
+        {
+            "test": health_probe,
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+        }
+        if health_probe is not None
+        else None
+    )
+    if service.get("healthcheck") != expected_healthcheck:
+        raise ContractError(f"{name} has the wrong healthcheck boundary")
+
+
+def _assert_postgresql_hardening(
+    name: str,
+    service: dict[str, Any],
+    *,
+    health_probe: list[str] | None,
+) -> None:
+    if (
+        service.get("platform") != "linux/amd64"
+        or service.get("user") != "999:999"
+        or service.get("read_only") is not True
+        or service.get("cap_drop") != ["ALL"]
+        or service.get("security_opt") != ["no-new-privileges:true"]
+        or service.get("tmpfs")
+        != ["/tmp", "/var/run/postgresql:uid=999,gid=999,mode=0750"]
+        or service.get("logging") != BOUNDED_LOCAL_LOGGING
+        or "cap_add" in service
+        or service.get("privileged", False) is not False
+    ):
+        raise ContractError(f"{name} lost PostgreSQL hardening")
+    expected_healthcheck = (
+        {
+            "test": health_probe,
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+        }
+        if health_probe is not None
+        else None
+    )
+    if service.get("healthcheck") != expected_healthcheck:
+        raise ContractError(f"{name} has the wrong healthcheck boundary")
+
+
+def _assert_volume_mount(
+    mount: dict[str, Any], source: str, *, read_only: bool
+) -> None:
+    if (
+        mount.get("type") != "volume"
+        or mount.get("source") != source
+        or bool(mount.get("read_only", False)) is not read_only
+    ):
+        raise ContractError(
+            "managed volume mount contract changed "
+            f"(expected source={source}, read_only={read_only}; "
+            f"observed type={mount.get('type')}, "
+            f"source={mount.get('source')}, "
+            f"read_only={bool(mount.get('read_only', False))})"
+        )
+
+
+def _assert_product_mounts(
+    name: str,
+    service: dict[str, Any],
+    lane: str,
+    *,
+    action: str,
+    package_root: Path,
+) -> None:
+    mounts = _mounts(service)
+    expected_targets = {
+        "/run/registry/bundle",
+        "/run/registry/anchor",
+    }
+    if action != "prepare":
+        expected_targets.add("/var/lib/registry/state")
+    if action not in {"preview", "verify"}:
+        expected_targets.add("/var/lib/registry/audit")
+    secret_volume = f"registry-operator-files-{lane}-{action}"
+    if secret_volume in STAGED_SECRET_VOLUMES:
+        expected_targets.add("/run/secrets")
+    if set(mounts) != expected_targets:
+        raise ContractError(f"{name} has the wrong protected mount inventory")
+    for target, kind in (
+        ("/run/registry/bundle", "bundles"),
+        ("/run/registry/anchor", "anchors"),
+    ):
+        mount = mounts[target]
+        source = mount.get("source")
+        expected_source = package_root / "generated" / kind / lane
+        if kind == "bundles":
+            source_path = Path(source) if isinstance(source, str) else None
+            lane_owned = source_path == expected_source or (
+                source_path is not None
+                and source_path.parent == expected_source
+                and re.fullmatch(r"[0-9a-f]{64}", source_path.name) is not None
+            )
+        else:
+            lane_owned = source == str(expected_source)
+        if (
+            mount.get("type") != "bind"
+            or mount.get("read_only") is not True
+            or mount.get("bind") != {"create_host_path": False}
+            or not lane_owned
+        ):
+            raise ContractError(f"{name} lost its lane-owned {kind} bind")
+    if "/var/lib/registry/state" in mounts:
+        _assert_volume_mount(
+            mounts["/var/lib/registry/state"],
+            f"registry-{lane}-state",
+            read_only=action in {"serve", "preview", "verify"},
+        )
+    if "/var/lib/registry/audit" in mounts:
+        _assert_volume_mount(
+            mounts["/var/lib/registry/audit"],
+            f"registry-{lane}-audit",
+            read_only=False,
+        )
+    if "/run/secrets" in mounts:
+        _assert_volume_mount(
+            mounts["/run/secrets"],
+            secret_volume,
+            read_only=True,
+        )
+
+
+def _assert_stager(
+    name: str,
+    service: dict[str, Any],
+    *,
+    postgresql_image: str,
+    command: list[str],
+    spec: dict[str, Any] | None = None,
+) -> None:
+    spec = spec or STAGER_SPECS[name]
+    if (
+        service.get("image") != postgresql_image
+        or service.get("platform") != "linux/amd64"
+        or service.get("entrypoint") != ["/bin/sh", "-ceu"]
+        or service.get("command") != command
+        or service.get("user") != "0:0"
+        or service.get("read_only") is not True
+        or service.get("cap_drop") != ["ALL"]
+        or service.get("cap_add") != ["CHOWN", "DAC_READ_SEARCH"]
+        or service.get("security_opt") != ["no-new-privileges:true"]
+        or service.get("tmpfs") != ["/tmp"]
+        or service.get("network_mode") != "none"
+        or service.get("restart") != "no"
+        or service.get("privileged", False) is not False
+    ):
+        raise ContractError(
+            f"{name} lost its isolated secret-staging capability contract"
+        )
+    for forbidden in (
+        "depends_on",
+        "env_file",
+        "healthcheck",
+        "networks",
+        "ports",
+    ):
+        if forbidden in service:
+            raise ContractError(f"{name} gained forbidden {forbidden} authority")
+    expected_mounts = {
+        f"/registryctl-stage/output/{action}": volume
+        for action, volume in spec["outputs"].items()
+    }
+    mounts = _mounts(service)
+    if set(mounts) != set(expected_mounts):
+        raise ContractError(f"{name} gained cross-lane output authority")
+    for target, source in expected_mounts.items():
+        _assert_volume_mount(mounts[target], source, read_only=False)
+    expected_secrets = {
+        source: source.removeprefix("registry-") for source in spec["secrets"]
+    }
+    if _secret_projections(service) != expected_secrets:
+        raise ContractError(f"{name} gained cross-lane input authority")
+
+
+def _assert_operator_file_inventory(
+    model: dict[str, Any],
+    package_root: Path,
+    declared_compose_files: set[str] | frozenset[str],
+) -> None:
+    expected_directory = (package_root / "operator/secrets").resolve()
+    observed_environment_files = set()
+    for service in _services(model).values():
+        if not isinstance(service, dict):
+            raise ContractError("service is not an object")
+        for path in _env_file_paths(service):
+            if path.parent == expected_directory:
+                observed_environment_files.add(path.name)
+    ordinary_environments = OPERATOR_ENVIRONMENT_FILES - {
+        "postgresql-bootstrap-environment"
+    }
+    if observed_environment_files != ordinary_environments:
+        raise ContractError("package has the wrong operator environment files")
+    declared_secrets = model.get("secrets")
+    expected_names = {
+        f"registry-{name}" for name in declared_compose_files
+    }
+    if (
+        not isinstance(declared_secrets, dict)
+        or set(declared_secrets) != expected_names
+    ):
+        observed_names = (
+            set(declared_secrets) if isinstance(declared_secrets, dict) else set()
+        )
+        raise ContractError(
+            "package has the wrong operator secret definitions "
+            f"(missing={sorted(expected_names - observed_names)}, "
+            f"unexpected={sorted(observed_names - expected_names)})"
+        )
+    observed_secret_files = set()
+    for name, definition in declared_secrets.items():
+        path = definition.get("file") if isinstance(definition, dict) else None
+        if (
+            not isinstance(path, str)
+            or Path(path).parent != expected_directory
+            or Path(path).name != name.removeprefix("registry-")
+        ):
+            raise ContractError("operator secret escaped package/operator/secrets")
+        observed_secret_files.add(Path(path).name)
+    if observed_environment_files | observed_secret_files != (
+        ordinary_environments | declared_compose_files
+    ):
+        raise ContractError("package operator-file inventory is incomplete")
+
+
+def _assert_top_level_resources(model: dict[str, Any]) -> None:
+    project_name = model.get("name")
+    if not isinstance(project_name, str) or not project_name:
+        raise ContractError("package lost its Compose project identity")
+    networks = model.get("networks")
+    if not isinstance(networks, dict) or set(networks) != {NETWORK_RUNTIME}:
+        raise ContractError("package must use exactly one ordinary runtime network")
+    network = networks[NETWORK_RUNTIME]
+    if (
+        not isinstance(network, dict)
+        or network.get("internal") is True
+        or network.get("external") is True
+        or set(network) - {"name"}
+        or network.get("name") != f"{project_name}_{NETWORK_RUNTIME}"
+    ):
+        raise ContractError("runtime network gained managed isolation")
+    volumes = model.get("volumes")
+    if not isinstance(volumes, dict) or set(volumes) != EXPECTED_VOLUMES:
+        raise ContractError("package has the wrong closed volume inventory")
+    for name in DURABLE_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"durable volume {name} lost its stable physical name")
+    for name in ORDINARY_STAGED_SECRET_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"scratch volume {name} lost its project scope")
+
+
+def assert_value_free(model: dict[str, Any]) -> None:
+    rendered = json.dumps(model, sort_keys=True)
+    if SENTINEL_FRAGMENT in rendered:
+        raise ContractError("Compose config resolved an operator sentinel value")
+    for name, service in _services(model).items():
+        if not isinstance(service, dict):
+            raise ContractError(f"service {name} is not an object")
+        if "environment" in service:
+            raise ContractError(f"service {name} resolved environment values")
+
+
+def validate_plan(path: Path) -> dict[str, str]:
+    try:
+        plan = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ContractError("deployment plan probe is not valid JSON") from error
+    expected_root_fields = {
+        "schema_id",
+        "schema_version",
+        "single_instance",
+        "workloads",
+        "initialization_actions",
+        "recovery_consistency_groups",
+        "exposure_requirements",
+    }
+    if (
+        not isinstance(plan, dict)
+        or set(plan) != expected_root_fields
+        or plan.get("schema_id") != "io.registrystack.deployment_plan"
+        or plan.get("schema_version") != "1.0"
+        or plan.get("single_instance") is not True
+    ):
+        raise ContractError("deployment plan probe has the wrong closed schema")
+    workloads = plan.get("workloads")
+    if not isinstance(workloads, list) or len(workloads) != 4:
+        raise ContractError("deployment plan must contain exactly four workloads")
+    images: dict[str, str] = {}
+    services = {
+        "relay-public": "registry-relay-public",
+        "relay-consultation": "registry-relay-consultation",
+        "notary": "registry-notary",
+        "postgresql-state-plane": "registry-postgres",
+    }
+    observed_ids = set()
+    for workload in workloads:
+        if not isinstance(workload, dict):
+            raise ContractError("deployment plan workload is not an object")
+        workload_id = workload.get("id")
+        expected = EXPECTED_PLAN_WORKLOADS.get(workload_id)
+        image = workload.get("image_identity")
+        if (
+            expected is None
+            or workload_id in observed_ids
+            or set(workload) != {
+                "id",
+                "image_identity",
+                "image_platform",
+                *expected,
+            }
+            or workload.get("image_platform") != "linux-amd64"
+            or {key: workload.get(key) for key in expected} != expected
+            or not isinstance(image, str)
+            or IMAGE_IDENTITY.fullmatch(image) is None
+        ):
+            raise ContractError(
+                f"deployment plan has the wrong closed workload {workload_id}"
+            )
+        observed_ids.add(workload_id)
+        images[services[workload_id]] = image
+    if observed_ids != set(EXPECTED_PLAN_WORKLOADS):
+        raise ContractError("deployment plan workload inventory is incomplete")
+    if images["registry-relay-public"] != images["registry-relay-consultation"]:
+        raise ContractError("deployment plan Relay workloads use different images")
+    if plan.get("initialization_actions") != EXPECTED_INITIALIZATION_ACTIONS:
+        raise ContractError("deployment plan initialization inventory is stale")
+    if plan.get("recovery_consistency_groups") != EXPECTED_RECOVERY_GROUPS:
+        raise ContractError("deployment plan recovery inventory is stale")
+    if plan.get("exposure_requirements") != EXPECTED_EXPOSURES:
+        raise ContractError("deployment plan exposure inventory is stale")
+    return images
 
 
 def assert_ordinary_model(
     model: dict[str, Any],
-    expected_images: dict[str, str] | None = None,
-    expected_secrets: dict[str, set[str]] | None = None,
-    expected_state_mounts: dict[str, set[tuple[str, str]]] | None = None,
-    expected_generated_dir: Path | None = None,
+    expected_images: dict[str, str],
+    fixture_root: Path = FIXTURE_ROOT,
+    *,
+    package_root: Path | None = None,
+    runtime_contract: dict[str, Any] | None = None,
 ) -> None:
+    package_root = package_root or fixture_root / "package"
+    runtime_contract = runtime_contract or fixture_runtime_contract()
+    assert_value_free(model)
     services = _services(model)
-    if set(services) != PRODUCT_SERVICES:
+    if set(services) != ORDINARY_SERVICES:
         raise ContractError(
-            "ordinary model must contain exactly the five governed services"
+            "ordinary model must contain four workloads and three secret stagers"
         )
-    leaked = INITIALIZATION_SERVICES.intersection(services)
-    if leaked:
-        raise ContractError(
-            "ordinary model contains initialization services: "
-            + ", ".join(sorted(leaked))
+    if INITIALIZATION_SERVICES.intersection(services):
+        raise ContractError("ordinary model exposes initialization services")
+    for name in STAGER_SERVICES:
+        _assert_stager(
+            name,
+            services[name],
+            postgresql_image=expected_images["registry-postgres"],
+            command=runtime_contract["ordinary_stager_commands"][name],
         )
-    for name in PRODUCT_SERVICES:
-        labels = _labels(services[name])
-        if labels.get("io.registrystack.probe.owner") != "renderer":
-            raise ContractError(f"{name} lost its renderer ownership label")
-        healthcheck = services[name].get("healthcheck")
-        if not isinstance(healthcheck, dict) or healthcheck.get("test") != [
-            "CMD",
-            "/conformance-only-healthcheck",
-        ]:
-            raise ContractError(f"{name} lost its conformance health shape")
+    for name in WORKLOAD_SERVICES:
         service = services[name]
-        if (
-            service.get("read_only") is not True
-            or service.get("user") != "65532:65532"
-            or service.get("cap_drop") != ["ALL"]
-            or service.get("security_opt") != ["no-new-privileges:true"]
-            or service.get("tmpfs") != ["/tmp"]
-        ):
-            raise ContractError(f"{name} does not use the product hardening profile")
-        expected_command = PRODUCT_COMMANDS.get(name)
-        if expected_command is not None and (
-            service.get("command") != expected_command
-            or service.get("entrypoint") is not None
-        ):
-            raise ContractError(f"{name} does not use its closed serve action")
-        if (
-            expected_images is not None
-            and service.get("image") != expected_images[name]
-        ):
-            raise ContractError(f"{name} does not use its plan image identity")
-        if expected_secrets is not None:
-            actual_secrets = {
-                secret.get("source")
-                for secret in service.get("secrets", [])
-                if isinstance(secret, dict)
-            }
-            if actual_secrets != expected_secrets[name]:
-                raise ContractError(
-                    f"{name} does not use its plan secret consumers"
-                )
-        if expected_state_mounts is not None:
-            actual_state_mounts = {
-                (mount.get("source"), mount.get("target"))
-                for mount in service.get("volumes", [])
-                if isinstance(mount, dict)
-                and mount.get("type") == "volume"
-                and mount.get("read_only") is not True
-            }
-            if actual_state_mounts != expected_state_mounts[name]:
-                raise ContractError(f"{name} does not use its plan state roles")
-
-    expected_dependencies = {
-        "registry-private-namespace": set(),
-        "registry-postgres": {"registry-private-namespace"},
-        "registry-relay-public": set(),
-        "registry-relay-consultation": {
-            "registry-private-namespace",
-            "registry-postgres",
-        },
-        "registry-notary": {
-            "registry-private-namespace",
-            "registry-postgres",
-            "registry-relay-consultation",
-        },
-    }
-    for name, expected in expected_dependencies.items():
-        dependencies = services[name].get("depends_on", {})
-        if set(dependencies) != expected:
-            raise ContractError(f"{name} has the wrong dependency inventory")
-        if any(
-            dependency.get("condition") != "service_healthy"
-            for dependency in dependencies.values()
-        ):
-            raise ContractError(f"{name} has a non-health dependency")
-
-    networks = model.get("networks")
-    if not isinstance(networks, dict):
-        raise ContractError("ordinary model has no networks object")
-    private_network = networks.get(PRIVATE_NETWORK)
-    if (
-        not isinstance(private_network, dict)
-        or private_network.get("internal") is not True
+        if service.get("image") != expected_images[name]:
+            raise ContractError(f"{name} does not use its exact plan image")
+        if service.get("command") != runtime_contract["ordinary_commands"][name]:
+            raise ContractError(f"{name} has the wrong ordinary command")
+        if service.get("restart") != "unless-stopped":
+            raise ContractError(f"{name} has the wrong ordinary restart policy")
+        if set(service.get("networks", {})) != {NETWORK_RUNTIME}:
+            raise ContractError(f"{name} has the wrong ordinary network")
+        if _dependencies(service) != ORDINARY_DEPENDENCIES[name]:
+            raise ContractError(f"{name} has the wrong ordinary dependencies")
+        for forbidden in ("network_mode", "secrets"):
+            if forbidden in service:
+                raise ContractError(f"{name} gained forbidden {forbidden}")
+    for name in (
+        "registry-relay-public",
+        "registry-relay-consultation",
+        "registry-notary",
     ):
-        raise ContractError("registry-private must remain an internal network")
-    if private_network.get("name") != "registry-adopter-probe-private":
-        raise ContractError("registry-private has the wrong stable name")
-    edge_network = networks.get("registry-edge")
+        _assert_product_hardening(
+            name,
+            services[name],
+            health_probe=runtime_contract["health_probes"][name],
+        )
+    _assert_postgresql_hardening(
+        "registry-postgres",
+        services["registry-postgres"],
+        health_probe=runtime_contract["health_probes"]["registry-postgres"],
+    )
+    for name, environment in LANE_ENVIRONMENTS.items():
+        if _env_file_paths(services[name]) != [
+            package_root / "operator/secrets" / environment
+        ]:
+            raise ContractError(f"{name} does not use its lane environment")
+    if _env_file_paths(services["registry-postgres"]) != [
+        package_root / "generated/postgresql-server.env"
+    ]:
+        raise ContractError("PostgreSQL does not use its package server environment")
     if (
-        not isinstance(edge_network, dict)
-        or edge_network.get("name") != "registry-adopter-probe-edge"
-        or edge_network.get("internal") is True
+        services["registry-postgres"].get("entrypoint")
+        != POSTGRESQL_ORDINARY_ENTRYPOINT
     ):
-        raise ContractError("registry-edge has the wrong exposure contract")
-
-    expected_network_modes = {
-        "registry-postgres": PRIVATE_NAMESPACE,
-        "registry-relay-consultation": PRIVATE_NAMESPACE,
-        "registry-notary": PRIVATE_NAMESPACE,
+        raise ContractError("ordinary PostgreSQL has the wrong fail-closed entrypoint")
+    postgres_mounts = _mounts(services["registry-postgres"])
+    if set(postgres_mounts) != {"/var/lib/postgresql/data", "/run/secrets"}:
+        raise ContractError("PostgreSQL has the wrong protected mount inventory")
+    _assert_volume_mount(
+        postgres_mounts["/var/lib/postgresql/data"],
+        "registry-postgresql-data",
+        read_only=False,
+    )
+    _assert_volume_mount(
+        postgres_mounts["/run/secrets"],
+        "registry-operator-files-postgresql-serve",
+        read_only=True,
+    )
+    for name, lane in (
+        ("registry-relay-public", "relay-public"),
+        ("registry-relay-consultation", "relay-consultation"),
+        ("registry-notary", "notary"),
+    ):
+        _assert_product_mounts(
+            name,
+            services[name],
+            lane,
+            action="serve",
+            package_root=package_root,
+        )
+    expected_ports = {
+        "registry-relay-public": [
+            {
+                "host_ip": "127.0.0.1",
+                "mode": "ingress",
+                "protocol": "tcp",
+                "published": "4242",
+                "target": 8080,
+            }
+        ],
+        "registry-notary": [
+            {
+                "host_ip": "127.0.0.1",
+                "mode": "ingress",
+                "protocol": "tcp",
+                "published": "4255",
+                "target": 8081,
+            }
+        ],
     }
-    for service_name, expected_mode in expected_network_modes.items():
-        if services[service_name].get("network_mode") != expected_mode:
-            raise ContractError(
-                f"{service_name} left the private product namespace"
-            )
-    holder_networks = services["registry-private-namespace"].get("networks", {})
-    if set(holder_networks) != {PRIVATE_NETWORK}:
-        raise ContractError("private namespace holder has the wrong network")
-    public_networks = services["registry-relay-public"].get("networks", {})
-    if set(public_networks) != {"registry-edge"}:
-        raise ContractError("public Relay has the wrong network")
-
-    if expected_generated_dir is not None:
-        if expected_secrets is None or expected_state_mounts is None:
-            raise ContractError("ordinary model plan projections are incomplete")
-        expected_inputs = {
-            "registry-relay-public": "relay-public",
-            "registry-relay-consultation": "relay-consultation",
-            "registry-notary": "notary",
-        }
-        for service_name, lane in expected_inputs.items():
-            input_mounts = {
-                mount.get("target"): mount
-                for mount in services[service_name].get("volumes", [])
-                if isinstance(mount, dict)
-                and mount.get("target")
-                in {"/run/registry/bundle", "/run/registry/anchor"}
-            }
-            expected_mounts = {
-                "/run/registry/bundle": expected_generated_dir
-                / "bundles"
-                / lane,
-                "/run/registry/anchor": expected_generated_dir
-                / "anchors"
-                / lane,
-            }
-            if set(input_mounts) != set(expected_mounts):
-                raise ContractError(
-                    f"{service_name} has the wrong immutable input mounts"
-                )
-            for target, expected_source in expected_mounts.items():
-                mount = input_mounts[target]
-                if (
-                    mount.get("type") != "bind"
-                    or mount.get("source") != str(expected_source)
-                    or mount.get("read_only") is not True
-                    or mount.get("bind", {}).get("create_host_path") is not False
-                ):
-                    raise ContractError(
-                        f"{service_name} has an unsafe {target} mount"
-                    )
-
-        declared_secrets = model.get("secrets")
-        expected_secret_names = {
-            secret_name
-            for service_secrets in expected_secrets.values()
-            for secret_name in service_secrets
-        }
-        if (
-            not isinstance(declared_secrets, dict)
-            or set(declared_secrets) != expected_secret_names
-        ):
-            raise ContractError(
-                "ordinary model secret definitions do not match the plan"
-            )
-        declared_volumes = model.get("volumes")
-        expected_volume_names = {
-            source
-            for service_mounts in expected_state_mounts.values()
-            for source, _target in service_mounts
-        }
-        if (
-            not isinstance(declared_volumes, dict)
-            or set(declared_volumes) != expected_volume_names
-        ):
-            raise ContractError(
-                "ordinary model volume definitions do not match the plan"
-            )
+    for name, service in services.items():
+        if service.get("ports") != expected_ports.get(name):
+            raise ContractError(f"{name} has the wrong host publication boundary")
+    _assert_top_level_resources(model)
+    _assert_operator_file_inventory(
+        model,
+        package_root,
+        runtime_contract["declared_compose_files"],
+    )
 
 
 def assert_initialization_model(
     model: dict[str, Any],
-    ordinary_model: dict[str, Any],
+    ordinary: dict[str, Any],
     expected_images: dict[str, str],
-) -> None:
-    services = _services(model)
-    ordinary_services = _services(ordinary_model)
-    expected = PRODUCT_SERVICES | INITIALIZATION_SERVICES
-    if set(services) != expected:
-        raise ContractError(
-            "explicit initialization model must contain exactly the governed "
-            "ordinary and initialization services"
-        )
-    for service_name in PRODUCT_SERVICES:
-        if services[service_name] != ordinary_services[service_name]:
-            raise ContractError(
-                "initialization file changed ordinary service "
-                f"{service_name}"
-            )
-    for service_name, ordinary_service in INITIALIZATION_IMAGE_SERVICE.items():
-        service = services[service_name]
-        if service.get("image") != expected_images[ordinary_service]:
-            raise ContractError(
-                f"{service_name} does not use its plan image identity"
-            )
-        if service.get("restart") != "no":
-            raise ContractError(f"{service_name} is not a one-shot service")
-        if (
-            service.get("command") != INITIALIZATION_COMMANDS[service_name]
-            or service.get("entrypoint") is not None
-        ):
-            raise ContractError(
-                f"{service_name} does not use its closed product action"
-            )
-        if (
-            service.get("read_only") is not True
-            or service.get("user") != "65532:65532"
-            or service.get("cap_drop") != ["ALL"]
-            or service.get("security_opt") != ["no-new-privileges:true"]
-            or service.get("tmpfs") != ["/tmp"]
-        ):
-            raise ContractError(
-                f"{service_name} does not use the one-shot hardening profile"
-            )
-        ordinary = ordinary_services[ordinary_service]
-        ordinary_mounts = {
-            mount.get("target"): mount
-            for mount in ordinary.get("volumes", [])
-            if isinstance(mount, dict)
-        }
-        required_targets = {
-            "/run/registry/bundle",
-            "/run/registry/anchor",
-            "/var/lib/registry/audit",
-        }
-        if service_name.endswith("-initialize"):
-            required_targets.add("/var/lib/registry/state")
-        actual_mounts = {
-            mount.get("target"): mount
-            for mount in service.get("volumes", [])
-            if isinstance(mount, dict)
-        }
-        if set(actual_mounts) != required_targets or any(
-            actual_mounts[target] != ordinary_mounts.get(target)
-            for target in required_targets
-        ):
-            raise ContractError(
-                f"{service_name} has the wrong closed-action mounts"
-            )
-        if service.get("secrets", []) != []:
-            raise ContractError(
-                f"{service_name} received unnecessary serving secrets"
-            )
-        if (
-            service.get("network_mode") != ordinary.get("network_mode")
-            or service.get("networks", {}) != ordinary.get("networks", {})
-        ):
-            raise ContractError(
-                f"{service_name} has the wrong network relationship"
-            )
-    initialization_dependencies = {
-        "registry-relay-public-prepare-state": {},
-        "registry-relay-consultation-prepare-state": {
-            "registry-private-namespace": "service_started",
-            "registry-postgres": "service_healthy",
-        },
-        "registry-notary-prepare-state": {
-            "registry-private-namespace": "service_started",
-            "registry-postgres": "service_healthy",
-        },
-        "registry-relay-public-initialize": {},
-        "registry-relay-consultation-initialize": {
-            "registry-private-namespace": "service_started",
-            "registry-postgres": "service_healthy",
-        },
-        "registry-notary-initialize": {
-            "registry-private-namespace": "service_started",
-            "registry-postgres": "service_healthy",
-        },
-    }
-    for service_name, expected_conditions in initialization_dependencies.items():
-        dependencies = services[service_name].get("depends_on", {})
-        actual_conditions = {
-            dependency_name: dependency.get("condition")
-            for dependency_name, dependency in dependencies.items()
-        }
-        if actual_conditions != expected_conditions:
-            raise ContractError(
-                f"{service_name} has the wrong initialization dependency"
-            )
-
-
-def assert_parent_boundary(
-    model: dict[str, Any],
-    baseline: dict[str, Any],
+    runtime_contract: dict[str, Any] | None = None,
     *,
-    expected_parent: str | None,
+    package_root: Path | None = None,
 ) -> None:
+    runtime_contract = runtime_contract or fixture_runtime_contract()
+    package_root = package_root or FIXTURE_ROOT / "package"
+    assert_value_free(model)
     services = _services(model)
-    baseline_services = _services(baseline)
-    if PRODUCT_SERVICES.difference(services):
-        raise ContractError("included model lost a governed product service")
-    for name in PRODUCT_SERVICES:
-        if services[name] != baseline_services[name]:
-            raise ContractError(f"parent changed renderer-owned service {name}")
-    for resource_kind in ("networks", "volumes", "secrets"):
-        baseline_resources = baseline.get(resource_kind, {})
-        resources = model.get(resource_kind, {})
-        if not isinstance(baseline_resources, dict) or not isinstance(
-            resources, dict
-        ):
-            raise ContractError(
-                f"included model has an invalid {resource_kind} object"
-            )
-        for name, definition in baseline_resources.items():
-            if resources.get(name) != definition:
-                raise ContractError(
-                    f"parent changed renderer-owned {resource_kind[:-1]} {name}"
-                )
-
-    parent_services = set(services).difference(PRODUCT_SERVICES)
-    expected = {expected_parent} if expected_parent else set()
-    if parent_services != expected:
+    expected_services = (
+        ORDINARY_SERVICES | ACTION_STAGER_SERVICES | INITIALIZATION_SERVICES
+    )
+    if set(services) != expected_services:
         raise ContractError(
-            "unexpected parent-owned service set: "
-            + ", ".join(sorted(parent_services))
+            "initialization model has the wrong explicit services "
+            f"(missing={sorted(expected_services - set(services))}, "
+            f"unexpected={sorted(set(services) - expected_services)})"
         )
-    protected_secret_names = {
-        definition.get("name")
-        for definition in baseline.get("secrets", {}).values()
-        if isinstance(definition, dict)
-    } - {None}
-    protected_volume_names = {
-        definition.get("name")
-        for definition in baseline.get("volumes", {}).values()
-        if isinstance(definition, dict)
-    } - {None}
-    private_network_definition = baseline.get("networks", {}).get(PRIVATE_NETWORK, {})
-    private_network_name = (
-        private_network_definition.get("name")
-        if isinstance(private_network_definition, dict)
-        else None
+    ordinary_services = _services(ordinary)
+    for name in ORDINARY_SERVICES - {"registry-postgres"}:
+        if services[name] != ordinary_services[name]:
+            raise ContractError(f"initialization delta changed ordinary service {name}")
+    for name in ACTION_STAGER_SERVICES:
+        _assert_stager(
+            name,
+            services[name],
+            postgresql_image=expected_images["registry-postgres"],
+            command=runtime_contract["initialization_stager_commands"][name],
+            spec=ACTION_STAGER_SPECS[name],
+        )
+    postgres_delta = {
+        key: value
+        for key, value in services["registry-postgres"].items()
+        if ordinary_services["registry-postgres"].get(key) != value
+    }
+    removed_postgres_fields = set(ordinary_services["registry-postgres"]) - set(
+        services["registry-postgres"]
     )
-    private_namespace_members = {
-        "registry-private-namespace",
-        "registry-postgres",
-        "registry-relay-consultation",
-        "registry-notary",
-    }
-    for name in parent_services:
-        service = services[name]
-        networks = service.get("networks", {})
-        if isinstance(networks, list):
-            network_names = set(networks)
-        elif isinstance(networks, dict):
-            network_names = set(networks)
-        else:
-            network_names = set()
-        effective_network_names = {
-            model.get("networks", {}).get(network, {}).get("name")
-            for network in network_names
-            if isinstance(model.get("networks", {}).get(network), dict)
-        } - {None}
-        if (
-            PRIVATE_NETWORK in network_names
-            or private_network_name in effective_network_names
-        ):
-            raise ContractError(f"parent service {name} joined the private network")
-        network_mode = service.get("network_mode")
-        shared_service = (
-            network_mode.removeprefix("service:")
-            if isinstance(network_mode, str) and network_mode.startswith("service:")
-            else None
-        )
-        if shared_service in private_namespace_members or (
-            isinstance(network_mode, str)
-            and network_mode.startswith("container:")
-        ):
-            raise ContractError(f"parent service {name} joined the private namespace")
-        volume_sources = [str(source) for source in service.get("volumes_from", [])]
-        inherited_services = {
-            source.split(":", 1)[0]
-            for source in volume_sources
-            if not source.startswith("container:")
-        }
-        if inherited_services.intersection(PRODUCT_SERVICES) or any(
-            source.startswith("container:") for source in volume_sources
-        ):
-            raise ContractError(
-                f"parent service {name} inherited renderer-owned volumes"
-            )
-        consumed_secret_names = {
-            model.get("secrets", {}).get(secret.get("source"), {}).get("name")
-            for secret in service.get("secrets", [])
-            if isinstance(secret, dict)
-            and isinstance(model.get("secrets", {}).get(secret.get("source")), dict)
-        } - {None}
-        if consumed_secret_names.intersection(protected_secret_names):
-            raise ContractError(
-                f"parent service {name} consumed a renderer-owned secret"
-            )
-        consumed_volume_names = {
-            model.get("volumes", {}).get(mount.get("source"), {}).get("name")
-            for mount in service.get("volumes", [])
-            if isinstance(mount, dict)
-            and mount.get("type") == "volume"
-            and isinstance(model.get("volumes", {}).get(mount.get("source")), dict)
-        } - {None}
-        if consumed_volume_names.intersection(protected_volume_names):
-            raise ContractError(
-                f"parent service {name} consumed a renderer-owned volume"
-            )
-
-
-def assert_edge_parent(model: dict[str, Any]) -> None:
-    service = _services(model).get("parent-edge-client")
-    if not isinstance(service, dict):
-        raise ContractError("positive parent has no edge client")
-    networks = service.get("networks", {})
-    names = set(networks) if isinstance(networks, (dict, list)) else set()
-    if "registry-edge" not in names:
-        raise ContractError("positive parent edge client did not join registry-edge")
-
-
-def assert_relative_paths_match(
-    baseline: dict[str, Any], included: dict[str, Any]
-) -> None:
-    baseline_services = _services(baseline)
-    included_services = _services(included)
-    for service_name in PRODUCT_SERVICES:
-        baseline_mounts = baseline_services[service_name].get("volumes", [])
-        included_mounts = included_services[service_name].get("volumes", [])
-        if baseline_mounts != included_mounts:
-            raise ContractError(
-                f"relative mount resolution changed for {service_name}"
-            )
-    if baseline.get("secrets") != included.get("secrets"):
-        raise ContractError("relative secret-file resolution changed under include")
-
-
-def assert_negative_boundary(
-    model: dict[str, Any],
-    baseline: dict[str, Any],
-    expected_reason: str,
-) -> None:
-    services = _services(model)
-    baseline_services = _services(baseline)
-    if PRODUCT_SERVICES.difference(services):
-        raise ContractError("negative fixture lost a governed product service")
-
-    changed_products = {
-        name
-        for name in PRODUCT_SERVICES
-        if services[name] != baseline_services[name]
-    }
-    if expected_reason == "cross-owner-mutation":
-        if set(services) != PRODUCT_SERVICES:
-            raise ContractError("cross-owner fixture introduced an unrelated service")
-        if changed_products != {"registry-notary"}:
-            raise ContractError(
-                "cross-owner fixture must change only the governed Notary service"
-            )
-        expected_parent = None
-    else:
-        if changed_products:
-            raise ContractError(
-                "private-access fixture unexpectedly changed a governed service"
-            )
-        if set(services).difference(PRODUCT_SERVICES) != {
-            "parent-private-client"
-        }:
-            raise ContractError("private-access fixture has the wrong parent service")
-        parent = services["parent-private-client"]
-        networks = parent.get("networks", {})
-        network_names = (
-            set(networks) if isinstance(networks, (dict, list)) else set()
-        )
-        if (
-            expected_reason == "private-network"
-            and PRIVATE_NETWORK not in network_names
-        ):
-            raise ContractError("private-network fixture did not join private network")
-        if (
-            expected_reason == "private-network"
-            and parent.get("network_mode") == PRIVATE_NAMESPACE
-        ):
-            raise ContractError(
-                "private-network fixture also joined the private namespace"
-            )
-        if (
-            expected_reason == "private-namespace"
-            and parent.get("network_mode") != PRIVATE_NAMESPACE
-        ):
-            raise ContractError(
-                "private-namespace fixture did not join private namespace"
-            )
-        if (
-            expected_reason == "private-namespace"
-            and PRIVATE_NETWORK in network_names
-        ):
-            raise ContractError(
-                "private-namespace fixture also joined the private network"
-            )
-        expected_parent = "parent-private-client"
-
-    try:
-        assert_parent_boundary(
-            model,
-            baseline,
-            expected_parent=expected_parent,
-        )
-    except ContractError as error:
-        expected_message = {
-            "private-network": "joined the private network",
-            "private-namespace": "joined the private namespace",
-            "cross-owner-mutation": (
-                "parent changed renderer-owned service registry-notary"
-            ),
-        }[expected_reason]
-        if expected_message not in str(error):
-            raise ContractError(
-                f"negative fixture failed for the wrong reason: {error}"
-            ) from error
-        return
-    raise ContractError(f"negative fixture was accepted: {expected_reason}")
-
-
-def assert_parent_rejected(
-    model: dict[str, Any],
-    baseline: dict[str, Any],
-    expected_message: str,
-) -> None:
-    try:
-        assert_parent_boundary(
-            model,
-            baseline,
-            expected_parent="parent-private-client",
-        )
-    except ContractError as error:
-        if expected_message not in str(error):
-            raise ContractError(
-                f"negative fixture failed for the wrong reason: {error}"
-            ) from error
-        return
-    raise ContractError(
-        f"negative fixture was accepted instead of reporting: {expected_message}"
-    )
-
-
-def validate_plan(
-    plan_path: Path,
-) -> tuple[
-    dict[str, str],
-    dict[str, set[str]],
-    dict[str, set[tuple[str, str]]],
-]:
-    try:
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ContractError(f"invalid deployment-plan probe: {error}") from error
-    if plan.get("schema") != "io.registrystack.deployment-plan.probe.v1":
-        raise ContractError("deployment-plan probe has the wrong schema")
-    expected_root_fields = {
-        "schema",
-        "single_instance",
-        "workloads",
-        "initialization_actions",
-        "private_co_location_groups",
-        "recovery_consistency_groups",
-        "exposure_requirements",
-    }
-    if set(plan) != expected_root_fields:
-        raise ContractError("deployment-plan probe has unsupported root fields")
-    if plan.get("single_instance") is not True:
-        raise ContractError("deployment-plan probe must remain single-instance")
-    workloads = plan.get("workloads")
-    if not isinstance(workloads, list) or len(workloads) != len(PRODUCT_SERVICES):
-        raise ContractError("deployment-plan probe must describe all five workloads")
-    workload_by_id = {workload.get("id"): workload for workload in workloads}
-    if set(workload_by_id) != set(EXPECTED_PLAN_WORKLOADS):
-        raise ContractError("deployment-plan probe workload inventory is incomplete")
-    for workload_id, expected in EXPECTED_PLAN_WORKLOADS.items():
-        workload = workload_by_id[workload_id]
-        expected_workload_fields = {
-            "id",
-            "kind",
-            "image_identity",
-            "secret_consumers",
-            "state_roles",
-            "endpoint_classes",
-            "network_relationships",
-            "dependencies",
-            "health_semantics",
-            "restart_action",
-            "reactivation_action",
-        }
-        if workload.get("kind") == "product":
-            expected_workload_fields.update(
-                {"product_lane", "action", "immutable_inputs", "mount_roles"}
-            )
-        elif workload.get("kind") == "supporting":
-            expected_workload_fields.add("recipe")
-        if set(workload) != expected_workload_fields:
-            unexpected = set(workload).difference(expected_workload_fields)
-            missing = expected_workload_fields.difference(workload)
-            raise ContractError(
-                f"deployment-plan probe has unsupported fields for {workload_id}: "
-                f"unexpected={','.join(sorted(unexpected)) or 'none'}; "
-                f"missing={','.join(sorted(missing)) or 'none'}"
-            )
-        for field, expected_value in expected.items():
-            if workload.get(field) != expected_value:
-                raise ContractError(
-                    f"deployment-plan probe has the wrong {field} for {workload_id}"
-                )
-        for field in (
-            "image_identity",
-            "secret_consumers",
-            "state_roles",
-            "endpoint_classes",
-            "network_relationships",
-            "dependencies",
-            "health_semantics",
-            "restart_action",
-            "reactivation_action",
-        ):
-            if field not in workload:
-                raise ContractError(
-                    f"deployment-plan probe omits {field} for {workload_id}"
-                )
-        if (
-            not isinstance(workload["image_identity"], str)
-            or not IMAGE_IDENTITY_PATTERN.fullmatch(workload["image_identity"])
-            or not workload["health_semantics"]
-        ):
-            raise ContractError(
-                "deployment-plan probe has an invalid image or health identity "
-                f"for {workload_id}"
-            )
-        if workload["kind"] == "product":
-            immutable_inputs = workload.get("immutable_inputs")
-            if not isinstance(immutable_inputs, list) or len(immutable_inputs) != 2:
-                raise ContractError(
-                    f"product workload {workload_id} must bind its bundle and anchor"
-                )
-            mount_roles = workload.get("mount_roles")
-            if not isinstance(mount_roles, list) or set(mount_roles) - {
-                "bundle",
-                "anchor",
-                "anti-rollback-state",
-                "secret",
-                "certificate",
-                "audit",
-            }:
-                raise ContractError(
-                    f"product workload {workload_id} has invalid mount roles"
-                )
-
-    def inventory(field: str) -> set[str]:
-        return {
-            item
-            for workload in workloads
-            for item in workload.get(field, [])
-        }
-
-    expected_inventories = {
-        "immutable_inputs": {
-            "relay-public-bundle",
-            "relay-public-anchor",
-            "relay-consultation-bundle",
-            "relay-consultation-anchor",
-            "notary-bundle",
-            "notary-anchor",
-        },
-        "secret_consumers": {
-            "relay-public-tls",
-            "relay-consultation-tls",
-            "notary-tls",
-            "notary-signing-key",
-            "postgresql-tls",
-            "postgresql-credentials",
-        },
-        "state_roles": {
-            "relay-public-anti-rollback",
-            "relay-public-audit",
-            "relay-consultation-anti-rollback",
-            "relay-consultation-audit",
-            "notary-anti-rollback",
-            "notary-audit",
-            "postgresql-data",
-        },
-        "endpoint_classes": {
-            "public-application",
-            "private-application",
-            "administration",
-            "metrics",
-            "posture",
-        },
-        "network_relationships": {
-            "edge",
-            "private",
-            "private-consultation-namespace",
-        },
-        "mount_roles": {
-            "bundle",
-            "anchor",
-            "anti-rollback-state",
-            "secret",
-            "certificate",
-            "audit",
-        },
-    }
-    for field, expected_inventory in expected_inventories.items():
-        if inventory(field) != expected_inventory:
-            raise ContractError(
-                f"deployment-plan probe {field} inventory is incomplete"
-            )
-
-    initialization_actions = plan.get("initialization_actions")
-    if not isinstance(initialization_actions, list):
-        raise ContractError("deployment-plan probe omits initialization actions")
-    if any(
-        not isinstance(action, dict)
-        or set(action) != {"id", "workload", "action"}
-        for action in initialization_actions
-    ):
-        raise ContractError("deployment-plan probe initialization fields are wrong")
-    actual_initialization_actions = tuple(
-        (action.get("id"), action.get("workload"), action.get("action"))
-        for action in initialization_actions
-    )
-    if actual_initialization_actions != EXPECTED_INITIALIZATION_ACTIONS:
-        raise ContractError("deployment-plan probe initialization inventory is wrong")
-
-    private_groups = plan.get("private_co_location_groups")
-    if private_groups != [
-        {
-            "id": "private-consultation-namespace",
-            "members": [
-                "relay-consultation",
-                "notary",
-                "postgresql-state-plane",
-                "private-namespace-holder",
-            ],
-        }
-    ]:
-        raise ContractError("deployment-plan probe private group is incomplete")
-    recovery_groups = plan.get("recovery_consistency_groups")
-    if recovery_groups != [
-        {
-            "id": "consultation-state",
-            "members": [
-                "relay-consultation",
-                "notary",
-                "postgresql-state-plane",
-            ],
-        },
-        {
-            "id": "relay-public-state",
-            "members": ["relay-public"],
-        },
-    ]:
-        raise ContractError("deployment-plan probe recovery groups are incomplete")
-    exposure_requirements = plan.get("exposure_requirements")
-    expected_exposure_requirements = {
-        "public-application": "operator-bound",
-        "private-application": "private-namespace-only",
-        "administration": "loopback-only",
-        "metrics": "loopback-only",
-        "posture": "loopback-only",
-    }
     if (
-        not isinstance(exposure_requirements, list)
-        or any(
-            not isinstance(item, dict)
-            or set(item) != {"endpoint_class", "exposure"}
-            for item in exposure_requirements
-        )
-        or {
-        item.get("endpoint_class"): item.get("exposure")
-        for item in exposure_requirements
-        if isinstance(item, dict)
-        }
-        != expected_exposure_requirements
+        postgres_delta
+        != {"entrypoint": POSTGRESQL_INITIALIZATION_ENTRYPOINT}
+        or removed_postgres_fields
     ):
-        raise ContractError("deployment-plan probe endpoint inventory is incomplete")
-    forbidden_keys = {
-        "command",
-        "entrypoint",
-        "environment",
-        "mounts",
-        "networks",
-        "ports",
-        "secrets",
-        "volumes",
-    }
-
-    def walk(value: Any) -> None:
-        if isinstance(value, dict):
-            forbidden = forbidden_keys.intersection(value)
-            if forbidden:
-                raise ContractError(
-                    "deployment-plan probe contains renderer syntax: "
-                    + ", ".join(sorted(forbidden))
-                )
-            for child in value.values():
-                walk(child)
-        elif isinstance(value, list):
-            for child in value:
-                walk(child)
-
-    walk(plan)
-    expected_images = {
-        COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: workload["image_identity"]
-        for workload_id, workload in workload_by_id.items()
-    }
-    expected_secrets = {
-        COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: {
-            COMPOSE_SECRET_FOR_CONSUMER[consumer]
-            for consumer in workload.get("secret_consumers", [])
+        raise ContractError("PostgreSQL initialization is not an explicit delta")
+    bootstrap = services["registry-postgres-bootstrap"]
+    bootstrap_env_files = _env_file_paths(bootstrap)
+    if (
+        bootstrap.get("image") != expected_images["registry-postgres"]
+        or bootstrap.get("command")
+        != runtime_contract["initialization_commands"][
+            "registry-postgres-bootstrap"
+        ]
+        or bootstrap.get("restart") != "no"
+        or bootstrap_env_files
+        != [
+            package_root / "generated/postgresql-server.env",
+            package_root / "operator/secrets/postgresql-bootstrap-environment",
+        ]
+        or set(bootstrap.get("networks", {})) != {NETWORK_RUNTIME}
+        or _dependencies(bootstrap)
+        != {
+            "registry-postgres": "service_healthy",
+            "registry-postgresql-actions-stage-secrets": (
+                "service_completed_successfully"
+            ),
         }
-        for workload_id, workload in workload_by_id.items()
-    }
-    expected_state_mounts = {
-        COMPOSE_SERVICE_FOR_WORKLOAD[workload_id]: {
-            COMPOSE_STATE_FOR_ROLE[role]
-            for role in workload.get("state_roles", [])
-        }
-        for workload_id, workload in workload_by_id.items()
-    }
-    return expected_images, expected_secrets, expected_state_mounts
+        or "network_mode" in bootstrap
+        or "secrets" in bootstrap
+        or "ports" in bootstrap
+    ):
+        raise ContractError("PostgreSQL bootstrap has the wrong initialization inputs")
+    _assert_postgresql_hardening(
+        "registry-postgres-bootstrap",
+        bootstrap,
+        health_probe=None,
+    )
+    bootstrap_mounts = _mounts(bootstrap)
+    if set(bootstrap_mounts) != {"/run/secrets"}:
+        raise ContractError("PostgreSQL bootstrap has the wrong protected mounts")
+    _assert_volume_mount(
+        bootstrap_mounts["/run/secrets"],
+        "registry-operator-files-postgresql-bootstrap",
+        read_only=True,
+    )
+    for name, (ordinary_name, lane, action) in INITIALIZATION_METADATA.items():
+        service = services[name]
+        environment = LANE_ENVIRONMENTS[ordinary_name]
+        requires_postgresql = (
+            lane == "relay-consultation"
+            and action in {"prepare", "initialize"}
+        ) or (lane == "notary" and action == "prepare")
+        expected_environment_files = (
+            [package_root / "operator/secrets" / environment]
+            if action in {"prepare", "initialize", "accept"}
+            else []
+        )
+        if (
+            service.get("image") != expected_images[ordinary_name]
+            or service.get("command")
+            != runtime_contract["initialization_commands"][name]
+            or service.get("restart") != "no"
+            or (
+                set(service.get("networks", {})) != {NETWORK_RUNTIME}
+                if requires_postgresql
+                else "networks" in service
+            )
+            or _dependencies(service) != INITIALIZATION_DEPENDENCIES[name]
+            or _env_file_paths(service) != expected_environment_files
+            or (
+                "network_mode" in service
+                if requires_postgresql
+                else service.get("network_mode") != "none"
+            )
+            or "secrets" in service
+            or "ports" in service
+        ):
+            raise ContractError(f"{name} has the wrong initialization contract")
+        _assert_product_hardening(name, service, health_probe=None)
+        _assert_product_mounts(
+            name,
+            service,
+            lane,
+            action=action,
+            package_root=package_root,
+        )
+    if model.get("networks") != ordinary.get("networks"):
+        raise ContractError("initialization delta changed package networks")
+    volumes = model.get("volumes")
+    project_name = model.get("name")
+    if not isinstance(volumes, dict) or set(volumes) != EXPECTED_INITIALIZATION_VOLUMES:
+        raise ContractError("initialization model has the wrong volume inventory")
+    for name in DURABLE_VOLUMES:
+        if volumes[name] != ordinary["volumes"][name]:
+            raise ContractError(f"initialization changed durable volume {name}")
+    for name in STAGED_SECRET_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"initialization scratch volume {name} lost project scope")
+    if model.get("secrets") != ordinary.get("secrets"):
+        raise ContractError("initialization delta changed operator secrets")
+
+
+def assert_parent_include(model: dict[str, Any], ordinary: dict[str, Any]) -> None:
+    assert_value_free(model)
+    services = _services(model)
+    if set(services) != ORDINARY_SERVICES | {"parent-runtime-client"}:
+        raise ContractError("parent include did not normalize the package exactly once")
+    for name in ORDINARY_SERVICES:
+        if services[name] != _services(ordinary)[name]:
+            raise ContractError(f"parent include changed package service {name}")
+    parent = services["parent-runtime-client"]
+    if set(parent.get("networks", {})) != {NETWORK_RUNTIME} or parent.get("image") != (
+        "example.invalid/registrystack/conformance-probe@sha256:" + "d" * 64
+    ):
+        raise ContractError("operator parent service lost its runtime model")
+    parent_name = model.get("name")
+    ordinary_name = ordinary.get("name")
+    if (
+        not isinstance(parent_name, str)
+        or not isinstance(ordinary_name, str)
+        or parent_name == ordinary_name
+    ):
+        raise ContractError("parent include did not exercise a distinct Compose project")
+    parent_secrets = model.get("secrets")
+    ordinary_secrets = ordinary.get("secrets")
+    if (
+        not isinstance(parent_secrets, dict)
+        or not isinstance(ordinary_secrets, dict)
+        or set(parent_secrets) != set(ordinary_secrets)
+    ):
+        raise ContractError("parent include changed package secret inventory")
+    for name, parent_secret in parent_secrets.items():
+        ordinary_secret = ordinary_secrets[name]
+        if (
+            not isinstance(parent_secret, dict)
+            or not isinstance(ordinary_secret, dict)
+            or parent_secret.get("file") != ordinary_secret.get("file")
+            or parent_secret.get("name") != f"{parent_name}_{name}"
+            or ordinary_secret.get("name") != f"{ordinary_name}_{name}"
+        ):
+            raise ContractError(
+                f"parent include changed operator secret projection {name}"
+            )
+    parent_networks = model.get("networks")
+    ordinary_networks = ordinary.get("networks")
+    if (
+        not isinstance(parent_networks, dict)
+        or not isinstance(ordinary_networks, dict)
+        or set(parent_networks) != {NETWORK_RUNTIME}
+        or set(ordinary_networks) != {NETWORK_RUNTIME}
+        or parent_networks[NETWORK_RUNTIME]
+        != {"name": f"{parent_name}_{NETWORK_RUNTIME}"}
+        or ordinary_networks[NETWORK_RUNTIME]
+        != {"name": f"{ordinary_name}_{NETWORK_RUNTIME}"}
+    ):
+        raise ContractError("parent include lost project-scoped networking")
+    parent_volumes = model.get("volumes")
+    ordinary_volumes = ordinary.get("volumes")
+    if (
+        not isinstance(parent_volumes, dict)
+        or not isinstance(ordinary_volumes, dict)
+        or set(parent_volumes) != EXPECTED_VOLUMES
+        or set(ordinary_volumes) != EXPECTED_VOLUMES
+    ):
+        raise ContractError("parent include changed package volume inventory")
+    for name in DURABLE_VOLUMES:
+        if parent_volumes[name] != ordinary_volumes[name]:
+            raise ContractError(f"parent include renamed durable volume {name}")
+    for name in ORDINARY_STAGED_SECRET_VOLUMES:
+        if (
+            parent_volumes[name] != {"name": f"{parent_name}_{name}"}
+            or ordinary_volumes[name] != {"name": f"{ordinary_name}_{name}"}
+        ):
+            raise ContractError(f"parent include lost project-scoped scratch volume {name}")
 
 
 def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
-    expected_images, expected_secrets, expected_state_mounts = validate_plan(
-        fixture_root / "deployment-plan.probe.v1.json"
+    expected_images = validate_plan(fixture_root / "deployment-plan.probe.v1.json")
+    ordinary = _compose_config(
+        compose_command,
+        fixture_root,
+        "package/generated/compose.yaml",
+        project_name=None,
     )
-    empty_env = fixture_root / "package/generated/compose.empty.env"
-    if not empty_env.is_file() or empty_env.stat().st_size != 0:
-        raise ContractError("compose.empty.env must exist and contain zero bytes")
-    baseline = _compose_config(
-        compose_command, fixture_root, "package/generated/compose.yaml"
-    )
-    assert_ordinary_model(
-        baseline,
-        expected_images,
-        expected_secrets,
-        expected_state_mounts,
-        (fixture_root / "package/generated").resolve(),
-    )
-
+    assert_ordinary_model(ordinary, expected_images, fixture_root)
     initialized = _compose_config(
         compose_command,
         fixture_root,
         "package/generated/compose.yaml",
         "package/generated/compose.initialize.yaml",
+        project_name=None,
     )
-    assert_initialization_model(initialized, baseline, expected_images)
-
-    short_parent = _compose_config(
-        compose_command, fixture_root, "parent-short/compose.yaml"
+    assert_initialization_model(
+        initialized,
+        ordinary,
+        expected_images,
+        package_root=fixture_root / "package",
     )
-    assert_parent_boundary(
-        short_parent, baseline, expected_parent="parent-edge-client"
-    )
-    assert_edge_parent(short_parent)
-    assert_relative_paths_match(baseline, short_parent)
-
-    override_parent = _compose_config(
-        compose_command, fixture_root, "parent-override/compose.yaml"
-    )
-    override_baseline = _compose_config(
+    parent = _compose_config(
         compose_command,
         fixture_root,
-        "package/generated/compose.yaml",
-        "package/operator-override.yaml",
+        "parent-short/compose.yaml",
+        project_name=None,
+    )
+    assert_parent_include(parent, ordinary)
+
+
+def run_rendered_package_contract(
+    compose_command: Sequence[str],
+    package_root: Path,
+    release_lock_payload: Path,
+) -> None:
+    expected_images = validate_plan(
+        package_root / "generated/deployment-plan.v1.json"
+    )
+    runtime_contract = runtime_contract_from_payload(release_lock_payload)
+    ordinary = _compose_config(
+        compose_command,
+        package_root.parent,
+        str(package_root / "generated/compose.yaml"),
+        package_root=package_root,
+        project_name=None,
     )
     assert_ordinary_model(
-        override_baseline,
+        ordinary,
         expected_images,
-        expected_secrets,
-        expected_state_mounts,
-        (fixture_root / "package/generated").resolve(),
+        package_root.parent,
+        package_root=package_root,
+        runtime_contract=runtime_contract,
     )
-    assert_parent_boundary(
-        override_parent, override_baseline, expected_parent="parent-edge-client"
-    )
-    assert_edge_parent(override_parent)
-    assert_relative_paths_match(override_baseline, override_parent)
-    override_labels = _labels(
-        _services(override_parent)["registry-relay-public"]
-    )
-    if (
-        override_labels.get("io.registrystack.probe.operator-override")
-        != "enabled"
-    ):
-        raise ContractError("explicit include did not load the operator override")
-
-    private_network = _compose_config(
-        compose_command, fixture_root, "negative-private-network/compose.yaml"
-    )
-    assert_negative_boundary(private_network, baseline, "private-network")
-    private_namespace = _compose_config(
-        compose_command, fixture_root, "negative-private-namespace/compose.yaml"
-    )
-    assert_negative_boundary(private_namespace, baseline, "private-namespace")
-    cross_owner = _compose_config(
+    initialized = _compose_config(
         compose_command,
-        fixture_root,
-        "negative-cross-owner-mutation/compose.yaml",
+        package_root.parent,
+        str(package_root / "generated/compose.yaml"),
+        str(package_root / "generated/compose.initialize.yaml"),
+        package_root=package_root,
+        project_name=None,
     )
-    assert_negative_boundary(cross_owner, baseline, "cross-owner-mutation")
-    private_alias = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-private-network-alias/compose.yaml",
+    assert_initialization_model(
+        initialized,
+        ordinary,
+        expected_images,
+        runtime_contract,
+        package_root=package_root,
     )
-    assert_parent_rejected(private_alias, baseline, "joined the private network")
-    private_service = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-private-service-namespace/compose.yaml",
-    )
-    assert_parent_rejected(private_service, baseline, "joined the private namespace")
-    owned_resources = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-owned-resources/compose.yaml",
-    )
-    assert_parent_rejected(
-        owned_resources,
-        baseline,
-        "consumed a renderer-owned secret",
-    )
-    owned_volume = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-owned-volume/compose.yaml",
-    )
-    assert_parent_rejected(
-        owned_volume,
-        baseline,
-        "consumed a renderer-owned volume",
-    )
-    container_namespace = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-container-namespace/compose.yaml",
-    )
-    assert_parent_rejected(
-        container_namespace,
-        baseline,
-        "joined the private namespace",
-    )
-    volumes_from = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-volumes-from/compose.yaml",
-    )
-    assert_parent_rejected(
-        volumes_from,
-        baseline,
-        "inherited renderer-owned volumes",
-    )
-    container_volumes_from = _compose_config(
-        compose_command,
-        fixture_root,
-        "negative-container-volumes-from/compose.yaml",
-    )
-    assert_parent_rejected(
-        container_volumes_from,
-        baseline,
-        "inherited renderer-owned volumes",
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="registry-parent-include-",
+        dir=package_root.parent,
+    ) as parent_directory:
+        parent_file = Path(parent_directory) / "compose.json"
+        parent_file.write_text(
+            json.dumps(
+                {
+                    "include": [
+                        {
+                            "path": str(
+                                package_root / "generated/compose.yaml"
+                            )
+                        }
+                    ],
+                    "services": {
+                        "parent-runtime-client": {
+                            "image": (
+                                "example.invalid/registrystack/"
+                                "conformance-probe@sha256:" + "d" * 64
+                            ),
+                            "networks": [NETWORK_RUNTIME],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        parent = _compose_config(
+            compose_command,
+            package_root.parent,
+            str(parent_file),
+            package_root=package_root,
+            project_name=None,
+        )
+        assert_parent_include(parent, ordinary)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--compose-binary",
-        type=Path,
-        help="standalone Compose binary; default is the Docker Compose plugin",
-    )
+    parser.add_argument("--compose-command", nargs="+", default=None)
+    parser.add_argument("--compose-binary", type=Path)
     parser.add_argument("--label", default="current")
     parser.add_argument("--fixture-root", type=Path, default=FIXTURE_ROOT)
-    return parser.parse_args(argv)
+    parser.add_argument("--package-root", type=Path)
+    parser.add_argument("--release-lock-payload", type=Path)
+    args = parser.parse_args(argv)
+    if args.compose_command is not None and args.compose_binary is not None:
+        parser.error("--compose-command and --compose-binary are mutually exclusive")
+    if (args.package_root is None) != (args.release_lock_payload is None):
+        parser.error(
+            "--package-root and --release-lock-payload must be provided together"
+        )
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    args = parse_args(argv or sys.argv[1:])
     compose_command = (
-        [str(args.compose_binary)]
+        args.compose_command
+        if args.compose_command is not None
+        else [str(args.compose_binary)]
         if args.compose_binary is not None
         else ["docker", "compose"]
     )
     try:
-        run_contract(compose_command, args.fixture_root.resolve())
+        if args.package_root is None:
+            run_contract(compose_command, args.fixture_root.resolve())
+        else:
+            run_rendered_package_contract(
+                compose_command,
+                args.package_root.resolve(),
+                args.release_lock_payload.resolve(),
+            )
     except ContractError as error:
-        print(f"adopter Compose conformance probe ({args.label}): FAIL: {error}")
+        print(f"adopter Compose conformance failed: {error}", file=sys.stderr)
         return 1
-    print(f"adopter Compose conformance probe ({args.label}): PASS")
+    print(f"adopter Compose conformance ({args.label}): PASS")
     return 0
 
 

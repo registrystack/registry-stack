@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectStarter {
     Http,
     Spreadsheet,
@@ -59,7 +59,6 @@ pub struct ProjectInitOptions {
 pub struct ProjectTestOptions {
     pub project_directory: PathBuf,
     pub environment: Option<String>,
-    pub live: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -230,15 +229,16 @@ pub struct ProjectBuildOptions {
 
 /// Product-labelled approved baselines for a project build.
 ///
-/// Relay and Notary remain independently signed product inputs. A combined
-/// project comparison therefore supplies both pairs, while a single-product
-/// project supplies only its product pair. The legacy `against` and `anchor`
-/// fields on [`ProjectBuildOptions`] remain available for single-product
-/// callers.
+/// Public Relay, consultation Relay, and Notary are independently signed
+/// inputs. A consultation project supplies both Relay pairs, plus Notary when
+/// that product is projected. The `against` and `anchor` fields on
+/// [`ProjectBuildOptions`] remain available for single-lane callers.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectBuildBaselineSetOptions {
     pub relay_against: Option<PathBuf>,
     pub relay_anchor: Option<PathBuf>,
+    pub relay_consultation_against: Option<PathBuf>,
+    pub relay_consultation_anchor: Option<PathBuf>,
     pub notary_against: Option<PathBuf>,
     pub notary_anchor: Option<PathBuf>,
 }
@@ -253,23 +253,6 @@ pub struct ProjectPreflightOptions {
 pub struct ProjectCapabilityOptions {
     pub project_directory: PathBuf,
     pub environment: String,
-}
-
-/// Options for an offline promotion decision. The comparison baseline must be
-/// a verified product bundle so the decision never treats an unauthenticated
-/// local artifact as reviewed authority.
-#[derive(Debug, Clone)]
-pub struct ProjectPromotionOptions {
-    pub project_directory: PathBuf,
-    pub environment: String,
-    /// One verified product baseline for Relay-only or Notary-only projects.
-    /// Combined projects should use the product-specific pairs below.
-    pub against: Option<PathBuf>,
-    pub anchor: Option<PathBuf>,
-    pub relay_against: Option<PathBuf>,
-    pub relay_anchor: Option<PathBuf>,
-    pub notary_against: Option<PathBuf>,
-    pub notary_anchor: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1702,6 +1685,8 @@ struct BoundsDeclaration {
 struct EnvironmentDocument {
     version: u8,
     #[serde(default)]
+    development: Option<DevelopmentDeclaration>,
+    #[serde(default)]
     integrations: BTreeMap<String, EnvironmentIntegration>,
     #[serde(default)]
     entities: BTreeMap<String, EnvironmentEntityBinding>,
@@ -1722,6 +1707,28 @@ struct EnvironmentDocument {
     #[serde(default)]
     oid4vci: Option<Oid4vciBinding>,
     deployment: DeploymentBinding,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentDeclaration {
+    source_mode: DevelopmentSourceMode,
+    default_integration: String,
+    default_fixture: String,
+    #[serde(default)]
+    relay_port: Option<u16>,
+    #[serde(default)]
+    notary_port: Option<u16>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DevelopmentSourceMode {
+    Synthetic,
+    LocalSnapshot,
+    OperatorBound,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -2119,7 +2126,7 @@ struct FixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
     #[serde(default)]
-    request: Option<GovernedLiveRequest>,
+    request: Option<GovernedFixtureRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
@@ -2127,18 +2134,15 @@ struct FixtureDocument {
     expect: FixtureExpectation,
 }
 
-/// The closed governed request accepted by both `project test --live` and an
-/// independently authored synthetic fixture witness.
-///
-/// Keeping one internal request type prevents fixture authoring from drifting
-/// into a looser contract than the live Notary boundary.
+/// The closed governed request accepted by an independently authored synthetic
+/// fixture witness.
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveRequest {
+struct GovernedFixtureRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    requester: Option<GovernedLiveTarget>,
-    target: GovernedLiveTarget,
+    requester: Option<GovernedFixtureTarget>,
+    target: GovernedFixtureTarget,
     #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
     #[serde(
         default,
@@ -2153,10 +2157,10 @@ struct GovernedLiveRequest {
     purpose: String,
 }
 
-impl GovernedLiveRequest {
+impl GovernedFixtureRequest {
     fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
         registry_notary_core::EvaluateRequest {
-            requester: self.requester.as_ref().map(governed_live_entity),
+            requester: self.requester.as_ref().map(governed_fixture_entity),
             target: Some(registry_notary_core::EvidenceEntity {
                 entity_type: self.target.entity_type.clone(),
                 id: self.target.id.clone(),
@@ -2186,7 +2190,7 @@ impl GovernedLiveRequest {
     }
 }
 
-fn governed_live_entity(entity: &GovernedLiveTarget) -> registry_notary_core::EvidenceEntity {
+fn governed_fixture_entity(entity: &GovernedFixtureTarget) -> registry_notary_core::EvidenceEntity {
     registry_notary_core::EvidenceEntity {
         entity_type: entity.entity_type.clone(),
         id: entity.id.clone(),
@@ -2209,13 +2213,13 @@ fn governed_live_entity(entity: &GovernedLiveTarget) -> registry_notary_core::Ev
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveTarget {
+struct GovernedFixtureTarget {
     #[serde(rename = "type")]
     entity_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    identifiers: Vec<GovernedLiveIdentifier>,
+    identifiers: Vec<GovernedFixtureIdentifier>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attributes: BTreeMap<String, Value>,
 }
@@ -2223,7 +2227,7 @@ struct GovernedLiveTarget {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GovernedLiveIdentifier {
+struct GovernedFixtureIdentifier {
     scheme: String,
     value: String,
 }
@@ -2296,6 +2300,7 @@ struct LoadedIntegration {
 struct CompiledProject {
     reviewable: BTreeMap<PathBuf, Box<[u8]>>,
     relay_private: BTreeMap<PathBuf, Box<[u8]>>,
+    relay_consultation_private: BTreeMap<PathBuf, Box<[u8]>>,
     notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
     approval_state: Value,
@@ -2316,15 +2321,26 @@ struct FixtureProfile {
 
 #[derive(Clone)]
 struct VerifiedBaseline {
+    lane: VerifiedBaselineLane,
     approval_state: Value,
+    approval_state_bytes: Box<[u8]>,
     approval_state_digest: String,
     verified_manifest: Value,
+    review_bytes: Box<[u8]>,
     review_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum VerifiedBaselineLane {
+    Relay,
+    RelayConsultation,
+    Notary,
 }
 
 #[derive(Default)]
 struct VerifiedBaselineSet {
     relay: Option<VerifiedBaseline>,
+    relay_consultation: Option<VerifiedBaseline>,
     notary: Option<VerifiedBaseline>,
 }
 

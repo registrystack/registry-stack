@@ -1527,6 +1527,7 @@ async fn consultation_routes_preserve_ambiguous_auth_code_without_dispatch_or_di
         audiences: vec![AUDIENCE.to_string()],
         jwks_url: None,
         discovery_url: None,
+        development_jwks_file: None,
         allow_dev_insecure_fetch_urls: false,
         allowed_algorithms: vec![OidcAlgorithm::EdDsa],
         jwks_cache_ttl: Duration::from_secs(600),

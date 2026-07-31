@@ -4482,6 +4482,16 @@
     },
     {
       "schema": "notary",
+      "pointer": "/$defs/RelayConnectionConfig/properties/allow_insecure_private_network",
+      "key_path": "evidence.relay.allow_insecure_private_network",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "schema_description",
+      "default_source": "schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
       "pointer": "/$defs/RelayConnectionConfig/properties/allowed_private_cidrs",
       "key_path": "evidence.relay.allowed_private_cidrs",
       "path_kind": "property",
@@ -4516,6 +4526,16 @@
       "key_path": "evidence.relay.max_in_flight",
       "path_kind": "property",
       "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayConnectionConfig/properties/root_certificate_path",
+      "key_path": "evidence.relay.root_certificate_path",
+      "path_kind": "property",
+      "profile": "notary_evidence_sensitive",
       "purpose_source": "profile",
       "default_source": "schema_default",
       "schema_facts_reviewed": true

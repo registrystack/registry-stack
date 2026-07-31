@@ -1,6 +1,6 @@
 ---
 title: Test one current source revision
-description: Pin one Registry Stack commit, build registryctl, and run the matching local Relay and Notary source-under-test gate.
+description: Pin one Registry Stack commit, build registryctl, and run the current tutorial authoring gate.
 status: current
 draft: true
 owner: registry-docs
@@ -12,14 +12,15 @@ locale: en
 standards_referenced: []
 ---
 
-Use this procedure when a Registry Docs page requires behavior from Main source that has not been
-released.
-You will freeze one Git commit, build its `registryctl`, and run the repository-owned gate that
-builds matching local Registry Relay and Registry Notary artifacts from the same checkout.
+Use this procedure when a Registry Docs page requires behavior from Main source
+that has not been released.
+You will freeze one Git commit, build its `registryctl`, and run the
+repository-owned tutorial gate against that source-built binary.
 
-This procedure produces source-under-test evidence only.
-The result is not a release, release candidate, signed artifact set, production image, country
-acceptance result, or interoperability result.
+This procedure produces source-under-test authoring evidence only.
+The result is not a release, release candidate, signed artifact set,
+production image, country acceptance result, runtime proof, or interoperability
+result.
 
 {/* Evidence: docs/site/scripts/check-registryctl-tutorials.sh,
     docs/site/scripts/registryctl-tutorial.test.mjs,
@@ -72,27 +73,23 @@ test "$(git rev-parse HEAD)" = "$SOURCE_REF"
 The package version printed by `registryctl --version` does not identify the source commit.
 Keep the recorded `SOURCE_REF` with every result.
 
-The current project-authoring commands do not need an image lock because they build unsigned
-product configuration inputs and do not select runtime images.
+The current project-authoring commands do not need an image lock because they
+build unsigned product configuration inputs and do not select runtime images.
 You can run the offline authoring journey with this binary:
 
 ```sh
-"$REGISTRYCTL_BIN" init --from http --project-dir registry-project
-"$REGISTRYCTL_BIN" test --project-dir registry-project
-"$REGISTRYCTL_BIN" check \
-  --project-dir registry-project \
-  --environment local \
-  --explain
-"$REGISTRYCTL_BIN" build \
-  --project-dir registry-project \
-  --environment local
+"$REGISTRYCTL_BIN" init registry-project --template http
+"$REGISTRYCTL_BIN" -C registry-project test
+"$REGISTRYCTL_BIN" -C registry-project check --environment local --explain
+"$REGISTRYCTL_BIN" -C registry-project build --environment local
 ```
 
 These commands do not build, sign, or deploy a runtime bundle.
 
-## Run the matching local runtime gate
+## Run the current tutorial gate
 
-Run the repository-owned test and gate from the same pinned checkout:
+Run the repository-owned tutorial contract test and executable reader gate from
+the same pinned checkout:
 
 ```sh
 cd docs/site
@@ -101,108 +98,35 @@ npm run test:tutorial:registryctl
 npm run check:tutorial:registryctl
 ```
 
-The gate performs these source-bound steps without downloading released Registry Stack
-artifacts:
+The gate performs these source-bound steps without cloning another Registry
+Stack checkout or downloading released Registry Stack artifacts:
 
-1. Builds Linux AMD64 `registryctl`, Registry Relay, Registry Notary, and their dedicated Rhai and
-   CEL workers from the pinned checkout with `Cargo.lock`.
-2. Builds the local Relay and Notary image shapes with the product release Dockerfiles.
-3. Produces a strict temporary source-test lock beside the source-built `registryctl`, with both
-   `manifest_source_ref` and `tag_target` set to the checkout commit.
-4. Runs project generation through that lock, then rebinds the generated Compose files to the
-   local source-under-test image tags.
-5. Executes the protected spreadsheet API and registry-backed claim tutorials, then removes the
-   temporary lock, images, projects, and demo credentials.
+1. Checks the documented tutorial command contracts.
+2. Executes the HTTP, spreadsheet, initial local approval, public no-credential
+   source, OAuth/Rhai, and OpenCRVS Events API reader journeys with the
+   source-built `registryctl`.
+3. Builds unsigned project inputs and verifies the tutorial evidence reports.
+4. Removes the temporary projects and evaluation-only approval material.
 
-The temporary lock contains generation-only image sentinels.
-The sentinels are not the identity of the local images, and the gate does not retain or publish the
-lock as a reusable artifact.
-The explicit rebind step is part of the source test.
+It does not run `registryctl dev`.
+Exact released images, the signed release lock, and disposable runtime smoke
+checks remain part of the release-candidate and tag workflow.
+
 A successful run ends with:
 
 ```text
-registryctl tutorial source check: PASS
+Registryctl <version> reader journeys: PASS
 ```
 
-The pass result proves that the two local tutorial journeys ran against products built from the
-recorded checkout.
-It does not prove release authenticity, reproducible image digests, provenance, production
-fitness, or external acceptance.
-
-## Verify an explicitly supplied test lock
-
-The all-in-one gate selects its temporary lock beside its source-built binary and deletes the lock
-at cleanup.
-It does not leave a lock for later commands.
-
-Use `REGISTRYCTL_IMAGE_LOCK` only when a separate source test has supplied a regular file at an
-explicit absolute path.
-Do not copy, edit, or relabel a released lock.
-Before selecting the supplied file, verify its closed shape, package version, platform,
-repositories, and source fields:
-
-```sh
-cd registry-stack-source-review
-SOURCE_REF="$(git rev-parse HEAD)"
-REGISTRYCTL_BIN="$PWD/target/debug/registryctl"
-REGISTRYCTL_VERSION="$("$REGISTRYCTL_BIN" --version | awk 'NR == 1 { print $2 }')"
-LOCK_PATH=/absolute/path/to/registryctl-source-test-image-lock.json
-
-case "$LOCK_PATH" in
-  /*) ;;
-  *) printf 'LOCK_PATH must be absolute\n' >&2; exit 1 ;;
-esac
-test -f "$LOCK_PATH"
-test ! -L "$LOCK_PATH"
-
-jq -e \
-  --arg source_ref "$SOURCE_REF" \
-  --arg release_tag "v$REGISTRYCTL_VERSION" \
-  '
-    keys == [
-      "images",
-      "manifest_source_ref",
-      "platform",
-      "release_tag",
-      "schema_version",
-      "tag_target"
-    ] and
-    .schema_version == "registryctl.release_image_lock.v1" and
-    .release_tag == $release_tag and
-    .manifest_source_ref == $source_ref and
-    .tag_target == $source_ref and
-    .platform == "linux/amd64" and
-    (.images | keys == ["registry-notary", "registry-relay"]) and
-    (.images["registry-relay"] |
-      test("^ghcr.io/registrystack/registry-relay@sha256:[0-9a-f]{64}$")) and
-    (.images["registry-notary"] |
-      test("^ghcr.io/registrystack/registry-notary@sha256:[0-9a-f]{64}$"))
-  ' "$LOCK_PATH"
-
-export REGISTRYCTL_IMAGE_LOCK="$LOCK_PATH"
-```
-
-The equality checks bind the lock metadata to the checkout.
-They do not prove that the referenced images were built from the commit.
-A retained artifact set needs separate image-digest, signature, and provenance evidence.
-Use the [release verification procedure](https://github.com/registrystack/registry-stack/blob/v0.13.0/release/VERIFY.md)
-for a published release.
-
-`REGISTRYCTL_IMAGE_LOCK` changes only where `registryctl` reads the lock.
-The CLI still rejects an invalid schema, version, platform, repository, digest shape, symlink, or
-oversized file.
-Unset the override after the bounded source test:
-
-```sh
-unset REGISTRYCTL_IMAGE_LOCK
-```
+The pass result proves that the current tutorial authoring journeys ran against
+the recorded checkout.
+It does not prove release authenticity, reproducible image digests, provenance,
+production fitness, or external acceptance.
+Exact runtime proof remains part of the release-candidate and tag workflow.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The source gate reports a missing command | A prerequisite is absent from `PATH` | Install the named prerequisite, then rerun the gate from the pinned checkout |
-| The source gate reports that Docker is unavailable | The Docker daemon is stopped or inaccessible | Start Docker and verify `docker info` before retrying |
-| The gate reports that a loopback port is occupied | Another process uses `4242` or `4255` | Stop that local process, then rerun the complete gate |
-| The lock field check exits nonzero | The lock is malformed, belongs to another package version or commit, or uses an unsupported image reference | Reject the lock; do not edit it into agreement |
-| A source-built local runtime command reports a missing lock | The runtime must select exact Relay and Notary image digests | Use the complete source-under-test gate, or use a verified released binary and its matching released lock |
+| A source-built local runtime command reports a missing lock | Runtime image identity is outside this source authoring procedure | Use a verified released binary and its matching released lock, or run the release-candidate workflow |

@@ -26,7 +26,7 @@ The installer never trusts a workspace automatically. Installing for VS Code
 updates the active profile unless --profile selects an existing profile. Zed
 requires one final command-palette action because its CLI cannot install a
 local development extension. Project configuration remains a separate
-registryctl init or registryctl authoring editor operation.
+registryctl init or registryctl -C <project> tooling editor operation.
 EOF
 }
 
@@ -111,8 +111,8 @@ verify_registryctl() {
     fail "this checkout is ${expected_version} but registryctl is ${installed_version}; install the matching registryctl"
   fi
 
-  "${REGISTRYCTL_PATH}" authoring language-server --help >/dev/null ||
-    fail "registryctl ${installed_version} does not provide authoring language-server"
+  "${REGISTRYCTL_PATH}" tooling language-server --help >/dev/null ||
+    fail "registryctl ${installed_version} does not provide tooling language-server"
   printf 'Using registryctl %s from %s\n' \
     "${installed_version}" "${REGISTRYCTL_PATH}"
 }

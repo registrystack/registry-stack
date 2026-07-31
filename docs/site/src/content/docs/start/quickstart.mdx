@@ -1,43 +1,62 @@
 ---
-title: Choose the v0.15 local first run
-description: Choose the supported local Registry Stack beginner path for a protected API or live claim.
+title: Start with Registry Stack 1.0
+description: Run Registry Relay and Registry Notary from a spreadsheet, then adapt the source or evidence rule.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Use the two local tutorials for the Registry Stack v0.15 beginner path. Start
-with Registry Relay, then continue to a live Registry Notary claim.
+Start with the maintained spreadsheet registry.
+It is the shortest complete path through Registry Relay, Registry Notary,
+authorization, source access, evidence evaluation, and minimized disclosure.
 
-## Run your first registry API
+## Start from a spreadsheet
 
-[Run your first registry API](../../tutorials/publish-spreadsheet-secured-registry-api/)
-installs Registryctl from release assets, starts Registry Relay over maintained
-synthetic data, and checks denied and allowed requests.
+[Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
+creates the released `spreadsheet` project, checks its evidence rules offline,
+and runs Relay and Notary locally over maintained synthetic records.
 
-## Verify a live claim
+Take this path first when evaluating Registry Stack.
+Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
+after the sample works.
 
-[Verify a live registry-backed claim](../../tutorials/verify-claim-registry-api/)
-continues from the first API to a running Registry Notary service and checks
-match, no-match, and denied requests.
+## Expose evidence
 
-## Connect your data
+The starter already exposes selected records and evaluates two predicate
+claims.
+[Change one spreadsheet-backed evidence rule](../../tutorials/verify-claim-registry-api/)
+to learn which decisions belong to Relay, Notary, fixtures, and the operator
+handoff.
 
-[Use your own spreadsheet](../../tutorials/use-your-spreadsheet/) replaces the
-sample workbook with one reviewed non-personal workbook after the local first
-run works.
+## Connect an existing registry
 
-## About older quickstart links
+[Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+creates the released `http` project and tests one bounded source request before
+an institution-owned endpoint is introduced.
 
-The former hosted quickstart and Solmara Lab tutorials used different
-deployment topologies. They are not the supported v0.15 beginner path, and the
-local tutorials are not equivalent replacements for those retired flows. Old
-links land on this chooser so you can select a current local task without
-mistaking it for hosted onboarding.
+Continue with:
+
+- [OAuth client credentials](../../configure/oauth-client-credentials/) when
+  the source requires a bearer token
+- [OAuth-backed Rhai](../../tutorials/configure-project-script-adapter/) when a
+  reviewed mapping needs several bounded same-origin requests or response
+  normalization
+- [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
+  for a synthetic example of that generic integration path
+
+The first run uses one terminal and synthetic data.
+You do not need a source checkout, production keys, or a deployment package.
+
+## Move an older project
+
+Pre-1.0 commands and generated runtime files do not have compatibility aliases
+or an automated migration path.
+Use the [pre-1.0 cutover guide](../pre-1.0-cutover/) to preserve reviewed
+authored intent and recreate generated material.

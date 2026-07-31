@@ -9,8 +9,25 @@ const defaultRepoRoot = resolve(docsRoot, '../..');
 const catalogRelative = 'crates/registryctl/tests/fixtures/project-authoring-journeys.yaml';
 const goldenPrefix = 'crates/registryctl/tests/fixtures/project-authoring/';
 const supportedSteps = ['init', 'editor', 'trace', 'watch', 'test', 'check', 'compare', 'build'];
-const starterSteps = supportedSteps;
-const publicStarterOrder = ['http', 'dhis2-tracker', 'opencrvs-dci', 'fhir-r4', 'snapshot'];
+const publicTemplates = [
+  {
+    id: 'spreadsheet',
+    label: 'Spreadsheet',
+    summary: 'A protected records API and bounded evidence service over a contained workbook.',
+    source: 'crates/registryctl/assets/project-starters/spreadsheet',
+    project_dir: 'spreadsheet-project',
+    focused_fixture_file: 'match.yaml',
+  },
+  {
+    id: 'http',
+    label: 'HTTP',
+    summary: 'One fixed bounded HTTP request with a closed response projection.',
+    source: 'crates/registryctl/assets/project-starters/bounded-http',
+    project_dir: 'http-project',
+    focused_fixture_file: 'active.yaml',
+  },
+];
+const publicTemplateOrder = publicTemplates.map(({ id }) => id);
 const safeCliTokenPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 async function readYaml(path) {
@@ -96,61 +113,67 @@ async function hasAuthoredFixtures(projectRoot, project) {
   return false;
 }
 
-function buildCommands(workspace, selection) {
+function buildCommands(workspace, selection, { publicTemplate = false } = {}) {
   const commands = [];
+  const project = workspace.project_dir;
   for (const step of workspace.steps) {
     switch (step) {
       case 'init':
+        if (!publicTemplate) break;
         commands.push(
-          `registryctl init --from ${workspace.starter} --project-dir ${workspace.project_dir}`,
+          `registryctl init ${project} --template ${workspace.starter}`,
         );
         break;
       case 'editor':
-        commands.push(`registryctl authoring editor --project-dir ${workspace.project_dir}`);
+        commands.push(`registryctl -C ${project} tooling editor`);
         break;
       case 'trace':
         commands.push(
-          `registryctl test --project-dir ${workspace.project_dir} --integration ${selection.integration} --fixture ${selection.fixture} --trace`,
+          `registryctl -C ${project} test --integration ${selection.integration} --fixture ${selection.fixture} --trace`,
         );
         break;
       case 'watch':
         commands.push(
-          `registryctl test --project-dir ${workspace.project_dir} --integration ${selection.integration} --fixture ${selection.fixture} --watch`,
+          `registryctl -C ${project} test --integration ${selection.integration} --fixture ${selection.fixture} --watch`,
         );
         break;
       case 'test':
-        commands.push(`registryctl test --project-dir ${workspace.project_dir}`);
+        commands.push(`registryctl -C ${project} test`);
         break;
       case 'check':
         commands.push(
-          `registryctl check --project-dir ${workspace.project_dir} --environment ${workspace.environment}${workspace.check_explain ? ' --explain' : ''}`,
+          `registryctl -C ${project} check --environment ${workspace.environment}${workspace.check_explain ? ' --explain' : ''}`,
         );
         break;
       case 'compare':
-        if (!workspace.starter) {
-          throw new Error(`${workspace.id} cannot compare with an embedded starter`);
-        }
         commands.push(
-          `registryctl compare --project-dir ${workspace.project_dir} --environment ${workspace.environment} --from-starter`,
+          `registryctl -C ${project} review compare --environment ${workspace.environment}`,
         );
         break;
       case 'build':
         commands.push(
-          `registryctl build --project-dir ${workspace.project_dir} --environment ${workspace.environment}`,
+          `registryctl -C ${project} build --environment ${workspace.environment}`,
         );
         break;
       default:
         throw new Error(`${workspace.id} contains unsupported step ${step}`);
     }
   }
+  if (publicTemplate) {
+    commands.push(
+      `registryctl -C ${project} dev --detach`,
+      `registryctl -C ${project} dev smoke`,
+      `registryctl -C ${project} dev down`,
+    );
+  }
   return commands;
 }
 
 function selectPublicStarters(journeys) {
   const starterJourneys = journeys.filter((journey) => journey.starter);
-  if (starterJourneys.length !== publicStarterOrder.length) {
+  if (starterJourneys.length !== publicTemplateOrder.length) {
     throw new Error(
-      `public starter catalog must contain exactly ${publicStarterOrder.length} entries`,
+      `public template catalog must contain exactly ${publicTemplateOrder.length} entries`,
     );
   }
   const byStarter = new Map(
@@ -160,13 +183,41 @@ function selectPublicStarters(journeys) {
     throw new Error('public starter catalog contains a duplicate starter');
   }
   if (
-    publicStarterOrder.some((starter) => !byStarter.has(starter))
+    publicTemplateOrder.some((starter) => !byStarter.has(starter))
   ) {
     throw new Error(
-      `public starter catalog must contain exactly ${publicStarterOrder.join(', ')}`,
+      `public template catalog must contain exactly ${publicTemplateOrder.join(', ')}`,
     );
   }
-  return publicStarterOrder.map((starter) => byStarter.get(starter));
+  return publicTemplateOrder.map((starter) => byStarter.get(starter));
+}
+
+async function buildPublicTemplateJourney(repoRoot, template) {
+  const workspace = {
+    id: template.id,
+    starter: template.id,
+    source: template.source,
+    project_dir: template.project_dir,
+    environment: 'local',
+    check_explain: true,
+    focused_fixture_file: template.focused_fixture_file,
+    steps: supportedSteps,
+  };
+  validateCatalogCommandArguments(workspace);
+  const projectRoot = resolve(repoRoot, template.source);
+  const project = await readYaml(join(projectRoot, 'registry-stack.yaml'));
+  const focused = await deriveFocusedSelection(projectRoot, project, workspace);
+  return {
+    ...template,
+    classification: 'maintained',
+    topology: deriveTopology(project, template.source),
+    starter: template.id,
+    environment: 'local',
+    check_explain: true,
+    capabilities: [...supportedSteps, 'dev'],
+    ...focused,
+    commands: buildCommands(workspace, focused, { publicTemplate: true }),
+  };
 }
 
 export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoRoot) {
@@ -206,15 +257,8 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
     if (workspace.environment !== 'local' || workspace.check_explain !== true) {
       throw new Error(`${workspace.id} must document check --environment local --explain`);
     }
-    if (!workspace.steps.includes('check') || !workspace.steps.includes('build')) {
-      throw new Error(`${workspace.id} must support check and build`);
-    }
-    if (workspace.starter) {
-      if (!equalValues(workspace.steps, starterSteps)) {
-        throw new Error(`${workspace.id} starter must expose the canonical eight-command journey`);
-      }
-    } else if (workspace.steps.includes('init') || workspace.steps.includes('compare')) {
-      throw new Error(`${workspace.id} is not a starter and cannot emit starter-only commands`);
+    if (!workspace.steps.includes('check')) {
+      throw new Error(`${workspace.id} must support check`);
     }
 
     const projectRoot = resolve(repoRoot, workspace.source);
@@ -226,9 +270,12 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
       );
     }
     const authoredFixtures = await hasAuthoredFixtures(projectRoot, project);
-    if (!authoredFixtures && !equalValues(workspace.steps, ['check', 'build'])) {
+    if (
+      !authoredFixtures &&
+      workspace.steps.some((step) => ['trace', 'watch'].includes(step))
+    ) {
       throw new Error(
-        `${workspace.id} is fixtureless and may document only check and build`,
+        `${workspace.id} is fixtureless and cannot document trace or watch`,
       );
     }
     if (
@@ -242,6 +289,16 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
     const focused = workspace.steps.some((step) => step === 'trace' || step === 'watch')
       ? await deriveFocusedSelection(projectRoot, project, workspace)
       : {};
+    const isPublicTemplate = publicTemplates.some(
+      ({ id, source }) =>
+        workspace.id === id &&
+        workspace.starter === id &&
+        workspace.source === source,
+    );
+    const commandWorkspace = {
+      ...workspace,
+      project_dir: isPublicTemplate ? workspace.project_dir : workspace.source,
+    };
     journeys.push({
       id: workspace.id,
       label: workspace.label,
@@ -251,11 +308,11 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
       ...(workspace.focus ? { focus: workspace.focus } : {}),
       topology,
       ...(workspace.evidence ? { evidence: workspace.evidence } : {}),
-      ...(workspace.starter ? { starter: workspace.starter } : {}),
-      project_dir: workspace.project_dir,
-      capabilities: workspace.steps,
+      ...(isPublicTemplate ? { starter: workspace.starter } : {}),
+      project_dir: commandWorkspace.project_dir,
+      capabilities: workspace.steps.filter((step) => step !== 'init'),
       ...focused,
-      commands: buildCommands(workspace, focused),
+      commands: buildCommands(commandWorkspace, focused),
     });
   }
 
@@ -263,6 +320,12 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
     throw new Error(
       `project-authoring golden catalog drift: catalog=${[...catalogGoldens].toSorted().join(',')} actual=${[...actualGoldens].toSorted().join(',')}`,
     );
+  }
+  for (const template of publicTemplates) {
+    const generatedTemplate = await buildPublicTemplateJourney(repoRoot, template);
+    const existing = journeys.findIndex(({ id }) => id === template.id);
+    if (existing === -1) journeys.push(generatedTemplate);
+    else journeys[existing] = { ...journeys[existing], ...generatedTemplate };
   }
   selectPublicStarters(journeys);
   return journeys;

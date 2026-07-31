@@ -39,38 +39,38 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1811,
-    "reference_count": 503,
+    "path_count": 1829,
+    "reference_count": 506,
     "by_schema": {
       "project": 220,
-      "environment": 206,
+      "environment": 213,
       "integration": 171,
       "fixture": 63,
       "entity": 35,
-      "relay": 584,
-      "notary": 532
+      "relay": 593,
+      "notary": 534
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1441,
+      "property": 1458,
       "map_key": 26,
       "map_value": 48,
       "array_item": 178,
-      "branch": 111
+      "branch": 112
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1170,
-      "sensitive": 403,
-      "secret_reference": 41,
+      "internal": 1179,
+      "sensitive": 408,
+      "secret_reference": 44,
       "redacted_fixture": 51,
-      "structural": 130
+      "structural": 131
     },
     "by_intent_source": {
-      "schema_description": 524,
-      "reviewed_override": 262,
+      "schema_description": 530,
+      "reviewed_override": 266,
       "structural_taxonomy": 131,
-      "reviewed_profile": 894
+      "reviewed_profile": 902
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -91,9 +91,9 @@
       "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 92,
+      "notary_evidence_internal": 93,
       "notary_evidence_secret_reference": 5,
-      "notary_evidence_sensitive": 40,
+      "notary_evidence_sensitive": 41,
       "notary_evidence_signing_keys_open_map": 1,
       "notary_evidence_variables_open_map": 1,
       "notary_federation_internal": 43,
@@ -117,15 +117,15 @@
       "relay_auth_internal": 15,
       "relay_auth_oidc_scope_map_open_map": 1,
       "relay_auth_secret_reference": 4,
-      "relay_auth_sensitive": 15,
+      "relay_auth_sensitive": 16,
       "relay_catalog_internal": 1,
       "relay_catalog_public": 6,
       "relay_catalog_sensitive": 1,
       "relay_config_trust_internal": 1,
       "relay_config_trust_sensitive": 4,
-      "relay_consultation_internal": 26,
-      "relay_consultation_secret_reference": 8,
-      "relay_consultation_sensitive": 20,
+      "relay_consultation_internal": 28,
+      "relay_consultation_secret_reference": 11,
+      "relay_consultation_sensitive": 23,
       "relay_datasets_internal": 391,
       "relay_datasets_secret_reference": 1,
       "relay_datasets_sensitive": 7,
@@ -148,10 +148,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1811,
-  "reviewed_intent_assignment_covered_count": 1811,
-  "distinct_reviewed_intent_count": 621,
+  "reviewed_intent_assignment_required_count": 1829,
+  "reviewed_intent_assignment_covered_count": 1829,
+  "distinct_reviewed_intent_count": 629,
   "distinct_reviewed_intents_reused_count": 86,
-  "reviewed_intent_assignments_using_reused_intent_count": 1276,
+  "reviewed_intent_assignments_using_reused_intent_count": 1286,
   "missing_intent": []
 }

@@ -103,16 +103,11 @@ jobs:
             exit 1
           fi
           gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-canary.yml/runs?branch=main&status=success&per_page=100" \
-            | jq --arg sha "${workflow_revision}" \
-            '[.workflow_runs[] | select(
-              .head_sha == $sha and .conclusion == "success"
-            )] | sort_by(.updated_at) | last
-            | {
-                path: ".github/workflows/release-canary.yml",
-                head_sha: .head_sha,
-                conclusion: .conclusion,
-                completed_at: .updated_at
-              }' > "${RUNNER_TEMP}/canary-run.json"
+            > "${RUNNER_TEMP}/canary-runs.json"
+          python3 release/scripts/release_candidate.py select-canary \
+            --metadata "${RUNNER_TEMP}/canary-runs.json" \
+            --workflow-revision "${workflow_revision}" \
+            --output "${RUNNER_TEMP}/canary-run.json"
           python3 release/scripts/release_candidate.py verify-canary \
             --metadata "${RUNNER_TEMP}/canary-run.json" \
             --workflow-revision "${workflow_revision}"
@@ -135,7 +130,8 @@ jobs:
             release_status=200
           else
             release_status="$(
-              awk '/^HTTP\\// {code=$2} END {print code}' "${release_response}"
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${release_response}"
             )"
           fi
           if [[ "${release_status}" != "404" ]]; then
@@ -143,14 +139,14 @@ jobs:
             exit 1
           fi
           for package in registry-notary registry-relay; do
-            if gh api --paginate \
-                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
-                | jq -r --arg tag "${tag}" \
-                '.[] | .metadata.container.tags[]? | select(. == $tag)' \
-                | grep -Fxq "${tag}"; then
-              echo "public image ${package}:${tag} already exists" >&2
-              exit 1
-            fi
+            versions="${RUNNER_TEMP}/${package}-versions.json"
+            gh api --paginate --slurp \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
+              > "${versions}"
+            python3 release/scripts/release_workflow_guard.py \
+              require-image-tag-absent \
+              --metadata "${versions}" \
+              --tag "${tag}"
           done
           manifest="$(
             python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
@@ -236,6 +232,13 @@ jobs:
             "dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
             --version "${{ needs.validate.outputs.version }}"
 
+      # This forces the v1 payload/schema/runtime renderer through the real
+      # generator on every candidate, including the final 0.x train before
+      # v1.0. The authenticated installer and public-image lifecycle remain
+      # tag-only because their exact identities do not exist before tagging.
+      - name: Rehearse forced 1.x release-lock runtime contract
+        run: release/scripts/check-runtime-contract-parity.sh
+
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v3.11.1
@@ -290,6 +293,41 @@ jobs:
             "${DOCS_DOCSET}" \
             --output "${DOCS_ARCHIVE_OUTPUT}" \
             --verify-lock
+
+      - name: Run exact candidate Registryctl against archived authoring journeys
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          REGISTRYCTL_BIN: ${{ github.workspace }}/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64
+          REGISTRYCTL_RELEASED_DOCS_ARCHIVE: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
+          REGISTRYCTL_RELEASED_DOCS_ROOT: ${{ runner.temp }}/candidate-released-docs/version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import runpy
+          from pathlib import Path
+
+          expected_root = Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ROOT"])
+          extraction_root = expected_root.parent
+          if extraction_root.exists():
+              raise SystemExit(
+                  f"candidate docs extraction destination already exists: {extraction_root}"
+              )
+          release_form = runpy.run_path(
+              "release/scripts/first-country-release-form.py"
+          )
+          observed_root = release_form["extract_released_docs_archive"](
+              Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ARCHIVE"]),
+              extraction_root,
+              tag=os.environ["CANDIDATE_TAG"],
+          )
+          if observed_root != expected_root:
+              raise SystemExit(
+                  f"candidate docs extracted to {observed_root}, expected {expected_root}"
+              )
+          PY
+          bash docs/site/scripts/check-registryctl-tutorials.sh
 
       - name: Stage canonical build products
         shell: bash
@@ -560,6 +598,8 @@ jobs:
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
+            crane manifest "${candidate_ref}" \
+              > "${RUNNER_TEMP}/${name}.index.json"
             python3 release/scripts/check-release-image-oci-labels.py \
               "${candidate_ref}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
@@ -581,6 +621,8 @@ jobs:
           fi
           printf '%s\n' "${postgresql_ref}" \
             > candidate/security/images/postgresql.digest
+          crane manifest "${postgresql_ref}" \
+            > "${RUNNER_TEMP}/postgresql.index.json"
           syft "${postgresql_ref}" \
             -o "spdx-json=candidate/security/image-sbom/postgresql.spdx.json" \
             -o "syft-json=candidate/security/syft/postgresql.syft.json"
@@ -626,7 +668,7 @@ jobs:
             ]
           }' > candidate/security/advisory-verdict.json
 
-      - name: Assemble public payload and run install and authoring smoke
+      - name: Assemble public payload and validate version-appropriate install inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -670,8 +712,6 @@ jobs:
               candidate/bundle-root/
           done
           cp candidate/security/advisory-verdict.json candidate/bundle-root/
-          relay_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-relay.digest")"
-          notary_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-notary.digest")"
           (
             cd candidate/bundle-root
             sha256sum \
@@ -680,16 +720,26 @@ jobs:
               "registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
               > SHA256SUMS
           )
-          python3 release/scripts/first-country-release-form.py run \
-            --asset-dir candidate/bundle-root \
-            --tag "${{ needs.validate.outputs.tag }}" \
-            --relay-image-override "${relay_candidate}" \
-            --notary-image-override "${notary_candidate}" \
-            --evidence-dir candidate/first-country
-          python3 release/scripts/first-country-release-form.py verify \
-            --asset-dir candidate/bundle-root \
-            --tag "${{ needs.validate.outputs.tag }}" \
-            --report candidate/first-country/first-country-release-form.json
+          major="${{ needs.validate.outputs.version }}"
+          major="${major%%.*}"
+          if ((major >= 1)); then
+            python3 release/scripts/registry_release_lock.py create-payload \
+              --version "${{ needs.validate.outputs.version }}" \
+              --manifest-source-ref "${{ needs.validate.outputs.source_sha }}" \
+              --tag-target "${{ needs.validate.outputs.source_sha }}" \
+              --asset-dir candidate/bundle-root \
+              --image-lock \
+                "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
+              --relay-image-index \
+                "${RUNNER_TEMP}/registry-relay.index.json" \
+              --notary-image-index \
+                "${RUNNER_TEMP}/registry-notary.index.json" \
+              --postgresql-image-index \
+                "${RUNNER_TEMP}/postgresql.index.json" \
+              --output "${RUNNER_TEMP}/registry-release-lock.payload.json"
+            test -s "${RUNNER_TEMP}/registry-release-lock.payload.json"
+            rm "${RUNNER_TEMP}/registry-release-lock.payload.json"
+          fi
           rm candidate/bundle-root/SHA256SUMS
 
       - name: Seal compact candidate manifest and bundle

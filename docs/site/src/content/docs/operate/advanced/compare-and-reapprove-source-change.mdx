@@ -1,185 +1,307 @@
 ---
-title: Compare a baseline and reapprove a source change
-description: Compare a verified product baseline, change source protocol evidence without widening authority, and produce separately approved product inputs.
+title: Compare and approve an evidence change
+description: Test an evidence change, identify affected product lanes, assemble the next approved set, and regenerate the deployment package.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-30"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure when a source changes product version, protocol profile, request shape, response
-shape, or adapter logic and the deployment needs a reviewable comparison with its approved
-product baseline.
+Use this procedure to add or change an integration, consultation, claim, credential profile,
+environment, or fixture in an existing governed Registry Stack deployment.
 
-## Prerequisites
+## When to use this
 
-- Keep the current authored project unchanged as the review baseline.
-- Obtain the verified signed Relay baseline and its product trust anchor.
-- Obtain the separate Notary baseline and anchor when the project includes Notary.
-- Define the source-owner evidence required to move a version label from `unverified` to `tested`.
-- Use synthetic fixtures until separate authority permits a live compatibility check.
+Use this flow after a product baseline has been approved and deployed.
+It preserves unchanged product lanes and identifies the lanes that need new review and signatures.
+
+A typical new external evidence integration changes:
+
+- `relay-consultation`, which owns source access and minimized consultation output
+- `notary`, which owns claims, disclosure, rendering, issuance, and signing
+
+`relay-public` changes only when the public records surface or its materialization also changes.
+Registryctl computes the affected set from the reviewed authored and generated closures.
 
 ## Ownership and trust boundary
 
-The integration declares product-neutral inputs, one `http`, `script`, or `snapshot` capability,
-source authority, outputs, and limits.
-`source.product` and `source.versions` record interoperability evidence.
-They do not select a runtime executor, enable a protocol helper, or grant source authority.
+The country implementer owns authored project changes.
+Independent lane owners retain signing authority for their product lanes.
+The approved-set owner assembles verified lane outputs, and the deployment operator owns package
+binding, integration into an operator Compose model, activation, state, and recovery.
 
-The environment binds the source origin, credential reference, private trust, rate, concurrency,
-and timeout without widening the integration.
-Registry Relay owns source access and adaptation.
-Registry Notary owns service policy, claim evaluation, disclosure, and issuance.
+Registryctl computes affected lanes, but it does not approve a semantic change, sign for a lane
+owner, or activate a product.
 
-{/* Evidence: docs/site/src/content/docs/tutorials/author-registry-project.mdx,
-    crates/registryctl/src/project_authoring/project.rs, and
-    crates/registryctl/tests/project_authoring.rs. */}
+## Prerequisites
 
-## Establish the verified baseline
+Keep:
 
-Run the unchanged project against the signed baseline before editing:
+- The current authored project unchanged in version control or a separate review copy
+- The current `approved-set.v1.json`
+- The deployed package and its complete `generated/` closure
+- The operator-owned `binding.yaml` and `operator/` files
+- The product-lane-specific anti-rollback state and recovery evidence
 
-```sh
-registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
-  --against <relay-baseline-bundle> \
-  --anchor <relay-trust-anchor> \
-  --explain \
-  --format json
-```
+Do not modify the only copy of the approved project or package.
+Do not edit Compose or generated product configuration to add evidence.
 
-For a combined project, use product-specific baseline pairs with `promote`.
-Do not substitute one product bundle for a project-root baseline.
+## Verify the current baseline
+
+Verify the existing package and bind the expected approved set:
 
 ```sh
-registryctl promote \
-  --project-dir <project> \
-  --environment <environment> \
-  --relay-against <relay-baseline-bundle> \
-  --relay-anchor <relay-trust-anchor> \
-  --notary-against <notary-baseline-bundle> \
-  --notary-anchor <notary-trust-anchor> \
-  --format json
+registryctl deploy verify \
+  --package ./registry-stack \
+  --approved-set ./approved-set.v1.json
 ```
 
-The report is an offline promotion decision.
-The command does not sign, activate, deploy, contact a source, or mutate either environment.
+Proceed only when the report identifies the expected package, ownership state, and approved-set
+digest.
+Resolve a stale or invalid result before combining that condition with an evidence change.
 
-## Make the narrow source change
+## Make the authored evidence change
 
-1. Update the source product or version label only when the transport contract is unchanged.
-   Keep the new version `unverified` until the required evidence exists.
-2. When transport behavior changes, edit only the required method, path, query, headers, body,
-   response mapping, Script branch, or protocol profile.
-3. Keep the origin, credentials, private CA, and deployment controls in the environment.
-4. Do not add a wider wildcard, another origin, another credential, another HTTP method, more
-   outputs, a larger call or byte budget, or a longer deadline unless the review explicitly
-   approves that authority.
-5. Update every affected fixture interaction and expected outcome.
-   Preserve match, no-match, ambiguity, subject mismatch, source rejection, and minimized-output
-   evidence that applies to the integration.
+Edit the smallest authored surface that expresses the new contract:
 
-The [project configuration reference](../../../reference/project-configuration/) identifies field
-ownership, sensitivity, environment behavior, validation, and migration intent.
-Use the [bounded Script guide](../../../tutorials/configure-project-script-adapter/) when the
-change requires reviewed orchestration.
+1. Update the integration and its wholly synthetic fixtures.
+2. Update the evidence service consultation, claims, disclosure, or credential profile when
+   Notary behavior changes.
+3. Update the environment only for deployment-specific source origins, secret references, trust,
+   and resource bindings.
+4. Keep consumer eligibility, ranking, workflow, and action policy outside the evidence service.
 
-## Compare and reapprove
+Do not widen an origin, method, path wildcard, credential, output, source-call count, byte limit,
+or deadline merely to make a fixture pass.
+Record the source-owner evidence required to change a source version from `unverified` to
+`tested`.
 
-Run the complete offline gates:
+## Test and review the change
+
+Run the complete offline fixture set:
 
 ```sh
-PROJECT_DIR=registry-project
-ENVIRONMENT=staging
-RELAY_BASELINE=operator-inputs/reviewed-relay-bundle
-RELAY_TRUST_ANCHOR=operator-inputs/relay-trust-anchor.json
-registryctl test --project-dir "$PROJECT_DIR"
-registryctl check \
-  --project-dir "$PROJECT_DIR" \
-  --environment "$ENVIRONMENT" \
-  --against "$RELAY_BASELINE" \
-  --anchor "$RELAY_TRUST_ANCHOR" \
-  --explain \
-  --format json
-registryctl preflight \
-  --project-dir "$PROJECT_DIR" \
-  --environment "$ENVIRONMENT" \
-  --format json
+registryctl test
 ```
 
-Review the semantic change dimensions, effective source authority, canonical requests, output and
-claim changes, disclosure changes, service policy, operator-security changes, and generated
-artifact manifest.
-For a combined project, run the four-argument product-pair `promote` comparison again.
+The report must pass the changed positive and negative fixtures and the derived
+authorization-before-source and output-minimization cases.
+Fixture evidence remains synthetic and does not prove live interoperability.
 
-Build against the same verified baseline:
+Validate the complete effective plan:
 
 ```sh
-registryctl build \
-  --project-dir <project> \
-  --environment <environment> \
-  --against <relay-baseline-bundle> \
-  --anchor <relay-trust-anchor> \
-  --format json
+registryctl check --explain
 ```
 
-The build produces unsigned review material.
-Sign and verify each generated product input independently after the authorized reviewer approves
-the report.
-Stage Relay first and Notary second, then admit traffic only after both product checks pass.
+Review the source authority, secret consumers, input mapping, outputs, claims, disclosure, and
+bounds.
+
+Compare with the approved set:
+
+```sh
+registryctl review compare --against ./approved-set.v1.json
+```
+
+The comparison reports value-free semantic change classes and the exact affected lanes.
+Comparison is pure.
+It does not sign, activate, deploy, contact a source, or modify the project.
+
+Use `--fail-on-change` only when automation treats any detected change as a negative domain
+result.
+Without that predicate, a successfully reported change exits with status `0`.
+
+## Build only the reviewed replacements
+
+Build against the same approved set:
+
+```sh
+registryctl build --against ./approved-set.v1.json
+```
+
+The build emits signing inputs only for lanes whose lane-scoped input or cross-lane interface
+changed.
+It rejects a lane set that disagrees with the reviewed comparison.
+
+Do not copy a generated signing input into another lane.
+Each input marker binds the lane, product, project, environment, stream, instance, trust domain,
+and reviewed closure.
+
+## Sign each affected lane
+
+The owning signer signs each affected lane into a new digest-specific directory.
+For a typical consultation and claim change:
+
+```sh
+registryctl trust bundle sign \
+  --lane relay-consultation \
+  --input ./.registry-stack/build/production/signing-inputs/relay-consultation \
+  --anchor ./trust/relay-consultation.anchor.json \
+  --key file:./keys/relay-consultation.private.jwk \
+  --against ./approved-set.v1.json \
+  --output-dir ./approved/relay-consultation-next
+registryctl trust bundle sign \
+  --lane notary \
+  --input ./.registry-stack/build/production/signing-inputs/notary \
+  --anchor ./trust/notary.anchor.json \
+  --key file:./keys/notary.private.jwk \
+  --against ./approved-set.v1.json \
+  --output-dir ./approved/notary-next
+```
+
+Use an explicitly supported key locator.
+The private key remains outside arguments as a value, output, reports, and retained artifacts.
+Each signing action verifies the preceding lane entry, advances the sequence, and binds the
+previous configuration hash.
+
+Do not sign or replace `relay-public` when the reviewed affected set excludes that lane.
+
+## Assemble the next approved set
+
+Assemble the replacements with verified unchanged lanes:
+
+```sh
+registryctl trust approved-set assemble \
+  --from ./approved-set.v1.json \
+  --relay-consultation ./approved/relay-consultation-next \
+  --notary ./approved/notary-next \
+  --output-file ./approved-set.next.v1.json
+```
+
+The assembler verifies every carried-forward and replacement lane.
+It rejects an omitted affected lane, a replacement for an unaffected lane, mixed project or
+environment identities, and incompatible cross-lane interface digests.
+
+The unchanged `relay-public` entry remains reusable because its lane-scoped inputs and bound
+interfaces did not change.
+The next approved set is an operator handoff, not product activation authority.
+
+## Regenerate and verify the package
+
+Regenerate the existing verified package:
+
+```sh
+registryctl deploy generate \
+  --approved-set ./approved-set.next.v1.json \
+  --output-dir ./registry-stack
+registryctl deploy verify \
+  --package ./registry-stack \
+  --approved-set ./approved-set.next.v1.json
+```
+
+Registryctl preserves `binding.yaml` and the operator-owned files under `operator/`.
+It stages the new `generated/` closure and retains one verified
+`generated.previous/` closure until the update runbook confirms the new accepted sequence.
+
+Copy or publish the complete generated closure.
+Do not transfer selected YAML files.
+Adding evidence does not require changing a parent application's Compose include.
+
+## Follow the generated update runbook
+
+Use `generated/RUNBOOK.md` for the exact package-specific sequence.
+The runbook performs read-only package, model, bundle, anchor, secret, and product-state checks
+before stopping a reachable service.
+
+Before the first product accepts a higher sequence, you may abort and restore the verified
+preceding generated closure.
+After any product advances anti-rollback state, continue forward, restore a coherent snapshot at
+the same or newer accepted sequence, or replace the instance.
+Do not automatically roll back to an older sequence.
+
+The runbook stops externally reachable dependents before a potentially incompatible private-lane
+change, starts and verifies affected dependencies, then resumes dependents.
+A mixed consultation Relay and Notary contract must fail before source access.
+
+## Verify the result
+
+After the update:
+
+1. Run `registryctl deploy verify` against the next approved set.
+2. Run each product-owned `verify_state` action from the generated runbook.
+3. Check value-free health and readiness.
+4. Exercise an authorized synthetic evaluation with an operator-owned request file.
+5. Confirm the changed claim and minimized output without recording source values.
+6. Confirm the operator-owned application and include graph remain separate from the package.
+
+Remove `generated.previous/` only when the generated runbook says the new acceptance is complete.
 
 ## Expected evidence
 
-Retain:
+Retain value-free evidence for:
 
-- The baseline verification result and exact product identities.
-- Fixture traces for each changed request, response, branch, output, and claim.
-- The redacted semantic comparison and promotion report.
-- The preflight report showing required bindings without secret values.
-- Separate verified Relay and Notary bundle reports when both products changed.
-- Source-owner compatibility evidence with scope, version, date, and limitations.
+- The passing offline fixture report
+- The redacted effective plan and approved-set comparison
+- The exact affected lane set
+- Each replacement lane's signed bundle verification
+- The next approved-set digest
+- Package verification before and after activation
+- Product-owned state verification at the accepted sequence
+
+Keep source values, credentials, private keys, and private deployment details outside the review
+record.
 
 ## What this proves
 
-Fixture tests prove deterministic behavior against synthetic observations.
-Baseline comparison proves the classified authored and generated delta against verified signed
-approval state.
-Preflight proves offline binding availability and non-widening.
-Product verification proves each signed bundle boundary.
+This procedure proves that the authored change was tested against synthetic observations,
+reviewed against the selected approved set, signed by each affected lane owner, assembled into a
+compatible approved set, and packaged under the reported ownership boundary.
 
-These gates do not prove live source interoperability, source-owner acceptance, legal approval,
-production readiness, or atomic activation.
-A version label alone proves none of those properties.
+It does not prove live-source interoperability, correctness for an untested source version,
+country acceptance, or an operator-owned application outside the verified package.
 
 ## Roll back or recover
 
-Before signing, discard the candidate and restore the unchanged authored project.
-Before traffic admission, restore the prior product recovery set.
-After a higher product sequence is accepted, create a reviewed higher-sequence recovery bundle
-instead of deleting anti-rollback state.
+Before any product accepts the higher sequence, stop and restore the complete preceding generated
+closure when the update runbook permits it.
+After acceptance, continue forward or restore a coherent recovery consistency group at the same
+or newer accepted sequence.
+Do not reset anti-rollback state or automatically activate an older bundle.
 
-If only Relay changes, keep Notary traffic blocked until Notary validates the exact new Relay
-consultation contract.
-If the source contract cannot remain narrow, split the change into a separately reviewed
-integration or a separate registry trust domain.
+For an orchestration edge case outside the generated package:
+
+If the package binding cannot express an orchestration need:
+
+1. Keep the verified package unchanged.
+2. Include its generated Compose model from a separate operator-owned application.
+3. Run `registryctl deploy verify` against the package itself.
+4. Validate and operate the application under operator ownership.
+
+Registryctl does not merge or verify the application Compose model.
+Its package result does not extend to application services or the include graph.
 
 ## Escalate
 
-Escalate to the source owner and security reviewer when the change adds an origin, write-like
-operation, wildcard authority, output, credential, private trust root, call, byte, or deadline
-budget.
-Escalate to the product owners when the change alters both Relay and Notary semantics or requires
-a source capability that current closed contracts do not support.
+Stop the update and involve the owning product and security reviewers when:
+
+- Authorization denial performs token or source work
+- A mixed Relay and Notary interface reaches source access
+- A secret or private key appears in retained output
+- Product state reports an unexpected lane identity, sequence, anchor, or configuration hash
+- Package verification reports `invalid`
+- Recovery cannot restore one coherent product-lane consistency group
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Comparison marks an unexpected lane affected | A lane-scoped input or cross-lane interface changed. | Inspect the value-free change classes and the corresponding authored files before signing. |
+| Build emits no replacement | The normalized reviewed closure is unchanged. | Do not invent a signing or deployment update. Retain the approved set. |
+| Assembly rejects a carried-forward lane | Its identity, closure, anchor, or interface no longer matches the next set. | Rebuild and sign every genuinely affected lane. |
+| Package verification reports `invalid` | A generated or operator file no longer matches the package closure. | Restore the verified package or regenerate it from the same approved set before proceeding. |
+| Product state rejects the update | The lane identity, sequence, configuration hash, or pinned anchor does not advance the accepted state. | Restore the pre-acceptance package or construct a reviewed forward update. Do not reset anti-rollback state. |
 
 ## Next
 
-- [Rotate credentials and trust](../rotate-credentials-and-trust/)
-- [Operate bounded Script workers](../operate-script-workers/)
-- [Use the registryctl CLI reference](../../../reference/registryctl/)
+- [Run the generated Compose package](../../single-node-compose-behind-proxy/) for the complete
+  package ownership and initialization procedure.
+- [Inspect and diagnose a deployment](../inspect-and-diagnose/) when readiness or state evidence
+  fails.
+- [Rotate credentials and trust](../rotate-credentials-and-trust/) when the change includes
+  source credentials, caller keys, signing keys, certificates, or anchors.

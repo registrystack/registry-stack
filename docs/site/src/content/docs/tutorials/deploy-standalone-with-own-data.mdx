@@ -1,148 +1,172 @@
 ---
-title: Deploy Relay with your own data
-description: Run Registry Relay against your own bounded local dataset and verify protected reads before adding a Registry Stack project.
+title: Connect your own data through Relay
+description: Adapt a Registry Stack project to an institution-owned source while keeping every claim consultation-backed and product authority separate.
 status: draft
 draft: true
 owner: registry-docs
 source_repos:
+  - registry-stack
   - registry-relay
-last_reviewed: "2026-06-26"
+  - registry-notary
+last_reviewed: "2026-07-30"
 doc_type: how-to
 locale: en
-standards_referenced:
-  - openapi
+standards_referenced: []
 ---
 
-Use this guide when you operate CSV, XLSX, Parquet, or PostgreSQL data and need a protected
-read-only Registry Relay API. This page covers Relay only. Add Registry Notary through a Registry
-Stack project when you need claims derived from compiler-pinned Relay
-consultations.
+Use this guide to replace a synthetic development source with institution-owned data while
+keeping source access in Registry Relay and every Registry Notary claim rooted in exactly one
+Relay consultation.
 
 ## When to use this
 
-Use this path for an operator-managed Relay deployment whose data is already available to the
-Relay host. Use [Registry Stack project authoring](../author-registry-project/) when you also need
-bounded HTTP or script adaptation, exact snapshot consultations, Notary claims, or a combined
-Relay and Notary topology.
+Use the `http` template for a bounded HTTP source.
+OAuth and Rhai adapt the HTTP project and do not introduce another template or runtime.
 
-This is an evaluation and pilot path, not a high-availability deployment profile.
+Use a separate manual design review when the source cannot fit the bounded HTTP or Rhai
+capabilities.
+Registryctl does not infer source authority, identity mappings, or disclosure policy.
 
 ## Before you start
 
 You need:
 
-- A Linux container host or a host that can run the Relay binary
-- A stable local dataset and logical schema
-- A deployment-specific audit hash secret
-- An API-key fingerprint or OpenID Connect configuration for each caller
-- A writable cache directory when Relay materializes file-backed data
+- A project created with `registryctl init <directory> --template http`
+- A source-owner-approved non-production endpoint
+- A stable subject identifier and exact mapping from the request to one consultation input
+- The smallest typed output required by each claim
+- Synthetic observations for match, no match, and every meaningful failure
+- Secret references for the selected environment, with values kept outside authored files
 
-Use synthetic examples while validating the configuration. Do not place raw API keys, source
-credentials, or production records in commands or source control.
+Do not copy production credentials, source responses, or personal data into fixtures or
+generated evidence.
 
-## Pin the Relay image
+## Author the Relay source boundary
 
-Pull a release tag or verified digest rather than `latest`:
+In the integration file, declare only the reviewed source authority:
 
-```sh
-docker pull ghcr.io/registrystack/registry-relay:v0.13.0
+- Source product and reviewed version context
+- Authentication profile
+- Exact method and bounded path pattern
+- Response media type and byte ceiling
+- Typed consultation inputs
+- Closed minimized outputs
+- Call, request-byte, source-byte, and deadline limits
+
+For OAuth, the environment binds the token and source destinations plus client-credential secret
+references.
+Relay owns token acquisition, caching, authorization headers, Transport Layer Security,
+redirects, source calls, and source audit.
+Rhai receives no credential, token, token response, filesystem, process, or arbitrary network
+authority.
+
+## Keep every claim consultation-backed
+
+Each evidence service must map the request to exactly one Relay consultation before declaring
+claims:
+
+```yaml
+consultations:
+  record:
+    integration: reviewed-record
+    input:
+      record_id: request.target.identifiers.registry_record_id
+claims:
+  record-exists:
+    cel: record.matched
+    disclosure: predicate
+  reviewed-status:
+    output: record.status
+    disclosure: value
 ```
 
-Review the release verification evidence before promoting an image into an institutional
-environment.
+The consultation name `record` is the only root used by these claims.
+Do not add source-free, self-attested, delegated-attestation, or caller-defined fallback claim
+paths.
+If a claim has no reviewed source, keep it out of the Registry Stack evidence service.
 
-## Prepare the deployment directory
+## Prove the source contract offline
 
-Create separate configuration, source, and cache directories:
+Author wholly synthetic fixtures for:
 
-```sh
-mkdir -p registry-relay/{data,cache}
-cd registry-relay
-touch config.yaml
-```
+- Authorized match
+- No match
+- Ambiguity where the source can return several candidates
+- Source rejection
+- Subject mismatch
+- Malformed and oversized response
+- Timeout
+- Authorization denial before source access
+- Output minimization
+- Malformed OAuth response when OAuth is enabled
 
-Mount source data read-only. Mount the cache read-write when the selected provider needs local
-materialization.
-
-## Write the Relay configuration
-
-Start from the [Relay configuration reference](../../products/registry-relay/configuration/) and
-define only the datasets, entities, fields, filters, scopes, and providers this deployment needs.
-Keep physical paths, table names, connection references, and credentials in private deployment
-configuration.
-
-At minimum, review:
-
-- `deployment.profile` and deployment evidence
-- `server.bind`, cache path, request limits, and authenticated OpenAPI policy
-- One authentication mode and narrowly scoped principals
-- The audit sink and deployment-specific hash secret reference
-- Logical dataset and entity schemas
-- Physical provider and column bindings
-- Allowed filters, projection, pagination, purpose requirements, and optional aggregates
-
-Registry Relay fails startup when required bindings, secrets, schemas, or security posture are
-invalid.
-
-## Provision a caller credential
-
-Generate an API key and store only its fingerprint in the environment named by the Relay config:
+Run all fixtures:
 
 ```sh
-docker run --rm \
-  ghcr.io/registrystack/registry-relay:v0.13.0 \
-  generate-api-key --id program-system
+registryctl test
 ```
 
-The command prints a raw API key and its fingerprint. Store the raw value in the institution's
-secret distribution process. Put only the fingerprint in the runtime environment.
+`test` is offline.
+Fixture success proves behavior against the authored observations, not interoperability with a
+live source.
 
-Create a stable audit hash secret through the institution's secret process. The value must remain
-outside YAML, logs, shell history, and source control.
-
-## Run Relay
-
-Run the container with private configuration and source mounts:
+Inspect only synthetic values when a focused trace is necessary:
 
 ```sh
-docker run --rm \
-  --name registry-relay \
-  -p 127.0.0.1:8080:8080 \
-  -v "$(pwd)/config.yaml:/etc/registry-relay/config.yaml:ro" \
-  -v "$(pwd)/data:/var/lib/registry-relay/data:ro" \
-  -v "$(pwd)/cache:/var/lib/registry-relay/cache" \
-  --env-file <verified-private-env-file> \
-  ghcr.io/registrystack/registry-relay:v0.13.0 \
-  --config /etc/registry-relay/config.yaml
+registryctl test \
+  --integration <integration-id> \
+  --fixture <synthetic-fixture-id> \
+  --trace
 ```
 
-The process exits non-zero when configuration parsing, source binding, authentication, audit, or
-listener validation fails.
+## Review the effective plan
 
-## Verify Relay
-
-Check liveness and readiness:
+Validate the complete authored environment:
 
 ```sh
-curl -i http://127.0.0.1:8080/healthz
-curl -i http://127.0.0.1:8080/ready
+registryctl check --explain
 ```
 
-Both routes return `200 OK` after the configured providers are ready. Confirm that an anonymous
-protected read returns `401 Unauthorized`, then repeat the request with the authorized caller
-credential and declared purpose.
+Review source destinations, secret consumers, request authority, subject binding, output types,
+limits, claims, and disclosure.
+The redacted plan must keep source authority in consultation Relay and claim evaluation in
+Notary.
+
+## Exercise the disposable product path
+
+Use the project's declared default synthetic scenario:
 
 ```sh
-curl -i \
-  -H "Authorization: Bearer <caller-api-key>" \
-  -H "Data-Purpose: https://example.gov/purpose/registry-consultation" \
-  "http://127.0.0.1:8080/v1/datasets/<dataset>/entities/<entity>/records?<filter>=<value>"
+registryctl dev --detach
+registryctl dev smoke
+registryctl dev down
 ```
 
-The successful response contains only configured projected fields. Confirm that the audit sink
-records the authorized request without the raw credential or sensitive lookup value.
+The denial scenario must perform no token or source call.
+The authorized scenario must perform only the declared bounded calls and report only minimized
+claim identifiers.
+This development trust, credential, and state material is disposable and cannot be promoted.
 
-## Add Notary through project authoring
+Testing an operator-bound non-production source requires explicit source-owner authorization.
+It remains development evidence and does not replace offline negative fixtures or production
+acceptance.
+
+## Build and hand off product inputs
+
+Build deterministic unsigned lane inputs:
+
+```sh
+registryctl build
+```
+
+Keep `relay-public`, `relay-consultation`, and `notary` separate.
+The consultation Relay lane owns the source contract.
+Notary owns claims and disclosure but receives no direct source credential or origin.
+
+Independent product owners review and sign the affected lanes, then the operator assembles the
+approved set.
+Use [Run the generated single-node Compose package](../../operate/single-node-compose-behind-proxy/)
+for the governed deployment handoff.
 
 Do not add a direct source connection to Registry Notary. A combined Registry Stack project
 compiles the source integration and consultation into Relay, then compiles Notary claims against
@@ -152,19 +176,23 @@ Follow [Author an HTTP Registry Stack project](../author-registry-project/) to r
 inspect the redacted plan, and build separate unsigned product inputs. Package, sign, verify, and
 activate each product input through its Config Bundle workflow.
 
+The generated Compose package is portable and operator-adaptable.
+Registryctl verifies only its generated package.
+An application Compose file or include graph remains operator-owned.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Relay exits before listening | Configuration, secret resolution, binding, or posture validation failed. | Read the named field in the startup error and correct the private configuration or environment. |
-| `/ready` returns `503` | A configured provider or materialization is not ready. | Inspect the bounded provider error and verify the source mount, schema, and cache path. |
-| A protected route returns `401` | The credential is absent or does not match the configured fingerprint. | Send the authorized raw key and verify only its fingerprint is configured. |
-| A protected route returns `403` | The principal lacks the route scope or required purpose. | Correct the principal scopes or request purpose without widening unrelated access. |
-| A registry-backed claim needs source access | Notary was configured as if it owned the source. | Author a combined project and keep every source binding in Relay. |
+| A source call is rejected before dispatch | The request is outside the reviewed method, path, or budget. | Correct the adapter or narrowly change the authored source authority. |
+| A claim lacks a consultation root | The claim has no Registry Stack evidence source. | Add one exact Relay consultation or remove the claim. |
+| A secret appears in an authored or generated file | A secret value crossed its ownership boundary. | Stop, remove the exposed material, rotate it, and report the failure through the security process. |
+| A fixture passes but the live source differs | Synthetic and interoperability evidence have been confused. | Keep the version `unverified` and run a separately authorized compatibility review. |
+| The generated Compose package cannot express an operator need | The orchestration change is outside the binding schema. | Keep the verified package intact and compose it into a separate operator-owned application. |
 
 ## Next
 
-- [Author an HTTP Registry Stack project](../author-registry-project/) for combined Relay and
-  Notary claims.
-- [Relay protected read flow](../../explanation/consultation-flow/) for Relay request processing.
-- [Harden a production deployment](../../security/hardening-checklist/) before public exposure.
+- [Build and run an HTTP registry project](../author-registry-project/) for the bounded HTTP
+  authoring path.
+- [Compare and approve an evidence change](../../operate/advanced/compare-and-reapprove-source-change/)
+  when changing a governed deployment.

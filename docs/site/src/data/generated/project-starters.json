@@ -1,13 +1,52 @@
 [
   {
+    "id": "spreadsheet",
+    "label": "Spreadsheet",
+    "summary": "A protected records API and bounded evidence service over a contained workbook.",
+    "source": "crates/registryctl/assets/project-starters/spreadsheet",
+    "project_dir": "spreadsheet-project",
+    "focused_fixture_file": "match.yaml",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "spreadsheet",
+    "environment": "local",
+    "check_explain": true,
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "compare",
+      "build",
+      "dev"
+    ],
+    "integration": "project-record-snapshot",
+    "fixture": "match",
+    "commands": [
+      "registryctl init spreadsheet-project --template spreadsheet",
+      "registryctl -C spreadsheet-project tooling editor",
+      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --trace",
+      "registryctl -C spreadsheet-project test --integration project-record-snapshot --fixture match --watch",
+      "registryctl -C spreadsheet-project test",
+      "registryctl -C spreadsheet-project check --environment local --explain",
+      "registryctl -C spreadsheet-project review compare --environment local",
+      "registryctl -C spreadsheet-project build --environment local",
+      "registryctl -C spreadsheet-project dev --detach",
+      "registryctl -C spreadsheet-project dev smoke",
+      "registryctl -C spreadsheet-project dev down"
+    ]
+  },
+  {
     "id": "http",
-    "label": "Custom HTTP",
+    "label": "HTTP",
     "summary": "One fixed bounded HTTP request with a closed response projection.",
     "source": "crates/registryctl/assets/project-starters/bounded-http",
     "classification": "maintained",
     "topology": "combined",
     "starter": "http",
-    "project_dir": "registry-project",
+    "project_dir": "http-project",
     "capabilities": [
       "init",
       "editor",
@@ -16,147 +55,26 @@
       "test",
       "check",
       "compare",
-      "build"
+      "build",
+      "dev"
     ],
     "integration": "person-record",
     "fixture": "active-person",
     "commands": [
-      "registryctl init --from http --project-dir registry-project",
-      "registryctl authoring editor --project-dir registry-project",
-      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --trace",
-      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --watch",
-      "registryctl test --project-dir registry-project",
-      "registryctl check --project-dir registry-project --environment local --explain",
-      "registryctl compare --project-dir registry-project --environment local --from-starter",
-      "registryctl build --project-dir registry-project --environment local"
-    ]
-  },
-  {
-    "id": "dhis2-tracker",
-    "label": "DHIS2 Tracker",
-    "summary": "Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for consumer-owned decisions.",
-    "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
-    "classification": "maintained",
-    "topology": "combined",
-    "starter": "dhis2-tracker",
-    "project_dir": "dhis2-project",
-    "capabilities": [
-      "init",
-      "editor",
-      "trace",
-      "watch",
-      "test",
-      "check",
-      "compare",
-      "build"
+      "registryctl init http-project --template http",
+      "registryctl -C http-project tooling editor",
+      "registryctl -C http-project test --integration person-record --fixture active-person --trace",
+      "registryctl -C http-project test --integration person-record --fixture active-person --watch",
+      "registryctl -C http-project test",
+      "registryctl -C http-project check --environment local --explain",
+      "registryctl -C http-project review compare --environment local",
+      "registryctl -C http-project build --environment local",
+      "registryctl -C http-project dev --detach",
+      "registryctl -C http-project dev smoke",
+      "registryctl -C http-project dev down"
     ],
-    "integration": "health-record",
-    "fixture": "complete-child-health-evidence",
-    "commands": [
-      "registryctl init --from dhis2-tracker --project-dir dhis2-project",
-      "registryctl authoring editor --project-dir dhis2-project",
-      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-child-health-evidence --trace",
-      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-child-health-evidence --watch",
-      "registryctl test --project-dir dhis2-project",
-      "registryctl check --project-dir dhis2-project --environment local --explain",
-      "registryctl compare --project-dir dhis2-project --environment local --from-starter",
-      "registryctl build --project-dir dhis2-project --environment local"
-    ]
-  },
-  {
-    "id": "opencrvs-dci",
-    "label": "OpenCRVS DCI",
-    "summary": "A product-neutral script adapter with the signed DCI search verification profile.",
-    "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
-    "classification": "maintained",
-    "topology": "combined",
-    "starter": "opencrvs-dci",
-    "project_dir": "opencrvs-project",
-    "capabilities": [
-      "init",
-      "editor",
-      "trace",
-      "watch",
-      "test",
-      "check",
-      "compare",
-      "build"
-    ],
-    "integration": "birth-record",
-    "fixture": "birth-record-match",
-    "commands": [
-      "registryctl init --from opencrvs-dci --project-dir opencrvs-project",
-      "registryctl authoring editor --project-dir opencrvs-project",
-      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --trace",
-      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
-      "registryctl test --project-dir opencrvs-project",
-      "registryctl check --project-dir opencrvs-project --environment local --explain",
-      "registryctl compare --project-dir opencrvs-project --environment local --from-starter",
-      "registryctl build --project-dir opencrvs-project --environment local"
-    ]
-  },
-  {
-    "id": "fhir-r4-coverage-active",
-    "label": "FHIR R4",
-    "summary": "A product-neutral script adapter with bounded FHIR R4 search-set parsing.",
-    "source": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
-    "classification": "maintained",
-    "topology": "combined",
-    "starter": "fhir-r4",
-    "project_dir": "fhir-project",
-    "capabilities": [
-      "init",
-      "editor",
-      "trace",
-      "watch",
-      "test",
-      "check",
-      "compare",
-      "build"
-    ],
-    "integration": "coverage",
-    "fixture": "coverage-active",
-    "commands": [
-      "registryctl init --from fhir-r4 --project-dir fhir-project",
-      "registryctl authoring editor --project-dir fhir-project",
-      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --trace",
-      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
-      "registryctl test --project-dir fhir-project",
-      "registryctl check --project-dir fhir-project --environment local --explain",
-      "registryctl compare --project-dir fhir-project --environment local --from-starter",
-      "registryctl build --project-dir fhir-project --environment local"
-    ]
-  },
-  {
-    "id": "snapshot",
-    "label": "Exact snapshot",
-    "summary": "An exact lookup over one immutable local materialization.",
-    "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
-    "classification": "maintained",
-    "topology": "combined",
-    "starter": "snapshot",
-    "project_dir": "snapshot-project",
-    "capabilities": [
-      "init",
-      "editor",
-      "trace",
-      "watch",
-      "test",
-      "check",
-      "compare",
-      "build"
-    ],
-    "integration": "person-snapshot",
-    "fixture": "snapshot-match",
-    "commands": [
-      "registryctl init --from snapshot --project-dir snapshot-project",
-      "registryctl authoring editor --project-dir snapshot-project",
-      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
-      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
-      "registryctl test --project-dir snapshot-project",
-      "registryctl check --project-dir snapshot-project --environment local --explain",
-      "registryctl compare --project-dir snapshot-project --environment local --from-starter",
-      "registryctl build --project-dir snapshot-project --environment local"
-    ]
+    "focused_fixture_file": "active.yaml",
+    "environment": "local",
+    "check_explain": true
   }
 ]

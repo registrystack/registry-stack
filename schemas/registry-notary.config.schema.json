@@ -2286,6 +2286,11 @@
           "default": false,
           "type": "boolean"
         },
+        "allow_insecure_private_network": {
+          "default": false,
+          "description": "Permit this signed Notary-to-Relay service hop to use application HTTP.\nRuntime resolution remains confined to eligible private addresses.",
+          "type": "boolean"
+        },
         "allowed_private_cidrs": {
           "default": [],
           "items": {
@@ -2301,6 +2306,14 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "root_certificate_path": {
+          "default": null,
+          "description": "Optional private root bundle for the exact HTTPS Relay destination.\n\nThe deployment must provide a bounded regular file owned by root or\nthe Notary effective user, readable by its owner, and inaccessible to\ngroup and other users (0400 or 0600).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "token_file": {
           "type": "string"

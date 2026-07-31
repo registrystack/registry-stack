@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/release/registry-release-lock.v1.schema.json",
+  "title": "RegistryReleaseLockV1 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "schema_version",
+    "signed_payload",
+    "sigstore_bundle"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "io.registrystack.registry_release_lock"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "signed_payload": {
+      "description": "Standard-base64 encoding of the exact RFC 8785 canonical RegistryReleaseLockV1 payload bytes signed by sigstore_bundle.",
+      "type": "string",
+      "contentEncoding": "base64",
+      "minLength": 4,
+      "maxLength": 1398104
+    },
+    "sigstore_bundle": {
+      "description": "Self-contained Sigstore protobuf bundle JSON. Registryctl performs the authoritative offline cryptographic and identity verification.",
+      "type": "object",
+      "required": [
+        "mediaType",
+        "verificationMaterial",
+        "messageSignature"
+      ],
+      "properties": {
+        "mediaType": {
+          "const": "application/vnd.dev.sigstore.bundle.v0.3+json"
+        },
+        "verificationMaterial": {
+          "type": "object"
+        },
+        "messageSignature": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

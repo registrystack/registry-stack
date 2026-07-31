@@ -212,30 +212,22 @@
       "additionalProperties": false,
       "properties": {
         "signing": {
-          "enum": [
-            "none",
-            "relay_bundle",
-            "notary_bundle",
-            "relay_and_notary_bundles"
-          ]
+          "$ref": "#/$defs/product_actions"
         },
         "activation": {
-          "enum": [
-            "none",
-            "republish_artifacts",
-            "apply_relay_config",
-            "apply_notary_config",
-            "apply_relay_and_notary_config"
-          ]
+          "$ref": "#/$defs/product_actions"
         },
         "restart": {
-          "enum": [
-            "none",
-            "registry_relay",
-            "registry_notary",
-            "registry_relay_and_notary"
-          ]
+          "$ref": "#/$defs/product_actions"
         }
+      }
+    },
+    "product_actions": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["relay-public", "relay-consultation", "notary"]
       }
     },
     "semantic_impact": {

@@ -43,13 +43,10 @@ const PROJECT_COMMAND_REPORT_SCHEMA_VERSION: &str = "registryctl.project_command
 const PROJECT_DIAGNOSTICS_SCHEMA_VERSION: &str = "registryctl.project_diagnostics.v1";
 const PROJECT_EDITOR_REPORT_SCHEMA_VERSION: &str = "registryctl.project_editor.v1";
 const REVIEW_SCHEMA: &str = "registry.project.review.v1";
-const APPROVAL_STATE_SCHEMA_V1: &str = "registry.project.approval-state.v1";
-const APPROVAL_STATE_SCHEMA_V2: &str = "registry.project.approval-state.v2";
-const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v3";
+const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v4";
 const APPROVAL_REVIEW_PATH: &str = "approval/review.json";
 const APPROVAL_STATE_PATH: &str = "approval/project-state.json";
 const MAX_AUTHORED_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_FIXTURES: usize = 128;
 const MAX_ENVIRONMENTS: usize = 64;
 const MAX_OPERATIONS: usize = 16;
@@ -65,6 +62,8 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // These ownership-oriented source units share this private module so the
 // authoring compiler can retain one closed internal type system without a
 // public API or visibility expansion.
+mod required_product_action;
+pub use required_product_action::*;
 mod report_contract;
 pub use report_contract::*;
 mod diagnostic_reference;
@@ -79,17 +78,14 @@ pub use documentation::*;
 mod knowledge;
 mod preflight;
 pub use preflight::*;
-mod promotion;
-pub use promotion::*;
-mod migration;
-pub use migration::*;
-mod semantic_comparison;
-pub use semantic_comparison::*;
+mod promotion_projection;
+use promotion_projection::*;
 mod duration_authority;
 use duration_authority::*;
 mod byte_size_authority;
 use byte_size_authority::*;
 include!("project_authoring/model.rs");
+include!("project_authoring/development.rs");
 include!("project_authoring/editor.rs");
 include!("project_authoring/schema_authority.rs");
 include!("project_authoring/authoring_contract.rs");

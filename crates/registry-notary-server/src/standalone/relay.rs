@@ -3,6 +3,9 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::Read as _;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::relay_client::{
@@ -13,9 +16,10 @@ use crate::runtime::{
     ActivatedRelayClientSet, ActivatedRelayConsultations, RelayClientSelectionV1,
     RuntimeRelayConsultationResult, RuntimeRelayExpectedResult,
 };
-use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
+use registry_notary_core::{ClaimEvidenceMode, DeploymentProfile, StandaloneRegistryNotaryConfig};
 use registry_platform_httputil::destination::{
-    DestinationProfile, ServiceHopDataDestinationPolicy,
+    DestinationProfile, DestinationTlsMaterial, ServiceHopDataDestinationPolicy,
+    MAX_DESTINATION_CA_BUNDLE_BYTES,
 };
 
 use super::StandaloneServerError;
@@ -26,20 +30,22 @@ pub(super) async fn activate_relay_from_config(
     let Some(plans) = activation_plans(config)? else {
         return Ok(None);
     };
+    let root_certificate = plans
+        .connection
+        .root_certificate_path
+        .as_deref()
+        .map(read_relay_root_certificate)
+        .transpose()
+        .map_err(|_| StandaloneServerError::RelayActivation)?
+        .map(Arc::<[u8]>::from);
     let mut activated = Vec::with_capacity(plans.clients.len());
     for plan in plans.clients {
         let credential = RelayWorkloadCredentialFile::new(plans.connection.token_file.clone())
             .map_err(map_relay_client_error)?;
-        let destination_profile = if plans.connection.uses_insecure_url() {
-            DestinationProfile::LoopbackDevelopmentHttp
-        } else {
-            DestinationProfile::ProductionHttps
-        };
-        let destination = ServiceHopDataDestinationPolicy::new(
-            "registry-notary-relay",
-            &plans.connection.base_url,
-            destination_profile,
-            &plans.connection.allowed_private_cidrs,
+        let destination = relay_destination(
+            plans.connection,
+            root_certificate.as_deref(),
+            config.deployment.profile,
         )
         .map_err(|_| StandaloneServerError::InvalidRelayDestination)?;
         let expected_result = plan.expected_result.relay()?;
@@ -53,6 +59,8 @@ pub(super) async fn activate_relay_from_config(
         .map_err(|_| StandaloneServerError::InvalidRelayActivationPlan)?;
         let retry_plan = RelayRetryPlan {
             connection: plans.connection.clone(),
+            root_certificate: root_certificate.clone(),
+            deployment_profile: config.deployment.profile,
             pin: RelayProfilePin::new(
                 plan.profile.id.as_str(),
                 plan.profile.contract_hash.as_str(),
@@ -100,6 +108,8 @@ fn retain_profile_activation(
 #[derive(Clone)]
 struct RelayRetryPlan {
     connection: registry_notary_core::RelayConnectionConfig,
+    root_certificate: Option<Arc<[u8]>>,
+    deployment_profile: Option<DeploymentProfile>,
     pin: RelayProfilePin,
     purpose: Box<str>,
     input_names: Vec<String>,
@@ -108,16 +118,10 @@ struct RelayRetryPlan {
 
 impl RelayRetryPlan {
     fn client(&self) -> Result<RelayConsultationClient, RelayClientError> {
-        let destination_profile = if self.connection.uses_insecure_url() {
-            DestinationProfile::LoopbackDevelopmentHttp
-        } else {
-            DestinationProfile::ProductionHttps
-        };
-        let destination = ServiceHopDataDestinationPolicy::new(
-            "registry-notary-relay",
-            &self.connection.base_url,
-            destination_profile,
-            &self.connection.allowed_private_cidrs,
+        let destination = relay_destination(
+            &self.connection,
+            self.root_certificate.as_deref(),
+            self.deployment_profile,
         )
         .map_err(|_| RelayClientError::InvalidConfiguration)?;
         RelayConsultationClient::new(
@@ -131,6 +135,102 @@ impl RelayRetryPlan {
         )
         .and_then(|client| client.with_max_in_flight(self.connection.max_in_flight))
     }
+}
+
+fn relay_destination(
+    connection: &registry_notary_core::RelayConnectionConfig,
+    root_certificate: Option<&[u8]>,
+    deployment_profile: Option<DeploymentProfile>,
+) -> Result<ServiceHopDataDestinationPolicy, ()> {
+    let destination_profile = if !connection.uses_insecure_url() {
+        DestinationProfile::ProductionHttps
+    } else if connection.uses_insecure_loopback_url() {
+        DestinationProfile::LoopbackDevelopmentHttp
+    } else if connection.uses_insecure_private_network_url() {
+        DestinationProfile::PrivateServiceHttp
+    } else if deployment_profile == Some(DeploymentProfile::Local) {
+        DestinationProfile::LocalPrivateDevelopmentHttp
+    } else {
+        return Err(());
+    };
+    let mut destination = ServiceHopDataDestinationPolicy::new(
+        "registry-notary-relay",
+        &connection.base_url,
+        destination_profile,
+        &connection.allowed_private_cidrs,
+    )
+    .map_err(|_| ())?;
+    if let Some(root_certificate) = root_certificate {
+        destination = destination.require_configured_tls();
+        let material =
+            DestinationTlsMaterial::from_pem(Some(root_certificate), None).map_err(|_| ())?;
+        destination
+            .install_configured_tls(material)
+            .map_err(|_| ())?;
+    }
+    Ok(destination)
+}
+
+fn read_relay_root_certificate(path: &Path) -> Result<Vec<u8>, ()> {
+    let mut file = open_relay_root_certificate(path)?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !metadata.is_file() {
+        return Err(());
+    }
+    validate_relay_root_certificate_metadata(&metadata)?;
+    let maximum = u64::try_from(MAX_DESTINATION_CA_BUNDLE_BYTES).map_err(|_| ())?;
+    if metadata.len() == 0 || metadata.len() > maximum {
+        return Err(());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).map_err(|_| ())?);
+    file.by_ref()
+        .take(maximum.checked_add(1).ok_or(())?)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.is_empty() || bytes.len() > MAX_DESTINATION_CA_BUNDLE_BYTES {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn open_relay_root_certificate(path: &Path) -> Result<File, ()> {
+    use rustix::fs::{Mode, OFlags};
+
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|_| ())?;
+    Ok(File::from(descriptor))
+}
+
+#[cfg(not(unix))]
+fn open_relay_root_certificate(path: &Path) -> Result<File, ()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if metadata.file_type().is_symlink() {
+        return Err(());
+    }
+    File::open(path).map_err(|_| ())
+}
+
+#[cfg(unix)]
+fn validate_relay_root_certificate_metadata(metadata: &fs::Metadata) -> Result<(), ()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let mode = metadata.permissions().mode();
+    let owner = metadata.uid();
+    let effective_user = rustix::process::geteuid().as_raw();
+    if mode & 0o177 != 0 || mode & 0o400 == 0 || (owner != 0 && owner != effective_user) {
+        return Err(());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_relay_root_certificate_metadata(_metadata: &fs::Metadata) -> Result<(), ()> {
+    Ok(())
 }
 
 struct PendingRelayProfile {
@@ -342,6 +442,95 @@ fn activation_plans(
 mod tests {
     use super::*;
 
+    fn local_private_connection(
+        base_url: &str,
+        allowed_private_cidrs: &[&str],
+    ) -> registry_notary_core::RelayConnectionConfig {
+        let mut connection: registry_notary_core::RelayConnectionConfig =
+            serde_norway::from_str(&format!(
+                "base_url: {base_url}\nworkload_client_id: registry-notary\ntoken_file: /run/secrets/relay.jwt\n"
+            ))
+            .expect("test Relay connection parses");
+        connection.allowed_private_cidrs = allowed_private_cidrs
+            .iter()
+            .map(|cidr| cidr.parse().expect("test CIDR parses"))
+            .collect();
+        connection
+    }
+
+    #[test]
+    fn local_private_relay_destination_is_exact_and_profile_bound() {
+        let connection = local_private_connection("http://10.89.0.4:8080", &["10.89.0.4/32"]);
+        relay_destination(&connection, None, Some(DeploymentProfile::Local))
+            .expect("local exact private HTTP destination activates");
+
+        for profile in [
+            None,
+            Some(DeploymentProfile::HostedLab),
+            Some(DeploymentProfile::Production),
+            Some(DeploymentProfile::EvidenceGrade),
+        ] {
+            assert!(relay_destination(&connection, None, profile).is_err());
+        }
+
+        for (base_url, cidrs) in [
+            ("http://10.89.0.4:8080", vec![]),
+            ("http://10.89.0.4:8080", vec!["10.89.0.0/24"]),
+            ("http://10.89.0.4:8080", vec!["10.89.0.5/32"]),
+            ("http://relay.internal.example:8080", vec!["10.89.0.4/32"]),
+            ("http://169.254.169.254:8080", vec!["169.254.169.254/32"]),
+            ("http://100.100.100.200:8080", vec!["100.100.100.200/32"]),
+            ("http://0.0.0.0:8080", vec!["0.0.0.0/32"]),
+        ] {
+            let connection = local_private_connection(base_url, &cidrs);
+            assert!(
+                relay_destination(&connection, None, Some(DeploymentProfile::Local)).is_err(),
+                "unexpectedly activated {base_url} with {cidrs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_service_relay_destination_activates_without_transport_ceremony() {
+        let mut connection =
+            local_private_connection("http://registry-relay-consultation:8080", &[]);
+        connection.allow_insecure_private_network = true;
+        for profile in [
+            DeploymentProfile::Local,
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            relay_destination(&connection, None, Some(profile))
+                .expect("signed private service HTTP destination activates");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relay_root_certificate_loader_requires_owner_only_regular_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path().join("relay-ca.pem");
+        std::fs::write(&root, b"bounded-public-root").expect("root writes");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o600))
+            .expect("permissions set");
+        assert_eq!(
+            read_relay_root_certificate(&root).expect("owner-only root loads"),
+            b"bounded-public-root"
+        );
+
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o644))
+            .expect("permissions widen");
+        assert!(read_relay_root_certificate(&root).is_err());
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o600))
+            .expect("permissions restore");
+        let link = directory.path().join("relay-ca-link.pem");
+        symlink(&root, &link).expect("symlink creates");
+        assert!(read_relay_root_certificate(&link).is_err());
+    }
+
     fn config_with_claim(
         claim: &str,
         token_file: &std::path::Path,
@@ -436,6 +625,8 @@ evidence:
             .expect("retry connection parses");
         let retry_plan = RelayRetryPlan {
             connection,
+            root_certificate: None,
+            deployment_profile: Some(DeploymentProfile::Local),
             pin: RelayProfilePin::new(
                 "example.snapshot-status.exact",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

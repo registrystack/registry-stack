@@ -13,13 +13,92 @@ fn value_free_runtime_activation_failure<E>(
 }
 
 pub(crate) async fn run_server(
-    config_path: &Path,
+    config_input: impl Into<ServerConfigInput>,
     bind_override: Option<SocketAddr>,
     initialize_state: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    run_server_with_acceptance(
+        config_input.into(),
+        bind_override,
+        initialize_state,
+        ServerAcceptanceMode::Legacy,
+    )
+    .await
+}
+
+pub(crate) async fn run_governed_server(
+    verified: VerifiedConfigBundle,
+    state_path: &Path,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing().map_err(value_free_configuration_failure)?;
+    let loaded = load_verified_product_server_config(state_path, verified, trust_domain)?;
+    run_loaded_server(loaded, None, ServerAcceptanceMode::Governed).await
+}
+
+enum ServerAcceptanceMode {
+    Legacy,
+    Governed,
+}
+
+enum PreparedServerAcceptance {
+    Legacy(Option<PendingBundleAcceptance>),
+    GovernedExact {
+        acceptance: PendingBundleAcceptance,
+        audit_evidence: GovernedAcceptanceAuditEvidence,
+    },
+}
+
+struct GovernedAcceptanceAuditEvidence {
+    acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1,
+    bundle_manifest_hash: String,
+    anchor_digest: String,
+    anchor_version: u64,
+}
+
+impl GovernedAcceptanceAuditEvidence {
+    #[cfg(test)]
+    fn from_intent(intent: &registry_platform_ops::AcceptanceAuditIntentV1) -> Self {
+        Self {
+            acceptance_identity: intent.key.acceptance_identity.clone(),
+            bundle_manifest_hash: intent.bundle_manifest_hash.clone(),
+            anchor_digest: intent.anchor_digest.clone(),
+            anchor_version: intent.anchor_version,
+        }
+    }
+
+    fn from_exact_acceptance(
+        acceptance: &PendingBundleAcceptance,
+    ) -> Result<Self, BundleVerificationFailure> {
+        Ok(Self {
+            acceptance_identity: acceptance.key.acceptance_identity.clone(),
+            bundle_manifest_hash: acceptance.bundle_manifest_hash.clone().ok_or_else(|| {
+                BundleVerificationFailure::from(BundleVerificationCode::REJECTED_VALIDATION)
+            })?,
+            anchor_digest: acceptance.accepted_anchor.digest.clone(),
+            anchor_version: acceptance.accepted_anchor.version,
+        })
+    }
+}
+
+async fn run_server_with_acceptance(
+    config_input: ServerConfigInput,
+    bind_override: Option<SocketAddr>,
+    initialize_state: bool,
+    acceptance_mode: ServerAcceptanceMode,
+) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing().map_err(value_free_configuration_failure)?;
 
-    let loaded = load_server_config(config_path, initialize_state)?;
+    let loaded = load_server_config_input(&config_input, initialize_state)?;
+    run_loaded_server(loaded, bind_override, acceptance_mode).await
+}
+
+async fn run_loaded_server(
+    loaded: LoadedServerConfig,
+    bind_override: Option<SocketAddr>,
+    acceptance_mode: ServerAcceptanceMode,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prepared_acceptance = prepare_server_acceptance(&loaded, acceptance_mode)?;
     let mut config = loaded.config;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;
@@ -41,7 +120,7 @@ pub(crate) async fn run_server(
             let public_addr: SocketAddr = public_listener.local_addr()?;
             let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
             let admin_addr: SocketAddr = admin_listener.local_addr()?;
-            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+            finalize_server_acceptance(&runtime, prepared_acceptance)
                 .await
                 .map_err(value_free_runtime_activation_failure)?;
             let routers = notary_routers_from_runtime(runtime)
@@ -81,7 +160,7 @@ pub(crate) async fn run_server(
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             let listener = tokio::net::TcpListener::bind(bind).await?;
             let local_addr: SocketAddr = listener.local_addr()?;
-            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+            finalize_server_acceptance(&runtime, prepared_acceptance)
                 .await
                 .map_err(value_free_runtime_activation_failure)?;
             let app = notary_shared_router_from_runtime(runtime)
@@ -98,7 +177,7 @@ pub(crate) async fn run_server(
         RegistryNotaryAdminListenerMode::Disabled => {
             let listener = tokio::net::TcpListener::bind(bind).await?;
             let local_addr: SocketAddr = listener.local_addr()?;
-            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+            finalize_server_acceptance(&runtime, prepared_acceptance)
                 .await
                 .map_err(value_free_runtime_activation_failure)?;
             let app = notary_routers_from_runtime(runtime)
@@ -117,20 +196,178 @@ pub(crate) async fn run_server(
     Ok(())
 }
 
+fn prepare_server_acceptance(
+    loaded: &LoadedServerConfig,
+    mode: ServerAcceptanceMode,
+) -> Result<PreparedServerAcceptance, Box<dyn std::error::Error>> {
+    match mode {
+        ServerAcceptanceMode::Legacy => Ok(PreparedServerAcceptance::Legacy(
+            loaded.pending_bundle_acceptance.clone(),
+        )),
+        ServerAcceptanceMode::Governed => {
+            let acceptance = loaded.pending_bundle_acceptance.clone().ok_or_else(|| {
+                Box::new(BundleVerificationFailure::from(
+                    BundleVerificationCode::REJECTED_VALIDATION,
+                )) as Box<dyn std::error::Error>
+            })?;
+            let candidate = loaded.verified_acceptance_state.as_ref().ok_or_else(|| {
+                Box::new(BundleVerificationFailure::from(
+                    BundleVerificationCode::REJECTED_VALIDATION,
+                )) as Box<dyn std::error::Error>
+            })?;
+            let store = registry_platform_ops::FileAntiRollbackStore::new(&acceptance.state_path);
+            store
+                .verify_state(candidate.expectation())
+                .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
+            let audit_evidence =
+                GovernedAcceptanceAuditEvidence::from_exact_acceptance(&acceptance)?;
+            Ok(PreparedServerAcceptance::GovernedExact {
+                acceptance,
+                audit_evidence,
+            })
+        }
+    }
+}
+
+async fn finalize_server_acceptance(
+    runtime: &registry_notary_server::NotaryRuntimeSnapshot,
+    prepared: PreparedServerAcceptance,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match prepared {
+        PreparedServerAcceptance::Legacy(acceptance) => {
+            emit_and_persist_boot_acceptance(runtime, acceptance.as_ref()).await
+        }
+        PreparedServerAcceptance::GovernedExact {
+            acceptance,
+            audit_evidence,
+        } => {
+            emit_boot_config_audits_for_action(runtime, &acceptance, "serve", Some(&audit_evidence))
+                .await
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn initialize_state_once(
+    config_input: impl Into<ServerConfigInput>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing().map_err(value_free_configuration_failure)?;
+
+    let config_input = config_input.into();
+    let loaded = load_server_config_input(&config_input, true)?;
+    let acceptance = loaded.pending_bundle_acceptance.clone().ok_or_else(|| {
+        Box::new(BundleVerificationFailure::from(
+            BundleVerificationCode::REJECTED_VALIDATION,
+        )) as Box<dyn std::error::Error>
+    })?;
+    let verified_acceptance_state = loaded.verified_acceptance_state.clone().ok_or_else(|| {
+        Box::new(BundleVerificationFailure::from(
+            BundleVerificationCode::REJECTED_VALIDATION,
+        )) as Box<dyn std::error::Error>
+    })?;
+    if acceptance.source != ConfigSource::SignedBundleFile
+        || acceptance.sequence != Some(1)
+        || acceptance.state_action != BundleStateAction::Initialize
+    {
+        return Err(Box::new(BundleVerificationFailure::from(
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        )));
+    }
+    let store = registry_platform_ops::FileAntiRollbackStore::new(&acceptance.state_path);
+    let plan = store
+        .plan_initialize(&verified_acceptance_state)
+        .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
+    ensure_acceptance_audit_matches_plan(&acceptance, plan.audit_intent())?;
+
+    let runtime = compile_notary_runtime_with_provenance(
+        loaded.config,
+        loaded.config_source,
+        loaded.config_provenance,
+    )
+    .map_err(registry_notary_server::NotaryActivationFailure::from)?
+    .activate()
+    .await
+    .map_err(registry_notary_server::NotaryActivationFailure::from)?;
+
+    store
+        .commit_acceptance(plan, |intent| async move {
+            ensure_acceptance_audit_matches_plan(&acceptance, &intent)?;
+            let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(&intent);
+            emit_boot_config_audits_for_action(
+                &runtime,
+                &acceptance,
+                "initialize_state",
+                Some(&audit_evidence),
+            )
+            .await
+        })
+        .await
+        .map_err(|error| value_free_runtime_activation_failure(ConfigBootError::Store(error)))?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn ensure_acceptance_audit_matches_plan(
+    acceptance: &PendingBundleAcceptance,
+    intent: &registry_platform_ops::AcceptanceAuditIntentV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if acceptance.key == intent.key
+        && acceptance.sequence == Some(intent.sequence)
+        && acceptance.config_hash == intent.config_hash
+        && acceptance.bundle_manifest_hash.as_deref() == Some(&intent.bundle_manifest_hash)
+        && acceptance.bundle_id.as_deref() == Some(&intent.bundle_id)
+        && acceptance.accepted_anchor.digest == intent.anchor_digest
+        && acceptance.accepted_anchor.version == intent.anchor_version
+    {
+        return Ok(());
+    }
+    Err(Box::new(BundleVerificationFailure::from(
+        BundleVerificationCode::REJECTED_VALIDATION,
+    )))
+}
+
+#[cfg(test)]
 pub(crate) fn bundle_acceptance_audit(acceptance: &PendingBundleAcceptance) -> ConfigAuditEvent {
+    bundle_acceptance_audit_for_action(acceptance, "boot", None)
+}
+
+#[cfg(test)]
+pub(crate) fn governed_bundle_acceptance_audit(
+    acceptance: &PendingBundleAcceptance,
+    intent: &registry_platform_ops::AcceptanceAuditIntentV1,
+) -> Result<ConfigAuditEvent, Box<dyn std::error::Error>> {
+    ensure_acceptance_audit_matches_plan(acceptance, intent)?;
+    let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(intent);
+    Ok(bundle_acceptance_audit_for_action(
+        acceptance,
+        "initialize_state",
+        Some(&audit_evidence),
+    ))
+}
+
+fn bundle_acceptance_audit_for_action(
+    acceptance: &PendingBundleAcceptance,
+    action: &str,
+    governed_evidence: Option<&GovernedAcceptanceAuditEvidence>,
+) -> ConfigAuditEvent {
     ConfigAuditEvent {
-        action: "boot".to_string(),
+        action: action.to_string(),
         source: acceptance.source.as_posture_str().to_string(),
+        acceptance_identity: governed_evidence.map(|evidence| evidence.acceptance_identity.clone()),
         bundle_id: acceptance.bundle_id.clone(),
+        bundle_manifest_hash: governed_evidence
+            .map(|evidence| evidence.bundle_manifest_hash.clone()),
         sequence: acceptance.sequence,
         signer_kids: acceptance.signer_kids.clone(),
         previous_config_hash: acceptance.previous_config_hash.clone(),
         previous_hash_matched: acceptance.previous_hash_matched,
         config_hash: Some(acceptance.config_hash.clone()),
+        anchor_digest: governed_evidence.map(|evidence| evidence.anchor_digest.clone()),
+        anchor_version: governed_evidence.map(|evidence| evidence.anchor_version),
         product_validation_result: "accepted".to_string(),
-        apply_result: "applied".to_string(),
+        apply_result: "pending".to_string(),
         posture_result: "accepted".to_string(),
-        applied: true,
+        applied: false,
         restart_required: false,
         change_classes: Vec::new(),
         break_glass: acceptance.break_glass,
@@ -153,6 +390,15 @@ pub(crate) async fn emit_boot_config_audits(
     runtime: &registry_notary_server::NotaryRuntimeSnapshot,
     acceptance: &PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    emit_boot_config_audits_for_action(runtime, acceptance, "boot", None).await
+}
+
+async fn emit_boot_config_audits_for_action(
+    runtime: &registry_notary_server::NotaryRuntimeSnapshot,
+    acceptance: &PendingBundleAcceptance,
+    action: &str,
+    governed_evidence: Option<&GovernedAcceptanceAuditEvidence>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if acceptance.emits_break_glass_used_audit() {
         runtime
             .emit_config_boot_audit(
@@ -165,7 +411,7 @@ pub(crate) async fn emit_boot_config_audits(
         runtime
             .emit_config_boot_audit(
                 "config.bundle_accepted",
-                bundle_acceptance_audit(acceptance),
+                bundle_acceptance_audit_for_action(acceptance, action, governed_evidence),
             )
             .await?;
     }
@@ -182,12 +428,16 @@ pub(crate) fn break_glass_used_audit(
     Ok(ConfigAuditEvent {
         action: "boot".to_string(),
         source: acceptance.source.as_posture_str().to_string(),
+        acceptance_identity: None,
         bundle_id: acceptance.bundle_id.clone(),
+        bundle_manifest_hash: None,
         sequence: acceptance.sequence,
         signer_kids: acceptance.signer_kids.clone(),
         previous_config_hash: acceptance.previous_config_hash.clone(),
         previous_hash_matched: acceptance.previous_hash_matched,
         config_hash: Some(acceptance.config_hash.clone()),
+        anchor_digest: None,
+        anchor_version: None,
         product_validation_result: "accepted".to_string(),
         apply_result: "applied".to_string(),
         posture_result: "accepted".to_string(),

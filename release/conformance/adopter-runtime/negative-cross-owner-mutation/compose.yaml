@@ -1,5 +1,0 @@
-include:
-  - path:
-      - ../package/generated/compose.yaml
-      - ./mutate.yaml
-    project_directory: ../package/generated

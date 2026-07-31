@@ -1,62 +1,57 @@
 ---
-title: Connect your data
-description: Move from the working Registry Stack sample to one reviewed workbook your institution owns.
+title: Connect an existing registry
+description: Adapt a bounded HTTP integration to an institution-owned registry without changing product boundaries.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start from a working local sample, then replace its synthetic workbook with
-one reviewed non-personal workbook. Registry Stack does not infer access
-policy or safe fields from source data. You make those decisions in small
-reviewed project files.
+Start from the tested HTTP project, prove its synthetic contract, then
+introduce one reviewed institution-owned registry source.
+Registry Stack does not infer access policy, safe fields, or evidence claims
+from source data.
 
-## Start from the protected sample
+## Start from the HTTP project
 
-Complete [Run your first registry API](../tutorials/publish-spreadsheet-secured-registry-api/)
-before adapting a source. The sample gives you a known-good project, a
-loopback-only runtime, and maintained denied and allowed checks.
+Use the `http` template when the source already exposes an HTTP API.
+It contains one bounded synthetic interaction that you can replace with a
+reviewed HTTP or Rhai integration.
 
-## Use a spreadsheet
+Domain systems such as OpenCRVS, DHIS2, and Fast Healthcare Interoperability
+Resources (FHIR) remain authored integrations.
+They are not public templates or privileged runtime connector types.
 
-Choose this path when the source is one reviewed `.xlsx` workbook with a
-stable key, one selected worksheet, and a fixed set of columns.
+## Keep authored and generated files separate
 
-[Use your own spreadsheet](../tutorials/use-your-spreadsheet/) walks from the
-working sample to a strictly described workbook and protected API.
+You own the project, integration, entity, fixture, and environment files.
+Registryctl owns files under `.registry-stack/` and may replace them.
 
-## Explore advanced source patterns
+Fixtures contain synthetic interactions and expected minimized results.
+They never authorize a live network request.
+`registryctl test` remains offline for every source pattern.
 
-Registry Stack also documents bounded HTTP, reviewed script, exact snapshot,
-and Fast Healthcare Interoperability Resources (FHIR) source patterns. No
-end-to-end tutorial is published for these advanced options.
+## Choose the adaptation
 
-Use [integration patterns](../explanation/integration-patterns/) to compare
-their boundaries. Use the [configuration reference](../reference/project-configuration/)
-to inspect the exact authored fields and validation metadata.
-
-## Know what you own
-
-| Surface | What it controls | Who changes it |
-| --- | --- | --- |
-| Workbook copy | The source rows and columns used by this project | Source owner |
-| Entity file | The stable key, fields, types, and row limits | Project reviewer |
-| Project file | The service purpose, caller scopes, filters, and returned fields | Project reviewer |
-| Environment file | The workbook location, worksheet, callers, and local runtime | Environment operator |
-| Generated build and runtime directories | Product configuration and local runtime state | `registryctl`; do not edit |
-
-Keep real credentials and personal data out of tutorials and fixtures. Use a
-reviewed non-personal derivative when you test institution-owned data.
+- [Connect an existing HTTP registry](../tutorials/author-registry-project/)
+  for the base bounded request and minimized response path
+- [Configure OAuth client credentials](./oauth-client-credentials/) when a
+  bounded HTTP source requires a reviewed token exchange
+- [Add an OAuth-backed Rhai adapter](../tutorials/configure-project-script-adapter/)
+  for bounded multi-call HTTP acquisition
+- [Review integration patterns](../explanation/integration-patterns/) for
+  HTTP, script, snapshot, and domain-system boundaries
 
 ## Next
 
+- [Start from a spreadsheet](../tutorials/publish-spreadsheet-secured-registry-api/)
+  when the institution does not already expose an HTTP registry
 - [Validate a project](../verify/)
-- [Understand generated files and ownership](../generated-artifacts/)
-- [registryctl CLI reference](../reference/registryctl/)
+- [Understand generated files](../generated-artifacts/)
+- [Review project configuration](../reference/project-configuration/)

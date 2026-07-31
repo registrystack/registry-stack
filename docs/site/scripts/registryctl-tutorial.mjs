@@ -1,11 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-import { parseDocument } from 'yaml';
-
-export const HTTP_STATUS_PREFIX = '__REGISTRYCTL_TUTORIAL_HTTP_STATUS__:';
 
 function invariant(condition, message) {
   if (!condition) {
@@ -67,7 +62,10 @@ export function extractFencedBlocks(markdown) {
     fence.lines.push(line.startsWith(fence.indent) ? line.slice(fence.indent.length) : line);
   }
 
-  invariant(fence === null, `unterminated ${fence?.language ?? ''} fence under ${fence?.heading ?? 'unknown heading'}`);
+  invariant(
+    fence === null,
+    `unterminated ${fence?.language ?? ''} fence under ${fence?.heading ?? 'unknown heading'}`,
+  );
   return blocks;
 }
 
@@ -83,6 +81,17 @@ export function assertTutorialLayout(markdown, expectedHeadings) {
   );
 }
 
+function findFence(markdown, heading, language, occurrence) {
+  const block = extractFencedBlocks(markdown).find(
+    (candidate) =>
+      candidate.heading === heading &&
+      candidate.language === language &&
+      candidate.occurrence === occurrence,
+  );
+  invariant(block, `missing ${language} fence ${occurrence} under "${heading}"`);
+  return block;
+}
+
 export function writeShellBlocks(markdownPath, outputDirectory) {
   const blocks = shellBlocks(readFileSync(markdownPath, 'utf8'));
   mkdirSync(outputDirectory, { recursive: true });
@@ -93,21 +102,31 @@ export function writeShellBlocks(markdownPath, outputDirectory) {
   });
   writeFileSync(
     resolve(outputDirectory, 'manifest.json'),
-    `${JSON.stringify(blocks.map(({ heading, occurrence, line }) => ({ heading, occurrence, line })), null, 2)}\n`,
+    `${JSON.stringify(
+      blocks.map(({ heading, occurrence, line }) => ({ heading, occurrence, line })),
+      null,
+      2,
+    )}\n`,
     'utf8',
   );
   return blocks;
 }
 
-function findFence(markdown, heading, language, occurrence) {
-  const block = extractFencedBlocks(markdown).find(
-    (candidate) =>
-      candidate.heading === heading &&
-      candidate.language === language &&
-      candidate.occurrence === occurrence,
+export function writeFence(
+  markdownPath,
+  heading,
+  language,
+  occurrence,
+  outputPath,
+) {
+  const block = findFence(
+    readFileSync(markdownPath, 'utf8'),
+    heading,
+    language,
+    occurrence,
   );
-  invariant(block, `missing ${language} fence ${occurrence} under "${heading}"`);
-  return block;
+  writeFileSync(outputPath, `${block.content}\n`, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(outputPath, 0o600);
 }
 
 export function assertOutputContainsLines(output, expected, label = 'command output') {
@@ -125,64 +144,105 @@ export function assertOutputExcludes(output, values, label = 'command output') {
   invariant(present.length === 0, `${label} exposes forbidden values: ${present.join(', ')}`);
 }
 
-export function assertHttpStatus(output, expectedStatus) {
-  const pattern = new RegExp(`${HTTP_STATUS_PREFIX}(\\d{3})`, 'g');
-  const statuses = [...output.matchAll(pattern)].map((match) => Number(match[1]));
-  invariant(statuses.length === 1, `expected one recorded HTTP status, found ${statuses.length}`);
+export function assertFenceEquals(
+  output,
+  markdown,
+  heading,
+  language,
+  occurrence,
+  replacements = [],
+) {
+  let actual = output.trim();
+  for (const [from, to] of replacements) {
+    invariant(from !== '', 'fence replacement source must not be empty');
+    actual = actual.replaceAll(from, to);
+  }
+  const expected = findFence(markdown, heading, language, occurrence).content;
   invariant(
-    statuses[0] === Number(expectedStatus),
-    `expected HTTP ${expectedStatus}, received HTTP ${statuses[0]}`,
+    actual === expected,
+    `${heading} ${language} fence ${occurrence} differs from executable output`,
   );
 }
 
-function withoutHttpStatusMarkers(output) {
-  const escapedPrefix = HTTP_STATUS_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return output
-    .replace(new RegExp(`\\n?${escapedPrefix}\\d{3}\\r?\\n?`, 'g'), '\n')
-    .replaceAll('\r', '');
+export function assertFenceFileEquals(markdown, heading, language, occurrence, source) {
+  const expected = source.trim();
+  const actual = findFence(markdown, heading, language, occurrence).content;
+  invariant(
+    actual === expected,
+    `${heading} ${language} fence ${occurrence} differs from its maintained source file`,
+  );
+}
+
+export function assertFenceInFile(markdown, heading, language, occurrence, source) {
+  const fragment = findFence(markdown, heading, language, occurrence).content;
+  invariant(
+    source.includes(fragment),
+    `${heading} ${language} fence ${occurrence} is not an exact maintained-source fragment`,
+  );
+}
+
+export function replaceFencePair(
+  markdown,
+  sourceHeading,
+  sourceLanguage,
+  sourceOccurrence,
+  replacementHeading,
+  replacementLanguage,
+  replacementOccurrence,
+  target,
+) {
+  const source = findFence(
+    markdown,
+    sourceHeading,
+    sourceLanguage,
+    sourceOccurrence,
+  ).content;
+  const replacement = findFence(
+    markdown,
+    replacementHeading,
+    replacementLanguage,
+    replacementOccurrence,
+  ).content;
+  invariant(source !== replacement, 'fence-pair replacement must change the target');
+  const occurrences = target.split(source).length - 1;
+  invariant(
+    occurrences === 1,
+    `expected one exact source fence in replacement target, found ${occurrences}`,
+  );
+  return target.replace(source, replacement);
+}
+
+export function replaceFencePairInFile(
+  markdownPath,
+  sourceHeading,
+  sourceLanguage,
+  sourceOccurrence,
+  replacementHeading,
+  replacementLanguage,
+  replacementOccurrence,
+  targetPath,
+) {
+  const target = replaceFencePair(
+    readFileSync(markdownPath, 'utf8'),
+    sourceHeading,
+    sourceLanguage,
+    sourceOccurrence,
+    replacementHeading,
+    replacementLanguage,
+    replacementOccurrence,
+    readFileSync(targetPath, 'utf8'),
+  );
+  writeFileSync(targetPath, target, 'utf8');
 }
 
 export function parseJsonOutput(output) {
-  const value = withoutHttpStatusMarkers(output);
-  const starts = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === '{' || value[index] === '[') starts.push(index);
+  const value = output.trim();
+  invariant(value !== '', 'command output is empty');
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    throw new Error(`command output is not one strict JSON document: ${error.message}`);
   }
-  for (const start of starts) {
-    const opening = value[start];
-    const closing = opening === '{' ? '}' : ']';
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = null;
-    for (let index = start; index < value.length; index += 1) {
-      const character = value[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (character === '\\') escaped = true;
-        else if (character === '"') inString = false;
-        continue;
-      }
-      if (character === '"') {
-        inString = true;
-      } else if (character === opening) {
-        depth += 1;
-      } else if (character === closing) {
-        depth -= 1;
-        if (depth === 0) {
-          end = index + 1;
-          break;
-        }
-      }
-    }
-    if (end === null) continue;
-    try {
-      return JSON.parse(value.slice(start, end));
-    } catch {
-      // Try the next JSON-looking boundary. HTTP headers can precede the body.
-    }
-  }
-  throw new Error('command output does not contain a complete JSON value');
 }
 
 function subsetMismatch(actual, expected, path = '$') {
@@ -190,8 +250,12 @@ function subsetMismatch(actual, expected, path = '$') {
     if (!Array.isArray(actual)) return `${path} must be an array`;
     if (expected.length === 0 && actual.length !== 0) return `${path} must be empty`;
     for (const expectedEntry of expected) {
-      const matched = actual.some((actualEntry) => subsetMismatch(actualEntry, expectedEntry, path) === null);
-      if (!matched) return `${path} is missing expected array entry ${JSON.stringify(expectedEntry)}`;
+      const matched = actual.some(
+        (actualEntry) => subsetMismatch(actualEntry, expectedEntry, path) === null,
+      );
+      if (!matched) {
+        return `${path} is missing expected array entry ${JSON.stringify(expectedEntry)}`;
+      }
     }
     return null;
   }
@@ -218,127 +282,214 @@ export function assertJsonSubset(output, expected) {
   invariant(mismatch === null, mismatch);
 }
 
-export function assertProblem(output, expectedStatus, expectedCode) {
-  assertHttpStatus(output, expectedStatus);
-  assertJsonSubset(output, { status: Number(expectedStatus), code: expectedCode });
+function fixtureIds(report) {
+  invariant(Array.isArray(report.fixtures), 'report fixtures must be an array');
+  return report.fixtures.map((fixture) => fixture.fixture);
 }
 
-function readYamlDocument(path) {
-  const document = parseDocument(readFileSync(path, 'utf8'));
-  invariant(document.errors.length === 0, `failed to parse ${path}: ${document.errors.join('; ')}`);
-  return document;
-}
+export function assertProjectReports(
+  testOutput,
+  checkOutput,
+  buildOutput,
+  expectedProject = null,
+  minimizationMode = 'derived',
+) {
+  const testReport = parseJsonOutput(testOutput);
+  const checkReport = parseJsonOutput(checkOutput);
+  const buildEnvelope = parseJsonOutput(buildOutput);
+  const buildReport = buildEnvelope.build;
+  const project = expectedProject ?? testReport.project;
 
-function writeYamlDocument(path, document) {
-  writeFileSync(path, document.toString(), 'utf8');
-}
-
-export function rebindProjectImages(projectDirectory, relayImage, notaryImage) {
-  const composePath = resolve(projectDirectory, 'compose.yaml');
-  const manifestPath = resolve(projectDirectory, 'registryctl.yaml');
-  const compose = readYamlDocument(composePath);
-  const composeValue = compose.toJS();
-  const relayServices = [
-    'registry-relay',
-    'registry-relay-consultation',
-    'registry-relay-consultation-bootstrap',
-  ].filter((service) => composeValue?.services?.[service] !== undefined);
-  const notaryServices = ['registry-notary'].filter(
-    (service) => composeValue?.services?.[service] !== undefined,
+  invariant(testReport.schema_version === 'registryctl.project_command.v1', 'unexpected test schema');
+  invariant(checkReport.schema_version === 'registryctl.project_command.v1', 'unexpected check schema');
+  invariant(
+    buildEnvelope.schema_version === 'registryctl.reviewed_project_build_report.v1',
+    'unexpected build schema',
   );
-  const hasRelay = relayServices.length > 0;
-  const hasNotary = notaryServices.length > 0;
-  invariant(hasRelay || hasNotary, `${composePath} has no Registry Stack product services`);
+  invariant(buildReport?.schema_version === 'registryctl.project_command.v1', 'unexpected nested build schema');
+  invariant(testReport.status === 'passed', `test status is ${testReport.status}`);
+  invariant(checkReport.status === 'valid', `check status is ${checkReport.status}`);
+  invariant(buildReport.status === 'built', `build status is ${buildReport.status}`);
 
-  for (const service of relayServices) compose.setIn(['services', service, 'image'], relayImage);
-  for (const service of notaryServices) compose.setIn(['services', service, 'image'], notaryImage);
-  writeYamlDocument(composePath, compose);
-
-  const manifest = readYamlDocument(manifestPath);
-  if (hasRelay) manifest.setIn(['runtime', 'relay_image'], relayImage);
-  if (hasNotary) manifest.setIn(['runtime', 'notary_image'], notaryImage);
-  writeYamlDocument(manifestPath, manifest);
-}
-
-export function setRelayMinGroupSize(configPath, datasetId, aggregateId, value) {
-  const document = readYamlDocument(configPath);
-  const config = document.toJS();
-  const datasetIndex = config?.datasets?.findIndex((dataset) => dataset.id === datasetId) ?? -1;
-  invariant(datasetIndex >= 0, `dataset ${datasetId} not found in ${configPath}`);
-  const aggregateIndex =
-    config.datasets[datasetIndex]?.aggregates?.findIndex((aggregate) => aggregate.id === aggregateId) ?? -1;
-  invariant(aggregateIndex >= 0, `aggregate ${aggregateId} not found in dataset ${datasetId}`);
-  const path = [
-    'datasets',
-    datasetIndex,
-    'aggregates',
-    aggregateIndex,
-    'disclosure_control',
-    'min_group_size',
-  ];
-  invariant(typeof document.getIn(path) === 'number', `${aggregateId} has no numeric min_group_size`);
-  document.setIn(path, Number(value));
-  writeYamlDocument(configPath, document);
-}
-
-export function replaceLiteralOnce(value, from, to) {
-  const occurrences = value.split(from).length - 1;
-  invariant(occurrences === 1, `expected one occurrence of ${JSON.stringify(from)}, found ${occurrences}`);
-  return value.replace(from, to);
-}
-
-export function redactOutput(output, envFile = '') {
-  const secrets = [];
-  if (envFile !== '') {
-    for (const line of normalizedLines(envFile)) {
-      if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
-      const separator = line.indexOf('=');
-      if (separator < 1) continue;
-      const key = line.slice(0, separator).trim();
-      let value = line.slice(separator + 1).trim();
-      if (
-        value.length >= 2 &&
-        ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'")))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (value.length >= 8) secrets.push({ key, value });
-    }
+  for (const report of [testReport, checkReport, buildReport]) {
+    invariant(report.project === project, `expected project ${project}, got ${report.project}`);
+    invariant(report.environment === 'local', `expected local environment, got ${report.environment}`);
+    invariant(report.fixtures.length > 0, 'project report has no fixtures');
+    invariant(report.fixtures.every((fixture) => fixture.passed === true), 'a fixture did not pass');
   }
 
-  let redacted = output;
-  for (const { key, value } of secrets.toSorted((left, right) => right.value.length - left.value.length)) {
-    redacted = redacted.split(value).join(`[REDACTED:${key}]`);
-  }
-  return redacted
-    .replace(/(Authorization:\s*Bearer\s+)[^\s]+/gi, '$1[REDACTED]')
-    .replace(/(x-api-key:\s*)[^\s]+/gi, '$1[REDACTED]');
-}
+  const expectedFixtureIds = fixtureIds(testReport);
+  invariant(
+    JSON.stringify(fixtureIds(checkReport)) === JSON.stringify(expectedFixtureIds),
+    'check fixture set differs from test',
+  );
+  invariant(
+    JSON.stringify(fixtureIds(buildReport)) === JSON.stringify(expectedFixtureIds),
+    'build fixture set differs from test',
+  );
 
-export async function assertPortsFree(ports) {
-  const servers = [];
-  try {
-    for (const port of ports) {
-      const server = createServer();
-      await new Promise((resolveListen, rejectListen) => {
-        server.once('error', rejectListen);
-        server.listen({ host: '127.0.0.1', port, exclusive: true }, resolveListen);
-      });
-      servers.push(server);
-    }
-  } catch (error) {
-    throw new Error(`documented tutorial ports are not free: ${error.message}`);
-  } finally {
-    await Promise.all(
-      servers.map(
-        (server) =>
-          new Promise((resolveClose) => {
-            server.close(resolveClose);
-          }),
-      ),
+  const authorizationCheck = testReport.fixtures.find((fixture) =>
+    fixture.fixture.endsWith('::derived/authorization_before_source'),
+  );
+  invariant(authorizationCheck, 'authorization-before-source fixture is missing');
+  invariant(
+    authorizationCheck.expected_error === 'authorization.denied' &&
+      authorizationCheck.source_access === false,
+    'authorization-before-source fixture does not prove zero source access',
+  );
+
+  if (minimizationMode === 'derived') {
+    const minimizationCheck = testReport.fixtures.find((fixture) =>
+      fixture.fixture.endsWith('::derived/output_minimization'),
+    );
+    invariant(minimizationCheck?.passed === true, 'output-minimization fixture is missing or failed');
+  } else {
+    invariant(minimizationMode === 'snapshot', 'unexpected minimization mode');
+    const snapshotResult = testReport.fixtures.find(
+      (fixture) =>
+        fixture.integration === 'project-record-snapshot' &&
+        fixture.fixture === 'match',
+    );
+    invariant(snapshotResult, 'project-record-snapshot.match fixture is missing');
+    invariant(
+      snapshotResult.passed === true && snapshotResult.outcome === 'match',
+      'project-record-snapshot.match did not pass with outcome match',
+    );
+    invariant(
+      JSON.stringify(snapshotResult.outputs) === JSON.stringify(['status']),
+      'project-record-snapshot.match outputs must be exactly ["status"]',
+    );
+    invariant(
+      JSON.stringify(snapshotResult.claims) ===
+        JSON.stringify(['project-record-exists', 'project-status-accepted']),
+      'project-record-snapshot.match claims must be exactly the two documented predicate claims',
     );
   }
+
+  const affectedLanes = buildEnvelope.affected_lanes;
+  invariant(Array.isArray(affectedLanes), 'build affected_lanes must be an array');
+  for (const lane of ['relay-public', 'relay-consultation', 'notary']) {
+    invariant(affectedLanes.includes(lane), `build does not include ${lane}`);
+  }
+}
+
+export function writeEvidenceManifest(
+  directory,
+  mode,
+  registryctlVersion,
+  retainedProject = null,
+  retainedOauthProject = null,
+) {
+  mkdirSync(directory, { recursive: true });
+  const manifest = {
+    schema_version: 'registryctl.tutorial_reader_journeys.v1',
+    status: 'passed',
+    mode,
+    registryctl_version: registryctlVersion,
+    projects: [
+      {
+        id: 'http',
+        source: 'embedded-http-template',
+        reports: [
+          'http/init.txt',
+          'http/test.txt',
+          'http/trace.txt',
+          'http/build.txt',
+          'http/test.json',
+          'http/check.json',
+          'http/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'http/runtime/dev-start.txt',
+                'http/runtime/dev-smoke.txt',
+                'http/runtime/dev-down.txt',
+              ]
+            : []),
+        ],
+      },
+      {
+        id: 'spreadsheet',
+        source: 'embedded-spreadsheet-template',
+        covers: [
+          'starter',
+          'adapted-workbook',
+          'evidence-rule-change',
+          'offline-fixtures',
+          'reviewed-build',
+        ],
+        reports: [
+          'spreadsheet/init.txt',
+          'spreadsheet/test.txt',
+          'spreadsheet/trace.txt',
+          'spreadsheet/build.txt',
+          'spreadsheet/test.json',
+          'spreadsheet/check.json',
+          'spreadsheet/build.json',
+          'spreadsheet-adapted/init.txt',
+          'spreadsheet-adapted/test.txt',
+          'spreadsheet-adapted/test.json',
+          'spreadsheet-adapted/check.json',
+          'spreadsheet-adapted/build.json',
+          'spreadsheet-evidence/before-trace.txt',
+          'spreadsheet-evidence/after-trace.txt',
+          'spreadsheet-evidence/test.txt',
+          'spreadsheet-evidence/test.json',
+          'spreadsheet-evidence/check.json',
+          'spreadsheet-evidence/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'spreadsheet/runtime/dev-start.txt',
+                'spreadsheet/runtime/records-denied.json',
+                'spreadsheet/runtime/records-request.json',
+                'spreadsheet/runtime/evidence-request.json',
+                'spreadsheet/runtime/dev-smoke.txt',
+                'spreadsheet/runtime/dev-down.txt',
+                'spreadsheet-adapted/runtime/dev-start.txt',
+                'spreadsheet-adapted/runtime/records-denied.json',
+                'spreadsheet-adapted/runtime/records-request.json',
+                'spreadsheet-adapted/runtime/evidence-request.json',
+                'spreadsheet-adapted/runtime/dev-smoke.txt',
+                'spreadsheet-adapted/runtime/dev-down.txt',
+                'spreadsheet-evidence/runtime/dev-start.txt',
+                'spreadsheet-evidence/runtime/records-denied.json',
+                'spreadsheet-evidence/runtime/records-request.json',
+                'spreadsheet-evidence/runtime/evidence-request.json',
+                'spreadsheet-evidence/runtime/dev-smoke.txt',
+                'spreadsheet-evidence/runtime/dev-down.txt',
+              ]
+            : []),
+        ],
+      },
+      {
+        id: 'opencrvs-events-api',
+        source: 'public-docs-overlay-v1',
+        covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
+        reports: [
+          'opencrvs/test.json',
+          'opencrvs/check.json',
+          'opencrvs/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'opencrvs/runtime/dev-start.txt',
+                'opencrvs/runtime/dev-smoke.txt',
+                'opencrvs/runtime/dev-down.txt',
+              ]
+            : []),
+        ],
+      },
+    ],
+    release_boundary:
+      mode === 'sealed'
+        ? 'Disposable development runtime evidence is recorded; installer, release lock, doctor, and governed deployment evidence are separate.'
+        : 'Disposable development runtime, installer, release lock, doctor, and governed deployment evidence require sealed candidate bytes.',
+    retained_project: retainedProject || null,
+    retained_oauth_project: retainedOauthProject || null,
+  };
+  writeFileSync(
+    resolve(directory, 'manifest.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function read(path) {
@@ -352,18 +503,17 @@ async function main([command, ...args]) {
       writeShellBlocks(args[0], args[1]);
       return;
     }
+    case 'extract-fence': {
+      invariant(
+        args.length === 5,
+        'usage: extract-fence <tutorial> <heading> <language> <occurrence> <output-file>',
+      );
+      writeFence(args[0], args[1], args[2], Number(args[3]), args[4]);
+      return;
+    }
     case 'assert-layout': {
       invariant(args.length === 2, 'usage: assert-layout <tutorial> <expected-headings-json>');
       assertTutorialLayout(read(args[0]), JSON.parse(args[1]));
-      return;
-    }
-    case 'assert-fence-lines': {
-      invariant(
-        args.length === 5,
-        'usage: assert-fence-lines <output> <tutorial> <heading> <language> <occurrence>',
-      );
-      const expected = findFence(read(args[1]), args[2], args[3], Number(args[4])).content;
-      assertOutputContainsLines(read(args[0]), expected, args[2]);
       return;
     }
     case 'assert-contains': {
@@ -376,14 +526,53 @@ async function main([command, ...args]) {
       assertOutputExcludes(read(args[0]), args.slice(1));
       return;
     }
-    case 'assert-http': {
-      invariant(args.length === 2, 'usage: assert-http <output> <status>');
-      assertHttpStatus(read(args[0]), Number(args[1]));
+    case 'assert-fence-equals': {
+      invariant(
+        args.length === 5 || args.length === 7,
+        'usage: assert-fence-equals <output> <tutorial> <heading> <language> <occurrence> [replace-from replace-to]',
+      );
+      const replacements = args.length === 7 ? [[args[5], args[6]]] : [];
+      assertFenceEquals(
+        read(args[0]),
+        read(args[1]),
+        args[2],
+        args[3],
+        Number(args[4]),
+        replacements,
+      );
       return;
     }
-    case 'assert-problem': {
-      invariant(args.length === 3, 'usage: assert-problem <output> <status> <code>');
-      assertProblem(read(args[0]), Number(args[1]), args[2]);
+    case 'assert-fence-file-equals': {
+      invariant(
+        args.length === 5,
+        'usage: assert-fence-file-equals <tutorial> <heading> <language> <occurrence> <source-file>',
+      );
+      assertFenceFileEquals(read(args[0]), args[1], args[2], Number(args[3]), read(args[4]));
+      return;
+    }
+    case 'assert-fence-in-file': {
+      invariant(
+        args.length === 5,
+        'usage: assert-fence-in-file <tutorial> <heading> <language> <occurrence> <source-file>',
+      );
+      assertFenceInFile(read(args[0]), args[1], args[2], Number(args[3]), read(args[4]));
+      return;
+    }
+    case 'replace-fence-pair': {
+      invariant(
+        args.length === 8,
+        'usage: replace-fence-pair <tutorial> <source-heading> <source-language> <source-occurrence> <replacement-heading> <replacement-language> <replacement-occurrence> <target-file>',
+      );
+      replaceFencePairInFile(
+        args[0],
+        args[1],
+        args[2],
+        Number(args[3]),
+        args[4],
+        args[5],
+        Number(args[6]),
+        args[7],
+      );
       return;
     }
     case 'assert-json-subset': {
@@ -391,45 +580,27 @@ async function main([command, ...args]) {
       assertJsonSubset(read(args[0]), JSON.parse(args[1]));
       return;
     }
-    case 'assert-json-fence-subset': {
+    case 'assert-project-reports': {
       invariant(
-        args.length === 4,
-        'usage: assert-json-fence-subset <output> <tutorial> <heading> <occurrence>',
+        args.length >= 3 && args.length <= 5,
+        'usage: assert-project-reports <test-json> <check-json> <build-json> [project-id] [derived|snapshot]',
       );
-      const expected = findFence(read(args[1]), args[2], 'json', Number(args[3])).content;
-      assertJsonSubset(read(args[0]), JSON.parse(expected));
+      assertProjectReports(
+        read(args[0]),
+        read(args[1]),
+        read(args[2]),
+        args[3] ?? null,
+        args[4] ?? 'derived',
+      );
       return;
     }
-    case 'rebind-project': {
+    case 'write-evidence-manifest': {
       invariant(
-        args.length === 3,
-        'usage: rebind-project <project-directory> <relay-image> <notary-image>',
+        args.length >= 3 && args.length <= 5,
+        'usage: write-evidence-manifest <directory> <source|sealed> <registryctl-version> [retained-project] [retained-oauth-project]',
       );
-      rebindProjectImages(args[0], args[1], args[2]);
-      return;
-    }
-    case 'set-relay-min-group-size': {
-      invariant(
-        args.length === 4,
-        'usage: set-relay-min-group-size <config> <dataset-id> <aggregate-id> <value>',
-      );
-      setRelayMinGroupSize(args[0], args[1], args[2], Number(args[3]));
-      return;
-    }
-    case 'replace-once': {
-      invariant(args.length === 4, 'usage: replace-once <input> <from> <to> <output>');
-      writeFileSync(args[3], replaceLiteralOnce(read(args[0]), args[1], args[2]), 'utf8');
-      return;
-    }
-    case 'sanitize': {
-      invariant(args.length === 1 || args.length === 2, 'usage: sanitize <output> [env-file]');
-      const envFile = args[1] === undefined ? '' : read(args[1]);
-      process.stdout.write(redactOutput(read(args[0]), envFile));
-      return;
-    }
-    case 'assert-ports-free': {
-      invariant(args.length > 0, 'usage: assert-ports-free <port>...');
-      await assertPortsFree(args.map(Number));
+      invariant(args[1] === 'source' || args[1] === 'sealed', 'invalid evidence mode');
+      writeEvidenceManifest(args[0], args[1], args[2], args[3] ?? null, args[4] ?? null);
       return;
     }
     default:

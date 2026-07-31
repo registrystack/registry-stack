@@ -84,6 +84,21 @@ pub enum BootstrapKeyringStatus {
     Identical,
 }
 
+/// Value-free result for the idempotent database-only preparation action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PrepareStateStoreResult {
+    pub schema: &'static str,
+    pub state_plane: BootstrapStatePlaneStatus,
+}
+
+/// Value-free result for the consultation keyring portion of explicit product
+/// initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct InitializeConsultationStateResult {
+    pub schema: &'static str,
+    pub keyring: BootstrapKeyringStatus,
+}
+
 /// Closed bootstrap failures. No variant stores a path, URL, role, key id, or
 /// environment-reference name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -298,6 +313,253 @@ pub async fn bootstrap_state(
     })
 }
 
+/// Prepare or attest the Relay-owned consultation database schema and roles
+/// from signed policy. This action never initializes the keyring and never
+/// reads or mutates bundle anti-rollback state.
+pub async fn prepare_state_store_from_signed_policy(
+    config: &Config,
+) -> Result<PrepareStateStoreResult, BootstrapStateError> {
+    let request = signed_bootstrap_request(config)?;
+    let consultation = config
+        .consultation
+        .as_ref()
+        .ok_or(BootstrapStateError::ConsultationDisabled)?;
+    let validated = ValidatedBootstrapRequest::parse(consultation, &request)?;
+
+    let (mut migration_connection, runtime_connection, maintenance_connection, reader_connection) =
+        tokio::try_join!(
+            open_operator_connection(
+                &consultation.state_plane,
+                request.migration_database_url_env,
+            ),
+            open_operator_connection(
+                &consultation.state_plane,
+                consultation.state_plane.database_url_env.as_str(),
+            ),
+            open_operator_connection(
+                &consultation.state_plane,
+                request.keyring_maintenance_database_url_env,
+            ),
+            open_operator_connection(
+                &consultation.state_plane,
+                request.keyring_reader_database_url_env,
+            ),
+        )
+        .map_err(map_connection_error)?;
+
+    let (migration_identity, runtime_identity, maintenance_identity, reader_identity) = tokio::try_join!(
+        direct_login_identity(migration_connection.client()),
+        direct_login_identity(runtime_connection.client()),
+        direct_login_identity(maintenance_connection.client()),
+        direct_login_identity(reader_connection.client()),
+    )?;
+    ensure_one_database([
+        &migration_identity,
+        &runtime_identity,
+        &maintenance_identity,
+        &reader_identity,
+    ])?;
+    let database_challenge = acquire_database_challenge(migration_connection.client()).await?;
+    attest_database_challenge(runtime_connection.client(), database_challenge).await?;
+    attest_database_challenge(maintenance_connection.client(), database_challenge).await?;
+    attest_database_challenge(reader_connection.client(), database_challenge).await?;
+    ensure_distinct_role_oids([
+        runtime_identity.role_oid,
+        maintenance_identity.role_oid,
+        reader_identity.role_oid,
+    ])?;
+
+    let runtime_role = RuntimeDatabaseRole::parse(&runtime_identity.role_name)
+        .map_err(|_| BootstrapStateError::InvalidDatabaseIdentity)?;
+    let maintenance_role =
+        AuditPseudonymMaintenanceDatabaseRole::parse(&maintenance_identity.role_name)
+            .map_err(|_| BootstrapStateError::InvalidDatabaseIdentity)?;
+    let reader_role = AuditPseudonymReaderDatabaseRole::parse(&reader_identity.role_name)
+        .map_err(|_| BootstrapStateError::InvalidDatabaseIdentity)?;
+
+    bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::AuthorityConfigurationRejected,
+        migration_connection
+            .client()
+            .batch_execute(&format!("SET ROLE \"{}\"", request.owner_role)),
+    )
+    .await?
+    .map_err(|_| BootstrapStateError::AuthorityConfigurationRejected)?;
+    let owner_identity = current_role_identity(migration_connection.client()).await?;
+    if owner_identity.role_name != request.owner_role {
+        return Err(BootstrapStateError::InvalidDatabaseIdentity);
+    }
+    ensure_distinct_role_oids([
+        owner_identity.role_oid,
+        runtime_identity.role_oid,
+        maintenance_identity.role_oid,
+        reader_identity.role_oid,
+    ])?;
+
+    bounded_database_operation(
+        OPERATOR_DATABASE_INSTALL_TIMEOUT,
+        BootstrapStateError::DatabaseUnavailable,
+        install_postgres_state_plane_v1(
+            migration_connection.client_mut(),
+            &runtime_role,
+            &validated.chain_key_epoch_id,
+            validated.serving_fence_lock_key,
+            &maintenance_role,
+            &reader_role,
+            validated.keyring_lock_key,
+        ),
+    )
+    .await?
+    .map_err(map_install_error)?;
+    bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::DatabaseUnavailable,
+        migration_connection.client().batch_execute("RESET ROLE"),
+    )
+    .await?
+    .map_err(|_| BootstrapStateError::DatabaseUnavailable)?;
+    release_database_challenge(migration_connection.client(), database_challenge).await?;
+
+    Ok(PrepareStateStoreResult {
+        schema: "registry.relay.prepare-state-store.v1",
+        state_plane: BootstrapStatePlaneStatus::InstalledOrAttested,
+    })
+}
+
+/// Initialize or attest the first consultation keyring epoch from signed
+/// policy. The database schema must already have been prepared.
+pub async fn initialize_state_from_signed_policy(
+    config: &Config,
+) -> Result<InitializeConsultationStateResult, BootstrapStateError> {
+    let request = signed_bootstrap_request(config)?;
+    let consultation = config
+        .consultation
+        .as_ref()
+        .ok_or(BootstrapStateError::ConsultationDisabled)?;
+    let validated = ValidatedBootstrapRequest::parse(consultation, &request)?;
+
+    let (mut runtime_connection, mut maintenance_connection, mut reader_connection) =
+        tokio::try_join!(
+            open_operator_connection(
+                &consultation.state_plane,
+                consultation.state_plane.database_url_env.as_str(),
+            ),
+            open_operator_connection(
+                &consultation.state_plane,
+                request.keyring_maintenance_database_url_env,
+            ),
+            open_operator_connection(
+                &consultation.state_plane,
+                request.keyring_reader_database_url_env,
+            ),
+        )
+        .map_err(map_connection_error)?;
+    let (runtime_identity, maintenance_identity, reader_identity) = tokio::try_join!(
+        direct_login_identity(runtime_connection.client()),
+        direct_login_identity(maintenance_connection.client()),
+        direct_login_identity(reader_connection.client()),
+    )?;
+    ensure_one_database_three([&runtime_identity, &maintenance_identity, &reader_identity])?;
+    let database_challenge = acquire_database_challenge(runtime_connection.client()).await?;
+    attest_database_challenge(maintenance_connection.client(), database_challenge).await?;
+    attest_database_challenge(reader_connection.client(), database_challenge).await?;
+    ensure_distinct_role_oids([
+        runtime_identity.role_oid,
+        maintenance_identity.role_oid,
+        reader_identity.role_oid,
+    ])?;
+    release_database_challenge(runtime_connection.client(), database_challenge).await?;
+
+    let runtime_keyring = bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::KeyringUnavailable,
+        PostgresAuditPseudonymKeyringRuntime::connect(
+            runtime_connection.take_client(),
+            validated.chain_key_epoch_id.clone(),
+            validated.keyring_lock_key,
+        ),
+    )
+    .await?
+    .map_err(map_keyring_error)?;
+    let maintenance_keyring = bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::KeyringUnavailable,
+        PostgresAuditPseudonymKeyringMaintenance::connect(
+            maintenance_connection.take_client(),
+            validated.chain_key_epoch_id.clone(),
+            validated.keyring_lock_key,
+        ),
+    )
+    .await?
+    .map_err(map_keyring_error)?;
+    let _reader_keyring = bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::KeyringUnavailable,
+        PostgresAuditPseudonymKeyringReader::connect(
+            reader_connection.take_client(),
+            validated.chain_key_epoch_id,
+            validated.keyring_lock_key,
+        ),
+    )
+    .await?
+    .map_err(map_keyring_error)?;
+
+    let initialization = bounded_database_operation(
+        OPERATOR_DATABASE_INSTALL_TIMEOUT,
+        BootstrapStateError::KeyringUnavailable,
+        maintenance_keyring.initialize_or_attest_from_postgres_time(
+            validated.active_key_id.clone(),
+            request.active_write_deadline_unix_ms,
+            request.audit_event_retention_ms,
+        ),
+    )
+    .await?
+    .map_err(map_keyring_error)?;
+    let current_epoch = bounded_database_operation(
+        OPERATOR_DATABASE_OPERATION_TIMEOUT,
+        BootstrapStateError::KeyringUnavailable,
+        runtime_keyring.current_write_authority(),
+    )
+    .await?
+    .and_then(|authority| authority.authorize_use())
+    .map_err(map_keyring_error)?;
+    if current_epoch.key_id() != &validated.active_key_id {
+        return Err(BootstrapStateError::KeyringDrift);
+    }
+
+    Ok(InitializeConsultationStateResult {
+        schema: "registry.relay.initialize-consultation-state.v1",
+        keyring: match initialization {
+            KeyringInitializationOutcome::Initialized => BootstrapKeyringStatus::Initialized,
+            KeyringInitializationOutcome::Identical => BootstrapKeyringStatus::Identical,
+        },
+    })
+}
+
+fn signed_bootstrap_request(
+    config: &Config,
+) -> Result<BootstrapStateRequest<'_>, BootstrapStateError> {
+    let consultation = config
+        .consultation
+        .as_ref()
+        .ok_or(BootstrapStateError::ConsultationDisabled)?;
+    let policy = consultation
+        .bootstrap
+        .as_ref()
+        .ok_or(BootstrapStateError::InvalidInput)?;
+    Ok(BootstrapStateRequest {
+        config,
+        migration_database_url_env: &policy.migration_database_url_env,
+        owner_role: &policy.owner_role,
+        keyring_maintenance_database_url_env: &policy.keyring_maintenance_database_url_env,
+        keyring_reader_database_url_env: &policy.keyring_reader_database_url_env,
+        active_key_id: &policy.active_key_id,
+        active_write_deadline_unix_ms: policy.active_write_deadline_unix_ms,
+        audit_event_retention_ms: policy.audit_event_retention_ms,
+    })
+}
+
 struct ValidatedBootstrapRequest {
     chain_key_epoch_id: AuditChainKeyEpochId,
     serving_fence_lock_key: ServingFenceLockKey,
@@ -414,6 +676,19 @@ async fn current_role_identity(client: &Client) -> Result<DatabaseIdentity, Boot
 }
 
 fn ensure_one_database(identities: [&DatabaseIdentity; 4]) -> Result<(), BootstrapStateError> {
+    let database_oid = identities[0].database_oid;
+    let database_name = &identities[0].database_name;
+    if identities.iter().any(|identity| {
+        identity.database_oid != database_oid || &identity.database_name != database_name
+    }) {
+        return Err(BootstrapStateError::DatabaseMismatch);
+    }
+    Ok(())
+}
+
+fn ensure_one_database_three(
+    identities: [&DatabaseIdentity; 3],
+) -> Result<(), BootstrapStateError> {
     let database_oid = identities[0].database_oid;
     let database_name = &identities[0].database_name;
     if identities.iter().any(|identity| {
@@ -775,6 +1050,30 @@ mod tests {
             for forbidden in ["postgresql://", "sentinel", "owner-role", "key-id"] {
                 assert!(!rendered.contains(forbidden));
             }
+        }
+    }
+
+    #[test]
+    fn preparation_is_database_only_and_cannot_initialize_product_state() {
+        let source = include_str!("operator.rs");
+        let preparation = source
+            .split("pub async fn prepare_state_store_from_signed_policy")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("pub async fn initialize_state_from_signed_policy")
+                    .next()
+            })
+            .expect("preparation implementation remains inspectable");
+        for forbidden in [
+            "initialize_or_attest_from_postgres_time",
+            "AntiRollback",
+            "source_credentials",
+            "build_auth",
+        ] {
+            assert!(
+                !preparation.contains(forbidden),
+                "preparation acquired forbidden authority: {forbidden}"
+            );
         }
     }
 }

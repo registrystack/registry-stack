@@ -8,6 +8,7 @@ mod doctor;
 mod env_file;
 mod explain_config;
 mod logging;
+mod product_action;
 mod serve;
 
 use boot::*;
@@ -17,6 +18,7 @@ use doctor::*;
 use env_file::*;
 use explain_config::*;
 use logging::*;
+use product_action::*;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -51,17 +53,18 @@ use registry_notary_server::{
 };
 use registry_platform_config::{
     expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
-    ConfigBundleError, VerifiedConfigBundle,
+    ConfigBundleError, ProductTrustDomainV1, VerifiedConfigBundle,
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     evaluate_ack_health, load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
-    posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
-    AuditSinkKind, BundleStateAction, BundleStateRequest, BundleVerificationCode,
-    BundleVerificationFailure, ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource,
-    PendingBundleAcceptance, UnsignedConfigSelection,
+    posture_safe_runtime_config_hash, resolve_bundle_state_action, AcceptanceStatePreviewV1,
+    AntiRollbackStoreError, AuditSinkKind, BundleStateAction, BundleStateRequest,
+    BundleVerificationCode, BundleVerificationFailure, ConfigBootError, ConfigOverrideMode,
+    ConfigProvenance, ConfigSource, FileAntiRollbackStore, PendingBundleAcceptance,
+    UnsignedConfigSelection, VerifiedAcceptanceStateV1,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -83,6 +86,27 @@ struct Args {
     /// YAML config path.
     #[arg(short, long, env = "REGISTRY_NOTARY_CONFIG", global = true)]
     config: Option<PathBuf>,
+    /// Signed Config Bundle directory used for direct server startup.
+    #[arg(
+        long,
+        requires_all = ["anchor_path", "state_path"],
+        conflicts_with = "config"
+    )]
+    bundle_dir: Option<PathBuf>,
+    /// Trust anchor JSON path used for direct signed-bundle startup.
+    #[arg(
+        long,
+        requires_all = ["bundle_dir", "state_path"],
+        conflicts_with = "config"
+    )]
+    anchor_path: Option<PathBuf>,
+    /// Anti-rollback state JSON path used for direct signed-bundle startup.
+    #[arg(
+        long,
+        requires_all = ["bundle_dir", "anchor_path"],
+        conflicts_with = "config"
+    )]
+    state_path: Option<PathBuf>,
     /// Dotenv-style file to load before config validation resolves env vars.
     #[arg(long, env = "REGISTRY_NOTARY_ENV_FILE", global = true)]
     env_file: Option<PathBuf>,
@@ -99,6 +123,16 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run one closed, release-mapped product action.
+    ProductAction {
+        #[command(subcommand)]
+        action: ProductAction,
+    },
+    /// Run one closed development-package action.
+    DevelopmentAction {
+        #[command(subcommand)]
+        action: DevelopmentAction,
+    },
     /// Print the Registry Notary OpenAPI document as JSON.
     Openapi,
     /// Validate config, env-backed secrets, Relay activation, and VC wiring.
@@ -251,7 +285,11 @@ struct ConfigVerifyBundleArgs {
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let server_startup = args.command.is_none();
+    let server_startup = args.command.is_none()
+        || matches!(
+            &args.command,
+            Some(Command::ProductAction { .. } | Command::DevelopmentAction { .. })
+        );
     match run(args).await {
         Ok(code) => code,
         Err(err) => {
@@ -286,7 +324,28 @@ fn top_level_error_message(
 }
 
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if let Some(Command::ProductAction { action }) = args.command.as_ref() {
+        ensure_closed_product_action_arguments(&args)?;
+        run_product_action(*action, ProductTrustDomainV1::Governed).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(Command::DevelopmentAction { action }) = args.command.as_ref() {
+        ensure_closed_product_action_arguments(&args)?;
+        run_development_action(*action).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let server_startup = args.command.is_none();
+    let server_config_input = if server_startup {
+        Some(server_config_input(&args).map_err(value_free_configuration_failure)?)
+    } else {
+        if args.bundle_dir.is_some() || args.anchor_path.is_some() || args.state_path.is_some() {
+            return Err(
+                "--bundle-dir, --anchor-path, and --state-path are server-startup-only arguments"
+                    .into(),
+            );
+        }
+        None
+    };
     let doctor_command = matches!(
         &args.command,
         Some(Command::Doctor { .. })
@@ -301,12 +360,27 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Err(error) => return Err(error),
     };
+    if matches!(
+        server_config_input.as_ref(),
+        Some(ServerConfigInput::SignedBundle { .. })
+    ) && env_report.contains("REGISTRY_NOTARY_CONFIG")
+    {
+        return Err(Box::new(value_free_configuration_failure(
+            "REGISTRY_NOTARY_CONFIG cannot be supplied by --env-file for direct bundle startup",
+        )));
+    }
     match args.command {
         None => {
-            let config_path = required_config_path(args.config.as_deref())
-                .map_err(value_free_configuration_failure)?;
-            run_server(config_path, args.bind, args.initialize_state).await?;
+            run_server(
+                server_config_input.expect("server startup input was resolved"),
+                args.bind,
+                args.initialize_state,
+            )
+            .await?;
             Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::ProductAction { .. } | Command::DevelopmentAction { .. }) => {
+            unreachable!("product actions return before legacy input resolution")
         }
         Some(Command::Openapi) => {
             println!("{}", serde_json::to_string_pretty(&openapi_document())?);
@@ -405,6 +479,30 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 }
 
+fn server_config_input(args: &Args) -> Result<ServerConfigInput, &'static str> {
+    match (
+        args.config.as_ref(),
+        args.bundle_dir.as_ref(),
+        args.anchor_path.as_ref(),
+        args.state_path.as_ref(),
+    ) {
+        (Some(config_path), None, None, None) => {
+            Ok(ServerConfigInput::LocalFile(config_path.clone()))
+        }
+        (None, Some(bundle_dir), Some(anchor_path), Some(state_path)) => {
+            Ok(ServerConfigInput::SignedBundle {
+                bundle_dir: bundle_dir.clone(),
+                anchor_path: anchor_path.clone(),
+                state_path: state_path.clone(),
+            })
+        }
+        (None, None, None, None) => {
+            Err("--config or the complete signed-bundle startup arguments are required")
+        }
+        _ => Err("local config and signed-bundle startup arguments cannot be combined"),
+    }
+}
+
 #[cfg(test)]
 mod test_support;
 
@@ -423,10 +521,22 @@ mod operator_boundary_tests {
                 "/Users/SENTINEL_USER/SENTINEL_COUNTRY/SENTINEL_SECRET_STATE.json",
             ),
             key: registry_platform_ops::AntiRollbackKey {
-                product: "registry-notary".to_string(),
-                instance_id: "SENTINEL_PARSER_INSTANCE".to_string(),
-                environment: "SENTINEL_COUNTRY".to_string(),
-                stream_id: "governed-stream".to_string(),
+                acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1 {
+                    trust_domain: registry_platform_config::ProductTrustDomainV1::Governed,
+                    project: "governed-project".to_string(),
+                    environment: "SENTINEL_COUNTRY".to_string(),
+                    lane: registry_platform_config::ProductAcceptanceLaneV1::Notary,
+                    product: registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+                    stream: "governed-stream".to_string(),
+                    instance: "SENTINEL_PARSER_INSTANCE".to_string(),
+                },
+            },
+            accepted_anchor: registry_platform_ops::AcceptedAnchorPinV1 {
+                digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+                version: 1,
+                threshold: 1,
+                enabled_signers: vec!["governed-signer-kid".to_string()],
             },
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some("governed-bundle-42".to_string()),

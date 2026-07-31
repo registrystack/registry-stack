@@ -2,6 +2,106 @@
 
 include!("artifact_manifest.rs");
 
+pub const REVIEWED_BUILD_RECORD_FILE: &str = "reviewed-build.v1.json";
+const REVIEW_COMPARISON_REPORT_SCHEMA_VERSION: &str = "registryctl.review_comparison_report.v1";
+const REVIEWED_BUILD_RECORD_SCHEMA_ID: &str = "registry.stack.reviewed_build";
+const REVIEWED_BUILD_RECORD_SCHEMA_VERSION: &str = "1.0";
+const REVIEWED_PROJECT_BUILD_REPORT_SCHEMA_VERSION: &str =
+    "registryctl.reviewed_project_build_report.v1";
+
+#[derive(Debug, Clone)]
+pub struct ReviewCompareOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    pub against: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewComparisonReportV1 {
+    pub schema_version: &'static str,
+    pub project: String,
+    pub environment: String,
+    pub changed: bool,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub reviewed_bindings: crate::ReviewedBuildUpdateV1,
+    pub input_owner: &'static str,
+    pub output_owner: &'static str,
+    pub mutation: &'static str,
+    pub next_action: &'static str,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedBuildRecordV1 {
+    pub schema_id: String,
+    pub schema_version: String,
+    pub project: String,
+    pub environment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preceding_approved_set_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchor_rotation_lanes: Vec<crate::ApprovedLaneV1>,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub bindings: crate::ReviewedBuildUpdateV1,
+}
+
+impl ReviewedBuildRecordV1 {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_id != REVIEWED_BUILD_RECORD_SCHEMA_ID
+            || self.schema_version != REVIEWED_BUILD_RECORD_SCHEMA_VERSION
+            || self.project.is_empty()
+            || self.environment.is_empty()
+        {
+            bail!("reviewed-build record identity or schema is invalid");
+        }
+        if let Some(digest) = &self.preceding_approved_set_digest {
+            validate_reviewed_sha256(digest, "preceding approved-set digest")?;
+        }
+        if !self.anchor_rotation_lanes.is_empty() && self.preceding_approved_set_digest.is_none() {
+            bail!("reviewed-build anchor rotation requires a preceding approved set");
+        }
+        let expected_rotation_lanes = crate::ApprovedLaneV1::ALL
+            .into_iter()
+            .filter(|lane| self.anchor_rotation_lanes.contains(lane))
+            .collect::<Vec<_>>();
+        if self.anchor_rotation_lanes != expected_rotation_lanes
+            || self
+                .anchor_rotation_lanes
+                .iter()
+                .any(|lane| !self.affected_lanes.contains(lane))
+        {
+            bail!("reviewed-build anchor rotation lanes are not a canonical affected-lane subset");
+        }
+        self.bindings.validate_bindings()?;
+        if self.affected_lanes != self.bindings.affected_lanes() {
+            bail!("reviewed-build affected lanes do not match its closed bindings");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewedProjectBuildOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    pub against: Option<PathBuf>,
+    pub anchor_rotations: Vec<crate::ApprovedLaneV1>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedProjectBuildReportV1 {
+    pub schema_version: &'static str,
+    pub build: ProjectCommandReport,
+    pub affected_lanes: Vec<crate::ApprovedLaneV1>,
+    pub anchor_rotation_lanes: Vec<crate::ApprovedLaneV1>,
+    pub reviewed_build_record: ProjectRelativePath,
+    pub reviewed_build_record_digest: String,
+    pub output_owner: &'static str,
+    pub next_action: &'static str,
+}
+
 /// Trusted process-local dependencies used while executing project fixtures.
 ///
 /// The worker executable is supplied only by reviewed Rust callers. It is not
@@ -106,7 +206,10 @@ mod project_execution_context_tests {
 }
 
 fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> {
-    if compiled.relay_private.is_empty() && compiled.notary_private.is_empty() {
+    if compiled.relay_private.is_empty()
+        && compiled.relay_consultation_private.is_empty()
+        && compiled.notary_private.is_empty()
+    {
         bail!("generated deployment has no product configuration");
     }
     if !compiled.relay_private.is_empty() {
@@ -115,16 +218,17 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
             .get(Path::new("config/relay.yaml"))
             .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
         validate_generated_relay(relay_config, &compiled.relay_private, "config/relay.yaml")?;
-        if let Some(consultation_config) = compiled
-            .relay_private
-            .get(Path::new("config/relay-consultation.yaml"))
-        {
-            validate_generated_relay(
-                consultation_config,
-                &compiled.relay_private,
-                "config/relay-consultation.yaml",
-            )?;
-        }
+    }
+    if !compiled.relay_consultation_private.is_empty() {
+        let relay_config = compiled
+            .relay_consultation_private
+            .get(Path::new("config/relay.yaml"))
+            .ok_or_else(|| anyhow!("generated Relay consultation config is absent"))?;
+        validate_generated_relay(
+            relay_config,
+            &compiled.relay_consultation_private,
+            "config/relay.yaml",
+        )?;
     }
     if !compiled.notary_private.is_empty() {
         validate_generated_notary(compiled)?;
@@ -579,15 +683,500 @@ fn generated_evidence(
         .collect()
 }
 
+struct PreparedReviewedProject {
+    loaded: LoadedRegistryProject,
+    compiled: CompiledProject,
+    signing_input_identities: [registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    preceding_approved_set_digest: Option<String>,
+    anchor_rotation_lanes: Vec<crate::ApprovedLaneV1>,
+    retained_rotation_evidence: BTreeMap<crate::ApprovedLaneV1, RetainedReviewedEvidence>,
+    affected_lanes: Vec<crate::ApprovedLaneV1>,
+    bindings: crate::ReviewedBuildUpdateV1,
+}
+
+#[derive(Clone)]
+struct RetainedReviewedEvidence {
+    review: Box<[u8]>,
+    approval_state: Box<[u8]>,
+}
+
+pub fn compare_reviewed_project(
+    options: &ReviewCompareOptions,
+) -> Result<ReviewComparisonReportV1> {
+    let prepared = prepare_reviewed_project(
+        &options.project_directory,
+        &options.environment,
+        options.against.as_deref(),
+        &[],
+    )?;
+    Ok(ReviewComparisonReportV1 {
+        schema_version: REVIEW_COMPARISON_REPORT_SCHEMA_VERSION,
+        project: prepared.loaded.project.registry.id,
+        environment: options.environment.clone(),
+        changed: !prepared.affected_lanes.is_empty(),
+        affected_lanes: prepared.affected_lanes,
+        reviewed_bindings: prepared.bindings,
+        input_owner: "project author and current approved-set operator",
+        output_owner: "reviewer",
+        mutation: "none",
+        next_action: "run registryctl build with the same environment and --against value",
+    })
+}
+
+pub fn build_reviewed_project(
+    options: &ReviewedProjectBuildOptions,
+) -> Result<ReviewedProjectBuildReportV1> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    let prepared = prepare_reviewed_project(
+        &options.project_directory,
+        &options.environment,
+        options.against.as_deref(),
+        &options.anchor_rotations,
+    )?;
+    preflight_project_rhai_scripts(&prepared.loaded)?;
+    validate_generated_product_configs(&prepared.compiled)?;
+    let has_project_local_file_input = prepared
+        .loaded
+        .environment
+        .as_ref()
+        .is_some_and(|environment| {
+            environment
+                .entities
+                .values()
+                .any(|binding| matches!(&binding.provider, RecordProvider::Xlsx { .. }))
+        });
+    let artifact_inputs = validate_project_workbook_inputs(&prepared.loaded, &prepared.compiled)?;
+    let (fixtures, generated_observations, request_observations, call_budget_actual) =
+        execute_all_fixtures_with_coverage_observations(
+            &prepared.loaded,
+            &prepared.compiled,
+            None,
+            None,
+            false,
+            &execution_context,
+        )?;
+    require_passing_fixtures(&fixtures)?;
+    let fixture_coverage = generate_fixture_coverage_report(
+        &prepared.loaded,
+        &fixtures,
+        &generated_observations,
+        &request_observations,
+        call_budget_actual,
+    )?;
+    let output = prepared
+        .loaded
+        .root
+        .join(BUILD_ROOT)
+        .join(options.environment.as_str());
+    let record = ReviewedBuildRecordV1 {
+        schema_id: REVIEWED_BUILD_RECORD_SCHEMA_ID.to_string(),
+        schema_version: REVIEWED_BUILD_RECORD_SCHEMA_VERSION.to_string(),
+        project: prepared.loaded.project.registry.id.clone(),
+        environment: options.environment.clone(),
+        preceding_approved_set_digest: prepared.preceding_approved_set_digest,
+        anchor_rotation_lanes: prepared.anchor_rotation_lanes.clone(),
+        affected_lanes: prepared.affected_lanes.clone(),
+        bindings: prepared.bindings,
+    };
+    record.validate()?;
+    let next_action = reviewed_build_next_action(
+        options.against.is_some(),
+        &record.affected_lanes,
+        has_project_local_file_input,
+    );
+    let emitted = record
+        .affected_lanes
+        .iter()
+        .map(|lane| lane.acceptance_lane())
+        .collect::<Vec<_>>();
+    let artifact_manifest = write_compiled_project_selected(
+        &prepared.loaded.root,
+        &output,
+        &prepared.compiled,
+        &prepared.loaded.project.registry.id,
+        &options.environment,
+        &artifact_inputs,
+        &prepared.signing_input_identities,
+        &emitted,
+        &prepared.retained_rotation_evidence,
+        Some(&record),
+    )?;
+    let reported_output = ProjectRelativePath::new(format!("{BUILD_ROOT}/{}", options.environment))
+        .map_err(|error| anyhow!("invalid project-relative build output path: {error}"))?;
+    let record_relative = ProjectRelativePath::new(format!(
+        "{BUILD_ROOT}/{}/{}",
+        options.environment, REVIEWED_BUILD_RECORD_FILE
+    ))
+    .map_err(|error| anyhow!("invalid reviewed-build record path: {error}"))?;
+    let record_bytes = canonical_json_line(
+        &serde_json::to_value(&record).context("failed to serialize reviewed-build record")?,
+    )?;
+    let build = ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
+        status: "built",
+        project: prepared.loaded.project.registry.id,
+        environment: prepared.loaded.environment_name,
+        fixtures,
+        semantic_changes: prepared.compiled.semantic_changes,
+        baseline: if options.against.is_some() {
+            "verified_signed_bundle"
+        } else {
+            "initial_without_baseline"
+        },
+        output: Some(reported_output.as_str().to_string()),
+        semantic_impact: Some(prepared.compiled.semantic_impact),
+        artifact_manifest: Some(artifact_manifest),
+        fixture_coverage: Some(fixture_coverage),
+        explanation: None,
+    };
+    Ok(ReviewedProjectBuildReportV1 {
+        schema_version: REVIEWED_PROJECT_BUILD_REPORT_SCHEMA_VERSION,
+        build,
+        affected_lanes: record.affected_lanes,
+        anchor_rotation_lanes: record.anchor_rotation_lanes,
+        reviewed_build_record: record_relative,
+        reviewed_build_record_digest: sha256_uri(&record_bytes),
+        output_owner: if has_project_local_file_input {
+            "country implementer and reviewer"
+        } else {
+            "product signers and approved-set operator"
+        },
+        next_action,
+    })
+}
+
+fn reviewed_build_next_action(
+    is_update: bool,
+    affected_lanes: &[crate::ApprovedLaneV1],
+    has_project_local_file_input: bool,
+) -> &'static str {
+    if has_project_local_file_input {
+        "bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build"
+    } else if !is_update {
+        "registryctl trust anchor create --help"
+    } else if affected_lanes.is_empty() {
+        "retain the current approved set; no lane signing input was emitted"
+    } else {
+        "registryctl trust bundle sign --help"
+    }
+}
+
+pub(crate) fn reviewed_project_id(project_directory: &Path, environment: &str) -> Result<String> {
+    Ok(load_registry_project(project_directory, Some(environment))?
+        .project
+        .registry
+        .id)
+}
+
+pub(crate) fn load_current_reviewed_build_record(
+    project_directory: &Path,
+    environment: &str,
+) -> Result<ReviewedBuildRecordV1> {
+    let path = project_directory
+        .join(BUILD_ROOT)
+        .join(environment)
+        .join(REVIEWED_BUILD_RECORD_FILE);
+    reject_symlink_components(project_directory, &path)?;
+    let metadata =
+        fs::symlink_metadata(&path).context("current reviewed-build record is unavailable")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        bail!("current reviewed-build record is not a bounded regular file");
+    }
+    let bytes = fs::read(&path).context("failed to read current reviewed-build record")?;
+    let value =
+        parse_json_strict(&bytes).context("current reviewed-build record is not strict JSON")?;
+    let record: ReviewedBuildRecordV1 = serde_json::from_value(value)
+        .context("current reviewed-build record has an invalid closed contract")?;
+    record.validate()?;
+    Ok(record)
+}
+
+fn prepare_reviewed_project(
+    project_directory: &Path,
+    environment: &str,
+    against: Option<&Path>,
+    requested_anchor_rotations: &[crate::ApprovedLaneV1],
+) -> Result<PreparedReviewedProject> {
+    if !requested_anchor_rotations.is_empty() && against.is_none() {
+        bail!("anchor rotation selection requires --against");
+    }
+    let anchor_rotation_lanes = crate::ApprovedLaneV1::ALL
+        .into_iter()
+        .filter(|lane| requested_anchor_rotations.contains(lane))
+        .collect::<Vec<_>>();
+    if anchor_rotation_lanes.len() != requested_anchor_rotations.len() {
+        bail!("anchor rotation selection contains a duplicate lane");
+    }
+    let loaded = load_registry_project(project_directory, Some(environment))?;
+    let signing_input_identities = governed_signing_input_identities(&loaded)?;
+    let (baselines, preceding, preceding_digest) = if let Some(set_file) = against {
+        let set = crate::approved_set::load_approved_baseline_set(set_file)?;
+        let mut baselines = VerifiedBaselineSet::default();
+        let root = set_file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        for lane in crate::ApprovedLaneV1::ALL {
+            let verified = crate::approved_set::verify_approved_lane_from_set(set_file, lane)?;
+            let expected = &signing_input_identities[match lane {
+                crate::ApprovedLaneV1::RelayPublic => 0,
+                crate::ApprovedLaneV1::RelayConsultation => 1,
+                crate::ApprovedLaneV1::Notary => 2,
+            }];
+            if verified.acceptance_identity() != expected {
+                bail!("approved set lane identity does not match the selected project environment");
+            }
+            let entry = set.lanes.get(lane);
+            let bundle =
+                crate::approved_set::resolve_portable_artifact(root, &entry.locators.bundle)?;
+            let anchor =
+                crate::approved_set::resolve_portable_artifact(root, &entry.locators.anchor)?;
+            let baseline = load_verified_baseline(
+                Some(&bundle),
+                Some(&anchor),
+                &loaded,
+                Some(match lane {
+                    crate::ApprovedLaneV1::RelayPublic => VerifiedBaselineLane::Relay,
+                    crate::ApprovedLaneV1::RelayConsultation => {
+                        VerifiedBaselineLane::RelayConsultation
+                    }
+                    crate::ApprovedLaneV1::Notary => VerifiedBaselineLane::Notary,
+                }),
+            )?
+            .ok_or_else(|| anyhow!("approved set lane baseline is absent"))?;
+            baselines.insert(baseline)?;
+        }
+        baselines.validate_common_signed_state()?;
+        (
+            baselines,
+            Some(set),
+            Some(crate::approved_set::load_approved_baseline_set(set_file)?.digest()?),
+        )
+    } else {
+        (VerifiedBaselineSet::default(), None, None)
+    };
+    let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
+    validate_generated_product_configs(&compiled)?;
+    let all_bindings = reviewed_bindings(&compiled, &signing_input_identities)?;
+    let changed_lanes = crate::ApprovedLaneV1::ALL
+        .into_iter()
+        .filter(|lane| {
+            preceding.as_ref().is_none_or(|set| {
+                let current = all_bindings
+                    .get(*lane)
+                    .expect("all current lane bindings are present");
+                let previous = set.lanes.get(*lane).reviewed_binding();
+                current.lane_scoped_reviewed_input_digest
+                    != previous.lane_scoped_reviewed_input_digest
+                    || current.interfaces != previous.interfaces
+            })
+        })
+        .collect::<Vec<_>>();
+    let affected_lanes = crate::ApprovedLaneV1::ALL
+        .into_iter()
+        .filter(|lane| changed_lanes.contains(lane) || anchor_rotation_lanes.contains(lane))
+        .collect::<Vec<_>>();
+    let retained_rotation_evidence = anchor_rotation_lanes
+        .iter()
+        .filter(|lane| !changed_lanes.contains(lane))
+        .map(|lane| {
+            let baseline = baselines
+                .get(*lane)
+                .expect("an anchor-only rotation has a verified preceding lane");
+            (
+                *lane,
+                RetainedReviewedEvidence {
+                    review: baseline.review_bytes.clone(),
+                    approval_state: baseline.approval_state_bytes.clone(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let selected_binding = |lane: crate::ApprovedLaneV1| {
+        if retained_rotation_evidence.contains_key(&lane) {
+            preceding
+                .as_ref()
+                .expect("retained rotation evidence has a preceding set")
+                .lanes
+                .get(lane)
+                .reviewed_binding()
+        } else {
+            all_bindings
+                .get(lane)
+                .expect("all current lane bindings are present")
+                .clone()
+        }
+    };
+    let bindings = crate::ReviewedBuildUpdateV1 {
+        relay_public: affected_lanes
+            .contains(&crate::ApprovedLaneV1::RelayPublic)
+            .then(|| selected_binding(crate::ApprovedLaneV1::RelayPublic)),
+        relay_consultation: affected_lanes
+            .contains(&crate::ApprovedLaneV1::RelayConsultation)
+            .then(|| selected_binding(crate::ApprovedLaneV1::RelayConsultation)),
+        notary: affected_lanes
+            .contains(&crate::ApprovedLaneV1::Notary)
+            .then(|| selected_binding(crate::ApprovedLaneV1::Notary)),
+    };
+    bindings.validate_bindings()?;
+    Ok(PreparedReviewedProject {
+        loaded,
+        compiled,
+        signing_input_identities,
+        preceding_approved_set_digest: preceding_digest,
+        anchor_rotation_lanes,
+        retained_rotation_evidence,
+        affected_lanes,
+        bindings,
+    })
+}
+
+fn reviewed_bindings(
+    compiled: &CompiledProject,
+    identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+) -> Result<crate::ReviewedBuildUpdateV1> {
+    let review_bytes = canonical_json_line(&compiled.review)?;
+    let state_bytes = canonical_json_line(&compiled.approval_state)?;
+    let consultation_interface = compiled
+        .review
+        .get("consultations")
+        .and_then(Value::as_object)
+        .filter(|consultations| !consultations.is_empty())
+        .map(|consultations| {
+            canonicalize_json(&Value::Object(consultations.clone())).map(|bytes| sha256_uri(&bytes))
+        })
+        .transpose()
+        .context("failed to canonicalize reviewed consultation interface")?;
+    let binding = |lane: crate::ApprovedLaneV1,
+                   identity: &registry_platform_config::ProductAcceptanceIdentityV1,
+                   files: &BTreeMap<PathBuf, Box<[u8]>>|
+     -> Result<crate::ReviewedLaneBindingV1> {
+        let lane_digest = compiled
+            .approval_state
+            .pointer(&format!(
+                "/generated_closure_digests/{}",
+                lane.closure_name()
+            ))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("compiled project lacks a lane-scoped reviewed digest"))?
+            .to_string();
+        let marker = crate::SigningInputMarkerV1::governed(identity.clone())?;
+        let marker_bytes = crate::trust::canonical_signing_input_marker(&marker)?;
+        let mut closure = files
+            .iter()
+            .map(|(path, bytes)| Ok((normalized_relative_path(path)?, sha256_uri(bytes))))
+            .collect::<Result<Vec<_>>>()?;
+        closure.extend([
+            (APPROVAL_REVIEW_PATH.to_string(), sha256_uri(&review_bytes)),
+            (APPROVAL_STATE_PATH.to_string(), sha256_uri(&state_bytes)),
+            (
+                crate::SIGNING_INPUT_MARKER_FILE.to_string(),
+                sha256_uri(&marker_bytes),
+            ),
+        ]);
+        closure.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut hasher = Sha256::new();
+        for (path, digest) in closure {
+            hasher.update(path.as_bytes());
+            hasher.update([0]);
+            hasher.update(digest.as_bytes());
+            hasher.update([b'\n']);
+        }
+        Ok(crate::ReviewedLaneBindingV1 {
+            lane_scoped_reviewed_input_digest: lane_digest,
+            signing_input_closure_digest: format!("sha256:{}", hex::encode(hasher.finalize())),
+            interfaces: match lane {
+                crate::ApprovedLaneV1::RelayPublic => crate::CrossLaneInterfaceDigestsV1::default(),
+                crate::ApprovedLaneV1::RelayConsultation | crate::ApprovedLaneV1::Notary => {
+                    crate::CrossLaneInterfaceDigestsV1 {
+                        consultation_relay_notary: consultation_interface.clone(),
+                    }
+                }
+            },
+        })
+    };
+    Ok(crate::ReviewedBuildUpdateV1 {
+        relay_public: Some(binding(
+            crate::ApprovedLaneV1::RelayPublic,
+            &identities[0],
+            &compiled.relay_private,
+        )?),
+        relay_consultation: Some(binding(
+            crate::ApprovedLaneV1::RelayConsultation,
+            &identities[1],
+            &compiled.relay_consultation_private,
+        )?),
+        notary: Some(binding(
+            crate::ApprovedLaneV1::Notary,
+            &identities[2],
+            &compiled.notary_private,
+        )?),
+    })
+}
+
+fn validate_reviewed_sha256(value: &str, label: &str) -> Result<()> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        bail!("{label} must use the sha256 URI form");
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{label} must contain one lowercase SHA-256 digest");
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn write_compiled_project(
     root: &Path,
     output: &Path,
     compiled: &CompiledProject,
-    runtime_identity: Option<crate::RuntimeIdentity>,
     project: &str,
     environment: &str,
     artifact_inputs: &[ArtifactInputDigest],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
 ) -> Result<ProjectArtifactManifestRef> {
+    let emitted_lanes = signing_input_identities
+        .iter()
+        .map(|identity| identity.lane)
+        .collect::<Vec<_>>();
+    write_compiled_project_selected(
+        root,
+        output,
+        compiled,
+        project,
+        environment,
+        artifact_inputs,
+        signing_input_identities,
+        &emitted_lanes,
+        &BTreeMap::new(),
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_compiled_project_selected(
+    root: &Path,
+    output: &Path,
+    compiled: &CompiledProject,
+    project: &str,
+    environment: &str,
+    artifact_inputs: &[ArtifactInputDigest],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    emitted_lanes: &[registry_platform_config::ProductAcceptanceLaneV1],
+    retained_rotation_evidence: &BTreeMap<crate::ApprovedLaneV1, RetainedReviewedEvidence>,
+    reviewed_build: Option<&ReviewedBuildRecordV1>,
+) -> Result<ProjectArtifactManifestRef> {
+    if compiled.relay_private.is_empty()
+        || compiled.relay_consultation_private.is_empty()
+        || compiled.notary_private.is_empty()
+    {
+        bail!(
+            "governed build requires complete relay-public, relay-consultation, and notary signing inputs; continue authoring with project test and project check, then add the missing product binding before project build"
+        );
+    }
     let expected_parent = root.join(BUILD_ROOT);
     let parent = output
         .parent()
@@ -616,9 +1205,16 @@ fn write_compiled_project(
     let approval_state_bytes = canonical_json_line(&compiled.approval_state)?;
     write_private_file(&reviewable_root.join("review.json"), &review_bytes)?;
     if !compiled.relay_private.is_empty() {
-        let relay_root = temporary.join("private/relay");
+        let relay_root = temporary.join("private/relay-public");
         create_dir_owner_only(&relay_root)?;
         write_file_map(&relay_root, &compiled.relay_private)?;
+        write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
+        write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
+    }
+    if !compiled.relay_consultation_private.is_empty() {
+        let relay_root = temporary.join("private/relay-consultation");
+        create_dir_owner_only(&relay_root)?;
+        write_file_map(&relay_root, &compiled.relay_consultation_private)?;
         write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
         write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
     }
@@ -632,17 +1228,50 @@ fn write_compiled_project(
             &approval_state_bytes,
         )?;
     }
-    if let Some(identity) = runtime_identity {
-        // The temporary build root is freshly created owner-only state and is
-        // not published until the rename below. Privileged ownership changes
-        // are confined to the two config trees mounted into containers, so a
-        // failure leaves the prior published build untouched.
-        for relative in ["private/relay/config", "private/notary/config"] {
-            assign_unpublished_runtime_input_owner(&temporary.join(relative), identity)?;
+    for (identity, files) in [
+        (&signing_input_identities[0], &compiled.relay_private),
+        (
+            &signing_input_identities[1],
+            &compiled.relay_consultation_private,
+        ),
+        (&signing_input_identities[2], &compiled.notary_private),
+    ] {
+        if !emitted_lanes.contains(&identity.lane) {
+            continue;
         }
+        let approved_lane = crate::ApprovedLaneV1::from_acceptance_lane(identity.lane);
+        let (lane_review_bytes, lane_approval_state_bytes) = retained_rotation_evidence
+            .get(&approved_lane)
+            .map(|evidence| (evidence.review.as_ref(), evidence.approval_state.as_ref()))
+            .unwrap_or((review_bytes.as_slice(), approval_state_bytes.as_slice()));
+        let lane_root = temporary
+            .join("signing-inputs")
+            .join(product_acceptance_lane_name(identity.lane));
+        create_dir_owner_only(&lane_root)?;
+        write_file_map(&lane_root, files)?;
+        write_private_file(&lane_root.join(APPROVAL_REVIEW_PATH), lane_review_bytes)?;
+        write_private_file(
+            &lane_root.join(APPROVAL_STATE_PATH),
+            lane_approval_state_bytes,
+        )?;
+        let marker = crate::SigningInputMarkerV1::governed(identity.clone())?;
+        let marker_bytes = crate::trust::canonical_signing_input_marker(&marker)?;
+        write_private_file(
+            &lane_root.join(crate::SIGNING_INPUT_MARKER_FILE),
+            &marker_bytes,
+        )?;
     }
     let artifact_manifest =
         write_artifact_manifest(&temporary, project, environment, artifact_inputs)?;
+    if let Some(reviewed_build) = reviewed_build {
+        write_private_file(
+            &temporary.join(REVIEWED_BUILD_RECORD_FILE),
+            &canonical_json_line(
+                &serde_json::to_value(reviewed_build)
+                    .context("failed to serialize reviewed-build record")?,
+            )?,
+        )?;
+    }
 
     let backup = expected_parent.join(format!(".{name}.previous-{}", std::process::id()));
     if backup.exists() {
@@ -667,60 +1296,85 @@ fn write_compiled_project(
     Ok(artifact_manifest)
 }
 
-#[cfg(unix)]
-fn assign_unpublished_runtime_input_owner(
-    path: &Path,
-    identity: crate::RuntimeIdentity,
-) -> Result<()> {
-    use std::os::unix::fs::{lchown, MetadataExt};
+fn governed_signing_input_identities(
+    loaded: &LoadedRegistryProject,
+) -> Result<[registry_platform_config::ProductAcceptanceIdentityV1; 3]> {
+    use registry_platform_config::{
+        ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+        ProductTrustDomainV1,
+    };
 
-    let metadata = fs::symlink_metadata(path).with_context(|| {
-        format!(
-            "failed to inspect unpublished runtime input {}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
-        bail!(
-            "unpublished runtime input contains an unsupported file type: {}",
-            path.display()
-        );
-    }
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path).with_context(|| {
-            format!(
-                "failed to read unpublished runtime input {}",
-                path.display()
-            )
-        })? {
-            let child = entry
-                .with_context(|| {
-                    format!(
-                        "failed to read an entry under unpublished runtime input {}",
-                        path.display()
-                    )
-                })?
-                .path();
-            assign_unpublished_runtime_input_owner(&child, identity)?;
-        }
-    }
-    if metadata.uid() != identity.uid || metadata.gid() != identity.gid {
-        lchown(path, Some(identity.uid), Some(identity.gid)).with_context(|| {
-            format!(
-                "failed to assign unpublished runtime input {} to {}:{}; the prior generated build remains active",
-                path.display(), identity.uid, identity.gid
+    let environment_name = loaded
+        .environment_name
+        .as_deref()
+        .ok_or_else(|| anyhow!("governed build requires an explicit environment"))?;
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("governed build requires an environment binding"))?;
+    let relay = environment
+        .deployment
+        .relay
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow!(
+                "governed build requires a public and consultation Relay binding; continue authoring with project test and project check, then add deployment.relay before project build"
             )
         })?;
+    let notary = environment
+        .deployment
+        .notary
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow!(
+                "governed build requires a Notary binding; continue authoring with project test and project check, then add deployment.notary before project build"
+            )
+        })?;
+    let project = loaded.project.registry.id.clone();
+    let identity = |lane, product, instance| ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: project.clone(),
+        environment: environment_name.to_string(),
+        lane,
+        product,
+        stream: project.clone(),
+        instance,
+    };
+    let identities = [
+        identity(
+            ProductAcceptanceLaneV1::RelayPublic,
+            ProductAcceptanceProductV1::RegistryRelay,
+            relay.service.clone(),
+        ),
+        identity(
+            ProductAcceptanceLaneV1::RelayConsultation,
+            ProductAcceptanceProductV1::RegistryRelay,
+            format!("{}-consultation", relay.service),
+        ),
+        identity(
+            ProductAcceptanceLaneV1::Notary,
+            ProductAcceptanceProductV1::RegistryNotary,
+            notary.service.clone(),
+        ),
+    ];
+    for identity in &identities {
+        identity
+            .validate()
+            .context("generated signing-input acceptance identity is invalid")?;
     }
-    Ok(())
+    Ok(identities)
 }
 
-#[cfg(not(unix))]
-fn assign_unpublished_runtime_input_owner(
-    _path: &Path,
-    _identity: crate::RuntimeIdentity,
-) -> Result<()> {
-    Ok(())
+fn product_acceptance_lane_name(
+    lane: registry_platform_config::ProductAcceptanceLaneV1,
+) -> &'static str {
+    match lane {
+        registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => "relay-public",
+        registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+            "relay-consultation"
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+    }
 }
 
 fn write_file_map(root: &Path, files: &BTreeMap<PathBuf, Box<[u8]>>) -> Result<()> {
@@ -786,12 +1440,26 @@ fn validate_baseline_pair(against: Option<&Path>, anchor: Option<&Path>) -> Resu
     Ok(())
 }
 
+fn validate_named_baseline_pair(
+    against_name: &str,
+    against: Option<&Path>,
+    anchor_name: &str,
+    anchor: Option<&Path>,
+) -> Result<()> {
+    if against.is_some() != anchor.is_some() {
+        bail!("{against_name} and {anchor_name} must be supplied together");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct ApprovedBaselineSetPaths<'a> {
     against: Option<&'a Path>,
     anchor: Option<&'a Path>,
     relay_against: Option<&'a Path>,
     relay_anchor: Option<&'a Path>,
+    relay_consultation_against: Option<&'a Path>,
+    relay_consultation_anchor: Option<&'a Path>,
     notary_against: Option<&'a Path>,
     notary_anchor: Option<&'a Path>,
 }
@@ -803,6 +1471,8 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             anchor,
             relay_against: None,
             relay_anchor: None,
+            relay_consultation_against: None,
+            relay_consultation_anchor: None,
             notary_against: None,
             notary_anchor: None,
         }
@@ -817,19 +1487,12 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             anchor: options.anchor.as_deref(),
             relay_against: baselines.and_then(|set| set.relay_against.as_deref()),
             relay_anchor: baselines.and_then(|set| set.relay_anchor.as_deref()),
+            relay_consultation_against: baselines
+                .and_then(|set| set.relay_consultation_against.as_deref()),
+            relay_consultation_anchor: baselines
+                .and_then(|set| set.relay_consultation_anchor.as_deref()),
             notary_against: baselines.and_then(|set| set.notary_against.as_deref()),
             notary_anchor: baselines.and_then(|set| set.notary_anchor.as_deref()),
-        }
-    }
-
-    fn promotion(options: &'a ProjectPromotionOptions) -> Self {
-        Self {
-            against: options.against.as_deref(),
-            anchor: options.anchor.as_deref(),
-            relay_against: options.relay_against.as_deref(),
-            relay_anchor: options.relay_anchor.as_deref(),
-            notary_against: options.notary_against.as_deref(),
-            notary_anchor: options.notary_anchor.as_deref(),
         }
     }
 }
@@ -840,38 +1503,88 @@ enum BaselineSetCompleteness {
     CompleteTopologyWhenPresent,
 }
 
+impl VerifiedBaselineLane {
+    fn product(self) -> registry_platform_config::ProductAcceptanceProductV1 {
+        match self {
+            Self::Relay | Self::RelayConsultation => {
+                registry_platform_config::ProductAcceptanceProductV1::RegistryRelay
+            }
+            Self::Notary => registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+        }
+    }
+
+    fn acceptance_lane(self) -> registry_platform_config::ProductAcceptanceLaneV1 {
+        match self {
+            Self::Relay => registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
+            Self::RelayConsultation => {
+                registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation
+            }
+            Self::Notary => registry_platform_config::ProductAcceptanceLaneV1::Notary,
+        }
+    }
+
+    fn closure(self) -> &'static str {
+        match self {
+            Self::Relay => "relay",
+            Self::RelayConsultation => "relay_consultation",
+            Self::Notary => "notary",
+        }
+    }
+}
+
 impl VerifiedBaselineSet {
     fn is_empty(&self) -> bool {
-        self.relay.is_none() && self.notary.is_none()
+        self.relay.is_none() && self.relay_consultation.is_none() && self.notary.is_none()
     }
 
     fn iter(&self) -> impl Iterator<Item = &VerifiedBaseline> {
-        [self.relay.as_ref(), self.notary.as_ref()]
-            .into_iter()
-            .flatten()
+        [
+            self.relay.as_ref(),
+            self.relay_consultation.as_ref(),
+            self.notary.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
     }
 
     fn common(&self) -> Option<&VerifiedBaseline> {
-        self.relay.as_ref().or(self.notary.as_ref())
+        self.relay
+            .as_ref()
+            .or(self.relay_consultation.as_ref())
+            .or(self.notary.as_ref())
+    }
+
+    fn get(&self, lane: crate::ApprovedLaneV1) -> Option<&VerifiedBaseline> {
+        match lane {
+            crate::ApprovedLaneV1::RelayPublic => self.relay.as_ref(),
+            crate::ApprovedLaneV1::RelayConsultation => self.relay_consultation.as_ref(),
+            crate::ApprovedLaneV1::Notary => self.notary.as_ref(),
+        }
     }
 
     fn predecessor_manifest_identities(&self) -> Value {
         json!({
             "relay": self.relay.as_ref().map(|baseline| &baseline.verified_manifest),
+            "relay_consultation": self.relay_consultation.as_ref().map(|baseline| &baseline.verified_manifest),
             "notary": self.notary.as_ref().map(|baseline| &baseline.verified_manifest),
         })
     }
 
     fn insert(&mut self, baseline: VerifiedBaseline) -> Result<()> {
-        match verified_baseline_product(&baseline)? {
-            PromotionProjectedProduct::Relay if self.relay.is_none() => {
+        match baseline.lane {
+            VerifiedBaselineLane::Relay if self.relay.is_none() => {
                 self.relay = Some(baseline);
             }
-            PromotionProjectedProduct::Notary if self.notary.is_none() => {
+            VerifiedBaselineLane::RelayConsultation if self.relay_consultation.is_none() => {
+                self.relay_consultation = Some(baseline);
+            }
+            VerifiedBaselineLane::Notary if self.notary.is_none() => {
                 self.notary = Some(baseline);
             }
-            PromotionProjectedProduct::Relay | PromotionProjectedProduct::Notary => {
-                bail!("approved baseline set contains a duplicate product")
+            VerifiedBaselineLane::Relay
+            | VerifiedBaselineLane::RelayConsultation
+            | VerifiedBaselineLane::Notary => {
+                bail!("approved baseline set contains a duplicate product lane")
             }
         }
         Ok(())
@@ -901,12 +1614,21 @@ fn validate_approved_baseline_set_paths(paths: ApprovedBaselineSetPaths<'_>) -> 
         paths.relay_anchor,
     )?;
     validate_named_baseline_pair(
+        "--relay-consultation-against",
+        paths.relay_consultation_against,
+        "--relay-consultation-anchor",
+        paths.relay_consultation_anchor,
+    )?;
+    validate_named_baseline_pair(
         "--notary-against",
         paths.notary_against,
         "--notary-anchor",
         paths.notary_anchor,
     )?;
-    if paths.against.is_some() && (paths.relay_against.is_some() || paths.notary_against.is_some())
+    if paths.against.is_some()
+        && (paths.relay_against.is_some()
+            || paths.relay_consultation_against.is_some()
+            || paths.notary_against.is_some())
     {
         bail!("--against cannot be combined with product-specific baselines");
     }
@@ -920,25 +1642,27 @@ fn load_verified_approved_baseline_set(
 ) -> Result<VerifiedBaselineSet> {
     validate_approved_baseline_set_paths(paths)?;
     let mut baselines = VerifiedBaselineSet::default();
-    if let Some(baseline) = load_verified_baseline(paths.against, paths.anchor, loaded)? {
+    if let Some(baseline) = load_verified_baseline(paths.against, paths.anchor, loaded, None)? {
         baselines.insert(baseline)?;
     } else {
-        for (against, anchor, expected_product) in [
+        for (against, anchor, lane) in [
             (
                 paths.relay_against,
                 paths.relay_anchor,
-                PromotionProjectedProduct::Relay,
+                VerifiedBaselineLane::Relay,
+            ),
+            (
+                paths.relay_consultation_against,
+                paths.relay_consultation_anchor,
+                VerifiedBaselineLane::RelayConsultation,
             ),
             (
                 paths.notary_against,
                 paths.notary_anchor,
-                PromotionProjectedProduct::Notary,
+                VerifiedBaselineLane::Notary,
             ),
         ] {
-            if let Some(baseline) = load_verified_baseline(against, anchor, loaded)? {
-                if verified_baseline_product(&baseline)? != expected_product {
-                    bail!("product-specific approved baseline has the wrong product");
-                }
+            if let Some(baseline) = load_verified_baseline(against, anchor, loaded, Some(lane))? {
                 baselines.insert(baseline)?;
             }
         }
@@ -956,7 +1680,15 @@ fn load_verified_approved_baseline_set(
         let products = project_promotion_products(environment);
         let requires_relay = products.contains(&PromotionProjectedProduct::Relay);
         let requires_notary = products.contains(&PromotionProjectedProduct::Notary);
+        let requires_relay_consultation = project_requires_relay_consultation_baseline(loaded)
+            || baselines.common().is_some_and(|baseline| {
+                baseline
+                    .approval_state
+                    .pointer("/generated_closure_digests/relay_consultation")
+                    .is_some_and(Value::is_string)
+            });
         if baselines.relay.is_some() != requires_relay
+            || baselines.relay_consultation.is_some() != requires_relay_consultation
             || baselines.notary.is_some() != requires_notary
         {
             bail!("approved baseline set is incomplete for the selected product topology");
@@ -965,10 +1697,19 @@ fn load_verified_approved_baseline_set(
     Ok(baselines)
 }
 
+fn project_requires_relay_consultation_baseline(loaded: &LoadedRegistryProject) -> bool {
+    loaded
+        .project
+        .services
+        .values()
+        .any(|service| !service.consultations.is_empty())
+}
+
 fn load_verified_baseline(
     against: Option<&Path>,
     anchor: Option<&Path>,
     loaded: &LoadedRegistryProject,
+    expected_lane: Option<VerifiedBaselineLane>,
 ) -> Result<Option<VerifiedBaseline>> {
     let (Some(bundle), Some(anchor)) = (against, anchor) else {
         return Ok(None);
@@ -979,12 +1720,31 @@ fn load_verified_baseline(
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("verified baseline requires an explicit environment"))?;
-    if !matches!(
-        verified.manifest.product.as_str(),
-        "registry-relay" | "registry-notary"
-    ) || verified.manifest.environment != environment
-    {
-        bail!("verified baseline manifest is not bound to this product environment");
+    let identity = &verified.manifest.acceptance_identity;
+    let lane = expected_lane.unwrap_or(match identity.lane {
+        registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => {
+            VerifiedBaselineLane::Relay
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+            VerifiedBaselineLane::RelayConsultation
+        }
+        registry_platform_config::ProductAcceptanceLaneV1::Notary => VerifiedBaselineLane::Notary,
+    });
+    let expected_identities = governed_signing_input_identities(loaded)?;
+    let expected_identity = match lane {
+        VerifiedBaselineLane::Relay => &expected_identities[0],
+        VerifiedBaselineLane::RelayConsultation => &expected_identities[1],
+        VerifiedBaselineLane::Notary => &expected_identities[2],
+    };
+    if identity != expected_identity {
+        bail!(
+            "verified baseline manifest acceptance identity does not exactly match the derived governed project, environment, lane, product, stream, and instance"
+        );
+    }
+    if &verified.trust_anchor.acceptance_identity != expected_identity {
+        bail!(
+            "verified baseline trust-anchor acceptance identity does not exactly match the derived governed project, environment, lane, product, stream, and instance"
+        );
     }
     let review_bytes =
         read_verified_bundle_payload(bundle, &verified.manifest, APPROVAL_REVIEW_PATH, "review")?;
@@ -1002,12 +1762,6 @@ fn load_verified_baseline(
     validate_signed_approval_state(&approval_state)?;
     if review.get("schema").and_then(Value::as_str) != Some(REVIEW_SCHEMA) {
         bail!("baseline review record has the wrong schema");
-    }
-    if !matches!(
-        approval_state.get("schema").and_then(Value::as_str),
-        Some(APPROVAL_STATE_SCHEMA_V1 | APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA)
-    ) {
-        bail!("baseline approval state has the wrong schema");
     }
     for value in [&review, &approval_state] {
         if value.get("registry").and_then(Value::as_str)
@@ -1036,6 +1790,18 @@ fn load_verified_baseline(
     if approval_state.get("entity_materializations") != review.get("entity_materializations") {
         bail!("verified baseline review and approval state disagree on entity materializations");
     }
+    let has_consultations = review
+        .get("consultations")
+        .and_then(Value::as_object)
+        .is_some_and(|consultations| !consultations.is_empty());
+    let has_consultation_closure = approval_state
+        .pointer("/generated_closure_digests/relay_consultation")
+        .is_some_and(Value::is_string);
+    if has_consultations != has_consultation_closure {
+        bail!(
+            "verified baseline review and approval state disagree on the Relay consultation input"
+        );
+    }
     let disclosure_profiles: DisclosureReviewProfiles = serde_json::from_value(
         review
             .get("disclosure_profiles")
@@ -1054,13 +1820,18 @@ fn load_verified_baseline(
     {
         bail!("verified baseline approval state does not bind the review disclosure profiles");
     }
-    validate_verified_product_closure(&approval_state, &verified.manifest)?;
+    validate_verified_product_closure(&approval_state, &verified.manifest, lane)?;
+    let approval_state_digest = sha256_uri(&approval_state_bytes);
+    let review_digest = sha256_uri(&review_bytes);
     Ok(Some(VerifiedBaseline {
+        lane,
         approval_state,
-        approval_state_digest: sha256_uri(&approval_state_bytes),
+        approval_state_bytes: approval_state_bytes.into_boxed_slice(),
+        approval_state_digest,
         verified_manifest: serde_json::to_value(verified.manifest)
             .context("failed to retain verified baseline manifest identity")?,
-        review_digest: sha256_uri(&review_bytes),
+        review_bytes: review_bytes.into_boxed_slice(),
+        review_digest,
     }))
 }
 
@@ -1089,32 +1860,32 @@ fn read_verified_bundle_payload(
 fn validate_verified_product_closure(
     approval_state: &Value,
     manifest: &registry_platform_config::ConfigBundleManifest,
+    lane: VerifiedBaselineLane,
 ) -> Result<()> {
-    let product = match manifest.product.as_str() {
-        "registry-relay" => "relay",
-        "registry-notary" => "notary",
-        _ => bail!("verified baseline manifest has an unsupported product"),
-    };
+    if manifest.acceptance_identity.product != lane.product()
+        || manifest.acceptance_identity.lane != lane.acceptance_lane()
+    {
+        bail!("verified baseline manifest has the wrong product for its selected lane");
+    }
+    let closure = lane.closure();
     let expected = approval_state
-        .pointer(&format!("/generated_closure_digests/{product}"))
+        .pointer(&format!("/generated_closure_digests/{closure}"))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow!("verified baseline approval state lacks its {product} closure digest")
-        })?;
+        .ok_or_else(|| anyhow!("verified baseline approval state lacks its selected closure"))?;
     let mut files = manifest
         .files
         .iter()
         .filter(|file| {
             !matches!(
                 file.path.as_str(),
-                APPROVAL_REVIEW_PATH | APPROVAL_STATE_PATH
+                APPROVAL_REVIEW_PATH | APPROVAL_STATE_PATH | crate::SIGNING_INPUT_MARKER_FILE
             )
         })
         .map(|file| json!({ "path": file.path, "sha256": file.sha256 }))
         .collect::<Vec<_>>();
     files.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
     if digest_json(&Value::Array(files))? != expected {
-        bail!("verified baseline product closure does not match its signed approval state");
+        bail!("verified baseline lane closure does not match its signed approval state");
     }
     Ok(())
 }
@@ -1188,35 +1959,15 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
         .get("schema")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("baseline approval state schema must be a string"))?;
-    let expected = match schema {
-        APPROVAL_STATE_SCHEMA_V1 => &[
-            "schema",
-            "registry",
-            "environment",
-            "compiler_version",
-            "report_digest",
-            "authored_input_digest",
-            "semantic_digests",
-            "disclosure_digest",
-            "generated_closure_digests",
-            "baseline",
-            "entity_materializations",
-        ][..],
-        APPROVAL_STATE_SCHEMA_V2 => &[
-            "schema",
-            "registry",
-            "environment",
-            "compiler_version",
-            "report_digest",
-            "authored_input_digest",
-            "semantic_digests",
-            "disclosure_digest",
-            "promotion_projection",
-            "generated_closure_digests",
-            "baseline",
-            "entity_materializations",
-        ][..],
-        APPROVAL_STATE_SCHEMA => &[
+    if schema != APPROVAL_STATE_SCHEMA {
+        bail!(
+            "baseline approval state uses an unsupported schema; recreate pre-1.0 generated \
+             artifacts before rebuilding"
+        );
+    }
+    let state = exact_review_object(
+        value,
+        &[
             "schema",
             "registry",
             "environment",
@@ -1229,10 +1980,9 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             "generated_closure_digests",
             "baseline",
             "entity_materializations",
-        ][..],
-        _ => bail!("baseline approval state has the wrong schema"),
-    };
-    let state = exact_review_object(value, expected, "baseline approval state")?;
+        ],
+        "baseline approval state",
+    )?;
     for field in ["schema", "registry", "environment", "compiler_version"] {
         if state.get(field).and_then(Value::as_str).is_none() {
             bail!("baseline approval state field {field} must be a string");
@@ -1265,24 +2015,21 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
     ] {
         validate_review_sha256(semantic.get(field), field, false)?;
     }
-    let promotion_products =
-        if matches!(schema, APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA) {
-            let promotion_projection: ProjectPromotionProjectionV1 =
-                serde_json::from_value(state.get("promotion_projection").cloned().ok_or_else(
-                    || anyhow!("baseline approval state lacks promotion_projection"),
-                )?)
-                .context("baseline approval promotion_projection is invalid")?;
-            validate_project_promotion_projection_structure(&promotion_projection)
-                .map_err(|error| anyhow!(error))?;
-            Some(promotion_projection.products)
-        } else {
-            None
-        };
+    let promotion_projection: ProjectPromotionProjectionV1 = serde_json::from_value(
+        state
+            .get("promotion_projection")
+            .cloned()
+            .ok_or_else(|| anyhow!("baseline approval state lacks promotion_projection"))?,
+    )
+    .context("baseline approval promotion_projection is invalid")?;
+    validate_project_promotion_projection_structure(&promotion_projection)
+        .map_err(|error| anyhow!(error))?;
+    let promotion_products = promotion_projection.products;
     let closure = exact_review_object(
         state
             .get("generated_closure_digests")
             .ok_or_else(|| anyhow!("baseline approval state lacks generated_closure_digests"))?,
-        &["reviewable", "relay", "notary"],
+        &["reviewable", "relay", "relay_consultation", "notary"],
         "baseline approval generated_closure_digests",
     )?;
     validate_review_sha256(closure.get("reviewable"), "reviewable", false)?;
@@ -1291,27 +2038,44 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             validate_review_sha256(closure.get(field), field, false)?;
         }
     }
-    if let Some(products) = promotion_products.as_ref() {
-        for (field, product) in [
-            ("relay", PromotionProjectedProduct::Relay),
-            ("notary", PromotionProjectedProduct::Notary),
-        ] {
-            let has_closure = closure.get(field).is_some_and(Value::is_string);
-            if has_closure != products.contains(&product) {
-                bail!(
-                    "baseline approval promotion_projection product inventory disagrees with generated_closure_digests"
-                );
-            }
+    if !closure
+        .get("relay_consultation")
+        .is_some_and(Value::is_null)
+    {
+        validate_review_sha256(
+            closure.get("relay_consultation"),
+            "relay_consultation",
+            false,
+        )?;
+    }
+    if closure
+        .get("relay_consultation")
+        .is_some_and(Value::is_string)
+        && !closure.get("relay").is_some_and(Value::is_string)
+    {
+        bail!("baseline approval Relay consultation closure requires the Relay product closure");
+    }
+    for (field, product) in [
+        ("relay", PromotionProjectedProduct::Relay),
+        ("notary", PromotionProjectedProduct::Notary),
+    ] {
+        let has_closure = closure.get(field).is_some_and(Value::is_string);
+        if has_closure != promotion_products.contains(&product) {
+            bail!(
+                "baseline approval promotion_projection product inventory disagrees with generated_closure_digests"
+            );
         }
     }
     validate_approval_baseline(
         state.get("baseline"),
-        schema,
         state
             .get("environment")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("baseline approval state environment must be a string"))?,
-        promotion_products.as_deref(),
+        &promotion_products,
+        closure
+            .get("relay_consultation")
+            .is_some_and(Value::is_string),
     )?;
     if !state
         .get("entity_materializations")
@@ -1411,9 +2175,9 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
 
 fn validate_approval_baseline(
     value: Option<&Value>,
-    schema: &str,
     environment: &str,
-    promotion_products: Option<&[PromotionProjectedProduct]>,
+    promotion_products: &[PromotionProjectedProduct],
+    consultation_closure: bool,
 ) -> Result<()> {
     let Some(value) = value else {
         bail!("baseline approval state lacks baseline");
@@ -1421,76 +2185,70 @@ fn validate_approval_baseline(
     if value.is_null() {
         return Ok(());
     }
-    if schema == APPROVAL_STATE_SCHEMA {
-        let baseline = exact_review_object(
-            value,
-            &["verified_manifests"],
-            "baseline approval state baseline",
-        )?;
-        let manifests = exact_review_object(
-            baseline
-                .get("verified_manifests")
-                .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifests"))?,
-            &["relay", "notary"],
-            "baseline approval verified_manifests",
-        )?;
-        let mut present = 0_usize;
-        for (field, expected_product, projected_product) in [
-            ("relay", "registry-relay", PromotionProjectedProduct::Relay),
-            (
-                "notary",
-                "registry-notary",
-                PromotionProjectedProduct::Notary,
-            ),
-        ] {
-            let Some(value) = manifests.get(field) else {
-                bail!("baseline approval state lacks a product manifest identity");
-            };
-            if value.is_null() {
-                continue;
+    let baseline = exact_review_object(
+        value,
+        &["verified_manifests"],
+        "baseline approval state baseline",
+    )?;
+    let manifests = exact_review_object(
+        baseline
+            .get("verified_manifests")
+            .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifests"))?,
+        &["relay", "relay_consultation", "notary"],
+        "baseline approval verified_manifests",
+    )?;
+    let mut present = 0_usize;
+    for (field, expected_product, expected_lane, projected_product, required) in [
+        (
+            "relay",
+            registry_platform_config::ProductAcceptanceProductV1::RegistryRelay,
+            registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
+            PromotionProjectedProduct::Relay,
+            promotion_products.contains(&PromotionProjectedProduct::Relay),
+        ),
+        (
+            "relay_consultation",
+            registry_platform_config::ProductAcceptanceProductV1::RegistryRelay,
+            registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation,
+            PromotionProjectedProduct::Relay,
+            consultation_closure,
+        ),
+        (
+            "notary",
+            registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
+            registry_platform_config::ProductAcceptanceLaneV1::Notary,
+            PromotionProjectedProduct::Notary,
+            promotion_products.contains(&PromotionProjectedProduct::Notary),
+        ),
+    ] {
+        let Some(value) = manifests.get(field) else {
+            bail!("baseline approval state lacks a product manifest identity");
+        };
+        if value.is_null() {
+            if required {
+                bail!("baseline approval product manifest identity set is incomplete");
             }
-            let manifest: registry_platform_config::ConfigBundleManifest =
-                serde_json::from_value(value.clone())
-                    .context("baseline approval product manifest identity is invalid")?;
-            manifest
-                .validate()
+            continue;
+        }
+        let manifest: registry_platform_config::ConfigBundleManifest =
+            serde_json::from_value(value.clone())
                 .context("baseline approval product manifest identity is invalid")?;
-            if manifest.product != expected_product || manifest.environment != environment {
-                bail!("baseline approval product manifest identity has the wrong product");
-            }
-            if !promotion_products.is_some_and(|products| products.contains(&projected_product)) {
-                bail!("baseline approval product manifest identity is outside project topology");
-            }
-            present += 1;
-        }
-        if present == 0 {
-            bail!("baseline approval state has no predecessor product manifest identity");
-        }
-        if promotion_products.is_some_and(|products| products.len() != present) {
-            bail!("baseline approval product manifest identity set is incomplete");
-        }
-    } else {
-        // v1 and v2 recorded one predecessor manifest because build accepted
-        // only one unlabelled product baseline. Readers retain that exact
-        // shape, while v3 writes the closed Relay/Notary identity set above.
-        let baseline = exact_review_object(
-            value,
-            &["verified_manifest"],
-            "baseline approval state baseline",
-        )?;
-        let manifest: registry_platform_config::ConfigBundleManifest = serde_json::from_value(
-            baseline
-                .get("verified_manifest")
-                .cloned()
-                .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifest"))?,
-        )
-        .context("baseline approval verified_manifest is invalid")?;
         manifest
             .validate()
-            .context("baseline approval verified_manifest is invalid")?;
-        if manifest.environment != environment {
-            bail!("baseline approval verified_manifest has the wrong environment");
+            .context("baseline approval product manifest identity is invalid")?;
+        if manifest.acceptance_identity.product != expected_product
+            || manifest.acceptance_identity.lane != expected_lane
+            || manifest.acceptance_identity.environment != environment
+        {
+            bail!("baseline approval product manifest identity has the wrong product");
         }
+        if !required || !promotion_products.contains(&projected_product) {
+            bail!("baseline approval product manifest identity is outside project topology");
+        }
+        present += 1;
+    }
+    if present == 0 {
+        bail!("baseline approval state has no predecessor product manifest identity");
     }
     Ok(())
 }
@@ -2103,7 +2861,9 @@ fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Resul
     let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
     let secure = origin.scheme() == "https";
     let local_loopback = origin.scheme() == "http" && url_host_is_ip_loopback(&origin);
-    if (!secure && !local_loopback)
+    let private_service = origin.scheme() == "http"
+        && matches!(origin.host(), Some(url::Host::Domain(host)) if host != "localhost" && !host.ends_with(".localhost"));
+    if (!secure && !local_loopback && !private_service)
         || origin.host().is_none()
         || !origin.username().is_empty()
         || origin.password().is_some()
@@ -2111,7 +2871,9 @@ fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Resul
         || origin.query().is_some()
         || origin.fragment().is_some()
     {
-        bail!("{field} must be an exact HTTPS origin or HTTP IP-loopback origin");
+        bail!(
+            "{field} must be an exact HTTPS origin, HTTP private-service hostname origin, or HTTP IP-loopback origin"
+        );
     }
     Ok(())
 }

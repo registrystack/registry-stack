@@ -48,6 +48,7 @@ pub mod spdci;
     reason = "WP1A compiles the private state-plane boundary before WP1B activates its runtime consumer"
 )]
 mod state_plane;
+pub mod synthetic_source;
 pub mod table_provider;
 
 include!(concat!(env!("OUT_DIR"), "/compiled_cargo_features.rs"));

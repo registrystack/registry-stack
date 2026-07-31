@@ -1,427 +1,359 @@
 ---
 title: Use your own spreadsheet
-description: Derive a protected local registry API from the headers, stable key, disclosure policy, caller, and purpose of one reviewed workbook.
+description: Replace the sample workbook with a reviewed derivative and rebuild the protected Registry Relay and Registry Notary inputs.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-07-27"
-doc_type: tutorial
+  - registry-notary
+last_reviewed: "2026-07-31"
+doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+Use a reviewed non-personal workbook after the
+[spreadsheet first run](../publish-spreadsheet-secured-registry-api/) works.
+Registryctl validates the workbook against explicit authored schema, access,
+and evidence decisions.
 
-Use this tutorial after
-[running the sample registry API](../publish-spreadsheet-secured-registry-api/).
-You will derive every source and access value from a workbook you control,
-validate the project, and prove denied and allowed behavior on the resulting
-route.
+## When to use this
 
-<QuickstartMeta
-  outcome="A protected local API over one reviewed spreadsheet, with the route, returned fields, purpose, and local caller derived from your own decisions."
-  time="About 30 minutes for a small worksheet"
-  level="Country implementer"
-  prerequisites={['Linux amd64', 'Registryctl 0.15.2 with its matching image lock', 'Docker Engine with Compose v2', 'curl', 'A reviewed non-personal XLSX workbook', 'A text editor'] }
-/>
+Use this path when the institution starts from an XLSX workbook or a reviewed
+XLSX derivative of another source.
+The 1.0 path deliberately supports a regular table with one header row.
+It does not infer relationships, formulas, access policy, or evidence meaning.
 
-Use a synthetic, public, or otherwise approved non-personal workbook for this
-local evaluation. Do not use live country data, personal data, production
-credentials, or an unreviewed export.
+Start with the maintained four-column shape to get a working result:
+
+| Required header | Purpose |
+| --- | --- |
+| `project_id` | Stable, unique record key |
+| `district_code` | Example protected registry field |
+| `sector` | Example protected registry field |
+| `status` | Bounded input to the sample evidence rule |
+
+For a different schema, edit the entity definition, workbook mapping, records
+projection, snapshot output, claims, and fixtures together.
+The [project configuration reference](../../reference/project-configuration/)
+lists those fields.
 
 ## Before you start
 
-Make a reviewed derivative that contains:
+Prepare a reviewed derivative with:
 
-- one selected worksheet with one header row;
-- exactly two columns for this first adaptation;
-- one stable, non-empty, unique text key;
-- one text field approved for disclosure;
-- no formulas in the selected worksheet; and
-- at least one approved row whose key you can use as a local principal.
+- One worksheet named `Projects`
+- One header row containing exactly the four required headers
+- A non-empty, unique `project_id` for every row
+- Static values with no formulas or external workbook links
+- No personal data for local development
 
-Registry Stack does not evaluate formulas, follow external workbook links, or
-infer relationships between sheets. Review the
+Review the
 [XLSX readiness contract](../../products/registry-relay/xlsx-readiness-contract/)
 before adapting a larger or less regular workbook.
 
-Write down the decisions you will substitute for the angle-bracket
-placeholders in this tutorial:
+## Create a clean spreadsheet project
 
-| Placeholder | Derive it from |
-| --- | --- |
-| `<entity-id>` and `<key-field>` | Stable lower-snake-case names for the selected worksheet and its unique key |
-| `<released-field>` | A lower-snake-case name for the second, approved column |
-| `<key-header>` and `<released-header>` | The two exact workbook header cells, including spaces and capitalization |
-| `<worksheet-name>` | The exact worksheet tab name |
-| `<matching-key-value>` | One approved, non-personal key cell that exists in the worksheet |
-| `<purpose>` | A reviewed identifier for why callers may use this API |
-| `<registry-id>` and `<service-id>` | Stable identifiers for the authored registry and its records policy |
-
-The examples below quote exact workbook header cells. Keep the angle brackets
-only while reading. Replace every placeholder in the authored files before
-running validation.
-
-Set the two values reused by shell commands in this tutorial. Replace the
-quoted placeholders with your actual identifiers:
+Create a new project rather than modifying generated files:
 
 ```sh
-entity_id='<entity-id>'
-request_purpose='<purpose>'
+registryctl init institution-registry --template spreadsheet
+cd institution-registry
 ```
 
-These assignments print nothing. Keep using the same shell for the remaining
-commands.
+Registryctl reports the created project and the next `registryctl test`
+action.
 
-## Create the project
-
-Create a new project from the maintained spreadsheet starter:
+Copy the reviewed workbook over the sample:
 
 ```sh
-registryctl init --from spreadsheet --project-dir reviewed-registry
-cd reviewed-registry
+cp /path/to/reviewed-registry.xlsx data/public_works_projects.xlsx
 ```
 
-Registryctl prints:
+The command prints nothing when it succeeds.
+Registryctl reads the workbook but never writes its cells.
 
-```text
-Initialized Registry Stack project "fictional-public-works-registry".
-  Directory: reviewed-registry
-  Starter: spreadsheet (Registry Stack 0.15.2)
-  Starter content: matches bundled digest
-  Editor support: VS Code and Zed (reviewed-registry/.registry-stack-editor/manifest.json)
-```
+## Record the source revision
 
-Registryctl follows those lines with a `Next` section that tells you to enter
-the directory, check the local project, and start Relay. The starter is the
-reviewed baseline you will adapt. The `cd` command prints nothing.
-
-Copy your workbook into the project and give the entity file its authored
-name:
-
-```sh
-cp /path/to/your-reviewed-workbook.xlsx data/reviewed-source.xlsx
-mv entities/projects.yaml "entities/${entity_id}.yaml"
-```
-
-These commands print nothing when they succeed. Registryctl reads the copied
-workbook but never writes its cells.
-
-You will edit only these human-owned inputs:
-
-| File | Decision it owns |
-| --- | --- |
-| `data/reviewed-source.xlsx` | The exact approved source bytes |
-| `entities/<entity-id>.yaml` | Logical field names, stable key, strict types, and row limits |
-| `environments/local.yaml` | Worksheet headers, workbook path, and local caller principals |
-| `registry-stack.yaml` | Registry identity, service, purpose, scopes, filters, and returned fields |
-
-Do not edit `.registry-stack/`. Registryctl generates that directory and may
-replace it.
-
-## Describe the two workbook fields
-
-Replace `entities/<entity-id>.yaml` with this strict two-field schema after
-substituting your three logical names:
+Open `environments/local.yaml`.
+The starter contains:
 
 ```yaml
-version: 1
-id: <entity-id>
-revision: 1
-primary_key: <key-field>
-schema:
-  type: object
-  additionalProperties: false
-  required: [<key-field>, <released-field>]
-  properties:
-    <key-field>: { type: string, minLength: 1, maxLength: 128 }
-    <released-field>: { type: string, minLength: 1, maxLength: 256 }
-materialization:
-  max_records: 10000
-  max_bytes: 16MiB
-  refresh: manual
-  retain_generations: 2
+    source_revision: synthetic-public-works-v1
+    generation: "1"
 ```
 
-`primary_key` names the stable key. Every selected column is required and
-explicitly typed. `additionalProperties: false` makes a new source column a
-review event instead of silently adding it to the entity.
-
-Do not use a row number or mutable display name as the key. If either column
-may legitimately be empty or needs a different type or length, make that
-decision explicitly using the
-[entity definition reference](../../reference/project-configuration/)
-before continuing.
-
-## Bind exact workbook headers
-
-Replace `environments/local.yaml` with the following content after substituting
-the entity, worksheet, header, and matching-key values:
+Replace it with the reviewed source revision and generation:
 
 ```yaml
-version: 1
-entities:
-  <entity-id>:
+    source_revision: reviewed-registry-2026-07-31
+    generation: "1"
+```
+
+Use an institution-owned immutable revision identifier.
+Increment `generation` only when the operator accepts a replacement source
+generation.
+
+The same file binds:
+
+```yaml
     provider:
       type: xlsx
-      project_file: data/reviewed-source.xlsx
-      path: /var/lib/registry/reviewed-source.xlsx
-      sheet: "<worksheet-name>"
+      project_file: data/public_works_projects.xlsx
+      path: /var/lib/registry/public_works_projects.xlsx
+      sheet: Projects
       header_row: 1
     columns:
-      <key-field>: "<key-header>"
-      <released-field>: "<released-header>"
-    source_revision: reviewed-source-v1
-    generation: "1"
-relay:
-  origin: https://records-relay.internal.invalid
-  issuer: https://workload-issuer.internal.invalid
-  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
-  audience: registry-relay
-  allowed_clients: [local-reviewed-client]
-  local_api_keys:
-    match_principal: "<matching-key-value>"
-    no_match_principal: registryctl_local_no_match
-    scopes: [<entity-id>:metadata, <entity-id>:rows]
-deployment:
-  profile: local
-  relay: { service: records-relay }
+      project_id: project_id
+      district_code: district_code
+      sector: sector
+      status: status
 ```
 
-The keys on the left side of `columns` are the logical field names from the
-entity schema. The quoted values on the right are exact header cells in the
-workbook.
+`project_file` stays inside the project and names the human-owned workbook.
+`path` is the read-only location generated for Registry Relay.
+Do not point either field outside the project or through a symbolic link.
 
-Set `match_principal` to an approved key cell that exists in the workbook.
-Keep `registryctl_local_no_match` absent from the key column. These two
-principals let you prove one-row and no-row behavior without creating
-production identities.
+## Review what Relay can return
 
-Local API keys exist only for this local profile. Registryctl writes their raw
-values to a private runtime directory. A deployed environment must use its
-reviewed identity provider and secret management.
-
-## Author the records policy
-
-Keep the `version` and `starter` block that Registryctl created at the top of
-`registry-stack.yaml`. Replace the `registry`, `entities`, and `services`
-sections beneath it with:
+Open `registry-stack.yaml` and review the `projects-records` service.
+The sample projection is:
 
 ```yaml
-registry:
-  id: <registry-id>
-
-entities:
-  <entity-id>:
-    file: entities/<entity-id>.yaml
-
-services:
-  <service-id>:
-    kind: records_api
-    entity: <entity-id>
-    title: Reviewed local records
-    description: Protected view of the approved workbook derivative.
-    owner: Local evaluation team
-    sensitivity: confidential
-    access_rights: restricted
-    update_frequency: as_needed
-    api:
-      scopes:
-        metadata: <entity-id>:metadata
-        rows: <entity-id>:rows
-        aggregate: <entity-id>:aggregate
-        evidence_verification: <entity-id>:evidence_verification
-      purposes: [<purpose>]
-      projection: [<key-field>, <released-field>]
-      pagination: { default_limit: 50, max_limit: 100 }
-      filters: { <key-field>: [eq] }
-      required_principal_filters: [<key-field>]
-      standards: { ogc_features: false, sp_dci: false }
+      projection: [project_id, district_code, sector, status]
+      filters: { project_id: [eq] }
+      required_principal_filters: [project_id]
 ```
 
-This policy derives the API contract:
+Remove every field that callers do not need.
+A workbook field is not exposed merely because it exists in the entity schema.
+It must also appear in this projection.
 
-- the request purpose header is `Data-Purpose: <purpose>`;
-- the returned object contains only `<key-field>` and `<released-field>`;
-- the allowed filter is equality on `<key-field>`; and
-- the required key filter is bound to trusted caller identity.
+The required `project_id` filter is bound to authenticated caller identity.
+A caller-supplied query value does not replace that binding.
 
-The service identifier owns the policy but does not appear in the URL.
-Registryctl derives the records URL from the entity identifier:
+## Review the evidence meaning
+
+The same project declares two predicate claims:
+
+```yaml
+    claims:
+      project-record-exists:
+        cel: project.matched
+        disclosure: predicate
+      project-status-accepted:
+        cel: 'project.matched && project.status == "active"'
+        disclosure: predicate
+```
+
+Keep `project-record-exists` only when this bounded registry lookup has the
+meaning your institution intends.
+Rename or replace `project-status-accepted` when `active` does not express the
+reviewed policy.
+The sample claim is not a legal eligibility decision.
+
+Update the synthetic fixtures under
+`integrations/project-record-snapshot/fixtures/` whenever the claim meaning
+changes.
+Fixtures contain invented observations and expected results.
+Do not copy whole workbook rows into them. The selected smoke fixture below
+uses only one reviewed identifier and the evidence-relevant `status` value.
+
+## Select one reviewed smoke row
+
+The local runtime needs one non-sensitive row that you are allowed to exercise.
+For a concrete checkpoint, suppose the reviewed workbook contains this row:
+
+| `project_id` | `district_code` | `sector` | `status` |
+| --- | --- | --- | --- |
+| `institution_001` | `north-01` | `water` | `active` |
+
+Use the actual identifier and evidence-relevant values from your reviewed test
+row in place of `institution_001` and `active`. Do not select a personal or
+production record merely to make the smoke check pass.
+
+In `environments/local.yaml`, replace the starter's local caller selection:
+
+```yaml
+  local_api_keys:
+    match_principal: pw_001
+    no_match_principal: registryctl_local_no_match
+    scopes: [projects:metadata, projects:rows]
+```
+
+with the reviewed row identifier:
+
+```yaml
+  local_api_keys:
+    match_principal: institution_001
+    no_match_principal: registryctl_local_no_match
+    scopes: [projects:metadata, projects:rows]
+```
+
+Then replace
+`integrations/project-record-snapshot/fixtures/match.yaml`:
+
+```yaml
+name: match
+classification: synthetic
+request:
+  target:
+    type: Project
+    identifiers: [{ scheme: project_id, value: pw_001 }]
+  claims: [project-record-exists, project-status-accepted]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: public-works-case-management
+input: { project_id: pw_001 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: active } }
+expect:
+  outcome: match
+  outputs: { status: active }
+  claims:
+    project-record-exists: true
+    project-status-accepted: true
+```
+
+with a synthetic observation matching only the selector and evidence meaning
+you intend to exercise:
+
+```yaml
+name: match
+classification: synthetic
+request:
+  target:
+    type: Project
+    identifiers: [{ scheme: project_id, value: institution_001 }]
+  claims: [project-record-exists, project-status-accepted]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: public-works-case-management
+input: { project_id: institution_001 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: active } }
+expect:
+  outcome: match
+  outputs: { status: active }
+  claims:
+    project-record-exists: true
+    project-status-accepted: true
+```
+
+Keep `development.default_fixture: match`. The fixture remains synthetic; the
+local snapshot smoke check separately confirms that the selected reviewed row
+is reachable through Relay and that Notary returns only the two predicate
+claims.
+
+## Validate the workbook and authored policy
+
+Run the offline fixture suite:
+
+```sh
+registryctl test
+```
+
+A passing unchanged fixture set reports:
 
 ```text
-http://127.0.0.1:4242/v1/datasets/<entity-id>/entities/<entity-id>/records
+Registry Stack test: passed for fictional-public-works-registry.
+Fixtures: 8.
+Next: registryctl dev
 ```
 
-A caller-supplied query value cannot satisfy or replace the required
-principal filter. Relay obtains that value from authenticated gateway
-identity. A field is not readable merely because it exists in the workbook or
-entity schema. It must also appear in the reviewed projection.
+This proves the authored evidence semantics against synthetic observations.
+It does not prove facts about the workbook.
 
-## Validate and start the protected API
-
-Ask Registryctl to validate the workbook, authored policy, generated
-configuration, release files, listener, and Docker runtime:
+Validate the actual workbook mapping, every selected row, the records policy,
+and the evidence configuration:
 
 ```sh
-registryctl doctor --profile local
+registryctl check --explain
 ```
 
-A successful result starts with:
+A valid project begins with:
 
 ```text
-Registry Stack doctor: ok
-
-Project: <absolute-project-path>
-Profile: local
-registry-relay: ok (0 errors, 0 warnings)
+Registry Stack check: valid for fictional-public-works-registry.
+Fixtures: 8.
+Explanation: registry.project.explanation.v1
 ```
 
-`<absolute-project-path>` is the path to `reviewed-registry` on your computer.
-If the check fails, correct the workbook or one of the three authored YAML
-files named in the diagnostic. Do not edit `.registry-stack/`.
+The explanation redacts workbook-sensitive and internal authored values.
+Use the named diagnostic path to correct a header, type, duplicate key, row
+limit, projection, or claim error.
 
-A successful check proves that:
+## Run the local product boundaries
 
-- the selected worksheet and headers exist;
-- every selected row matches the strict field schema;
-- required keys are present and unique;
-- formulas, unexpected columns, unsafe paths, and invalid values were rejected;
-- the route, scopes, purpose, filters, and projection form a valid Relay
-  policy; and
-- the matching release runtime can start on the loopback listener.
-
-Start Relay:
+Run the disposable local products against the copied workbook:
 
 ```sh
-registryctl start
+registryctl dev --detach
+registryctl dev smoke
+registryctl dev down
 ```
 
-After Docker progress, Registryctl prints exactly:
+Registryctl mounts only the validated, project-contained workbook into the
+Relay workloads that consume it. The mount is read-only and digest-bound to the
+development plan. Registryctl does not start the synthetic HTTP source or
+generate source credentials for this mode.
+
+The smoke result reports one live authorization denial and one authorized
+result with minimized claim identifiers. It exercises Relay and Notary against
+the copied workbook using the reviewed request and expected claim shape. A
+local workbook has no request counter, so smoke reports source effects as
+`unobserved`; the derived offline security fixture verifies the
+authorization-before-source contract. If smoke fails, recheck the selected
+row, `match_principal`, `match.yaml`, and evidence rule together.
+
+## Build reviewable inputs
+
+Build deterministic unsigned inputs:
+
+```sh
+registryctl build
+```
+
+Registryctl reports:
 
 ```text
-PASS readiness: compiled workbook source is ready
-Relay API:  http://127.0.0.1:4242
-API docs:   http://127.0.0.1:4242/docs
+Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Build output: .registry-stack/build/local
+Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build
 ```
 
-Relay parses the workbook again during its initial load. The listener is
-limited to `127.0.0.1:4242`. The generated configuration and workbook are
-mounted read-only.
+The build contains the generated product inputs and a digest-bound
+materialization.
+It does not copy the human-owned workbook into portable review reports, approve
+the data, or activate a deployment. The 1.0 managed deployment generator does
+not package project-local workbook sources. Bind an operator-managed HTTP
+source before starting governed approval.
 
-Do not run `registryctl smoke` for this adapted project. In v0.15, that command
-checks the unmodified starter's `projects` route and sample purpose. Use the
-derived requests below to check your authored route and purpose.
+## Verify
 
-## Prove the anonymous request is denied
+Before handoff, confirm:
 
-Substitute your entity and purpose in this request:
+- `registryctl test` passes with synthetic fixtures that express the reviewed
+  evidence meaning.
+- `registryctl check --explain` validates the copied workbook and names no
+  diagnostic violations.
+- `registryctl dev smoke` records a live denial and minimized authorized
+  output against the selected reviewed case; the derived fixture supplies the
+  authorization-before-source evidence that a local file cannot count.
+- `registryctl build` emits all three unsigned product lanes.
+- If the project is under version control, its status does not include
+  `.registry-stack/` or an unapproved workbook.
 
-```sh
-curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
-  -H "Data-Purpose: ${request_purpose}" \
-  "http://127.0.0.1:4242/v1/datasets/${entity_id}/entities/${entity_id}/records"
-```
+## Troubleshooting
 
-Relay prints exactly:
-
-```text
-HTTP 401
-```
-
-This proves that the protected route rejects a missing credential. A valid
-purpose header does not substitute for authenticated caller identity.
-
-## Prove the matching caller is allowed
-
-Load the private local keys without printing them:
-
-```sh
-set -a
-. .registry-stack/runtime/local/secrets/local.env
-set +a
-```
-
-These commands print nothing. Do not print, paste, commit, or retain the raw
-keys outside this disposable local runtime.
-
-Substitute the same entity and purpose:
-
-```sh
-curl -sS -w '\nHTTP %{http_code}\n' \
-  -H "Authorization: Bearer $REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW" \
-  -H "Data-Purpose: ${request_purpose}" \
-  "http://127.0.0.1:4242/v1/datasets/${entity_id}/entities/${entity_id}/records"
-```
-
-Relay returns this structure using your actual field names and row values.
-JSON whitespace and object-key order may differ:
-
-```json
-{
-  "data": [
-    {
-      "<key-field>": "<matching-key-value>",
-      "<released-field>": "<value-from-that-row>"
-    }
-  ],
-  "pagination": {
-    "has_more": false
-  }
-}
-HTTP 200
-```
-
-This proves that the credential authenticates the local caller, the purpose
-and scopes authorize the operation, the principal-bound key selects exactly
-the matching row, and the projection limits the disclosed fields. The request
-URL, purpose, key, and response fields all come from the authored values you
-derived from the workbook and access decision.
-
-## Stop and clean up
-
-Stop the local runtime:
-
-```sh
-registryctl stop
-```
-
-Docker may print container shutdown progress. Registryctl prints no additional
-success line after Compose exits successfully.
-
-The authored project and workbook remain. Generated build and runtime
-directories are disposable and can be regenerated.
-
-## What you built
-
-You built a loopback-only protected API over one reviewed XLSX worksheet. Its
-entity and request route come from your logical entity name. Its source mapping
-comes from exact worksheet headers. Its authorized row comes from the stable
-key used as local principal identity. Its purpose and returned fields come
-from explicit service policy.
-
-You validated the workbook and policy, then confirmed the running API's denied
-and allowed behavior.
-
-## Next
-
-- [Prepare the operator handoff](../../operate/) without copying workbook rows,
-  raw keys, or private runtime details into public evidence.
-- [Review the security guidance](../../security/) before connecting a real
-  identity provider or widening access.
-- [Look up project configuration](../../reference/project-configuration/)
-  when you need more columns, types, fixtures, or environment-specific policy.
-
-## Common source problems
-
-| Problem | What to change |
-| --- | --- |
-| Wrong worksheet or header | Correct `sheet`, `header_row`, or the exact quoted header mapping. |
-| Missing or unexpected column | Align the reviewed workbook derivative, entity schema, and column mapping. |
-| Missing or duplicate key | Resolve the source identity problem. Registry Stack will not choose one duplicate. |
-| Invalid type or null required value | Correct the workbook derivative or deliberately change the schema. |
-| Formula or external reference | Replace it with an approved static value in the derivative. |
-| Path traversal or workbook symlink | Copy the reviewed file under `data/` and use that regular file. |
-| An unintended field appears in `projection` | Remove it before building, or obtain the required review. |
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| Worksheet or header diagnostic | The workbook does not match `sheet`, `header_row`, or `columns`. | Correct the reviewed derivative or the exact authored mapping. |
+| Duplicate primary key | Two rows share `project_id`. | Resolve the source identity problem. Registry Stack does not choose a duplicate. |
+| Formula or external reference diagnostic | The selected worksheet contains computed or linked cells. | Replace them with reviewed static values. |
+| Unexpected field appears in Relay output | The field remains in `api.projection`. | Remove it and obtain review before rebuilding. |
+| Fixture passes but workbook check fails | Fixtures test authored evidence semantics, while `check` also validates the workbook mapping and rows. | Correct the workbook or authored mapping without copying sensitive workbook values into fixtures. |
+| Workbook check passes but smoke fails | The selected smoke request or expected claims no longer match the reviewed workbook case. | Update the development request fixture and expected claim shape to describe one non-sensitive reviewed example without copying unrelated rows. |

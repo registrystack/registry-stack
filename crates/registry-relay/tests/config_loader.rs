@@ -18,6 +18,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::ConfigSource;
@@ -98,12 +100,18 @@ fn write_signed_relay_bundle(tmp: &TempDir) -> SignedBundleFixture {
     let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
     let public = private.public();
     let kid = public.jkt().expect("thumbprint");
+    let acceptance_identity = ProductAcceptanceIdentityV1 {
+        trust_domain: ProductTrustDomainV1::Governed,
+        project: "relay-loader-project".to_string(),
+        environment: "lab".to_string(),
+        lane: ProductAcceptanceLaneV1::RelayPublic,
+        product: ProductAcceptanceProductV1::RegistryRelay,
+        stream: "relay-loader-test".to_string(),
+        instance: "relay-lab".to_string(),
+    };
     let manifest = ConfigBundleManifest {
         schema: "registry.platform.config_bundle.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-loader-test".to_string(),
-        instance_id: None,
+        acceptance_identity: acceptance_identity.clone(),
         bundle_id: "relay-loader-bundle".to_string(),
         sequence: 1,
         previous_config_hash: None,
@@ -117,15 +125,10 @@ fn write_signed_relay_bundle(tmp: &TempDir) -> SignedBundleFixture {
     write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
     let anchor = ConfigTrustAnchor {
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
-        product: "registry-relay".to_string(),
-        environment: "lab".to_string(),
-        stream_id: "relay-loader-test".to_string(),
-        instance_id: "relay-lab".to_string(),
-        signers: vec![ConfigTrustAnchorSigner {
-            kid,
-            jwk: public,
-            enabled: true,
-        }],
+        acceptance_identity,
+        version: 1,
+        threshold: 1,
+        enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
     };
     let anchor_path = tmp.path().join("trust_anchor.json");
     std::fs::write(
@@ -1943,6 +1946,48 @@ audit:
 }
 
 #[test]
+fn oidc_config_with_development_jwks_file_loads_only_for_local_profile() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = oidc_config_body("").replace(
+        "    jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs",
+        "    development_jwks_file: /run/registry/dev-public/notary-workload-jwks.json",
+    );
+    let path = write_config(&tmp, &body);
+    let config = config::load(&path).expect("local development JWKS config must load");
+    let oidc = config.auth.oidc.as_ref().expect("oidc present");
+    assert!(oidc.jwks_url.is_none());
+    assert!(oidc.discovery_url.is_none());
+    assert_eq!(
+        oidc.development_jwks_file.as_deref(),
+        Some(Path::new(
+            "/run/registry/dev-public/notary-workload-jwks.json"
+        ))
+    );
+
+    let production = body.replace("profile: local", "profile: production");
+    let production_path = write_config(&tmp, &production);
+    assert_config_code(config::load(&production_path), "config.validation_error");
+}
+
+#[test]
+fn oidc_development_jwks_file_requires_an_absolute_normalized_path() {
+    for invalid_path in [
+        "relative/jwks.json",
+        "/run/registry/../private/jwks.json",
+        "/run/registry/./dev-public/jwks.json",
+        "/run/registry//dev-public/jwks.json",
+    ] {
+        let tmp = TempDir::new().expect("tempdir");
+        let body = oidc_config_body("").replace(
+            "    jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs",
+            &format!("    development_jwks_file: {invalid_path}"),
+        );
+        let path = write_config(&tmp, &body);
+        assert_config_code(config::load(&path), "config.validation_error");
+    }
+}
+
+#[test]
 fn example_oidc_config_loads_and_validates() {
     let config = config::load(&example_oidc_path()).expect("oidc example config must load");
 
@@ -2102,6 +2147,16 @@ audit:
   format: jsonl
 "#;
     let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_development_file_combined_with_a_url() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = oidc_config_body(
+        "    development_jwks_file: /run/registry/dev-public/notary-workload-jwks.json\n",
+    );
+    let path = write_config(&tmp, &body);
     assert_config_code(config::load(&path), "config.validation_error");
 }
 

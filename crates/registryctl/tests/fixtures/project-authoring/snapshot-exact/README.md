@@ -4,7 +4,7 @@ This starter demonstrates an exact consultation over one Relay-local
 materialized entity without requiring a records API.
 
 ```bash
-registryctl authoring editor --project-dir .
+registryctl -C . tooling editor
 registryctl test --project-dir . --integration person-snapshot --fixture snapshot-match --trace
 registryctl test --project-dir . --integration person-snapshot --fixture snapshot-match --watch
 registryctl test --project-dir .

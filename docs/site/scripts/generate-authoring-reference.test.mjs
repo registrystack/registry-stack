@@ -197,7 +197,10 @@ test('fails closed on incomplete reviewed-intent assignment coverage before requ
     buildAuthoringReference('/unused', execute),
     /coverage is incomplete \(1 missing intents\)/,
   );
-  assert.deepEqual(calls, [['authoring', 'reference', '--coverage']]);
+  assert.deepEqual(
+    calls,
+    [['tooling', 'reference', 'configuration', '--coverage']],
+  );
 });
 
 test('rejects fabricated field history and inconsistent intent-reuse counts', () => {

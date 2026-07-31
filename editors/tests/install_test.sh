@@ -121,8 +121,9 @@ vscode_output="${TEST_ROOT}/vscode-output"
 "${INSTALLER}" vscode \
   --profile 'Registry Stack Test' > "${vscode_output}"
 
-assert_contains 'registryctl <authoring> <language-server> <--help>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <authoring> <editor>' "${COMMAND_LOG}"
+assert_contains 'registryctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <tooling> <editor>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <authoring>' "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <run> <package:dev>" "${COMMAND_LOG}"
 assert_contains "code <--profile> <Registry Stack Test> <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"

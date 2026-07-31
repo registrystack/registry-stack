@@ -133,8 +133,8 @@ The following are not covered by the compatibility promise, at any version:
   and crate-level APIs may change in any release.
 - Human-readable CLI output, log message text, and problem `detail` strings. Machine
   consumers must use the JSON output modes, the structured log format, and the `code` member.
-- Hidden commands and internal protocols, including `registryctl __update-check-refresh`,
-  `registry-notary cel-worker`, and the worker-harness line protocols.
+- Hidden commands and internal protocols, including `registry-notary cel-worker` and the
+  worker-harness line protocols.
 - The layout of the repository, the `products/` export trees, the docs site internals, and
   the lab tooling.
 - Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is
@@ -179,5 +179,5 @@ it, together with the deprecation and migration steps required by the
 
 - [Deprecation policy](../deprecation-policy/)
 - [Security support window](../../security/support-window/)
-- [Upgrade and roll back a deployment](../../operate/upgrade-and-rollback/)
+- [Upgrade and recover a deployment](../../operate/upgrade-and-rollback/)
 - [Contracts](../contracts/)

@@ -44,11 +44,12 @@ records the owner, evidence, decision date, and delivery rule for every surface.
 
 ## Get Started
 
-Without cloning this repository, use the Registry Docs tutorials. They create a Relay project from a sample workbook with `registryctl`, start the protected API, and run smoke checks:
+Without cloning this repository, start with the current Registry Docs project-authoring journey:
 
-- [See it live](https://docs.registrystack.org/start/see-it-live/): hosted lab, zero install.
-- [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
-- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+- [Build and run an HTTP registry project](https://docs.registrystack.org/tutorials/author-registry-project/)
+- [Configure OAuth client credentials](https://docs.registrystack.org/configure/oauth-client-credentials/)
+- [Add OAuth-backed Rhai adaptation](https://docs.registrystack.org/tutorials/configure-project-script-adapter/): adapt the HTTP starter when fixed response mapping is insufficient.
+- [Exercise a synthetic OpenCRVS Events API-shaped search](https://docs.registrystack.org/tutorials/verify-opencrvs-claims/): a case study of the generic OAuth, HTTP, and Rhai path, not an OpenCRVS template or compatibility claim.
 
 From this repository, the demo pack is the fastest local run. It generates scoped demo API keys on first use and starts a server with five synthetic datasets and the standards adapters enabled:
 
@@ -85,6 +86,23 @@ maintained as Registry Stack project-authoring golden workspaces in
 - [Operations runbook](docs/ops.md): deployment, hardening checklist, key rotation, audit handling, reloads, probes, and troubleshooting.
 - [Credential issuance migration](docs/provenance.md): notes for removing legacy Relay response-credential issuer config and using Registry Notary as the issuance surface.
 - [Development guide](docs/development.md): local setup, verification commands, project layout, and the OpenAPI release policy.
+
+For governed startup without an unsigned bootstrap document, supply the
+complete signed-bundle input:
+
+```sh
+registry-relay \
+  --bundle-dir /run/registry-relay/bundle \
+  --anchor-path /run/registry-relay/trust-anchor.json \
+  --state-path /var/lib/registry-relay/antirollback.json \
+  --initialize-state
+```
+
+Omit `--initialize-state` after first acceptance. Direct bundle startup does
+not fall back to local configuration or a break-glass override when
+verification or anti-rollback checks fail. The bundle manifest must contain an
+`instance_id` that matches the trust anchor. Relay rejects a missing or
+mismatched instance binding before reading or advancing anti-rollback state.
 
 ## Build
 

@@ -1,36 +1,44 @@
 # Adopter runtime Compose conformance probe
 
-This directory is test evidence for the deployment specification. It is not a
-shipped deployment package, a renderer, or a product configuration authority.
-The fixtures use non-routable example images and contain no credentials.
+These inert fixtures exercise the current generated-package Compose contract.
+They are not a shipped deployment package and contain no credentials.
 
-`deployment-plan.probe.v1.json` is a complete, value-free serialization of the
-current three-lane topology. The Compose fixtures exercise the renderer
-constraints that must be proved before renderer implementation:
+The checker proves:
 
-- the ordinary model excludes preparation and initialization services;
-- initialization appears only when its separate model is explicitly selected;
-- an unrelated parent service can join the public edge network;
-- parent services cannot join the private network through its key or effective
-  name, or share a private namespace through a service or container reference;
-- parent services cannot consume renderer-owned secrets or consume or inherit
-  durable volumes;
-- an included product service cannot be changed by the parent;
-- short include syntax and explicit `project_directory` resolve product-owned
-  relative paths identically.
+- the ordinary package has four workloads plus three least-authority,
+  networkless secret stagers;
+- all workloads use one ordinary, non-internal Compose runtime network, with
+  no namespace-holder service or shared `network_mode`;
+- only Relay public and Notary publish host ports, and both bind IPv4 loopback;
+- product application traffic is plain HTTP within that Compose network, and
+  the operator or platform terminates ingress TLS before the loopback boundary;
+- Relay public needs no staged listener TLS material, while each remaining
+  stager has only its source secrets and action-specific output volumes and
+  every consumer receives only its own read-only staged volume;
+- each product lane reuses one operator-owned environment file for serve,
+  preparation, and initialization;
+- selecting `compose.initialize.yaml` is required to initialize PostgreSQL and
+  exposes the seven initialization services only in that explicit model;
+- `docker compose config --no-env-resolution` retains environment-file paths
+  without resolving sentinel operator values; and
+- one operator-owned parent file can include the generated package using
+  ordinary Compose short include syntax.
 
-Compose permits a parent file to express these forbidden merges. The
-verifier policy rejects the normalized effective model before execution. The
-negative fixtures prove those policy rejections; they do not claim that
-Compose itself enforces Registry Stack ownership.
+The former parent-override certification and negative ownership fixtures were
+removed with the renderer-owned parent-boundary policy they tested. Registryctl
+now verifies the package itself. The parent include fixture only proves Docker
+Compose normalization.
+
+The single first-country release rehearsal supplies the functional proof that
+these inert fixtures cannot. It retains the already tested public HTTP demo,
+builds and signs its `public-demo` environment, starts the generated governed
+package, and sends one authenticated Notary evaluation through the private
+consultation Relay to the bounded source. The retained evidence contains only
+the HTTP status and minimized claim summary, not the caller token or source
+response.
 
 Run the current and minimum supported Compose implementations:
 
 ```sh
 bash release/scripts/check_adopter_compose_contract.sh
 ```
-
-The checker invokes the real `docker compose config` normalization path with
-the committed zero-byte environment file, interpolation disabled, and
-environment resolution disabled. Health commands and images are inert,
-conformance-only placeholders. The checker does not start them.

@@ -4,10 +4,11 @@
 //! collection. This crate owns the shared public contract and the emit-only
 //! sensitivity-tier filter used before posture leaves a runtime.
 
+use std::ffi::OsString;
 use std::fmt::{self, Display, Write as _};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -392,6 +393,9 @@ const AUDIT_ACK_CURSOR_SCHEMA_CONST: &str = "registry.audit.ack_cursor.v1";
 /// Ack cursors contain four short scalar fields. Bound reads keep a readiness
 /// probe from allocating based on an attacker-controlled or misconfigured file.
 const MAX_AUDIT_ACK_CURSOR_BYTES: u64 = 16 * 1024;
+pub const MAX_ANTI_ROLLBACK_STATE_BYTES: u64 = 256 * 1024;
+pub const MAX_ANTI_ROLLBACK_HISTORY_ENTRIES: usize = 1_024;
+pub const MAX_ACCEPTED_ANCHOR_SIGNERS: usize = 128;
 
 /// Observed off-host audit shipping state derived from the local ack cursor.
 ///
@@ -1172,34 +1176,56 @@ impl PostureApplyResult {
     }
 }
 
-#[derive(Clone, Debug, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AntiRollbackKey {
-    pub product: String,
-    #[serde(skip)]
-    pub instance_id: String,
-    pub environment: String,
-    pub stream_id: String,
+    pub acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1,
 }
 
-impl PartialEq for AntiRollbackKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.product == other.product
-            && self.environment == other.environment
-            && self.stream_id == other.stream_id
+impl From<registry_platform_config::ProductAcceptanceIdentityV1> for AntiRollbackKey {
+    fn from(acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1) -> Self {
+        Self {
+            acceptance_identity,
+        }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedAnchorPinV1 {
+    pub digest: String,
+    pub version: u64,
+    pub threshold: u32,
+    pub enabled_signers: Vec<String>,
+}
+
+impl AcceptedAnchorPinV1 {
+    pub fn from_trust_anchor(
+        anchor: &registry_platform_config::ConfigTrustAnchor,
+    ) -> Result<Self, registry_platform_config::ConfigBundleError> {
+        anchor.validate()?;
+        Ok(Self {
+            digest: registry_platform_config::trust_anchor_digest(anchor)?,
+            version: anchor.version,
+            threshold: anchor.threshold,
+            enabled_signers: anchor
+                .enabled_signers
+                .iter()
+                .map(|signer| signer.kid.clone())
+                .collect(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AntiRollbackRecord {
     pub key: AntiRollbackKey,
     pub last_sequence: u64,
     pub last_config_hash: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_bundle_manifest_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_bundle_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root_version: Option<u64>,
+    pub last_bundle_manifest_hash: String,
+    pub last_bundle_id: String,
+    pub accepted_anchor: AcceptedAnchorPinV1,
     #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub override_pin: Option<ConfigOverridePin>,
     #[serde(default, skip_serializing_if = "BreakGlassState::is_empty")]
@@ -1266,6 +1292,7 @@ pub enum BundleStateAction {
 pub struct PendingBundleAcceptance {
     pub state_path: PathBuf,
     pub key: AntiRollbackKey,
+    pub accepted_anchor: AcceptedAnchorPinV1,
     pub source: ConfigSource,
     pub bundle_id: Option<String>,
     pub bundle_manifest_hash: Option<String>,
@@ -1292,9 +1319,15 @@ impl PendingBundleAcceptance {
                 .sequence
                 .expect("initial state requires bundle sequence"),
             last_config_hash: self.config_hash.clone(),
-            last_bundle_manifest_hash: self.bundle_manifest_hash.clone(),
-            last_bundle_id: self.bundle_id.clone(),
-            root_version: None,
+            last_bundle_manifest_hash: self
+                .bundle_manifest_hash
+                .clone()
+                .expect("initial state requires bundle manifest hash"),
+            last_bundle_id: self
+                .bundle_id
+                .clone()
+                .expect("initial state requires bundle id"),
+            accepted_anchor: self.accepted_anchor.clone(),
             override_pin: None,
             break_glass: BreakGlassState::default(),
             local_approvals: LocalApprovalState::default(),
@@ -1802,10 +1835,138 @@ pub struct BreakGlassRateLimit {
     pub window_seconds: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceptanceMutationKindV1 {
+    Initialize,
+    Advance,
+    RotateAnchor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceptanceStatePreviewV1 {
+    Current,
+    Advance,
+    RotateAnchor,
+}
+
+impl AcceptanceStatePreviewV1 {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Advance => "advance",
+            Self::RotateAnchor => "rotate",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptanceAuditIntentV1 {
+    pub mutation: AcceptanceMutationKindV1,
+    pub key: AntiRollbackKey,
+    pub sequence: u64,
+    pub config_hash: String,
+    pub bundle_manifest_hash: String,
+    pub bundle_id: String,
+    pub anchor_digest: String,
+    pub anchor_version: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptanceStateExpectationV1<'a> {
+    pub key: &'a AntiRollbackKey,
+    pub sequence: u64,
+    pub config_hash: &'a str,
+    pub bundle_manifest_hash: &'a str,
+    pub bundle_id: &'a str,
+    pub anchor: &'a registry_platform_config::ConfigTrustAnchor,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AcceptanceStateUpdateV1<'a> {
+    pub expectation: AcceptanceStateExpectationV1<'a>,
+    pub previous_config_hash: Option<&'a str>,
+    pub current_anchor: Option<&'a registry_platform_config::ConfigTrustAnchor>,
+    pub transition: Option<&'a registry_platform_config::AnchorTransitionV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedAcceptanceStateV1 {
+    pub key: AntiRollbackKey,
+    pub sequence: u64,
+    pub config_hash: String,
+    pub previous_config_hash: Option<String>,
+    pub bundle_manifest_hash: String,
+    pub bundle_id: String,
+    pub anchor: registry_platform_config::ConfigTrustAnchor,
+}
+
+impl VerifiedAcceptanceStateV1 {
+    pub fn from_verified_bundle(
+        verified: &registry_platform_config::VerifiedConfigBundle,
+    ) -> Result<Self, AntiRollbackStoreError> {
+        if verified.manifest.acceptance_identity != verified.trust_anchor.acceptance_identity {
+            return Err(AntiRollbackStoreError::StateMismatch(
+                "anchor acceptance identity",
+            ));
+        }
+        AcceptedAnchorPinV1::from_trust_anchor(&verified.trust_anchor)
+            .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+        Ok(Self {
+            key: antirollback_key_from_verified_bundle(verified),
+            sequence: verified.manifest.sequence,
+            config_hash: verified.manifest.config_hash.clone(),
+            previous_config_hash: verified.manifest.previous_config_hash.clone(),
+            bundle_manifest_hash: verified.manifest_hash.clone(),
+            bundle_id: verified.manifest.bundle_id.clone(),
+            anchor: verified.trust_anchor.clone(),
+        })
+    }
+
+    #[must_use]
+    pub fn expectation(&self) -> AcceptanceStateExpectationV1<'_> {
+        AcceptanceStateExpectationV1 {
+            key: &self.key,
+            sequence: self.sequence,
+            config_hash: &self.config_hash,
+            bundle_manifest_hash: &self.bundle_manifest_hash,
+            bundle_id: &self.bundle_id,
+            anchor: &self.anchor,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AcceptanceStatePlanV1 {
+    state_path: PathBuf,
+    preceding: Option<AntiRollbackRecord>,
+    candidate: VerifiedAcceptanceStateV1,
+    current_anchor: Option<registry_platform_config::ConfigTrustAnchor>,
+    transition: Option<registry_platform_config::AnchorTransitionV1>,
+    intent: AcceptanceAuditIntentV1,
+}
+
+impl AcceptanceStatePlanV1 {
+    #[must_use]
+    pub fn audit_intent(&self) -> &AcceptanceAuditIntentV1 {
+        &self.intent
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AntiRollbackStoreError {
     MissingState,
     KeyMismatch,
+    StateMismatch(&'static str),
+    ActiveLegacyOverridePin,
+    InitialSequenceMustBeOne,
+    InitialAnchorVersionMustBeOne,
+    AnchorTransitionRequired,
+    UnexpectedAnchorTransition,
+    AnchorTransitionRejected,
+    SequenceMustAdvanceByOne,
+    GovernedMutationRequiresAcceptancePath,
+    AuditIntentFailed,
     NonMonotonicSequence,
     RootVersionRollback,
     PreviousConfigHashMismatch,
@@ -1829,6 +1990,45 @@ impl Display for AntiRollbackStoreError {
         match self {
             Self::MissingState => write!(f, "anti-rollback state is missing"),
             Self::KeyMismatch => write!(f, "anti-rollback state key does not match runtime"),
+            Self::StateMismatch(field) => {
+                write!(f, "anti-rollback state does not match expected {field}")
+            }
+            Self::ActiveLegacyOverridePin => {
+                write!(
+                    f,
+                    "anti-rollback state contains an active legacy override pin"
+                )
+            }
+            Self::InitialSequenceMustBeOne => {
+                write!(f, "initial anti-rollback sequence must be 1")
+            }
+            Self::InitialAnchorVersionMustBeOne => {
+                write!(f, "initial accepted anchor version must be 1")
+            }
+            Self::AnchorTransitionRequired => {
+                write!(f, "an authenticated next-anchor transition is required")
+            }
+            Self::UnexpectedAnchorTransition => {
+                write!(
+                    f,
+                    "an anchor transition was provided without an anchor change"
+                )
+            }
+            Self::AnchorTransitionRejected => {
+                write!(f, "the authenticated next-anchor transition was rejected")
+            }
+            Self::SequenceMustAdvanceByOne => {
+                write!(f, "bundle sequence must advance by exactly one")
+            }
+            Self::GovernedMutationRequiresAcceptancePath => {
+                write!(
+                    f,
+                    "governed anti-rollback state requires the audited acceptance path"
+                )
+            }
+            Self::AuditIntentFailed => {
+                write!(f, "acceptance intent audit failed before state mutation")
+            }
             Self::NonMonotonicSequence => write!(f, "bundle sequence is not monotonic"),
             Self::RootVersionRollback => write!(f, "root version is not monotonic"),
             Self::PreviousConfigHashMismatch => write!(f, "previous config hash does not match"),
@@ -1988,13 +2188,16 @@ impl FileAntiRollbackStore {
         &self,
         key: &AntiRollbackKey,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(AntiRollbackStoreError::MissingState);
-            }
-            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
-        };
+        let state_path = self.resolved_state_path(false)?;
+        self.load_from_path(&state_path, key)
+    }
+
+    fn load_from_path(
+        &self,
+        state_path: &Path,
+        key: &AntiRollbackKey,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let bytes = read_anti_rollback_state(state_path)?;
         let record: AntiRollbackRecord = serde_json::from_slice(&bytes)
             .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
         record.validate()?;
@@ -2004,20 +2207,178 @@ impl FileAntiRollbackStore {
         Ok(record)
     }
 
-    pub fn initialize(&self, record: AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        record.validate()?;
-        let target_path = self.write_target_path()?;
-        match fs::symlink_metadata(&target_path) {
-            Ok(_) => {
-                return Err(AntiRollbackStoreError::InvalidState(
-                    "anti-rollback state already exists".to_string(),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+    pub fn verify_state(
+        &self,
+        expected: AcceptanceStateExpectationV1<'_>,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let expected_anchor = AcceptedAnchorPinV1::from_trust_anchor(expected.anchor)
+            .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+        if expected.anchor.acceptance_identity != expected.key.acceptance_identity {
+            return Err(AntiRollbackStoreError::StateMismatch(
+                "anchor acceptance identity",
+            ));
         }
-        self.write_record(&record)
+        let record = self.load(expected.key)?;
+        reject_active_legacy_override_pin(&record)?;
+        verify_record_matches_expectation(&record, expected, &expected_anchor)?;
+        Ok(record)
+    }
+
+    pub fn plan_initialize(
+        &self,
+        candidate: &VerifiedAcceptanceStateV1,
+    ) -> Result<AcceptanceStatePlanV1, AntiRollbackStoreError> {
+        validate_initial_candidate(candidate)?;
+        let expected = candidate.expectation();
+        let accepted_anchor = AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
+            .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+        let record = record_from_expectation(expected, accepted_anchor, None)?;
+        let state_path = self.resolved_state_path(false)?;
+        self.ensure_state_absent_at(&state_path)?;
+        Ok(AcceptanceStatePlanV1 {
+            state_path,
+            preceding: None,
+            candidate: candidate.clone(),
+            current_anchor: None,
+            transition: None,
+            intent: acceptance_audit_intent(AcceptanceMutationKindV1::Initialize, &record),
+        })
+    }
+
+    pub fn plan_acceptance(
+        &self,
+        candidate: &VerifiedAcceptanceStateV1,
+        current_anchor: Option<&registry_platform_config::ConfigTrustAnchor>,
+        transition: Option<&registry_platform_config::AnchorTransitionV1>,
+    ) -> Result<AcceptanceStatePlanV1, AntiRollbackStoreError> {
+        let expected = candidate.expectation();
+        let accepted_anchor = AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
+            .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+        if candidate.anchor.acceptance_identity != candidate.key.acceptance_identity {
+            return Err(AntiRollbackStoreError::StateMismatch(
+                "anchor acceptance identity",
+            ));
+        }
+        let state_path = self.resolved_state_path(false)?;
+        let current = self.load_from_path(&state_path, &candidate.key)?;
+        let update = AcceptanceStateUpdateV1 {
+            expectation: expected,
+            previous_config_hash: candidate.previous_config_hash.as_deref(),
+            current_anchor,
+            transition,
+        };
+        let mutation = validate_acceptance_update(&current, update, &accepted_anchor)?;
+        let accepted = record_from_expectation(expected, accepted_anchor, Some(&current))?;
+        Ok(AcceptanceStatePlanV1 {
+            state_path,
+            preceding: Some(current),
+            candidate: candidate.clone(),
+            current_anchor: current_anchor.cloned(),
+            transition: transition.cloned(),
+            intent: acceptance_audit_intent(mutation, &accepted),
+        })
+    }
+
+    pub fn preview_acceptance(
+        &self,
+        candidate: &VerifiedAcceptanceStateV1,
+        current_anchor: Option<&registry_platform_config::ConfigTrustAnchor>,
+        transition: Option<&registry_platform_config::AnchorTransitionV1>,
+    ) -> Result<AcceptanceStatePreviewV1, AntiRollbackStoreError> {
+        match self.verify_state(candidate.expectation()) {
+            Ok(_) => Ok(AcceptanceStatePreviewV1::Current),
+            Err(AntiRollbackStoreError::StateMismatch(_)) => {
+                let plan = self.plan_acceptance(candidate, current_anchor, transition)?;
+                Ok(match plan.audit_intent().mutation {
+                    AcceptanceMutationKindV1::Advance => AcceptanceStatePreviewV1::Advance,
+                    AcceptanceMutationKindV1::RotateAnchor => {
+                        AcceptanceStatePreviewV1::RotateAnchor
+                    }
+                    AcceptanceMutationKindV1::Initialize => {
+                        return Err(AntiRollbackStoreError::InvalidState(
+                            "update preview produced an initialization plan".to_string(),
+                        ));
+                    }
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn commit_acceptance<AuditFn, AuditFuture, AuditError>(
+        &self,
+        plan: AcceptanceStatePlanV1,
+        audit_fn: AuditFn,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError>
+    where
+        AuditFn: FnOnce(AcceptanceAuditIntentV1) -> AuditFuture,
+        AuditFuture: std::future::Future<Output = Result<(), AuditError>>,
+    {
+        audit_fn(plan.intent.clone())
+            .await
+            .map_err(|_| AntiRollbackStoreError::AuditIntentFailed)?;
+        let state_path = self.resolved_state_path(true)?;
+        if plan.state_path != state_path {
+            return Err(AntiRollbackStoreError::StateMismatch("state path"));
+        }
+        let _lock = self.acquire_lock(&state_path)?;
+        match plan.preceding {
+            None => {
+                validate_initial_candidate(&plan.candidate)?;
+                self.ensure_state_absent_at(&state_path)?;
+                let accepted_anchor =
+                    AcceptedAnchorPinV1::from_trust_anchor(&plan.candidate.anchor)
+                        .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+                let accepted =
+                    record_from_expectation(plan.candidate.expectation(), accepted_anchor, None)?;
+                self.write_record(&state_path, &accepted, true)?;
+                Ok(accepted)
+            }
+            Some(preceding) => {
+                let locked_current = self.load_from_path(&state_path, &plan.candidate.key)?;
+                if locked_current != preceding {
+                    return Err(AntiRollbackStoreError::StateMismatch(
+                        "concurrent acceptance state",
+                    ));
+                }
+                let accepted_anchor =
+                    AcceptedAnchorPinV1::from_trust_anchor(&plan.candidate.anchor)
+                        .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+                let update = AcceptanceStateUpdateV1 {
+                    expectation: plan.candidate.expectation(),
+                    previous_config_hash: plan.candidate.previous_config_hash.as_deref(),
+                    current_anchor: plan.current_anchor.as_ref(),
+                    transition: plan.transition.as_ref(),
+                };
+                validate_acceptance_update(&locked_current, update, &accepted_anchor)?;
+                let accepted = record_from_expectation(
+                    plan.candidate.expectation(),
+                    accepted_anchor,
+                    Some(&locked_current),
+                )?;
+                self.write_record(&state_path, &accepted, false)?;
+                Ok(accepted)
+            }
+        }
+    }
+
+    pub fn initialize(&self, record: AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(&record.key)?;
+        record.validate()?;
+        let state_path = self.resolved_state_path(true)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        self.ensure_state_absent_at(&state_path)?;
+        self.write_record(&state_path, &record, true)
+    }
+
+    fn ensure_state_absent_at(&self, state_path: &Path) -> Result<(), AntiRollbackStoreError> {
+        match fs::symlink_metadata(state_path) {
+            Ok(_) => Err(AntiRollbackStoreError::InvalidState(
+                "anti-rollback state already exists".to_string(),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(AntiRollbackStoreError::Io(error.to_string())),
+        }
     }
 
     pub fn accept(
@@ -2025,6 +2386,7 @@ impl FileAntiRollbackStore {
         key: &AntiRollbackKey,
         proposal: AntiRollbackProposal,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.accept_at(key, proposal, current_unix_seconds()?)
     }
 
@@ -2034,15 +2396,11 @@ impl FileAntiRollbackStore {
         proposal: AntiRollbackProposal,
         now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
-        if let (Some(current_root_version), Some(proposed_root_version)) =
-            (current.root_version, proposal.root_version)
-        {
-            if proposed_root_version < current_root_version {
-                return Err(AntiRollbackStoreError::RootVersionRollback);
-            }
-        }
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
+        let _legacy_root_version = proposal.root_version;
         if proposal.sequence < current.last_sequence {
             return Err(AntiRollbackStoreError::NonMonotonicSequence);
         }
@@ -2053,21 +2411,7 @@ impl FileAntiRollbackStore {
             {
                 return Err(AntiRollbackStoreError::NonMonotonicSequence);
             }
-            let accepted_root_version = match (current.root_version, proposal.root_version) {
-                (Some(current), Some(proposed)) => Some(current.max(proposed)),
-                (None, Some(proposed)) => Some(proposed),
-                _ => current.root_version,
-            };
-            if accepted_root_version == current.root_version {
-                return Ok(current);
-            }
-            let accepted = AntiRollbackRecord {
-                root_version: accepted_root_version,
-                ..current
-            };
-            accepted.validate()?;
-            self.write_record(&accepted)?;
-            return Ok(accepted);
+            return Ok(current);
         }
         let mut break_glass = current.break_glass.clone();
         let mut local_approvals = current.local_approvals.clone();
@@ -2125,13 +2469,13 @@ impl FileAntiRollbackStore {
             last_config_hash: proposal.config_hash,
             last_bundle_manifest_hash: current.last_bundle_manifest_hash,
             last_bundle_id: current.last_bundle_id,
-            root_version: proposal.root_version.or(current.root_version),
+            accepted_anchor: current.accepted_anchor,
             override_pin: None,
             break_glass,
             local_approvals,
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
@@ -2143,6 +2487,7 @@ impl FileAntiRollbackStore {
         config_hash: String,
         bundle_manifest_hash: String,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.accept_bundle_at(
             key,
             bundle_id,
@@ -2162,8 +2507,10 @@ impl FileAntiRollbackStore {
         bundle_manifest_hash: String,
         _now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
         validate_non_empty("last_bundle_id", &bundle_id)?;
         validate_hash(&bundle_manifest_hash)?;
         validate_hash(&config_hash)?;
@@ -2172,14 +2519,13 @@ impl FileAntiRollbackStore {
         }
         if sequence == current.last_sequence
             && (config_hash != current.last_config_hash
-                || current.last_bundle_manifest_hash.as_deref()
-                    != Some(bundle_manifest_hash.as_str()))
+                || current.last_bundle_manifest_hash != bundle_manifest_hash)
         {
             return Err(AntiRollbackStoreError::NonMonotonicSequence);
         }
         if sequence == current.last_sequence
             && config_hash == current.last_config_hash
-            && current.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash.as_str())
+            && current.last_bundle_manifest_hash == bundle_manifest_hash
             && current.override_pin.is_none()
         {
             return Ok(current);
@@ -2188,15 +2534,15 @@ impl FileAntiRollbackStore {
             key: key.clone(),
             last_sequence: sequence,
             last_config_hash: config_hash,
-            last_bundle_manifest_hash: Some(bundle_manifest_hash),
-            last_bundle_id: Some(bundle_id),
-            root_version: None,
+            last_bundle_manifest_hash: bundle_manifest_hash,
+            last_bundle_id: bundle_id,
+            accepted_anchor: current.accepted_anchor,
             override_pin: None,
             break_glass: BreakGlassState::default(),
             local_approvals: LocalApprovalState::default(),
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
@@ -2205,6 +2551,7 @@ impl FileAntiRollbackStore {
         key: &AntiRollbackKey,
         pin: ConfigOverridePin,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        reject_governed_legacy_mutation(key)?;
         self.persist_override_pin_at(key, pin, current_unix_seconds()?)
     }
 
@@ -2214,8 +2561,10 @@ impl FileAntiRollbackStore {
         pin: ConfigOverridePin,
         now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
-        let _lock = self.acquire_lock()?;
-        let current = self.load(key)?;
+        reject_governed_legacy_mutation(key)?;
+        let state_path = self.resolved_state_path(false)?;
+        let _lock = self.acquire_lock(&state_path)?;
+        let current = self.load_from_path(&state_path, key)?;
         validate_override_pin(&pin)?;
         validate_active_override_pin_window(&pin, now_unix_seconds)?;
         let accepted = AntiRollbackRecord {
@@ -2223,21 +2572,27 @@ impl FileAntiRollbackStore {
             ..current
         };
         accepted.validate()?;
-        self.write_record(&accepted)?;
+        self.write_record(&state_path, &accepted, false)?;
         Ok(accepted)
     }
 
-    fn write_record(&self, record: &AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
-        let target_path = self.write_target_path()?;
-        if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
-        }
+    fn write_record(
+        &self,
+        state_path: &Path,
+        record: &AntiRollbackRecord,
+        no_replace: bool,
+    ) -> Result<(), AntiRollbackStoreError> {
         let bytes = serde_json::to_vec_pretty(record)
             .map_err(|error| AntiRollbackStoreError::Json(error.to_string()))?;
-        let tmp_path = target_path.with_extension("tmp");
+        let serialized_len = bytes.len().saturating_add(1);
+        if u64::try_from(serialized_len).unwrap_or(u64::MAX) > MAX_ANTI_ROLLBACK_STATE_BYTES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "serialized anti-rollback state exceeds the size limit".to_string(),
+            ));
+        }
+        let tmp_path = state_path.with_extension(format!("tmp-{}", Ulid::new()));
         {
-            let mut file = fs::File::create(&tmp_path)
+            let mut file = create_private_temp_file(&tmp_path)
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
             file.write_all(&bytes)
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
@@ -2246,40 +2601,309 @@ impl FileAntiRollbackStore {
             file.sync_all()
                 .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
         }
-        fs::rename(&tmp_path, &target_path)
-            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        let publish_result = if no_replace {
+            rename_noreplace(&tmp_path, state_path)
+        } else {
+            fs::rename(&tmp_path, state_path)
+        };
+        if let Err(error) = publish_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(AntiRollbackStoreError::Io(error.to_string()));
+        }
         Ok(())
     }
 
-    fn write_target_path(&self) -> Result<PathBuf, AntiRollbackStoreError> {
-        match fs::symlink_metadata(&self.path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => self
-                .path
-                .canonicalize()
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string())),
-            Ok(_) => Ok(self.path.clone()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(self.path.clone()),
-            Err(error) => Err(AntiRollbackStoreError::Io(error.to_string())),
-        }
+    fn resolved_state_path(&self, create_parent: bool) -> Result<PathBuf, AntiRollbackStoreError> {
+        resolve_state_path_identity(&self.path, create_parent)
     }
 
-    fn acquire_lock(&self) -> Result<AntiRollbackStoreLock, AntiRollbackStoreError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
-        }
-        let lock_path = self.path.with_extension("lock");
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lock_path)
+    fn acquire_lock(
+        &self,
+        state_path: &Path,
+    ) -> Result<AntiRollbackStoreLock, AntiRollbackStoreError> {
+        let lock_path = state_path.with_extension("lock");
+        let file = open_anti_rollback_lock(&lock_path)
             .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+        validate_regular_single_link_file(&file, "anti-rollback lock")?;
         file.lock_exclusive()
             .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
         Ok(AntiRollbackStoreLock { file })
     }
+}
+
+fn reject_governed_legacy_mutation(key: &AntiRollbackKey) -> Result<(), AntiRollbackStoreError> {
+    if key.acceptance_identity.trust_domain
+        == registry_platform_config::ProductTrustDomainV1::Governed
+    {
+        return Err(AntiRollbackStoreError::GovernedMutationRequiresAcceptancePath);
+    }
+    Ok(())
+}
+
+fn resolve_state_path_identity(
+    path: &Path,
+    create_parent: bool,
+) -> Result<PathBuf, AntiRollbackStoreError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?
+            .join(path)
+    };
+    let normalized = normalize_absolute_path(&absolute)?;
+    let file_name = normalized.file_name().ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path must name a file".to_string(),
+        )
+    })?;
+    let parent = normalized.parent().ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path must have a parent".to_string(),
+        )
+    })?;
+    if create_parent {
+        fs::create_dir_all(parent)
+            .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    }
+    let canonical_parent = canonicalize_existing_parent(parent)?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, AntiRollbackStoreError> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state path escapes its root".to_string(),
+                    ));
+                }
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    if !normalized.is_absolute() {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state path is not absolute".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn canonicalize_existing_parent(parent: &Path) -> Result<PathBuf, AntiRollbackStoreError> {
+    let mut cursor = parent.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match cursor.canonicalize() {
+            Ok(mut canonical) => {
+                if !canonical
+                    .metadata()
+                    .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?
+                    .is_dir()
+                {
+                    return Err(AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state parent is not a directory".to_string(),
+                    ));
+                }
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = cursor.file_name().ok_or_else(|| {
+                    AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state parent cannot be resolved".to_string(),
+                    )
+                })?;
+                missing.push(component.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .ok_or_else(|| {
+                        AntiRollbackStoreError::InvalidState(
+                            "anti-rollback state parent cannot be resolved".to_string(),
+                        )
+                    })?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+        }
+    }
+}
+
+fn read_anti_rollback_state(path: &Path) -> Result<Vec<u8>, AntiRollbackStoreError> {
+    let mut file = match open_anti_rollback_state(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AntiRollbackStoreError::MissingState);
+        }
+        Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+    };
+    validate_regular_single_link_file(&file, "anti-rollback state")?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if metadata.len() > MAX_ANTI_ROLLBACK_STATE_BYTES {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state exceeds the size limit".to_string(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_ANTI_ROLLBACK_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ANTI_ROLLBACK_STATE_BYTES {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "anti-rollback state exceeds the size limit".to_string(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_regular_single_link_file(
+    file: &File,
+    label: &'static str,
+) -> Result<(), AntiRollbackStoreError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| AntiRollbackStoreError::Io(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(AntiRollbackStoreError::InvalidState(format!(
+            "{label} is not a regular file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if metadata.nlink() != 1 {
+            return Err(AntiRollbackStoreError::InvalidState(format!(
+                "{label} has multiple hard links"
+            )));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(AntiRollbackStoreError::InvalidState(format!(
+                "{label} is a reparse point"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(windows)]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_anti_rollback_state(path: &Path) -> std::io::Result<File> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "anti-rollback state symbolic links are not allowed",
+        ));
+    }
+    File::open(path)
+}
+
+#[cfg(unix)]
+fn open_anti_rollback_lock(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_anti_rollback_lock(path: &Path) -> std::io::Result<File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+}
+
+#[cfg(unix)]
+fn create_private_temp_file(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::CLOEXEC
+            | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn create_private_temp_file(path: &Path) -> std::io::Result<File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(windows)]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-clobber anti-rollback publication is unsupported",
+    ))
 }
 
 struct AntiRollbackStoreLock {
@@ -2294,18 +2918,25 @@ impl Drop for AntiRollbackStoreLock {
 
 impl AntiRollbackRecord {
     fn validate(&self) -> Result<(), AntiRollbackStoreError> {
-        validate_non_empty("product", &self.key.product)?;
-        validate_non_empty("environment", &self.key.environment)?;
-        validate_non_empty("stream_id", &self.key.stream_id)?;
+        self.key.acceptance_identity.validate().map_err(|_| {
+            AntiRollbackStoreError::InvalidState("acceptance identity is invalid".to_string())
+        })?;
+        if self.last_sequence == 0 {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "last_sequence must be non-zero".to_string(),
+            ));
+        }
         validate_hash(&self.last_config_hash)?;
-        if let Some(manifest_hash) = &self.last_bundle_manifest_hash {
-            validate_hash(manifest_hash)?;
-        }
-        if let Some(bundle_id) = &self.last_bundle_id {
-            validate_non_empty("last_bundle_id", bundle_id)?;
-        }
+        validate_hash(&self.last_bundle_manifest_hash)?;
+        validate_non_empty("last_bundle_id", &self.last_bundle_id)?;
+        self.accepted_anchor.validate()?;
         if let Some(pin) = &self.override_pin {
             validate_override_pin(pin)?;
+        }
+        if self.break_glass.accepted.len() > MAX_ANTI_ROLLBACK_HISTORY_ENTRIES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "break_glass.accepted exceeds the entry limit".to_string(),
+            ));
         }
         for accepted in &self.break_glass.accepted {
             validate_non_empty(
@@ -2317,6 +2948,11 @@ impl AntiRollbackRecord {
                 &accepted.rate_limit_identity,
             )?;
             validate_hash(&accepted.config_hash)?;
+        }
+        if self.local_approvals.accepted.len() > MAX_ANTI_ROLLBACK_HISTORY_ENTRIES {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "local_approvals.accepted exceeds the entry limit".to_string(),
+            ));
         }
         for accepted in &self.local_approvals.accepted {
             validate_non_empty(
@@ -2334,26 +2970,192 @@ impl AntiRollbackRecord {
     }
 }
 
+impl AcceptedAnchorPinV1 {
+    fn validate(&self) -> Result<(), AntiRollbackStoreError> {
+        validate_hash(&self.digest)?;
+        if self.version == 0 {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "accepted_anchor.version must be non-zero".to_string(),
+            ));
+        }
+        if self.enabled_signers.is_empty()
+            || self.enabled_signers.len() > MAX_ACCEPTED_ANCHOR_SIGNERS
+        {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "accepted_anchor.enabled_signers count is invalid".to_string(),
+            ));
+        }
+        if self.threshold == 0 || self.threshold as usize > self.enabled_signers.len() {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "accepted_anchor.threshold is invalid".to_string(),
+            ));
+        }
+        let mut previous: Option<&str> = None;
+        for signer in &self.enabled_signers {
+            validate_non_empty("accepted_anchor.enabled_signers[]", signer)?;
+            if previous.is_some_and(|previous| previous >= signer.as_str()) {
+                return Err(AntiRollbackStoreError::InvalidState(
+                    "accepted_anchor.enabled_signers must be sorted and unique".to_string(),
+                ));
+            }
+            previous = Some(signer);
+        }
+        Ok(())
+    }
+}
+
+fn reject_active_legacy_override_pin(
+    record: &AntiRollbackRecord,
+) -> Result<(), AntiRollbackStoreError> {
+    if record.override_pin.as_ref().is_some_and(|pin| pin.active) {
+        return Err(AntiRollbackStoreError::ActiveLegacyOverridePin);
+    }
+    Ok(())
+}
+
+fn verify_record_matches_expectation(
+    record: &AntiRollbackRecord,
+    expected: AcceptanceStateExpectationV1<'_>,
+    expected_anchor: &AcceptedAnchorPinV1,
+) -> Result<(), AntiRollbackStoreError> {
+    if record.last_sequence != expected.sequence {
+        return Err(AntiRollbackStoreError::StateMismatch("sequence"));
+    }
+    if record.last_config_hash != expected.config_hash {
+        return Err(AntiRollbackStoreError::StateMismatch("configuration hash"));
+    }
+    if record.last_bundle_manifest_hash != expected.bundle_manifest_hash {
+        return Err(AntiRollbackStoreError::StateMismatch(
+            "bundle manifest hash",
+        ));
+    }
+    if record.last_bundle_id != expected.bundle_id {
+        return Err(AntiRollbackStoreError::StateMismatch("bundle id"));
+    }
+    if &record.accepted_anchor != expected_anchor {
+        return Err(AntiRollbackStoreError::StateMismatch("accepted anchor"));
+    }
+    Ok(())
+}
+
+fn record_from_expectation(
+    expected: AcceptanceStateExpectationV1<'_>,
+    accepted_anchor: AcceptedAnchorPinV1,
+    current: Option<&AntiRollbackRecord>,
+) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+    let record = AntiRollbackRecord {
+        key: expected.key.clone(),
+        last_sequence: expected.sequence,
+        last_config_hash: expected.config_hash.to_string(),
+        last_bundle_manifest_hash: expected.bundle_manifest_hash.to_string(),
+        last_bundle_id: expected.bundle_id.to_string(),
+        accepted_anchor,
+        override_pin: None,
+        break_glass: current
+            .map(|record| record.break_glass.clone())
+            .unwrap_or_default(),
+        local_approvals: current
+            .map(|record| record.local_approvals.clone())
+            .unwrap_or_default(),
+    };
+    record.validate()?;
+    Ok(record)
+}
+
+fn validate_initial_candidate(
+    candidate: &VerifiedAcceptanceStateV1,
+) -> Result<(), AntiRollbackStoreError> {
+    if candidate.sequence != 1 {
+        return Err(AntiRollbackStoreError::InitialSequenceMustBeOne);
+    }
+    if candidate.previous_config_hash.is_some() {
+        return Err(AntiRollbackStoreError::PreviousConfigHashMismatch);
+    }
+    if candidate.anchor.version != 1 {
+        return Err(AntiRollbackStoreError::InitialAnchorVersionMustBeOne);
+    }
+    if candidate.anchor.acceptance_identity != candidate.key.acceptance_identity {
+        return Err(AntiRollbackStoreError::StateMismatch(
+            "anchor acceptance identity",
+        ));
+    }
+    AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
+        .map_err(|_| AntiRollbackStoreError::StateMismatch("anchor"))?;
+    Ok(())
+}
+
+fn validate_acceptance_update(
+    current: &AntiRollbackRecord,
+    update: AcceptanceStateUpdateV1<'_>,
+    accepted_anchor: &AcceptedAnchorPinV1,
+) -> Result<AcceptanceMutationKindV1, AntiRollbackStoreError> {
+    reject_active_legacy_override_pin(current)?;
+    let expected_sequence = current
+        .last_sequence
+        .checked_add(1)
+        .ok_or(AntiRollbackStoreError::SequenceMustAdvanceByOne)?;
+    if update.expectation.sequence != expected_sequence {
+        return Err(AntiRollbackStoreError::SequenceMustAdvanceByOne);
+    }
+    if update.previous_config_hash != Some(current.last_config_hash.as_str()) {
+        return Err(AntiRollbackStoreError::PreviousConfigHashMismatch);
+    }
+
+    if accepted_anchor == &current.accepted_anchor {
+        if update.current_anchor.is_some() || update.transition.is_some() {
+            return Err(AntiRollbackStoreError::UnexpectedAnchorTransition);
+        }
+        return Ok(AcceptanceMutationKindV1::Advance);
+    }
+
+    let current_anchor = update
+        .current_anchor
+        .ok_or(AntiRollbackStoreError::AnchorTransitionRequired)?;
+    let transition = update
+        .transition
+        .ok_or(AntiRollbackStoreError::AnchorTransitionRequired)?;
+    let pinned_current_anchor = AcceptedAnchorPinV1::from_trust_anchor(current_anchor)
+        .map_err(|_| AntiRollbackStoreError::AnchorTransitionRejected)?;
+    if pinned_current_anchor != current.accepted_anchor
+        || current_anchor.acceptance_identity != current.key.acceptance_identity
+    {
+        return Err(AntiRollbackStoreError::AnchorTransitionRejected);
+    }
+    registry_platform_config::verify_anchor_transition(
+        current_anchor,
+        update.expectation.anchor,
+        transition,
+    )
+    .map_err(|_| AntiRollbackStoreError::AnchorTransitionRejected)?;
+    Ok(AcceptanceMutationKindV1::RotateAnchor)
+}
+
+fn acceptance_audit_intent(
+    mutation: AcceptanceMutationKindV1,
+    record: &AntiRollbackRecord,
+) -> AcceptanceAuditIntentV1 {
+    AcceptanceAuditIntentV1 {
+        mutation,
+        key: record.key.clone(),
+        sequence: record.last_sequence,
+        config_hash: record.last_config_hash.clone(),
+        bundle_manifest_hash: record.last_bundle_manifest_hash.clone(),
+        bundle_id: record.last_bundle_id.clone(),
+        anchor_digest: record.accepted_anchor.digest.clone(),
+        anchor_version: record.accepted_anchor.version,
+    }
+}
+
 pub fn antirollback_key_from_verified_bundle(
     verified: &registry_platform_config::VerifiedConfigBundle,
 ) -> AntiRollbackKey {
-    AntiRollbackKey {
-        product: verified.manifest.product.clone(),
-        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
-        environment: verified.manifest.environment.clone(),
-        stream_id: verified.manifest.stream_id.clone(),
-    }
+    verified.manifest.acceptance_identity.clone().into()
 }
 
 pub fn antirollback_key_from_trust_anchor(
     anchor: &registry_platform_config::ConfigTrustAnchor,
 ) -> AntiRollbackKey {
-    AntiRollbackKey {
-        product: anchor.product.clone(),
-        instance_id: anchor.instance_id.clone(),
-        environment: anchor.environment.clone(),
-        stream_id: anchor.stream_id.clone(),
-    }
+    anchor.acceptance_identity.clone().into()
 }
 
 pub fn verify_bundle_state_read_only(
@@ -2364,15 +3166,10 @@ pub fn verify_bundle_state_read_only(
     bundle_manifest_hash: &str,
 ) -> Result<(), ConfigBootError> {
     let record = FileAntiRollbackStore::new(state_path).load(key)?;
-    if sequence > record.last_sequence
-        || (sequence == record.last_sequence
-            && config_hash == record.last_config_hash
-            && record.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash))
-        || record.override_pin.as_ref().is_some_and(|pin| {
-            pin.mode == ConfigOverrideMode::AcceptRollback
-                && override_pin_active_and_unexpired(pin)
-                && pin.config_hash == config_hash
-        })
+    reject_active_legacy_override_pin(&record)?;
+    if sequence == record.last_sequence
+        && config_hash == record.last_config_hash
+        && record.last_bundle_manifest_hash == bundle_manifest_hash
     {
         Ok(())
     } else {
@@ -2421,7 +3218,7 @@ fn resolve_bundle_state_action_with_loader(
         Ok(record)
             if sequence == record.last_sequence
                 && config_hash == record.last_config_hash
-                && record.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash) =>
+                && record.last_bundle_manifest_hash == bundle_manifest_hash =>
         {
             let matched = previous_hash_matched(previous_config_hash, &record);
             let active_pin = record
@@ -2702,6 +3499,7 @@ fn override_mode_from_break_glass(
 pub fn persist_bundle_acceptance(
     acceptance: &PendingBundleAcceptance,
 ) -> Result<(), ConfigBootError> {
+    reject_governed_legacy_mutation(&acceptance.key)?;
     let store = FileAntiRollbackStore::new(&acceptance.state_path);
     match acceptance.state_action {
         BundleStateAction::Initialize => store.initialize(acceptance.initial_record())?,
@@ -2776,10 +3574,13 @@ pub fn bundle_verify_rejection_code(
     error: &registry_platform_config::ConfigBundleError,
 ) -> BundleVerificationCode {
     match error {
-        registry_platform_config::ConfigBundleError::BindingMismatch(_) => {
+        registry_platform_config::ConfigBundleError::BindingMismatch(_)
+        | registry_platform_config::ConfigBundleError::InvalidAcceptanceIdentity(_) => {
             BundleVerificationCode::REJECTED_BINDING
         }
         registry_platform_config::ConfigBundleError::SignatureRejected
+        | registry_platform_config::ConfigBundleError::AnchorTransitionRejected(_)
+        | registry_platform_config::ConfigBundleError::InvalidAnchorTransition(_)
         | registry_platform_config::ConfigBundleError::InvalidSignatureEnvelope(_)
         | registry_platform_config::ConfigBundleError::InvalidTrustAnchor(_)
         | registry_platform_config::ConfigBundleError::InvalidPermissions(_)
@@ -3586,7 +4387,7 @@ fn clone_allowed_leaf_value(value: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_crypto::PrivateJwk;
+    use registry_platform_crypto::{sign, PrivateJwk};
     use serde_json::json;
 
     const ED25519_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registry-platform-testing-ed25519-1"}"#;
@@ -3595,6 +4396,44 @@ mod tests {
 
     fn test_hash(label: char) -> String {
         format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    fn base64url_no_pad(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let first = chunk[0];
+            let second = chunk.get(1).copied().unwrap_or(0);
+            let third = chunk.get(2).copied().unwrap_or(0);
+            encoded.push(ALPHABET[(first >> 2) as usize] as char);
+            encoded.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                encoded.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
+            }
+            if chunk.len() > 2 {
+                encoded.push(ALPHABET[(third & 0x3f) as usize] as char);
+            }
+        }
+        encoded
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        struct NoopWake;
+
+        impl std::task::Wake for NoopWake {
+            fn wake(self: std::sync::Arc<Self>) {}
+        }
+
+        let waker = std::task::Waker::from(std::sync::Arc::new(NoopWake));
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                std::task::Poll::Ready(output) => return output,
+                std::task::Poll::Pending => std::thread::yield_now(),
+            }
+        }
     }
 
     #[test]
@@ -3988,10 +4827,92 @@ mod tests {
 
     fn test_key() -> AntiRollbackKey {
         AntiRollbackKey {
-            product: "registry-relay".to_string(),
-            instance_id: "relay-001".to_string(),
-            environment: "production".to_string(),
-            stream_id: "civil-registry".to_string(),
+            acceptance_identity: registry_platform_config::ProductAcceptanceIdentityV1 {
+                trust_domain: registry_platform_config::ProductTrustDomainV1::Development,
+                project: "civil-registry".to_string(),
+                environment: "production".to_string(),
+                lane: registry_platform_config::ProductAcceptanceLaneV1::RelayPublic,
+                product: registry_platform_config::ProductAcceptanceProductV1::RegistryRelay,
+                stream: "civil-registry".to_string(),
+                instance: "relay-001".to_string(),
+            },
+        }
+    }
+
+    fn governed_test_key() -> AntiRollbackKey {
+        let mut key = test_key();
+        key.acceptance_identity.trust_domain =
+            registry_platform_config::ProductTrustDomainV1::Governed;
+        key
+    }
+
+    fn test_anchor(key: &AntiRollbackKey) -> registry_platform_config::ConfigTrustAnchor {
+        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk");
+        let public = private.public();
+        let kid = public.jkt().expect("jkt");
+        registry_platform_config::ConfigTrustAnchor {
+            schema: TRUST_ANCHOR_SCHEMA.to_string(),
+            acceptance_identity: key.acceptance_identity.clone(),
+            version: 1,
+            threshold: 1,
+            enabled_signers: vec![registry_platform_config::ConfigTrustAnchorSigner {
+                kid,
+                jwk: public,
+            }],
+        }
+    }
+
+    fn signed_transition(
+        current_anchor: &registry_platform_config::ConfigTrustAnchor,
+        next_anchor: &registry_platform_config::ConfigTrustAnchor,
+    ) -> registry_platform_config::AnchorTransitionV1 {
+        let mut transition = registry_platform_config::AnchorTransitionV1 {
+            schema_id: "registry.platform.anchor_transition".to_string(),
+            schema_version: "1.0".to_string(),
+            payload: registry_platform_config::AnchorTransitionPayloadV1 {
+                acceptance_identity: current_anchor.acceptance_identity.clone(),
+                predecessor_anchor_digest: registry_platform_config::trust_anchor_digest(
+                    current_anchor,
+                )
+                .expect("current digest"),
+                predecessor_anchor_version: current_anchor.version,
+                next_anchor_digest: registry_platform_config::trust_anchor_digest(next_anchor)
+                    .expect("next digest"),
+                next_anchor_version: next_anchor.version,
+                next_enabled_signers: next_anchor.enabled_signers.clone(),
+                next_threshold: next_anchor.threshold,
+            },
+            signatures: vec![registry_platform_config::ConfigBundleSignature {
+                kid: current_anchor.enabled_signers[0].kid.clone(),
+                alg: "EdDSA".to_string(),
+                sig: "placeholder".to_string(),
+            }],
+        };
+        let canonical = registry_platform_config::canonical_anchor_transition_payload(&transition)
+            .expect("transition canonicalizes");
+        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk");
+        transition.signatures[0].sig =
+            base64url_no_pad(&sign(&canonical, &private).expect("transition signs"));
+        transition
+    }
+
+    fn acceptance_candidate(
+        key: &AntiRollbackKey,
+        sequence: u64,
+        previous_config_hash: Option<String>,
+        config_hash: String,
+        bundle_manifest_hash: String,
+        bundle_id: &str,
+        anchor: &registry_platform_config::ConfigTrustAnchor,
+    ) -> VerifiedAcceptanceStateV1 {
+        VerifiedAcceptanceStateV1 {
+            key: key.clone(),
+            sequence,
+            config_hash,
+            previous_config_hash,
+            bundle_manifest_hash,
+            bundle_id: bundle_id.to_string(),
+            anchor: anchor.clone(),
         }
     }
 
@@ -4001,13 +4922,15 @@ mod tests {
         config_hash: String,
         override_pin: Option<ConfigOverridePin>,
     ) -> AntiRollbackRecord {
+        let accepted_anchor =
+            AcceptedAnchorPinV1::from_trust_anchor(&test_anchor(&key)).expect("anchor pin");
         AntiRollbackRecord {
             key,
             last_sequence: sequence,
             last_config_hash: config_hash,
-            last_bundle_manifest_hash: Some(test_hash('f')),
-            last_bundle_id: Some("bundle-1".to_string()),
-            root_version: None,
+            last_bundle_manifest_hash: test_hash('f'),
+            last_bundle_id: "bundle-1".to_string(),
+            accepted_anchor,
             override_pin,
             break_glass: BreakGlassState::default(),
             local_approvals: LocalApprovalState::default(),
@@ -4105,21 +5028,7 @@ mod tests {
     }
 
     fn write_trust_anchor(path: &Path, key: &AntiRollbackKey) {
-        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk");
-        let public = private.public();
-        let kid = public.jkt().expect("jkt");
-        let anchor = registry_platform_config::ConfigTrustAnchor {
-            schema: TRUST_ANCHOR_SCHEMA.to_string(),
-            product: key.product.clone(),
-            environment: key.environment.clone(),
-            stream_id: key.stream_id.clone(),
-            instance_id: key.instance_id.clone(),
-            signers: vec![registry_platform_config::ConfigTrustAnchorSigner {
-                kid,
-                jwk: public,
-                enabled: true,
-            }],
-        };
+        let anchor = test_anchor(key);
         std::fs::write(
             path,
             serde_json::to_vec_pretty(&anchor).expect("anchor json"),
@@ -4148,6 +5057,8 @@ mod tests {
     ) -> PendingBundleAcceptance {
         PendingBundleAcceptance {
             state_path,
+            accepted_anchor: AcceptedAnchorPinV1::from_trust_anchor(&test_anchor(&key))
+                .expect("anchor pin"),
             key,
             source,
             bundle_id: Some("bundle-2".to_string()),
@@ -4180,6 +5091,829 @@ mod tests {
                 window_seconds: 60,
             },
         }
+    }
+
+    #[test]
+    fn acceptance_initialization_is_sequence_one_without_predecessor_and_plans_before_write() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let anchor = test_anchor(&key);
+        let invalid_sequence = acceptance_candidate(
+            &key,
+            2,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-2",
+            &anchor,
+        );
+        assert_eq!(
+            store.plan_initialize(&invalid_sequence).unwrap_err(),
+            AntiRollbackStoreError::InitialSequenceMustBeOne
+        );
+        let invalid_predecessor = acceptance_candidate(
+            &key,
+            1,
+            Some(test_hash('0')),
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        assert_eq!(
+            store.plan_initialize(&invalid_predecessor).unwrap_err(),
+            AntiRollbackStoreError::PreviousConfigHashMismatch
+        );
+        let mut later_anchor = anchor.clone();
+        later_anchor.version = 2;
+        let invalid_anchor = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &later_anchor,
+        );
+        assert_eq!(
+            store.plan_initialize(&invalid_anchor).unwrap_err(),
+            AntiRollbackStoreError::InitialAnchorVersionMustBeOne
+        );
+
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        let failed_audit_plan = store
+            .plan_initialize(&initial)
+            .expect("planning precedes external audit");
+        assert_eq!(
+            block_on(store.commit_acceptance(failed_audit_plan, |_| async { Err::<(), ()>(()) }))
+                .unwrap_err(),
+            AntiRollbackStoreError::AuditIntentFailed
+        );
+        assert_eq!(
+            store.load(&key),
+            Err(AntiRollbackStoreError::MissingState),
+            "failed external audit leaves planned state absent"
+        );
+        assert!(
+            !state_path.with_extension("lock").exists(),
+            "failed audit must precede lock creation"
+        );
+        let plan = store.plan_initialize(&initial).expect("initial plan");
+        assert_eq!(
+            plan.audit_intent().mutation,
+            AcceptanceMutationKindV1::Initialize
+        );
+        assert_eq!(
+            store.load(&key),
+            Err(AntiRollbackStoreError::MissingState),
+            "planning and the external audit boundary do not mutate state"
+        );
+        let accepted = block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("commit follows successful external audit");
+        assert_eq!(accepted.last_sequence, 1);
+        assert_eq!(store.verify_state(initial.expectation()), Ok(accepted));
+    }
+
+    #[test]
+    fn governed_state_rejects_every_legacy_mutation_entry_point_without_io() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let rejection = AntiRollbackStoreError::GovernedMutationRequiresAcceptancePath;
+        let record = antirollback_record(key.clone(), 1, test_hash('a'), None);
+
+        assert_eq!(store.initialize(record.clone()).unwrap_err(), rejection);
+        assert!(!state_path.exists());
+        assert!(!state_path.with_extension("lock").exists());
+
+        fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&record).expect("fixture serializes"),
+        )
+        .expect("fixture writes");
+        let before = fs::read(&state_path).expect("state bytes");
+        let proposal = AntiRollbackProposal {
+            sequence: 2,
+            previous_config_hash: Some(test_hash('a')),
+            config_hash: test_hash('b'),
+            root_version: None,
+            break_glass: None,
+            break_glass_rate_limit: None,
+            local_approval: None,
+            local_approval_rate_limit: None,
+        };
+        let pin = override_pin(ConfigOverrideMode::AcceptRollback, test_hash('b'));
+
+        assert_eq!(store.accept(&key, proposal.clone()).unwrap_err(), rejection);
+        assert_eq!(
+            store.accept_at(&key, proposal, 1_800_000_000).unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .accept_bundle(
+                    &key,
+                    "bundle-2".to_string(),
+                    2,
+                    test_hash('b'),
+                    test_hash('c'),
+                )
+                .unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .accept_bundle_at(
+                    &key,
+                    "bundle-2".to_string(),
+                    2,
+                    test_hash('b'),
+                    test_hash('c'),
+                    1_800_000_000,
+                )
+                .unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store.persist_override_pin(&key, pin.clone()).unwrap_err(),
+            rejection
+        );
+        assert_eq!(
+            store
+                .persist_override_pin_at(&key, pin, 1_800_000_000)
+                .unwrap_err(),
+            rejection
+        );
+
+        let override_path = dir.path().join("break-glass.json");
+        fs::write(&override_path, b"must not be consumed").expect("override fixture writes");
+        let acceptance = pending_acceptance(
+            state_path.clone(),
+            key,
+            ConfigSource::SignedBundleFile,
+            BundleStateAction::AlreadyPinned,
+            test_hash('a'),
+            None,
+            Some(override_path.clone()),
+        );
+        assert_eq!(
+            persist_bundle_acceptance(&acceptance).unwrap_err(),
+            ConfigBootError::Store(rejection)
+        );
+        assert_eq!(fs::read(&state_path).expect("state bytes"), before);
+        assert_eq!(
+            fs::read(&override_path).expect("override bytes"),
+            b"must not be consumed"
+        );
+        assert!(!state_path.with_extension("lock").exists());
+    }
+
+    #[test]
+    fn acceptance_commit_audits_before_mutation_and_never_clobbers_competing_initialization() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &test_anchor(&key),
+        );
+        let plan = store.plan_initialize(&initial).expect("initial plan");
+        let competing_bytes = b"competing initialization";
+
+        let error = block_on(store.commit_acceptance(plan, |_| {
+            assert!(
+                !state_path.exists(),
+                "the audit callback runs before the first durable state mutation"
+            );
+            fs::write(&state_path, competing_bytes).expect("competing state writes");
+            async { Ok::<(), ()>(()) }
+        }))
+        .expect_err("competing initialization wins");
+
+        assert!(matches!(error, AntiRollbackStoreError::InvalidState(_)));
+        assert_eq!(
+            fs::read(&state_path).expect("competing state remains"),
+            competing_bytes
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acceptance_aliases_share_one_lock_and_reject_the_stale_plan() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_dir = dir.path().join("state");
+        fs::create_dir(&state_dir).expect("state directory");
+        fs::create_dir(state_dir.join("nested")).expect("nested directory");
+        let state_path = state_dir.join("antirollback.json");
+        let alias_dir = dir.path().join("state-alias");
+        symlink(&state_dir, &alias_dir).expect("state directory symlink");
+        let alias_path = alias_dir
+            .join("nested")
+            .join("..")
+            .join("antirollback.json");
+        let direct_store = FileAntiRollbackStore::new(&state_path);
+        let alias_store = FileAntiRollbackStore::new(&alias_path);
+        let key = governed_test_key();
+        let anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        block_on(
+            direct_store.commit_acceptance(
+                direct_store
+                    .plan_initialize(&initial)
+                    .expect("initial plan"),
+                |_| async { Ok::<(), ()>(()) },
+            ),
+        )
+        .expect("initial state");
+        let update = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &anchor,
+        );
+        let direct_plan = direct_store
+            .plan_acceptance(&update, None, None)
+            .expect("direct plan");
+        let alias_plan = alias_store
+            .plan_acceptance(&update, None, None)
+            .expect("alias plan");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let first_barrier = std::sync::Arc::clone(&barrier);
+        let first = std::thread::spawn(move || {
+            block_on(direct_store.commit_acceptance(direct_plan, move |_| {
+                first_barrier.wait();
+                async { Ok::<(), ()>(()) }
+            }))
+        });
+        let second = std::thread::spawn(move || {
+            block_on(alias_store.commit_acceptance(alias_plan, move |_| {
+                barrier.wait();
+                async { Ok::<(), ()>(()) }
+            }))
+        });
+        let results = [
+            first.join().expect("direct commit thread"),
+            second.join().expect("alias commit thread"),
+        ];
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Err(AntiRollbackStoreError::StateMismatch(
+                            "concurrent acceptance state"
+                        ))
+                    )
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            FileAntiRollbackStore::new(&state_path)
+                .verify_state(update.expectation())
+                .expect("single accepted update")
+                .last_sequence,
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn antirollback_state_reads_reject_symlinks_and_fifos_without_blocking() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target_path = dir.path().join("target.json");
+        let key = test_key();
+        fs::write(
+            &target_path,
+            serde_json::to_vec_pretty(&antirollback_record(key.clone(), 1, test_hash('a'), None))
+                .expect("fixture serializes"),
+        )
+        .expect("target writes");
+        let symlink_path = dir.path().join("state-symlink.json");
+        symlink(&target_path, &symlink_path).expect("state symlink");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&symlink_path).load(&key),
+            Err(AntiRollbackStoreError::Io(_)) | Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+
+        let fifo_path = dir.path().join("state.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("mkfifo executes");
+        assert!(status.success(), "mkfifo creates the test state");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&fifo_path).load(&key),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn antirollback_state_reads_and_collections_are_bounded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oversized_path = dir.path().join("oversized.json");
+        fs::write(
+            &oversized_path,
+            vec![b'x'; (MAX_ANTI_ROLLBACK_STATE_BYTES + 1) as usize],
+        )
+        .expect("oversized state writes");
+        assert!(matches!(
+            FileAntiRollbackStore::new(&oversized_path).load(&test_key()),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+
+        let mut record = antirollback_record(test_key(), 1, test_hash('a'), None);
+        let accepted = BreakGlassAcceptance {
+            accepted_at_unix_seconds: 1,
+            approval_reference: "approval-1".to_string(),
+            emergency_change_class: None,
+            rate_limit_identity: "relay-001".to_string(),
+            sequence: 1,
+            config_hash: test_hash('a'),
+            expires_at_unix_seconds: 2,
+        };
+        record.break_glass.accepted = vec![accepted; MAX_ANTI_ROLLBACK_HISTORY_ENTRIES + 1];
+        assert!(matches!(
+            FileAntiRollbackStore::new(dir.path().join("bounded.json")).initialize(record),
+            Err(AntiRollbackStoreError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn exact_verify_rejects_future_cross_lane_cross_instance_and_active_legacy_pins_read_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        assert_eq!(
+            store.verify_state(initial.expectation()),
+            Err(AntiRollbackStoreError::MissingState)
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let before = fs::read(&state_path).expect("state bytes");
+
+        let mut future = initial.clone();
+        future.sequence = 2;
+        assert_eq!(
+            store.verify_state(future.expectation()),
+            Err(AntiRollbackStoreError::StateMismatch("sequence"))
+        );
+        for identity in [
+            registry_platform_config::ProductAcceptanceIdentityV1 {
+                lane: registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation,
+                ..key.acceptance_identity.clone()
+            },
+            registry_platform_config::ProductAcceptanceIdentityV1 {
+                instance: "relay-002".to_string(),
+                ..key.acceptance_identity.clone()
+            },
+        ] {
+            let other_key = AntiRollbackKey {
+                acceptance_identity: identity,
+            };
+            let other_anchor = test_anchor(&other_key);
+            let other = acceptance_candidate(
+                &other_key,
+                1,
+                None,
+                test_hash('a'),
+                test_hash('b'),
+                "bundle-1",
+                &other_anchor,
+            );
+            assert_eq!(
+                store.verify_state(other.expectation()),
+                Err(AntiRollbackStoreError::KeyMismatch)
+            );
+        }
+        assert_eq!(fs::read(&state_path).expect("state bytes"), before);
+
+        for (index, pin) in [
+            override_pin(ConfigOverrideMode::AcceptRollback, test_hash('a')),
+            unsigned_override_pin(test_hash('a'), &dir.path().join("unsigned.yaml")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let pinned_path = dir.path().join(format!("pinned-{index}.json"));
+            let pinned_store = FileAntiRollbackStore::new(&pinned_path);
+            fs::write(
+                &pinned_path,
+                serde_json::to_vec_pretty(&antirollback_record(
+                    key.clone(),
+                    1,
+                    test_hash('a'),
+                    Some(pin),
+                ))
+                .expect("legacy pinned fixture serializes"),
+            )
+            .expect("legacy pinned fixture writes");
+            let pinned_before = fs::read(&pinned_path).expect("pinned bytes");
+            assert_eq!(
+                pinned_store.verify_state(initial.expectation()),
+                Err(AntiRollbackStoreError::ActiveLegacyOverridePin)
+            );
+            assert_eq!(fs::read(&pinned_path).expect("pinned bytes"), pinned_before);
+        }
+    }
+
+    #[test]
+    fn acceptance_update_requires_exact_successor_and_predecessor_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        for (sequence, previous) in [
+            (3, Some(test_hash('a'))),
+            (2, None),
+            (2, Some(test_hash('0'))),
+        ] {
+            let update = acceptance_candidate(
+                &key,
+                sequence,
+                previous,
+                test_hash('c'),
+                test_hash('d'),
+                "bundle-2",
+                &anchor,
+            );
+            let error = store
+                .plan_acceptance(&update, None, None)
+                .expect_err("broken successor chain is rejected");
+            if sequence == 3 {
+                assert_eq!(error, AntiRollbackStoreError::SequenceMustAdvanceByOne);
+            } else {
+                assert_eq!(error, AntiRollbackStoreError::PreviousConfigHashMismatch);
+            }
+        }
+
+        let update = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &anchor,
+        );
+        let plan = store
+            .plan_acceptance(&update, None, None)
+            .expect("successor plan");
+        assert_eq!(
+            plan.audit_intent().mutation,
+            AcceptanceMutationKindV1::Advance
+        );
+        assert_eq!(store.load(&key).expect("pre-audit state").last_sequence, 1);
+        block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("commit follows successful external audit");
+        assert_eq!(
+            store
+                .verify_state(update.expectation())
+                .expect("exact state")
+                .last_sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_is_read_only_for_current_advance_and_rotation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let current_anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &current_anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let initial_bytes = fs::read(&state_path).expect("initial state bytes");
+
+        assert_eq!(
+            store.preview_acceptance(&initial, None, None),
+            Ok(AcceptanceStatePreviewV1::Current)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after current preview"),
+            initial_bytes
+        );
+
+        let advance = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &current_anchor,
+        );
+        assert_eq!(
+            store.preview_acceptance(&advance, None, None),
+            Ok(AcceptanceStatePreviewV1::Advance)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after advance preview"),
+            initial_bytes
+        );
+
+        let mut next_anchor = current_anchor.clone();
+        next_anchor.version = 2;
+        let rotate = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &next_anchor,
+        );
+        let transition = signed_transition(&current_anchor, &next_anchor);
+        assert_eq!(
+            store.preview_acceptance(&rotate, Some(&current_anchor), Some(&transition)),
+            Ok(AcceptanceStatePreviewV1::RotateAnchor)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after rotation preview"),
+            initial_bytes
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_is_idempotent_with_retained_rotation_inputs_and_rejects_invalid_updates()
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let current_anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &current_anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let initial_bytes = fs::read(&state_path).expect("initial state bytes");
+        let mut next_anchor = current_anchor.clone();
+        next_anchor.version = 2;
+        let transition = signed_transition(&current_anchor, &next_anchor);
+
+        assert_eq!(
+            store.preview_acceptance(&initial, Some(&current_anchor), Some(&transition)),
+            Ok(AcceptanceStatePreviewV1::Current)
+        );
+
+        let rotate = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &next_anchor,
+        );
+        let mut invalid = transition;
+        invalid.signatures[0].sig = base64url_no_pad(&[0u8; 64]);
+        assert_eq!(
+            store.preview_acceptance(&rotate, Some(&current_anchor), Some(&invalid)),
+            Err(AntiRollbackStoreError::AnchorTransitionRejected)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after rejected previews"),
+            initial_bytes
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_supports_retained_aliases_same_anchor_advance_and_next_rotation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let anchor_1 = test_anchor(&key);
+        let sequence_1 = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor_1,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&sequence_1).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+
+        let mut anchor_2 = anchor_1.clone();
+        anchor_2.version = 2;
+        let transition_1_to_2 = signed_transition(&anchor_1, &anchor_2);
+        let sequence_2 = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &anchor_2,
+        );
+        let rotation_plan = store
+            .plan_acceptance(&sequence_2, Some(&anchor_1), Some(&transition_1_to_2))
+            .expect("first rotation plan");
+        block_on(store.commit_acceptance(rotation_plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("first rotation commits");
+
+        assert_eq!(
+            store.preview_acceptance(&sequence_2, Some(&anchor_1), Some(&transition_1_to_2),),
+            Ok(AcceptanceStatePreviewV1::Current),
+            "a just-rotated current bundle is idempotent even while aliases remain"
+        );
+
+        let sequence_3 = acceptance_candidate(
+            &key,
+            3,
+            Some(test_hash('c')),
+            test_hash('e'),
+            test_hash('f'),
+            "bundle-3",
+            &anchor_2,
+        );
+        assert_eq!(
+            store.preview_acceptance(&sequence_3, None, None),
+            Ok(AcceptanceStatePreviewV1::Advance),
+            "same-anchor advancement does not need retained rotation aliases"
+        );
+        let advance_plan = store
+            .plan_acceptance(&sequence_3, None, None)
+            .expect("same-anchor advance plan");
+        block_on(store.commit_acceptance(advance_plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("same-anchor advance commits");
+
+        let mut anchor_3 = anchor_2.clone();
+        anchor_3.version = 3;
+        let transition_2_to_3 = signed_transition(&anchor_2, &anchor_3);
+        let sequence_4 = acceptance_candidate(
+            &key,
+            4,
+            Some(test_hash('e')),
+            test_hash('1'),
+            test_hash('2'),
+            "bundle-4",
+            &anchor_3,
+        );
+        assert_eq!(
+            store.preview_acceptance(&sequence_4, Some(&anchor_2), Some(&transition_2_to_3),),
+            Ok(AcceptanceStatePreviewV1::RotateAnchor),
+            "the next rotation must authenticate from the currently pinned anchor"
+        );
+    }
+
+    #[test]
+    fn anchor_replacement_requires_valid_authenticated_transition_before_audit_plan() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let current_anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &current_anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let mut next_anchor = current_anchor.clone();
+        next_anchor.version = 2;
+        let update = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &next_anchor,
+        );
+        let before = fs::read(&state_path).expect("state bytes");
+        assert_eq!(
+            store.plan_acceptance(&update, None, None).unwrap_err(),
+            AntiRollbackStoreError::AnchorTransitionRequired
+        );
+
+        let mut invalid = signed_transition(&current_anchor, &next_anchor);
+        invalid.signatures[0].sig = base64url_no_pad(&[0u8; 64]);
+        assert_eq!(
+            store
+                .plan_acceptance(&update, Some(&current_anchor), Some(&invalid))
+                .unwrap_err(),
+            AntiRollbackStoreError::AnchorTransitionRejected
+        );
+        assert_eq!(fs::read(&state_path).expect("state bytes"), before);
+
+        let transition = signed_transition(&current_anchor, &next_anchor);
+        let plan = store
+            .plan_acceptance(&update, Some(&current_anchor), Some(&transition))
+            .expect("authenticated transition plans");
+        assert_eq!(
+            plan.audit_intent().mutation,
+            AcceptanceMutationKindV1::RotateAnchor
+        );
+        assert_eq!(fs::read(&state_path).expect("state bytes"), before);
+        let accepted = block_on(store.commit_acceptance(plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("commit follows successful external audit");
+        assert_eq!(
+            accepted.accepted_anchor,
+            AcceptedAnchorPinV1::from_trust_anchor(&next_anchor).expect("next anchor pin")
+        );
+        assert_eq!(store.verify_state(update.expectation()), Ok(accepted));
     }
 
     #[test]
@@ -4614,10 +6348,7 @@ mod tests {
             )
             .expect("same signed bundle restarts idempotently");
 
-        assert_eq!(
-            accepted.last_bundle_manifest_hash.as_deref(),
-            Some(test_hash('f').as_str())
-        );
+        assert_eq!(accepted.last_bundle_manifest_hash, test_hash('f'));
     }
 
     #[test]
@@ -4635,8 +6366,10 @@ mod tests {
             ))
             .expect("state initializes");
 
-        verify_bundle_state_read_only(&state_path, &key, 5, &test_hash('b'), &test_hash('e'))
-            .expect("higher sequence verifies");
+        let future =
+            verify_bundle_state_read_only(&state_path, &key, 5, &test_hash('b'), &test_hash('e'))
+                .expect_err("future sequence is not the exact accepted state");
+        assert_eq!(future, ConfigBootError::NonMonotonicSequence);
         verify_bundle_state_read_only(&state_path, &key, 4, &current_hash, &test_hash('f'))
             .expect("same sequence and hash verifies");
         let err =
@@ -4663,8 +6396,18 @@ mod tests {
                 )),
             ))
             .expect("pinned state initializes");
-        verify_bundle_state_read_only(&pinned_state_path, &key, 4, &pinned_hash, &test_hash('e'))
-            .expect("active override pin verifies matching hash");
+        let pinned = verify_bundle_state_read_only(
+            &pinned_state_path,
+            &key,
+            6,
+            &test_hash('e'),
+            &test_hash('f'),
+        )
+        .expect_err("active rollback pin invalidates exact state");
+        assert_eq!(
+            pinned,
+            ConfigBootError::Store(AntiRollbackStoreError::ActiveLegacyOverridePin)
+        );
 
         let unsigned_pin_state_path = dir.path().join("unsigned-pin-antirollback.json");
         FileAntiRollbackStore::new(&unsigned_pin_state_path)
@@ -4687,7 +6430,10 @@ mod tests {
         )
         .expect_err("unsigned override pin does not verify signed rollback");
 
-        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+        assert_eq!(
+            err,
+            ConfigBootError::Store(AntiRollbackStoreError::ActiveLegacyOverridePin)
+        );
     }
 
     #[test]

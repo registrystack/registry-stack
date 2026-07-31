@@ -2,8 +2,8 @@
 
 Semantic navigation for VS Code and Zed is installable from a Registry Stack source release.
 The integrations are beta features and are not yet marketplace extensions or release assets.
-Use `registryctl init --from <starter>` and its generated editor schema setup as the stable beta
-path for YAML validation, completion, hover, and formatting.
+Use `registryctl init <directory> --template http` and its generated editor schema setup as the
+stable beta path for YAML validation, completion, hover, and formatting.
 Install the editor integration when you also want optional cross-file semantic navigation.
 
 The Registry Stack editor support is split into one reusable language server and thin editor
@@ -28,7 +28,7 @@ Project setup and editor installation are separate operations. `registryctl init
 projects automatically. For an existing project, refresh its version-matched schema settings with:
 
 ```console
-registryctl authoring editor --project-dir /path/to/registry-stack-project
+registryctl -C /path/to/registry-stack-project tooling editor
 ```
 
 Install the `registryctl` version that matches this source checkout, then install an integration
@@ -58,7 +58,7 @@ outside the checkout, so the diagnostic checks below cannot modify a tracked gol
 export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
 export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
 registryctl --version
-registryctl init --from http --project-dir "$REGISTRY_STACK_SMOKE_PROJECT"
+registryctl init "$REGISTRY_STACK_SMOKE_PROJECT" --template http
 ```
 
 Keep that terminal open so the two variables remain available. Then follow the editor-specific

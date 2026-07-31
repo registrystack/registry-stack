@@ -6,7 +6,8 @@ The crate builds the `registry-notary` binary.
 
 ## What It Provides
 
-- CLI parsing for `--config` and subcommands.
+- CLI parsing for local `--config`, direct signed-bundle startup, and
+  subcommands.
 - YAML config loading and validation.
 - Tracing initialization.
 - Axum listener startup and graceful shutdown.
@@ -35,6 +36,21 @@ Run the service:
 ```sh
 cargo run -p registry-notary -- --config demo/config/registry-notary.yaml
 ```
+
+Start from a signed Config Bundle without an unsigned bootstrap document:
+
+```sh
+registry-notary \
+  --bundle-dir /run/registry-notary/bundle \
+  --anchor-path /run/registry-notary/trust-anchor.json \
+  --state-path /var/lib/registry-notary/antirollback.json \
+  --initialize-state
+```
+
+Omit `--initialize-state` after first acceptance. Direct bundle startup rejects
+partial or mixed local inputs and has no unsigned or break-glass fallback. The
+signed manifest must include an `instance_id` that matches the trust anchor so
+each runtime instance has a distinct anti-rollback lane.
 
 Print the OpenAPI document:
 

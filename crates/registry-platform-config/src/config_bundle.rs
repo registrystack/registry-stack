@@ -25,6 +25,10 @@ pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub const MAX_SIGNATURE_ENVELOPE_BYTES: u64 = 256 * 1024;
 pub const MAX_TRUST_ANCHOR_BYTES: u64 = 1024 * 1024;
 pub const MAX_BUNDLE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_ACCEPTANCE_ID_COMPONENT_BYTES: usize = 128;
+pub const MAX_TRUST_ANCHOR_SIGNERS: usize = 64;
+pub const MAX_ANCHOR_TRANSITION_SIGNATURES: usize = 64;
+pub const MAX_ANCHOR_TRANSITION_BYTES: usize = 1024 * 1024;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const SIGNATURE_FILE: &str = "manifest.sig.json";
@@ -32,16 +36,51 @@ const BUNDLE_SCHEMA: &str = "registry.platform.config_bundle.v1";
 const SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const BREAK_GLASS_SCHEMA: &str = "registry.platform.config_break_glass.v1";
+pub const ANCHOR_TRANSITION_SCHEMA_ID: &str = "registry.platform.anchor_transition";
+pub const ANCHOR_TRANSITION_SCHEMA_VERSION: &str = "1.0";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProductTrustDomainV1 {
+    Governed,
+    Development,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+pub enum ProductAcceptanceLaneV1 {
+    #[serde(rename = "relay-public")]
+    RelayPublic,
+    #[serde(rename = "relay-consultation")]
+    RelayConsultation,
+    #[serde(rename = "notary")]
+    Notary,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+pub enum ProductAcceptanceProductV1 {
+    #[serde(rename = "registry-relay")]
+    RegistryRelay,
+    #[serde(rename = "registry-notary")]
+    RegistryNotary,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductAcceptanceIdentityV1 {
+    pub trust_domain: ProductTrustDomainV1,
+    pub project: String,
+    pub environment: String,
+    pub lane: ProductAcceptanceLaneV1,
+    pub product: ProductAcceptanceProductV1,
+    pub stream: String,
+    pub instance: String,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigBundleManifest {
     pub schema: String,
-    pub product: String,
-    pub environment: String,
-    pub stream_id: String,
-    #[serde(default)]
-    pub instance_id: Option<String>,
+    pub acceptance_identity: ProductAcceptanceIdentityV1,
     pub bundle_id: String,
     pub sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,11 +116,10 @@ pub struct ConfigBundleSignature {
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustAnchor {
     pub schema: String,
-    pub product: String,
-    pub environment: String,
-    pub stream_id: String,
-    pub instance_id: String,
-    pub signers: Vec<ConfigTrustAnchorSigner>,
+    pub acceptance_identity: ProductAcceptanceIdentityV1,
+    pub version: u64,
+    pub threshold: u32,
+    pub enabled_signers: Vec<ConfigTrustAnchorSigner>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -89,7 +127,27 @@ pub struct ConfigTrustAnchor {
 pub struct ConfigTrustAnchorSigner {
     pub kid: String,
     pub jwk: PublicJwk,
-    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorTransitionV1 {
+    pub schema_id: String,
+    pub schema_version: String,
+    pub payload: AnchorTransitionPayloadV1,
+    pub signatures: Vec<ConfigBundleSignature>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorTransitionPayloadV1 {
+    pub acceptance_identity: ProductAcceptanceIdentityV1,
+    pub predecessor_anchor_digest: String,
+    pub predecessor_anchor_version: u64,
+    pub next_anchor_digest: String,
+    pub next_anchor_version: u64,
+    pub next_enabled_signers: Vec<ConfigTrustAnchorSigner>,
+    pub next_threshold: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -118,6 +176,7 @@ pub struct VerifiedConfigBundle {
     pub manifest: ConfigBundleManifest,
     pub manifest_hash: String,
     pub signer_kids: Vec<String>,
+    pub trust_anchor: ConfigTrustAnchor,
     pub config_path: PathBuf,
     pub config_bytes: Vec<u8>,
 }
@@ -126,13 +185,16 @@ pub struct VerifiedConfigBundle {
 pub enum ConfigBundleError {
     Io(String),
     Json(String),
+    InvalidAcceptanceIdentity(&'static str),
     InvalidManifest(&'static str),
     InvalidTrustAnchor(&'static str),
+    InvalidAnchorTransition(&'static str),
     InvalidPermissions(&'static str),
     InvalidBreakGlass(&'static str),
     InvalidSignatureEnvelope(&'static str),
     BindingMismatch(&'static str),
     SignatureRejected,
+    AnchorTransitionRejected(&'static str),
     FileClosure(String),
     HashMismatch {
         path: String,
@@ -146,11 +208,17 @@ impl fmt::Display for ConfigBundleError {
         match self {
             Self::Io(message) => write!(f, "config bundle I/O error: {message}"),
             Self::Json(message) => write!(f, "config bundle JSON error: {message}"),
+            Self::InvalidAcceptanceIdentity(reason) => {
+                write!(f, "product acceptance identity is invalid: {reason}")
+            }
             Self::InvalidManifest(reason) => {
                 write!(f, "config bundle manifest is invalid: {reason}")
             }
             Self::InvalidTrustAnchor(reason) => {
                 write!(f, "config trust anchor is invalid: {reason}")
+            }
+            Self::InvalidAnchorTransition(reason) => {
+                write!(f, "anchor transition is invalid: {reason}")
             }
             Self::InvalidPermissions(reason) => {
                 write!(f, "config artifact permissions are invalid: {reason}")
@@ -168,6 +236,9 @@ impl fmt::Display for ConfigBundleError {
                 )
             }
             Self::SignatureRejected => write!(f, "config bundle signature was not accepted"),
+            Self::AnchorTransitionRejected(reason) => {
+                write!(f, "anchor transition was not accepted: {reason}")
+            }
             Self::FileClosure(reason) => write!(f, "config bundle file closure failed: {reason}"),
             Self::HashMismatch {
                 path,
@@ -221,6 +292,7 @@ pub fn verify_config_bundle(
         manifest,
         manifest_hash,
         signer_kids,
+        trust_anchor: anchor,
         config_path,
         config_bytes,
     })
@@ -237,18 +309,149 @@ pub fn load_trust_anchor(path: &Path) -> Result<ConfigTrustAnchor, ConfigBundleE
     Ok(anchor)
 }
 
+pub fn load_anchor_transition(path: &Path) -> Result<AnchorTransitionV1, ConfigBundleError> {
+    let bytes = read_limited_with_permissions(
+        path,
+        MAX_ANCHOR_TRANSITION_BYTES as u64,
+        ArtifactPermissions::AnchorTransition,
+    )?;
+    parse_anchor_transition(&bytes)
+}
+
+pub fn parse_anchor_transition(bytes: &[u8]) -> Result<AnchorTransitionV1, ConfigBundleError> {
+    if bytes.len() > MAX_ANCHOR_TRANSITION_BYTES {
+        return Err(ConfigBundleError::InvalidAnchorTransition("document size"));
+    }
+    let transition: AnchorTransitionV1 = deserialize_strict(bytes)?;
+    transition.validate()?;
+    Ok(transition)
+}
+
+pub fn canonical_product_acceptance_identity(
+    identity: &ProductAcceptanceIdentityV1,
+) -> Result<Vec<u8>, ConfigBundleError> {
+    identity.validate()?;
+    canonicalize_serializable(identity)
+}
+
+pub fn canonical_trust_anchor(anchor: &ConfigTrustAnchor) -> Result<Vec<u8>, ConfigBundleError> {
+    anchor.validate()?;
+    canonicalize_serializable(anchor)
+}
+
+pub fn trust_anchor_digest(anchor: &ConfigTrustAnchor) -> Result<String, ConfigBundleError> {
+    Ok(sha256_uri(&canonical_trust_anchor(anchor)?))
+}
+
+pub fn canonical_anchor_transition_payload(
+    transition: &AnchorTransitionV1,
+) -> Result<Vec<u8>, ConfigBundleError> {
+    transition.validate_payload()?;
+    canonicalize_serializable(&transition.payload)
+}
+
+pub fn verify_anchor_transition(
+    current_anchor: &ConfigTrustAnchor,
+    next_anchor: &ConfigTrustAnchor,
+    transition: &AnchorTransitionV1,
+) -> Result<Vec<String>, ConfigBundleError> {
+    current_anchor.validate()?;
+    next_anchor.validate()?;
+    transition.validate()?;
+
+    if current_anchor.acceptance_identity != next_anchor.acceptance_identity
+        || transition.payload.acceptance_identity != current_anchor.acceptance_identity
+    {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "acceptance_identity",
+        ));
+    }
+    if transition.payload.predecessor_anchor_version != current_anchor.version {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "predecessor_anchor_version",
+        ));
+    }
+    if transition.payload.predecessor_anchor_digest != trust_anchor_digest(current_anchor)? {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "predecessor_anchor_digest",
+        ));
+    }
+    let expected_next_version = current_anchor
+        .version
+        .checked_add(1)
+        .filter(|version| *version <= MAX_CONFIG_BUNDLE_SEQUENCE)
+        .ok_or(ConfigBundleError::AnchorTransitionRejected(
+            "next_anchor_version",
+        ))?;
+    if next_anchor.version != expected_next_version
+        || transition.payload.next_anchor_version != expected_next_version
+    {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "next_anchor_version",
+        ));
+    }
+    if transition.payload.next_anchor_digest != trust_anchor_digest(next_anchor)? {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "next_anchor_digest",
+        ));
+    }
+    if transition.payload.next_enabled_signers != next_anchor.enabled_signers {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "next_enabled_signers",
+        ));
+    }
+    if transition.payload.next_threshold != next_anchor.threshold {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "next_threshold",
+        ));
+    }
+
+    let next_signer_kids = next_anchor
+        .enabled_signers
+        .iter()
+        .map(|signer| signer.kid.as_str())
+        .collect::<BTreeSet<_>>();
+    let retained_current_signers = current_anchor
+        .enabled_signers
+        .iter()
+        .filter(|signer| next_signer_kids.contains(signer.kid.as_str()))
+        .count();
+    if retained_current_signers < current_anchor.threshold as usize {
+        return Err(ConfigBundleError::AnchorTransitionRejected(
+            "signer_overlap",
+        ));
+    }
+
+    let canonical_payload = canonical_anchor_transition_payload(transition)?;
+    verify_transition_signatures(&canonical_payload, transition, current_anchor)
+}
+
+impl ProductAcceptanceIdentityV1 {
+    pub fn validate(&self) -> Result<(), ConfigBundleError> {
+        validate_identity_component("project", &self.project)?;
+        validate_identity_component("environment", &self.environment)?;
+        validate_identity_component("stream", &self.stream)?;
+        validate_identity_component("instance", &self.instance)?;
+        match (self.lane, self.product) {
+            (
+                ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation,
+                ProductAcceptanceProductV1::RegistryRelay,
+            )
+            | (ProductAcceptanceLaneV1::Notary, ProductAcceptanceProductV1::RegistryNotary) => {
+                Ok(())
+            }
+            _ => Err(ConfigBundleError::InvalidAcceptanceIdentity("lane/product")),
+        }
+    }
+}
+
 impl ConfigBundleManifest {
     pub fn validate(&self) -> Result<(), ConfigBundleError> {
         if self.schema != BUNDLE_SCHEMA {
             return Err(ConfigBundleError::InvalidManifest("schema"));
         }
-        validate_non_empty_manifest("product", &self.product)?;
-        validate_non_empty_manifest("environment", &self.environment)?;
-        validate_non_empty_manifest("stream_id", &self.stream_id)?;
+        self.acceptance_identity.validate()?;
         validate_non_empty_manifest("bundle_id", &self.bundle_id)?;
-        if let Some(instance_id) = &self.instance_id {
-            validate_non_empty_manifest("instance_id", instance_id)?;
-        }
         validate_sequence(self.sequence)?;
         validate_hash_manifest("config_hash", &self.config_hash)?;
         if let Some(previous) = &self.previous_config_hash {
@@ -273,52 +476,59 @@ impl ConfigBundleManifest {
     }
 
     fn validate_binding(&self, anchor: &ConfigTrustAnchor) -> Result<(), ConfigBundleError> {
-        if self.product != anchor.product {
-            return Err(ConfigBundleError::BindingMismatch("product"));
-        }
-        if self.environment != anchor.environment {
-            return Err(ConfigBundleError::BindingMismatch("environment"));
-        }
-        if self.stream_id != anchor.stream_id {
-            return Err(ConfigBundleError::BindingMismatch("stream_id"));
-        }
-        // A missing manifest instance_id is intentionally fleet-wide. A present
-        // value pins the bundle to the anchor's runtime instance.
-        if self
-            .instance_id
-            .as_deref()
-            .is_some_and(|instance_id| instance_id != anchor.instance_id)
-        {
-            return Err(ConfigBundleError::BindingMismatch("instance_id"));
+        if self.acceptance_identity != anchor.acceptance_identity {
+            return Err(ConfigBundleError::BindingMismatch(
+                acceptance_identity_mismatch(
+                    &self.acceptance_identity,
+                    &anchor.acceptance_identity,
+                ),
+            ));
         }
         Ok(())
     }
 }
 
 impl ConfigTrustAnchor {
+    pub fn validate_initial(&self) -> Result<(), ConfigBundleError> {
+        self.validate()?;
+        if self.version != 1 {
+            return Err(ConfigBundleError::InvalidTrustAnchor("initial version"));
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), ConfigBundleError> {
         if self.schema != TRUST_ANCHOR_SCHEMA {
             return Err(ConfigBundleError::InvalidTrustAnchor("schema"));
         }
-        validate_non_empty_anchor("product", &self.product)?;
-        validate_non_empty_anchor("environment", &self.environment)?;
-        validate_non_empty_anchor("stream_id", &self.stream_id)?;
-        validate_non_empty_anchor("instance_id", &self.instance_id)?;
-        if self.signers.is_empty() {
-            return Err(ConfigBundleError::InvalidTrustAnchor("signers"));
+        self.acceptance_identity.validate()?;
+        validate_anchor_version(self.version)?;
+        if self.enabled_signers.is_empty() || self.enabled_signers.len() > MAX_TRUST_ANCHOR_SIGNERS
+        {
+            return Err(ConfigBundleError::InvalidTrustAnchor("enabled_signers"));
+        }
+        if self.threshold == 0 || self.threshold as usize > self.enabled_signers.len() {
+            return Err(ConfigBundleError::InvalidTrustAnchor("threshold"));
         }
         let mut seen = BTreeSet::new();
-        for signer in &self.signers {
-            validate_non_empty_anchor("signers[].kid", &signer.kid)?;
+        let mut previous_kid: Option<&str> = None;
+        for signer in &self.enabled_signers {
+            validate_non_empty_anchor("enabled_signers[].kid", &signer.kid)?;
             if !seen.insert(signer.kid.clone()) {
                 return Err(ConfigBundleError::InvalidTrustAnchor(
                     "duplicate signer kid",
                 ));
             }
+            if previous_kid.is_some_and(|previous| previous >= signer.kid.as_str()) {
+                return Err(ConfigBundleError::InvalidTrustAnchor(
+                    "enabled_signers order",
+                ));
+            }
+            previous_kid = Some(&signer.kid);
             let computed = signer
                 .jwk
                 .jkt()
-                .map_err(|_| ConfigBundleError::InvalidTrustAnchor("signers[].jwk"))?;
+                .map_err(|_| ConfigBundleError::InvalidTrustAnchor("enabled_signers[].jwk"))?;
             if computed != signer.kid {
                 return Err(ConfigBundleError::InvalidTrustAnchor("kid/jwk mismatch"));
             }
@@ -327,11 +537,121 @@ impl ConfigTrustAnchor {
     }
 
     fn enabled_signers_by_kid(&self) -> BTreeMap<&str, &PublicJwk> {
-        self.signers
+        self.enabled_signers
             .iter()
-            .filter(|signer| signer.enabled)
             .map(|signer| (signer.kid.as_str(), &signer.jwk))
             .collect()
+    }
+}
+
+impl AnchorTransitionV1 {
+    pub fn unsigned(
+        current_anchor: &ConfigTrustAnchor,
+        next_anchor: &ConfigTrustAnchor,
+    ) -> Result<Self, ConfigBundleError> {
+        current_anchor.validate()?;
+        next_anchor.validate()?;
+        if current_anchor.acceptance_identity != next_anchor.acceptance_identity {
+            return Err(ConfigBundleError::AnchorTransitionRejected(
+                "acceptance_identity",
+            ));
+        }
+        let expected_next_version = current_anchor
+            .version
+            .checked_add(1)
+            .filter(|version| *version <= MAX_CONFIG_BUNDLE_SEQUENCE)
+            .ok_or(ConfigBundleError::AnchorTransitionRejected(
+                "next_anchor_version",
+            ))?;
+        if next_anchor.version != expected_next_version {
+            return Err(ConfigBundleError::AnchorTransitionRejected(
+                "next_anchor_version",
+            ));
+        }
+        let next_signer_kids = next_anchor
+            .enabled_signers
+            .iter()
+            .map(|signer| signer.kid.as_str())
+            .collect::<BTreeSet<_>>();
+        let retained_current_signers = current_anchor
+            .enabled_signers
+            .iter()
+            .filter(|signer| next_signer_kids.contains(signer.kid.as_str()))
+            .count();
+        if retained_current_signers < current_anchor.threshold as usize {
+            return Err(ConfigBundleError::AnchorTransitionRejected(
+                "signer_overlap",
+            ));
+        }
+        Ok(Self {
+            schema_id: ANCHOR_TRANSITION_SCHEMA_ID.to_string(),
+            schema_version: ANCHOR_TRANSITION_SCHEMA_VERSION.to_string(),
+            payload: AnchorTransitionPayloadV1 {
+                acceptance_identity: current_anchor.acceptance_identity.clone(),
+                predecessor_anchor_digest: trust_anchor_digest(current_anchor)?,
+                predecessor_anchor_version: current_anchor.version,
+                next_anchor_digest: trust_anchor_digest(next_anchor)?,
+                next_anchor_version: next_anchor.version,
+                next_enabled_signers: next_anchor.enabled_signers.clone(),
+                next_threshold: next_anchor.threshold,
+            },
+            signatures: Vec::new(),
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigBundleError> {
+        self.validate_payload()?;
+        if self.signatures.is_empty() || self.signatures.len() > MAX_ANCHOR_TRANSITION_SIGNATURES {
+            return Err(ConfigBundleError::InvalidAnchorTransition("signatures"));
+        }
+        let mut seen = BTreeSet::new();
+        for signature in &self.signatures {
+            validate_non_empty_transition("signatures[].kid", &signature.kid)?;
+            validate_non_empty_transition("signatures[].alg", &signature.alg)?;
+            validate_non_empty_transition("signatures[].sig", &signature.sig)?;
+            if !seen.insert(signature.kid.as_str()) {
+                return Err(ConfigBundleError::InvalidAnchorTransition(
+                    "duplicate signature kid",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_payload(&self) -> Result<(), ConfigBundleError> {
+        if self.schema_id != ANCHOR_TRANSITION_SCHEMA_ID {
+            return Err(ConfigBundleError::InvalidAnchorTransition("schema_id"));
+        }
+        if self.schema_version != ANCHOR_TRANSITION_SCHEMA_VERSION {
+            return Err(ConfigBundleError::InvalidAnchorTransition("schema_version"));
+        }
+        self.payload.acceptance_identity.validate()?;
+        validate_hash_transition(
+            "predecessor_anchor_digest",
+            &self.payload.predecessor_anchor_digest,
+        )?;
+        validate_anchor_transition_version(
+            "predecessor_anchor_version",
+            self.payload.predecessor_anchor_version,
+        )?;
+        validate_hash_transition("next_anchor_digest", &self.payload.next_anchor_digest)?;
+        validate_anchor_transition_version(
+            "next_anchor_version",
+            self.payload.next_anchor_version,
+        )?;
+        if self.payload.next_enabled_signers.is_empty()
+            || self.payload.next_enabled_signers.len() > MAX_TRUST_ANCHOR_SIGNERS
+        {
+            return Err(ConfigBundleError::InvalidAnchorTransition(
+                "next_enabled_signers",
+            ));
+        }
+        if self.payload.next_threshold == 0
+            || self.payload.next_threshold as usize > self.payload.next_enabled_signers.len()
+        {
+            return Err(ConfigBundleError::InvalidAnchorTransition("next_threshold"));
+        }
+        validate_transition_signer_set(&self.payload.next_enabled_signers)
     }
 }
 
@@ -453,8 +773,36 @@ fn verify_manifest_signatures(
             verified.insert(signature.kid.clone());
         }
     }
-    if verified.is_empty() {
+    if verified.len() < anchor.threshold as usize {
         return Err(ConfigBundleError::SignatureRejected);
+    }
+    Ok(verified.into_iter().collect())
+}
+
+fn verify_transition_signatures(
+    canonical_payload: &[u8],
+    transition: &AnchorTransitionV1,
+    current_anchor: &ConfigTrustAnchor,
+) -> Result<Vec<String>, ConfigBundleError> {
+    let signers = current_anchor.enabled_signers_by_kid();
+    let mut verified = BTreeSet::new();
+    for signature in &transition.signatures {
+        let Some(jwk) = signers.get(signature.kid.as_str()) else {
+            continue;
+        };
+        if signature.alg != signing_alg_label(jwk)? {
+            continue;
+        }
+        let sig = match URL_SAFE_NO_PAD.decode(signature.sig.as_bytes()) {
+            Ok(sig) => sig,
+            Err(_) => continue,
+        };
+        if verify(canonical_payload, &sig, jwk).is_ok() {
+            verified.insert(signature.kid.clone());
+        }
+    }
+    if verified.len() < current_anchor.threshold as usize {
+        return Err(ConfigBundleError::AnchorTransitionRejected("signatures"));
     }
     Ok(verified.into_iter().collect())
 }
@@ -462,7 +810,7 @@ fn verify_manifest_signatures(
 fn signing_alg_label(jwk: &PublicJwk) -> Result<&'static str, ConfigBundleError> {
     match jwk
         .algorithm()
-        .map_err(|_| ConfigBundleError::InvalidTrustAnchor("signers[].jwk"))?
+        .map_err(|_| ConfigBundleError::InvalidTrustAnchor("enabled_signers[].jwk"))?
     {
         SigningAlgorithm::EdDsa => Ok("EdDSA"),
         SigningAlgorithm::Es256 => Ok("ES256"),
@@ -632,6 +980,7 @@ fn read_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ConfigBundleErro
 #[derive(Clone, Copy)]
 enum ArtifactPermissions {
     TrustAnchor,
+    AnchorTransition,
     BreakGlassOverride,
 }
 
@@ -718,6 +1067,9 @@ fn validate_artifact_file_permissions(
     if mode & 0o022 != 0 {
         let reason = match permissions {
             ArtifactPermissions::TrustAnchor => "trust anchor must not be group/world writable",
+            ArtifactPermissions::AnchorTransition => {
+                "anchor transition must not be group/world writable"
+            }
             ArtifactPermissions::BreakGlassOverride => {
                 "break-glass override must not be group/world writable"
             }
@@ -729,6 +1081,11 @@ fn validate_artifact_file_permissions(
         ArtifactPermissions::TrustAnchor if owner != 0 && owner != current_euid() => {
             return Err(ConfigBundleError::InvalidPermissions(
                 "trust anchor owner must be root or current service user",
+            ));
+        }
+        ArtifactPermissions::AnchorTransition if owner != 0 && owner != current_euid() => {
+            return Err(ConfigBundleError::InvalidPermissions(
+                "anchor transition owner must be root or current service user",
             ));
         }
         ArtifactPermissions::BreakGlassOverride if owner != 0 => {
@@ -784,6 +1141,101 @@ fn validate_sequence(sequence: u64) -> Result<(), ConfigBundleError> {
     Ok(())
 }
 
+fn validate_anchor_version(version: u64) -> Result<(), ConfigBundleError> {
+    if version == 0 || version > MAX_CONFIG_BUNDLE_SEQUENCE {
+        return Err(ConfigBundleError::InvalidTrustAnchor("version"));
+    }
+    Ok(())
+}
+
+fn validate_anchor_transition_version(
+    field: &'static str,
+    version: u64,
+) -> Result<(), ConfigBundleError> {
+    if version == 0 || version > MAX_CONFIG_BUNDLE_SEQUENCE {
+        return Err(ConfigBundleError::InvalidAnchorTransition(field));
+    }
+    Ok(())
+}
+
+fn validate_identity_component(field: &'static str, value: &str) -> Result<(), ConfigBundleError> {
+    if value.is_empty()
+        || value.len() > MAX_ACCEPTANCE_ID_COMPONENT_BYTES
+        || value.trim() != value
+        || !value.is_ascii()
+    {
+        return Err(ConfigBundleError::InvalidAcceptanceIdentity(field));
+    }
+    let mut characters = value.bytes();
+    if !characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        || !characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, b'-' | b'.' | b'_')
+        })
+    {
+        return Err(ConfigBundleError::InvalidAcceptanceIdentity(field));
+    }
+    Ok(())
+}
+
+fn acceptance_identity_mismatch(
+    manifest: &ProductAcceptanceIdentityV1,
+    anchor: &ProductAcceptanceIdentityV1,
+) -> &'static str {
+    if manifest.trust_domain != anchor.trust_domain {
+        "trust_domain"
+    } else if manifest.project != anchor.project {
+        "project"
+    } else if manifest.environment != anchor.environment {
+        "environment"
+    } else if manifest.lane != anchor.lane {
+        "lane"
+    } else if manifest.product != anchor.product {
+        "product"
+    } else if manifest.stream != anchor.stream {
+        "stream"
+    } else {
+        "instance"
+    }
+}
+
+fn canonicalize_serializable<T: Serialize>(value: &T) -> Result<Vec<u8>, ConfigBundleError> {
+    let value =
+        serde_json::to_value(value).map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    canonicalize_json(&value).map_err(|error| ConfigBundleError::Json(error.to_string()))
+}
+
+fn validate_transition_signer_set(
+    signers: &[ConfigTrustAnchorSigner],
+) -> Result<(), ConfigBundleError> {
+    let mut seen = BTreeSet::new();
+    let mut previous_kid: Option<&str> = None;
+    for signer in signers {
+        validate_non_empty_transition("next_enabled_signers[].kid", &signer.kid)?;
+        if !seen.insert(signer.kid.as_str()) {
+            return Err(ConfigBundleError::InvalidAnchorTransition(
+                "duplicate next signer kid",
+            ));
+        }
+        if previous_kid.is_some_and(|previous| previous >= signer.kid.as_str()) {
+            return Err(ConfigBundleError::InvalidAnchorTransition(
+                "next_enabled_signers order",
+            ));
+        }
+        previous_kid = Some(&signer.kid);
+        let computed = signer.jwk.jkt().map_err(|_| {
+            ConfigBundleError::InvalidAnchorTransition("next_enabled_signers[].jwk")
+        })?;
+        if computed != signer.kid {
+            return Err(ConfigBundleError::InvalidAnchorTransition(
+                "next signer kid/jwk mismatch",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_break_glass_time(
     field: &'static str,
     value: &str,
@@ -793,6 +1245,10 @@ fn parse_break_glass_time(
 
 fn validate_hash_manifest(field: &'static str, value: &str) -> Result<(), ConfigBundleError> {
     validate_sha256_uri(field, value).map_err(|_| ConfigBundleError::InvalidManifest(field))
+}
+
+fn validate_hash_transition(field: &'static str, value: &str) -> Result<(), ConfigBundleError> {
+    validate_sha256_uri(field, value).map_err(|_| ConfigBundleError::InvalidAnchorTransition(field))
 }
 
 fn validate_non_empty_manifest(field: &'static str, value: &str) -> Result<(), ConfigBundleError> {
@@ -812,6 +1268,16 @@ fn validate_non_empty_anchor(field: &'static str, value: &str) -> Result<(), Con
 fn validate_non_empty_signature(field: &'static str, value: &str) -> Result<(), ConfigBundleError> {
     if value.trim().is_empty() {
         return Err(ConfigBundleError::InvalidSignatureEnvelope(field));
+    }
+    Ok(())
+}
+
+fn validate_non_empty_transition(
+    field: &'static str,
+    value: &str,
+) -> Result<(), ConfigBundleError> {
+    if value.trim().is_empty() {
+        return Err(ConfigBundleError::InvalidAnchorTransition(field));
     }
     Ok(())
 }
@@ -837,6 +1303,7 @@ mod tests {
     use super::*;
 
     const ED25519_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registry-platform-testing-ed25519-1"}"#;
+    const ED25519_ROTATED_PRIVATE_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"registry-platform-testing-ed25519-2"}"#;
 
     struct BundleFixture {
         tmp: TempDir,
@@ -844,6 +1311,18 @@ mod tests {
         anchor_path: PathBuf,
         manifest: ConfigBundleManifest,
         private: PrivateJwk,
+    }
+
+    fn notary_identity() -> ProductAcceptanceIdentityV1 {
+        ProductAcceptanceIdentityV1 {
+            trust_domain: ProductTrustDomainV1::Governed,
+            project: "civil-registry".to_string(),
+            environment: "production".to_string(),
+            lane: ProductAcceptanceLaneV1::Notary,
+            product: ProductAcceptanceProductV1::RegistryNotary,
+            stream: "civil-registration".to_string(),
+            instance: "notary-011".to_string(),
+        }
     }
 
     fn fixture() -> BundleFixture {
@@ -855,10 +1334,7 @@ mod tests {
         let config_hash = sha256_uri(config_bytes);
         let manifest = ConfigBundleManifest {
             schema: BUNDLE_SCHEMA.to_string(),
-            product: "registry-notary".to_string(),
-            environment: "production".to_string(),
-            stream_id: "civil-registry".to_string(),
-            instance_id: None,
+            acceptance_identity: notary_identity(),
             bundle_id: "2026-07-07-rollout-3".to_string(),
             sequence: MAX_CONFIG_BUNDLE_SEQUENCE,
             previous_config_hash: Some(sha256_uri(b"previous")),
@@ -875,15 +1351,10 @@ mod tests {
         let kid = public.jkt().expect("jkt");
         let anchor = ConfigTrustAnchor {
             schema: TRUST_ANCHOR_SCHEMA.to_string(),
-            product: "registry-notary".to_string(),
-            environment: "production".to_string(),
-            stream_id: "civil-registry".to_string(),
-            instance_id: "notary-011".to_string(),
-            signers: vec![ConfigTrustAnchorSigner {
-                kid,
-                jwk: public,
-                enabled: true,
-            }],
+            acceptance_identity: notary_identity(),
+            version: 1,
+            threshold: 1,
+            enabled_signers: vec![ConfigTrustAnchorSigner { kid, jwk: public }],
         };
         let anchor_path = tmp.path().join("trust_anchor.json");
         fs::write(
@@ -929,15 +1400,73 @@ mod tests {
         .expect("signature");
     }
 
+    fn anchor_from_keys(
+        acceptance_identity: ProductAcceptanceIdentityV1,
+        version: u64,
+        threshold: u32,
+        private_keys: &[&PrivateJwk],
+    ) -> ConfigTrustAnchor {
+        let mut enabled_signers = private_keys
+            .iter()
+            .map(|private| {
+                let jwk = private.public();
+                ConfigTrustAnchorSigner {
+                    kid: jwk.jkt().expect("signer kid"),
+                    jwk,
+                }
+            })
+            .collect::<Vec<_>>();
+        enabled_signers.sort_by(|left, right| left.kid.cmp(&right.kid));
+        ConfigTrustAnchor {
+            schema: TRUST_ANCHOR_SCHEMA.to_string(),
+            acceptance_identity,
+            version,
+            threshold,
+            enabled_signers,
+        }
+    }
+
+    fn sign_anchor_transition(transition: &mut AnchorTransitionV1, private_keys: &[&PrivateJwk]) {
+        let payload =
+            canonical_anchor_transition_payload(transition).expect("canonical transition payload");
+        transition.signatures = private_keys
+            .iter()
+            .map(|private| ConfigBundleSignature {
+                kid: private.public().jkt().expect("signer kid"),
+                alg: "EdDSA".to_string(),
+                sig: URL_SAFE_NO_PAD.encode(sign(&payload, private).expect("transition signature")),
+            })
+            .collect();
+    }
+
+    fn signed_rotation_fixture() -> (
+        PrivateJwk,
+        PrivateJwk,
+        ConfigTrustAnchor,
+        ConfigTrustAnchor,
+        AnchorTransitionV1,
+    ) {
+        let first = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("first private key");
+        let second = PrivateJwk::parse(ED25519_ROTATED_PRIVATE_JWK).expect("second private key");
+        let current = anchor_from_keys(notary_identity(), 1, 2, &[&first, &second]);
+        let next = anchor_from_keys(notary_identity(), 2, 1, &[&first, &second]);
+        let mut transition =
+            AnchorTransitionV1::unsigned(&current, &next).expect("unsigned transition");
+        sign_anchor_transition(&mut transition, &[&first, &second]);
+        (first, second, current, next, transition)
+    }
+
     #[test]
     fn verifies_signed_bundle_with_max_safe_sequence() {
         let fixture = fixture();
+        let expected_anchor = load_trust_anchor(&fixture.anchor_path).expect("expected anchor");
 
         let verified =
             verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("verified");
 
         assert_eq!(verified.manifest.sequence, MAX_CONFIG_BUNDLE_SEQUENCE);
         assert_eq!(verified.signer_kids.len(), 1);
+        assert_eq!(verified.trust_anchor, expected_anchor);
         assert_eq!(
             verified.config_path,
             fixture.bundle_dir.join("config/notary.yaml")
@@ -1002,7 +1531,7 @@ mod tests {
             let bytes = fs::read(&fixture.anchor_path).expect("anchor bytes");
             let mut anchor: serde_json::Value =
                 serde_json::from_slice(&bytes).expect("anchor fixture JSON");
-            anchor["signers"][0]["jwk"][member] = serde_json::json!(PRIVATE_MARKER);
+            anchor["enabled_signers"][0]["jwk"][member] = serde_json::json!(PRIVATE_MARKER);
             fs::write(
                 &fixture.anchor_path,
                 serde_json::to_vec_pretty(&anchor).expect("private anchor fixture"),
@@ -1018,25 +1547,410 @@ mod tests {
     }
 
     #[test]
-    fn accepts_fleet_wide_bundle_for_instance_anchor() {
-        let fixture = fixture();
+    fn rejects_every_acceptance_identity_dimension_mismatch() {
+        let base = notary_identity();
+        let mismatches = [
+            (
+                "trust_domain",
+                ProductAcceptanceIdentityV1 {
+                    trust_domain: ProductTrustDomainV1::Development,
+                    ..base.clone()
+                },
+            ),
+            (
+                "project",
+                ProductAcceptanceIdentityV1 {
+                    project: "other-project".to_string(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "environment",
+                ProductAcceptanceIdentityV1 {
+                    environment: "staging".to_string(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "lane",
+                ProductAcceptanceIdentityV1 {
+                    lane: ProductAcceptanceLaneV1::RelayPublic,
+                    product: ProductAcceptanceProductV1::RegistryRelay,
+                    ..base.clone()
+                },
+            ),
+            (
+                "stream",
+                ProductAcceptanceIdentityV1 {
+                    stream: "other-stream".to_string(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "instance",
+                ProductAcceptanceIdentityV1 {
+                    instance: "notary-012".to_string(),
+                    ..base
+                },
+            ),
+        ];
 
-        let verified =
-            verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("verified");
+        for (field, identity) in mismatches {
+            let mut fixture = fixture();
+            fixture.manifest.acceptance_identity = identity;
+            write_manifest_and_signature(&fixture.bundle_dir, &fixture.manifest, &fixture.private);
 
-        assert_eq!(verified.manifest.instance_id, None);
+            let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+                .expect_err("identity mismatch rejected");
+
+            assert_eq!(err, ConfigBundleError::BindingMismatch(field), "{field}");
+        }
     }
 
     #[test]
-    fn rejects_instance_pinned_bundle_for_other_anchor_instance() {
+    fn rejects_invalid_lane_product_pair() {
         let mut fixture = fixture();
-        fixture.manifest.instance_id = Some("notary-012".to_string());
+        fixture.manifest.acceptance_identity.product = ProductAcceptanceProductV1::RegistryRelay;
         write_manifest_and_signature(&fixture.bundle_dir, &fixture.manifest, &fixture.private);
 
         let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
-            .expect_err("instance binding rejected");
+            .expect_err("invalid product rejected");
 
-        assert_eq!(err, ConfigBundleError::BindingMismatch("instance_id"));
+        assert_eq!(
+            err,
+            ConfigBundleError::InvalidAcceptanceIdentity("lane/product")
+        );
+    }
+
+    #[test]
+    fn acceptance_identity_validation_is_closed_and_bounded() {
+        let mut identity = notary_identity();
+        identity.project = "x".repeat(MAX_ACCEPTANCE_ID_COMPONENT_BYTES + 1);
+        assert_eq!(
+            identity.validate(),
+            Err(ConfigBundleError::InvalidAcceptanceIdentity("project"))
+        );
+
+        let mut identity = notary_identity();
+        identity.stream = "civil/registry".to_string();
+        assert_eq!(
+            identity.validate(),
+            Err(ConfigBundleError::InvalidAcceptanceIdentity("stream"))
+        );
+
+        let mut identity = notary_identity();
+        identity.instance.clear();
+        assert_eq!(
+            identity.validate(),
+            Err(ConfigBundleError::InvalidAcceptanceIdentity("instance"))
+        );
+
+        let mut value = serde_json::to_value(notary_identity()).expect("identity JSON");
+        value["trust_domain"] = json!("external");
+        assert!(serde_json::from_value::<ProductAcceptanceIdentityV1>(value).is_err());
+
+        let mut value = serde_json::to_value(notary_identity()).expect("identity JSON");
+        value["lane"] = json!("relay");
+        assert!(serde_json::from_value::<ProductAcceptanceIdentityV1>(value).is_err());
+    }
+
+    #[test]
+    fn acceptance_identity_canonicalization_is_deterministic() {
+        let expected = canonical_product_acceptance_identity(&notary_identity())
+            .expect("canonical acceptance identity");
+        let reordered: ProductAcceptanceIdentityV1 = serde_json::from_str(
+            r#"{
+                "instance":"notary-011",
+                "stream":"civil-registration",
+                "product":"registry-notary",
+                "lane":"notary",
+                "environment":"production",
+                "project":"civil-registry",
+                "trust_domain":"governed"
+            }"#,
+        )
+        .expect("reordered identity");
+
+        assert_eq!(
+            canonical_product_acceptance_identity(&reordered)
+                .expect("reordered canonical identity"),
+            expected
+        );
+        assert_eq!(
+            std::str::from_utf8(&expected).expect("canonical utf8"),
+            r#"{"environment":"production","instance":"notary-011","lane":"notary","product":"registry-notary","project":"civil-registry","stream":"civil-registration","trust_domain":"governed"}"#
+        );
+    }
+
+    #[test]
+    fn verifies_canonical_anchor_transition_with_distinct_current_threshold() {
+        let (_first, _second, current, next, transition) = signed_rotation_fixture();
+
+        let verified =
+            verify_anchor_transition(&current, &next, &transition).expect("rotation verified");
+
+        assert_eq!(verified.len(), 2);
+        assert_eq!(transition.payload.predecessor_anchor_version, 1);
+        assert_eq!(transition.payload.next_anchor_version, 2);
+        assert_eq!(
+            transition.payload.predecessor_anchor_digest,
+            trust_anchor_digest(&current).expect("current digest")
+        );
+        assert_eq!(
+            transition.payload.next_anchor_digest,
+            trust_anchor_digest(&next).expect("next digest")
+        );
+    }
+
+    #[test]
+    fn rejects_anchor_and_transition_threshold_failures() {
+        let (first, _second, current, next, mut transition) = signed_rotation_fixture();
+
+        let mut invalid_anchor = current.clone();
+        invalid_anchor.threshold = 0;
+        assert_eq!(
+            invalid_anchor.validate(),
+            Err(ConfigBundleError::InvalidTrustAnchor("threshold"))
+        );
+        invalid_anchor.threshold = 3;
+        assert_eq!(
+            invalid_anchor.validate(),
+            Err(ConfigBundleError::InvalidTrustAnchor("threshold"))
+        );
+
+        sign_anchor_transition(&mut transition, &[&first]);
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::AnchorTransitionRejected("signatures"))
+        );
+    }
+
+    #[test]
+    fn rejects_anchor_rotation_without_current_threshold_overlap() {
+        let first = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("first private key");
+        let second = PrivateJwk::parse(ED25519_ROTATED_PRIVATE_JWK).expect("second private key");
+        let current = anchor_from_keys(notary_identity(), 1, 2, &[&first, &second]);
+        let next = anchor_from_keys(notary_identity(), 2, 1, &[&first]);
+
+        assert_eq!(
+            AnchorTransitionV1::unsigned(&current, &next),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "signer_overlap"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_anchor_rotation_identity_change_before_signing() {
+        let first = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("first private key");
+        let current = anchor_from_keys(notary_identity(), 1, 1, &[&first]);
+        let mut next_identity = notary_identity();
+        next_identity.instance = "notary-012".to_string();
+        let next = anchor_from_keys(next_identity, 2, 1, &[&first]);
+
+        assert_eq!(
+            AnchorTransitionV1::unsigned(&current, &next),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "acceptance_identity"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_transition_identity_change_and_incomplete_next_signer_set() {
+        let (_first, _second, current, next, mut transition) = signed_rotation_fixture();
+        transition.payload.acceptance_identity.instance = "notary-012".to_string();
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "acceptance_identity"
+            ))
+        );
+
+        let (_first, _second, current, next, mut transition) = signed_rotation_fixture();
+        transition.payload.next_enabled_signers.pop();
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "next_enabled_signers"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_anchor_transition_predecessor() {
+        let (_first, _second, current, next, mut transition) = signed_rotation_fixture();
+        transition.payload.predecessor_anchor_digest = sha256_uri(b"wrong predecessor");
+
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "predecessor_anchor_digest"
+            ))
+        );
+
+        let (_first, _second, current, next, mut transition) = signed_rotation_fixture();
+        transition.payload.predecessor_anchor_version = 2;
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::AnchorTransitionRejected(
+                "predecessor_anchor_version"
+            ))
+        );
+    }
+
+    #[test]
+    fn anchor_transition_payload_canonicalization_is_deterministic() {
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        let expected =
+            canonical_anchor_transition_payload(&transition).expect("canonical transition");
+        let value = serde_json::to_value(&transition).expect("transition value");
+        let reparsed: AnchorTransitionV1 =
+            serde_json::from_value(value).expect("reparsed transition");
+
+        assert_eq!(
+            canonical_anchor_transition_payload(&reparsed).expect("reparsed canonical transition"),
+            expected
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_fields_in_identity_anchor_and_transition() {
+        let fixture = fixture();
+        let anchor: ConfigTrustAnchor =
+            serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor bytes"))
+                .expect("anchor");
+        let mut anchor_value = serde_json::to_value(anchor).expect("anchor value");
+        anchor_value["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<ConfigTrustAnchor>(anchor_value).is_err());
+
+        let mut identity_value = serde_json::to_value(notary_identity()).expect("identity value");
+        identity_value["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<ProductAcceptanceIdentityV1>(identity_value).is_err());
+
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        let mut transition_value = serde_json::to_value(transition).expect("transition value");
+        transition_value["payload"]["unexpected"] = json!(true);
+        let bytes = serde_json::to_vec(&transition_value).expect("transition bytes");
+        assert!(matches!(
+            parse_anchor_transition(&bytes),
+            Err(ConfigBundleError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_anchor_transition_document() {
+        let oversized = vec![b' '; MAX_ANCHOR_TRANSITION_BYTES + 1];
+
+        assert_eq!(
+            parse_anchor_transition(&oversized),
+            Err(ConfigBundleError::InvalidAnchorTransition("document size"))
+        );
+    }
+
+    #[test]
+    fn loads_bounded_valid_anchor_transition_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+
+        assert_eq!(
+            load_anchor_transition(&path).expect("loaded transition"),
+            transition
+        );
+    }
+
+    #[test]
+    fn anchor_transition_loader_rejects_oversized_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        fs::write(&path, vec![b' '; MAX_ANCHOR_TRANSITION_BYTES + 1])
+            .expect("write oversized transition");
+
+        assert!(matches!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::Io(message)) if message.contains("size cap")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchor_transition_loader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("transition-target.json");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &target,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+        symlink(&target, &path).expect("transition symlink");
+
+        assert!(matches!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::Io(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchor_transition_loader_rejects_group_writable_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("transition.json");
+        let (_first, _second, _current, _next, transition) = signed_rotation_fixture();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&transition).expect("transition JSON"),
+        )
+        .expect("write transition");
+        let mut permissions = fs::metadata(&path)
+            .expect("transition metadata")
+            .permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&path, permissions).expect("set transition permissions");
+
+        assert_eq!(
+            load_anchor_transition(&path),
+            Err(ConfigBundleError::InvalidPermissions(
+                "anchor transition must not be group/world writable"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_anchor_transition_signatures() {
+        let (_first, _second, current, next, mut transition) = signed_rotation_fixture();
+        transition.signatures.push(transition.signatures[0].clone());
+
+        assert_eq!(
+            verify_anchor_transition(&current, &next, &transition),
+            Err(ConfigBundleError::InvalidAnchorTransition(
+                "duplicate signature kid"
+            ))
+        );
+    }
+
+    #[test]
+    fn initial_anchor_requires_version_one() {
+        let first = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("first private key");
+        let initial = anchor_from_keys(notary_identity(), 1, 1, &[&first]);
+        assert!(initial.validate_initial().is_ok());
+
+        let rotated = anchor_from_keys(notary_identity(), 2, 1, &[&first]);
+        assert_eq!(
+            rotated.validate_initial(),
+            Err(ConfigBundleError::InvalidTrustAnchor("initial version"))
+        );
     }
 
     #[test]
@@ -1071,7 +1985,7 @@ mod tests {
     #[test]
     fn rejects_signature_before_classifying_binding_mismatch() {
         let mut fixture = fixture();
-        fixture.manifest.environment = "staging".to_string();
+        fixture.manifest.acceptance_identity.environment = "staging".to_string();
         fs::write(
             fixture.bundle_dir.join(MANIFEST_FILE),
             serde_json::to_vec_pretty(&fixture.manifest).expect("manifest json"),
@@ -1264,12 +2178,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_signature_from_disabled_signer() {
+    fn rejects_manifest_signature_below_anchor_threshold() {
         let fixture = fixture();
         let mut anchor: ConfigTrustAnchor =
             serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor"))
                 .expect("anchor");
-        anchor.signers[0].enabled = false;
+        let rotated = PrivateJwk::parse(ED25519_ROTATED_PRIVATE_JWK).expect("rotated private");
+        let rotated_public = rotated.public();
+        anchor.enabled_signers.push(ConfigTrustAnchorSigner {
+            kid: rotated_public.jkt().expect("rotated kid"),
+            jwk: rotated_public,
+        });
+        anchor
+            .enabled_signers
+            .sort_by(|left, right| left.kid.cmp(&right.kid));
+        anchor.threshold = 2;
         fs::write(
             &fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("anchor json"),
@@ -1277,7 +2200,46 @@ mod tests {
         .expect("anchor");
 
         let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
-            .expect_err("disabled signer rejected");
+            .expect_err("sub-threshold signature rejected");
+
+        assert_eq!(err, ConfigBundleError::SignatureRejected);
+    }
+
+    #[test]
+    fn duplicate_manifest_signature_cannot_satisfy_anchor_threshold() {
+        let fixture = fixture();
+        let mut anchor: ConfigTrustAnchor =
+            serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor"))
+                .expect("anchor");
+        let rotated = PrivateJwk::parse(ED25519_ROTATED_PRIVATE_JWK).expect("rotated private");
+        let rotated_public = rotated.public();
+        anchor.enabled_signers.push(ConfigTrustAnchorSigner {
+            kid: rotated_public.jkt().expect("rotated kid"),
+            jwk: rotated_public,
+        });
+        anchor
+            .enabled_signers
+            .sort_by(|left, right| left.kid.cmp(&right.kid));
+        anchor.threshold = 2;
+        fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor json"),
+        )
+        .expect("anchor");
+
+        let signature_path = fixture.bundle_dir.join(SIGNATURE_FILE);
+        let mut envelope: ConfigBundleSignatureEnvelope =
+            serde_json::from_slice(&fs::read(&signature_path).expect("signature envelope"))
+                .expect("signature envelope");
+        envelope.signatures.push(envelope.signatures[0].clone());
+        fs::write(
+            signature_path,
+            serde_json::to_vec_pretty(&envelope).expect("signature envelope json"),
+        )
+        .expect("signature envelope");
+
+        let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("duplicate signature does not increase quorum");
 
         assert_eq!(err, ConfigBundleError::SignatureRejected);
     }
@@ -1288,7 +2250,7 @@ mod tests {
         let mut anchor: ConfigTrustAnchor =
             serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor"))
                 .expect("anchor");
-        anchor.signers[0].kid = "not-the-thumbprint".to_string();
+        anchor.enabled_signers[0].kid = "not-the-thumbprint".to_string();
         fs::write(
             &fixture.anchor_path,
             serde_json::to_vec_pretty(&anchor).expect("anchor json"),

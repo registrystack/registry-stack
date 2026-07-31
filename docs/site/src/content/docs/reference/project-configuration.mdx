@@ -28,8 +28,8 @@ and Notary runtime configuration.
 - Published release containing this generator: none
 - Field release history: not verified
 - Compared releases: none
-- Generator: `registryctl authoring reference`
-- Coverage gate: `registryctl authoring reference --coverage`
+- Generator: `registryctl tooling reference configuration`
+- Coverage gate: `registryctl tooling reference configuration --coverage`
 - Country workspace or runtime configuration reads: none
 
 The generated reference is next-release candidate evidence from current source.
@@ -70,11 +70,11 @@ and assignments that use reused text separately.
 Assignment coverage does not claim that every path has unique prose.
 They do not prove that a complete project satisfies cross-file semantics, fixtures pass, an
 environment resolves required secret references, or a generated product configuration is valid.
-Run the authoring, fixture, preflight, and build commands for those separate gates.
+Run `check`, the offline fixture tests, `doctor`, and `build` for those separate gates.
 
 ## Next
 
-- [Connect your data](../../configure/)
+- [Connect an existing registry](../../configure/)
 - [registryctl CLI reference](../registryctl/)
 - [Errors and status codes](../errors/)
 - [Generated artifacts](../../generated-artifacts/)

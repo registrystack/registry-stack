@@ -1486,6 +1486,54 @@
             ],
             "type": "string"
           },
+          "DevelopmentDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "default_fixture": {
+                "type": "string"
+              },
+              "default_integration": {
+                "type": "string"
+              },
+              "notary_port": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "relay_port": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "source_mode": {
+                "$ref": "#/$defs/DevelopmentSourceMode"
+              }
+            },
+            "required": [
+              "source_mode",
+              "default_integration",
+              "default_fixture"
+            ],
+            "type": "object"
+          },
+          "DevelopmentSourceMode": {
+            "enum": [
+              "synthetic",
+              "local_snapshot",
+              "operator_bound"
+            ],
+            "type": "string"
+          },
           "EnvironmentCredential": {
             "additionalProperties": false,
             "properties": {
@@ -2358,6 +2406,17 @@
           },
           "deployment": {
             "$ref": "#/$defs/DeploymentBinding"
+          },
+          "development": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DevelopmentDeclaration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "entities": {
             "additionalProperties": {
@@ -3780,7 +3839,7 @@
             },
             "type": "object"
           },
-          "GovernedLiveIdentifier": {
+          "GovernedFixtureIdentifier": {
             "additionalProperties": false,
             "properties": {
               "scheme": {
@@ -3796,9 +3855,9 @@
             ],
             "type": "object"
           },
-          "GovernedLiveRequest": {
+          "GovernedFixtureRequest": {
             "additionalProperties": false,
-            "description": "The closed governed request accepted by both `project test --live` and an\nindependently authored synthetic fixture witness.\n\nKeeping one internal request type prevents fixture authoring from drifting\ninto a looser contract than the live Notary boundary.",
+            "description": "The closed governed request accepted by an independently authored synthetic\nfixture witness.",
             "properties": {
               "claims": {
                 "items": {
@@ -3824,7 +3883,7 @@
               "requester": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/GovernedLiveTarget"
+                    "$ref": "#/$defs/GovernedFixtureTarget"
                   },
                   {
                     "type": "null"
@@ -3832,7 +3891,7 @@
                 ]
               },
               "target": {
-                "$ref": "#/$defs/GovernedLiveTarget"
+                "$ref": "#/$defs/GovernedFixtureTarget"
               },
               "variables": {
                 "additionalProperties": {
@@ -3848,7 +3907,7 @@
             ],
             "type": "object"
           },
-          "GovernedLiveTarget": {
+          "GovernedFixtureTarget": {
             "additionalProperties": false,
             "properties": {
               "attributes": {
@@ -3863,7 +3922,7 @@
               },
               "identifiers": {
                 "items": {
-                  "$ref": "#/$defs/GovernedLiveIdentifier"
+                  "$ref": "#/$defs/GovernedFixtureIdentifier"
                 },
                 "type": "array"
               },
@@ -3920,7 +3979,7 @@
           "request": {
             "anyOf": [
               {
-                "$ref": "#/$defs/GovernedLiveRequest"
+                "$ref": "#/$defs/GovernedFixtureRequest"
               },
               {
                 "type": "null"

@@ -1,393 +1,239 @@
 ---
 title: Back up and restore a deployment
-description: How to preserve generated secrets, Relay and Notary PostgreSQL state, and config-trust files across container recreation and upgrades.
-status: draft
+description: How to preserve a generated deployment package and its complete recovery consistency groups.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-31"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure before you recreate containers, move a host, or upgrade a
-single-node Registry Relay or Registry Notary deployment. Start with `secrets/local.env`
-because losing it rotates generated API credentials, audit HMAC secrets, and the local
-Notary issuer identity; then preserve product state directories, every enabled product's
-complete PostgreSQL database, config-trust files, and source inputs.
+Use this procedure for a single-node deployment created by
+`registryctl deploy generate`. It preserves the verified package, operator files, and
+the complete state that each product lane needs after container recreation or host
+replacement.
 
-This page remains draft until complete backup and restore pass against the exact independently
-verified 1.0 candidate and its pinned standalone Solmara topology.
+Registryctl verifies the generated package. It does not create, schedule, coordinate,
+encrypt, retain, or restore backups. Keep Registryctl out of backup automation. The
+deployment operator owns those controls and the recovery decision.
+
+This procedure describes the package and fail-closed recovery boundaries implemented
+by the 1.0 deployment runbook. It is not evidence that a particular backup platform
+captured a coherent recovery point.
 
 ## When to use this
 
-Use this for `registryctl` generated projects and for hand-written single-node Docker Compose
-deployments that keep state on the host running the containers.
-Use your platform's snapshot, secret-manager, and database backup process for hosted,
-multi-node, or Kubernetes deployments.
+Use this procedure before an update, host move, storage change, or recovery exercise for
+the generated single-node Compose deployment.
 
-This procedure preserves durable state.
-It does not preserve process-local state such as OpenID Connect (OIDC) JSON Web Key Set
-(JWKS) caches or Relay source-integration token caches. A restart can still interrupt an
-in-flight OpenID for Verifiable Credential Issuance browser journey even when its bounded
-preauthorization state survives in PostgreSQL.
+Use the backup and restore procedure for your database, volume, snapshot, and secret
+platform when it provides stronger consistency guarantees. Preserve the same recovery
+groups and identity evidence described here.
 
-## Before you start
+## Prerequisites
 
-- Know the project directory that contains `compose.yaml`, `registry-stack.yaml`, `secrets/`,
-  and `state/`.
-- Know whether Relay consultations or Registry Notary are enabled, which PostgreSQL database each
-  product uses, and which role-provisioning record belongs to each database.
-- For a deployment with audited SnapshotExact materializations, remove dependent traffic, stop
-  the Relay fence holder and every Notary caller, and prevent replacement processes from starting.
-  Keep that topology quiesced while capturing source inputs, the Relay ingest cache, and the Relay
-  consultation database at one coordinated recovery point.
-- For a deployment without audited SnapshotExact, stop write traffic or use a filesystem snapshot
-  if you need an exact point-in-time copy of audit files.
-- Keep backups encrypted and access-controlled. `secrets/local.env`, audit files,
-  config-trust state, PostgreSQL correctness state, and sensitive-state key versions are
-  security-sensitive.
+- Locate the package root containing `binding.yaml`, `operator/`, and `generated/`.
+- Retain the exact approved-set file used to generate the package outside the package.
+- Record the generated closure SHA-256 outside the host being protected.
+- Read the package-specific `generated/RUNBOOK.md` and
+  `generated/operator-files.v1.json`.
+- Identify the backing store for every volume and PostgreSQL service declared by the
+  generated Compose model.
+- Arrange an encrypted, access-controlled destination for package files, operator
+  secrets, audit state, config-trust state, database backups, and recovery records.
+- Arrange a traffic and source-update freeze to capture one coordinated recovery point.
 
-## Back up generated secrets first
+## Recovery consistency groups
 
-Create a backup directory and copy `secrets/local.env` before copying other state:
+Do not treat individual files as independent restore units.
 
-```sh
-backup_dir="backup/registry-stack-$(date +%Y%m%d)"
-install -d -m 700 "$backup_dir"
-cp -p secrets/local.env "$backup_dir/local.env"
-sha256sum "$backup_dir/local.env" > "$backup_dir/local.env.sha256"
-chmod 600 "$backup_dir/local.env" "$backup_dir/local.env.sha256"
-```
+The `relay-public-state` group includes the exact package, approved set, public Relay
+bundle and anchor, instance and stream identities, accepted sequence, anti-rollback
+state, audit state, source inputs, ingest cache, and materialization state.
 
-Expected output is no output.
-The checksum file lets you confirm that a later restore put back the exact same secret file.
+The `consultation-state` group includes the exact package, approved set, consultation
+Relay and Notary bundles and anchors, instance and stream identities, accepted
+sequences, anti-rollback and audit state, complete Relay consultation and Notary
+PostgreSQL correctness state, role and key-lifecycle records, and retained key
+material.
 
-## Back up config, source files, and product state
+For audited SnapshotExact materializations, freeze source updates and dependent traffic
+before stopping the Relay fence holder and Notary callers.
+Capture source inputs, the Relay ingest cache, and the Relay
+consultation database at one coordinated recovery point. The recovery record must bind
+the database active pointer and history to the exact active generation and restricted
+content digest.
 
-Back up the project manifest when present, Compose file, product config directories, source data,
-and host-mounted state:
+If all services and source writers are stopped, sequential storage copies can describe
+the same logical point. If any writer remains active, use a storage or database
+snapshot mechanism that proves cross-store consistency.
 
-```sh
-backup_items=""
-for item in registry-stack.yaml compose.yaml relay notary state data; do
-  [ -e "$item" ] && backup_items="$backup_items $item"
-done
-[ -f .env ] && backup_items="$backup_items .env"
-tar -cf "$backup_dir/config-source-state.tar" $backup_items
-sha256sum "$backup_dir/config-source-state.tar" > "$backup_dir/config-source-state.tar.sha256"
-```
+## Verify and stop the package
 
-Expected output is one checksum line in `config-source-state.tar.sha256`.
-The archive includes `state/relay/` and `state/notary/` when those directories exist.
-Those paths are where generated Compose projects mount Relay cache, optional file-audit
-directories, and config-trust anti-rollback state if you enable it with
-`antirollback_state_path`.
-
-When audited SnapshotExact is configured, run this archive command only after the topology is
-quiesced. Keep Relay and its Notary callers stopped until the matching Relay database backup
-finishes. A source archive, ingest-cache archive, and Relay database taken at independent live
-times do not form a recoverable materialization set.
-
-If your hand-written config uses different paths, include them in the archive:
-
-- Relay or Notary file-audit directories, such as `/var/log/registry-relay/` or
-  `/var/log/registry-notary/`.
-- `config_trust.trust_anchor_path`, `config_trust.bundle_path`, and
-  `config_trust.antirollback_state_path`.
-- Source files, metadata manifests, signed bundles, and trust anchors that are mounted
-  into the containers.
-
-## Back up Relay consultation PostgreSQL state
-
-Skip this section when Relay has no `consultation` configuration. The ordinary Relay ingest cache
-remains covered by the file archive.
-
-The consultation state plane is a complete Relay-owned correctness boundary. Its
-`relay_state_private` and `relay_state_api` schemas contain durable consultation audit,
-completion and replay decisions, quotas, dispatch fencing, materialization publication state,
-and audit-pseudonym keyring metadata. They are separate from Notary's
-`registry_notary_private` and `registry_notary_api` schemas. Never copy state tables between the
-products.
-
-Remove traffic from Notary callers first, then stop the Relay fence holder and prevent another
-Relay process from starting. Keep the source inputs and Relay ingest cache unchanged while the
-database backup is captured. If Relay and Notary form one service, keep both products quiesced
-while their source, cache, and database backups are taken or use a platform snapshot that gives
-all stores one coordinated recovery point. A transactionally consistent dump of one live database
-does not make independently backed-up source, cache, or product databases share a recovery point.
-
-For a database dedicated to Relay and an empty-database restore in the same PostgreSQL cluster,
-where the pre-created roles keep their object identifiers, back up the complete Relay database
-through the migration login:
+Run package verification as a manual preflight, outside the backup job:
 
 ```sh
-PGSERVICEFILE=/run/registry-relay/pg_service.conf \
-PGSERVICE=registry_relay_migration \
-PGPASSFILE=/run/secrets/registry-relay-migration.pgpass \
-pg_dump --format=custom --no-owner --no-acl \
-  --role=relay_state_owner \
-  --file="$backup_dir/relay-consultation-state.dump" \
-  --dbname=registry_relay
-sha256sum "$backup_dir/relay-consultation-state.dump" \
-  > "$backup_dir/relay-consultation-state.dump.sha256"
+registryctl deploy verify \
+  --package . \
+  --approved-set ../approved-set.v1.json \
+  --check-operator-files
+export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<package-id-from-generated-RUNBOOK.md>}"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```
 
-If Relay shares a database with another owner, have the database administrator back up the
-complete database with an appropriately privileged backup identity. Do not narrow the backup to
-the two Relay schemas.
+Compare the reported closure digest with the value in the external recovery record.
+Stop dependent traffic and source updates, then stop the generated deployment:
 
-Expected output is one checksum line. Store the Relay release, config and signed artifact closure,
-PostgreSQL major, all five role names, the four bound role object identifiers, bootstrap inputs,
-keyring lifecycle settings, PostgreSQL trust root, and retained audit-pseudonym key material with
-the encrypted recovery record. Keep secret values outside the database dump.
+```sh
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml down
+```
 
-For every audited SnapshotExact binding, the access-controlled recovery record must bind:
+Keep the traffic and source freeze in place until every member of each selected recovery
+group has been captured.
 
-- The source-input archive SHA-256 and the exact source revision.
-- The Relay ingest-cache archive SHA-256.
-- The complete Relay database backup SHA-256, including materialization active-pointer and history
-  tables.
-- The exact active binding, publication sequence, generation, and restricted content digest.
-- The time or write-ahead-log position shared by the quiesced recovery set.
+## Capture the operator-owned backup
 
-Hash and sign or independently attest that closed recovery record. Do not put restricted content
-digests, source paths, rows, credentials, or key material in general logs or a public release
-record. A list of unrelated artifact hashes is not evidence that the stores belong to one
+Archive the package without editing `generated/`:
+
+```sh
+backup_root="/secure-backups/registry-stack-recovery-id"
+install -d -m 700 "$backup_root"
+tar -cf "$backup_root/deployment-package.tar" \
+  binding.yaml operator generated
+cp -p ../approved-set.v1.json "$backup_root/approved-set.v1.json"
+(
+  cd "$backup_root"
+  sha256sum deployment-package.tar approved-set.v1.json > package-files.sha256
+)
+chmod 600 "$backup_root/deployment-package.tar" \
+  "$backup_root/approved-set.v1.json" \
+  "$backup_root/package-files.sha256"
+```
+
+The archive contains operator secrets and certificates. Encrypt it at rest, restrict
+access, and do not print or copy its contents into logs.
+
+Use the operator-owned storage procedures to capture the state named by the generated
+runbook and binding:
+
+1. Snapshot the complete `relay-public-state` group when that lane is in scope.
+2. Snapshot the complete `consultation-state` group when consultation Relay or Notary is
+   in scope. Back up complete product databases, not selected tables or schemas.
+3. Preserve PostgreSQL role object identifiers when the product state contract binds
+   them. A physical or managed cluster snapshot is required when a logical restore
+   cannot preserve that identity.
+4. Hash each backup artifact without logging its contents.
+5. Sign or independently attest one closed recovery record that binds the artifacts to
+   the package closure, approved-set digest, product release, PostgreSQL major, lane,
+   instance, stream, accepted sequence, and shared recovery point.
+
+A list of unrelated artifact hashes is not evidence that the stores belong to one
 generation.
 
-For recovery into another PostgreSQL cluster, use a physical backup or cluster-level managed
-snapshot that preserves the PostgreSQL role catalog and its object identifiers. Recreating the
-same role names does not preserve those identifiers, and Relay intentionally rejects the restored
-binding as capability drift. The
-[Relay product documentation](../../products/registry-relay/) documents the schema and role
-boundary in full.
+Do not restart services until all selected recovery groups are complete. Then use the
+ordinary start sequence in `generated/RUNBOOK.md`.
 
-## Back up PostgreSQL when Notary is present
+## Restore a recovery point
 
-Back up the complete Notary database at one consistent point. Do not back up individual
-correctness tables. Stop Notary writers for a quiesced backup, or use the database platform's
-transactionally consistent snapshot workflow. Use a PostgreSQL service definition and password
-file so credentials do not appear in process arguments:
+Restore into an empty, isolated directory and isolated backing stores. Keep public,
+consultation, and Notary traffic blocked.
 
-```ini
-# /run/registry-notary/pg_service.conf
-[registry_notary_migrator]
-host=postgres.example.internal
-port=5432
-dbname=registry_notary
-user=registry_notary_migrator
-sslmode=verify-full
-sslrootcert=/run/secrets/notary-postgres-ca.pem
-```
+1. Verify the backup system's integrity record before extracting any files.
+2. Extract `deployment-package.tar` and restore the approved set outside the package.
+3. Restore every member of each selected recovery group from the same recovery record.
+4. Restore exact instance, stream, role, key, bundle, anchor, audit, and anti-rollback
+   identities. Do not edit or regenerate them to make startup pass.
+5. Restore operator-file permissions and ownership recorded by the backup.
+6. Keep the initialization Compose file and every initialization service unused. They
+   are only for a new identity and an empty first installation.
 
-The service name is operator-defined. The
-[Registry Notary PostgreSQL operations guide](https://docs.registrystack.org/products/registry-notary/postgresql-state-operations/)
-provides the complete role-provisioning example and password-file requirements.
+Verify the archived files before extraction:
 
 ```sh
-PGSERVICEFILE=/run/registry-notary/pg_service.conf \
-PGSERVICE=registry_notary_migrator \
-PGPASSFILE=/run/secrets/registry-notary-migrator.pgpass \
-pg_dump --format=custom --no-owner --no-acl \
-  --role=registry_notary_owner \
-  --file="$backup_dir/notary-state.dump" \
-  --dbname=registry_notary
-sha256sum "$backup_dir/notary-state.dump" \
-  > "$backup_dir/notary-state.dump.sha256"
+backup_root="/secure-backups/registry-stack-recovery-id"
+(
+  cd "$backup_root"
+  sha256sum -c package-files.sha256
+)
 ```
 
-Expected output is one checksum line. Preserve the application release, migration set,
-PostgreSQL major, reproducible owner and runtime role provisioning, recovery timestamp, and
-sensitive-state key version with the encrypted backup. Keep the key value in the secret manager,
-outside the database dump.
-
-## Restore files
-
-On a new host, install Docker Compose and `registryctl`, create the project directory, and copy
-the backup directory into it.
-On the original host, stop the generated services before restoring files:
+Verify the restored package before contacting product state:
 
 ```sh
-registryctl stop
+registryctl deploy verify \
+  --package . \
+  --approved-set ../approved-set.v1.json \
+  --check-operator-files
+export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<package-id-from-generated-RUNBOOK.md>}"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```
 
-Expected output comes from Docker Compose and shows the containers stopping or already stopped.
-Then restore secrets and host-mounted state:
+Compare the reported closure digest with the external recovery record. Any mismatch is
+a manual abort.
+
+Run all three dedicated, networkless state checks required by the generated runbook before
+staging serving secrets:
 
 ```sh
-sha256sum -c "$backup_dir/local.env.sha256"
-install -d -m 700 secrets
-cp -p "$backup_dir/local.env" secrets/local.env
-sha256sum -c "$backup_dir/config-source-state.tar.sha256"
-tar -xf "$backup_dir/config-source-state.tar"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
 ```
 
-Both checksum commands print `OK` for the named file.
-Do not generate a new `secrets/local.env` to replace a lost one unless you intend to rotate
-the deployment's API credentials, audit HMAC secret, and local Notary issuer key.
-On a new host, compare `.env` with `id -u` and `id -g`.
-If `REGISTRY_STACK_RUNTIME_UID` or `REGISTRY_STACK_RUNTIME_GID` names the old host owner, edit
-those two values before starting containers so Relay and Notary can write the restored private
-state directories.
-If the archive was extracted by root or with numeric owners preserved, align restored state
-ownership and private permissions with the runtime identity:
+If any check rejects the restored state, do not delete anti-rollback state, change an
+accepted sequence, drop a schema, or rerun initialization. Restore a coherent group at
+the same or newer accepted sequence. If no such backup exists, provision a new instance
+identity, review and sign every affected lane, generate a new package, and follow the
+first-installation section of its runbook.
+
+Only after all checks succeed, stage the three serving-secret groups and start:
 
 ```sh
-runtime_uid="$(awk -F= '$1 == "REGISTRY_STACK_RUNTIME_UID" { print $2 }' .env)"
-runtime_gid="$(awk -F= '$1 == "REGISTRY_STACK_RUNTIME_GID" { print $2 }' .env)"
-if [ -n "$runtime_uid" ] && [ -n "$runtime_gid" ] && [ -d state ]; then
-  sudo chown -R "$runtime_uid:$runtime_gid" state
-  find state -type d -exec chmod 700 {} +
-  find state -type f -exec chmod 600 {} +
-fi
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
-For audited SnapshotExact, do not start Relay after restoring the files. First verify that the
-source-input archive, ingest-cache archive, and Relay database dump match the same attested
-recovery record. The record's active generation and restricted content digest must agree with the
-database active pointer and history and with the retained cache generation.
+For a private-lane recovery, keep externally reachable dependants stopped until
+PostgreSQL and consultation Relay are ready and verified. Then start Notary and the
+remaining dependants in the order specified by `generated/RUNBOOK.md`.
 
-## Restore Relay consultation PostgreSQL state
+## Verify the restored service
 
-Skip this section when no Relay consultation dump or snapshot is present. Keep Relay and every
-Notary caller offline while restoring into an empty, isolated, writable PostgreSQL 16 through 18
-primary.
+- Confirm `docker compose ... ps` reports the expected services as healthy.
+- Exercise one authenticated canary for every restored public and consultation path.
+- Exercise each recovered SnapshotExact materialization. Global readiness can remain
+  successful while one execution rejects a stale materialization.
+- Reconcile the recovery record with the last acknowledged consultation, credential,
+  status, and external audit watermark before admitting traffic.
+- Confirm new audit records extend the retained chain without exposing record values.
 
-For a same-cluster logical restore, retain the original owner, runtime, keyring-maintenance, and
-keyring-reader roles and their object identifiers. Restore the complete dump as the original
-owner. For a different cluster, restore the physical backup that includes the original role
-catalog. A logical restore into newly recreated role names is not a supported rebinding path.
-
-```sh
-sha256sum -c "$backup_dir/relay-consultation-state.dump.sha256"
-PGSERVICEFILE=/run/registry-relay/pg_service.conf \
-PGSERVICE=registry_relay_migration \
-PGPASSFILE=/run/secrets/registry-relay-migration.pgpass \
-pg_restore --exit-on-error --single-transaction --no-owner --no-acl \
-  --role=relay_state_owner \
-  --dbname=registry_relay \
-  "$backup_dir/relay-consultation-state.dump"
-```
-
-The checksum command prints `OK`. The restore command must finish without an error before
-bootstrap attestation starts.
-
-After the restore, restore the matching config, artifact closure, PostgreSQL trust root, audit
-HMAC material, and retained audit-pseudonym key material. Rerun
-`registry-relay consultation bootstrap-state` with exactly the same role connections, owner,
-chain-key epoch, lock keys, active key, deadline, and retention inputs recorded with the backup.
-The command must report `installed_or_attested` and `identical`. A drift response means the
-recovery set does not match; do not drop the Relay schemas or change bootstrap inputs to make it
-pass.
-
-For audited SnapshotExact, startup reconciles the database-authoritative active generation and
-digest with the restored cache before opening a newer source generation. A missing, mismatched, or
-unreadable retained cache generation keeps the dependent SnapshotExact publication unavailable.
-Do not replace the database pointer, edit the cache, or open live source fallback to clear the
-failure. Restore the matching coordinated set or republish a reviewed source input as a new
-generation.
-
-Relay startup and `/ready` attest the restored catalog, role grants, keyring, audit, quota,
-materialization, and current serving fence. They do not prove that the recovery point includes
-every write Relay previously acknowledged. If the backup might be stale, keep it offline and use
-write-ahead-log replay or point-in-time recovery until the recovery point covers the last
-acknowledged consultation and external audit watermark. If that cannot be proved, do not resume
-the same consultation workload from the restore. Waiting for the 15-minute batch-child replay
-window does not restore missing audit, quota, materialization, or keyring history.
-
-## Restore Notary PostgreSQL data
-
-Restore the dump into an empty, isolated database with no Notary traffic path. Provision the
-restricted migration login, `NOLOGIN` owner role, and runtime role before the restore:
-
-```sh
-sha256sum -c "$backup_dir/notary-state.dump.sha256"
-PGSERVICEFILE=/run/registry-notary/pg_service.conf \
-PGSERVICE=registry_notary_migrator \
-PGPASSFILE=/run/secrets/registry-notary-migrator.pgpass \
-pg_restore --exit-on-error --single-transaction --no-owner --no-acl \
-  --role=registry_notary_owner \
-  --dbname=registry_notary \
-  "$backup_dir/notary-state.dump"
-registry-notary --config /etc/registry-notary/notary.yaml state install \
-  --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \
-  --owner-role registry_notary_owner \
-  --runtime-role registry_notary_runtime
-registry-notary --config /etc/registry-notary/notary.yaml state doctor
-```
-
-The checksum command prints `OK`. The restore omits source-cluster ACLs and creates objects as the
-new `NOLOGIN` owner. The installer safely rebinds role identities and reapplies the complete
-compiled ACL baseline when the released schema still attests. It does not change ownership or
-repair drift. The installer and doctor report schema version and supported PostgreSQL major
-without printing database credentials. Restore the matching sensitive-state key before running
-doctor. When preauthorization is enabled, doctor proves that the key is present and well formed,
-but only a complete preauthorization canary proves that it decrypts state from this recovery point.
-
-Keep Notary offline when the recovery point might predate an acknowledged write. Wait for every
-possibly missing replay, nonce, evaluation, idempotency, preauthorization, and quota decision to
-expire, and reconcile credential status before admitting traffic. A lost suspension or revocation
-does not become safe through waiting. The
-[Registry Notary PostgreSQL operations guide](https://docs.registrystack.org/products/registry-notary/postgresql-state-operations/)
-defines the full stale-restore quarantine.
-
-## Verify after restore
-
-Start the deployment and run product checks:
-
-```sh
-registryctl start
-registryctl doctor --profile local
-```
-
-The human-readable `doctor` report must contain no `startup_fail` findings. Add `--format json`
-when another program needs the versioned report.
-Run `registryctl smoke` when the generated deployment includes Relay. For a Notary deployment,
-run `registry-notary doctor --config <your-notary-config.yaml> --format json`, then exercise an
-authenticated claim or credential journey appropriate to that deployment. `registryctl` does not
-provide a product-scoped Notary smoke subcommand. When OID4VCI preauthorization is enabled,
-complete an offer-to-credential journey before admitting traffic.
-For a consultation-enabled Relay, require `/ready` to return `200`, then run one authenticated
-consultation canary while downstream Notary traffic remains blocked. Global readiness can remain
-`200` while an individual SnapshotExact execution rejects a stale snapshot, so the canary must
-exercise every recovered materialization relied on by the deployment. Admit Notary traffic only
-after both product recovery points and the canaries have been reconciled.
-
-For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
-matches the configured trust anchor and signed bundle before the service is allowed to serve.
-Run the command on the host or inside a container where the configured paths are available:
-
-```sh
-registry-relay config verify-bundle \
-  --bundle-dir /etc/registry-relay/config/bundle \
-  --anchor-path /etc/registry-relay/config/trust-anchor.json \
-  --state-path /var/lib/registry-relay/config-state/antirollback.json
-```
-
-Use the equivalent `registry-notary config verify-bundle` command and Notary paths when
-verifying a Notary bundle.
-A rollback rejection means the restored anti-rollback file has seen a newer bundle sequence
-than the bundle you are trying to boot.
+Package verification proves the generated closure and operator-file boundary. It does
+not prove that the backup captured one recovery point, that a database contains the
+latest acknowledged write, or that a canary covered every product path. Readiness also
+does not prove restore freshness.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Generated API keys no longer work after restore | `secrets/local.env` was regenerated or copied from the wrong project | Restore the original `secrets/local.env`, then restart the containers |
-| Audit records cannot be correlated across the restore | The audit HMAC secret changed | Restore the prior `secrets/local.env`; if the old file is gone, document the break as a key-rotation event |
-| Relay consultation bootstrap reports capability or keyring drift | The restore has different role object identifiers, schema ownership, bootstrap identity, or keyring lifecycle state | Keep traffic blocked and restore the matching complete recovery set; do not drop schemas or reinitialize the keyring |
-| Relay is ready but the recovery point might be stale | Readiness attests the restored state plane but cannot infer missing acknowledged writes | Keep Relay and Notary traffic blocked and recover forward to the last acknowledged write and audit watermark |
-| Relay is ready but one SnapshotExact canary is unavailable | The execution-time freshness bound failed, or the restored source, cache generation, content digest, and database publication pointer do not agree | Keep dependent traffic blocked and restore the coordinated recovery set or publish a reviewed new generation |
-| Notary state doctor rejects the restore | The schema, runtime role, server major, write authority, durability settings, or configured sensitive-state key is invalid | Keep traffic blocked, restore the matching recovery set, and rerun `state install` and `state doctor` |
-| Config bundle startup fails with a rollback code | The anti-rollback state records a newer accepted sequence | Boot a signed bundle with a higher sequence, or follow the break-glass process documented for config trust |
+| Symptom | Required response |
+|---|---|
+| Package verification reports a digest or ownership mismatch | Keep traffic blocked and restore the exact package and approved set named by the recovery record |
+| An operator file is absent or has the wrong mode or owner | Restore it from the encrypted package archive; do not invent a replacement |
+| `verify_state` rejects an older sequence | Keep the lane offline and restore a coherent same-or-newer recovery group; never delete or reinitialize anti-rollback state |
+| Relay is healthy but a SnapshotExact canary fails | Restore source, cache, database publication state, and digest from one group, or publish a newly reviewed generation |
+| The database role identity differs after restore | Restore a snapshot that preserves the role catalog or replace the affected instance identity |
+| The recovery point may omit acknowledged writes | Keep traffic blocked and recover forward to the last acknowledged write and external audit watermark |
 
 ## Next
 
 - [Run single-node Compose behind your reverse proxy](../single-node-compose-behind-proxy/)
 - [Retention and persistent state](../retention-and-persistent-state/)
-- [Upgrade and roll back a deployment](../upgrade-and-rollback/)
+- [Upgrade and recover a deployment](../upgrade-and-rollback/)
 - [Harden a production deployment](../../security/hardening-checklist/)

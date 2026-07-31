@@ -164,7 +164,7 @@ function resolveServerCommand(
   if (packagedRegistryctl !== undefined) {
     return {
       command: packagedRegistryctl,
-      args: ['authoring', 'language-server'],
+      args: ['tooling', 'language-server'],
     };
   }
   const standalone = findExecutableOnPath(executable);
@@ -175,10 +175,10 @@ function resolveServerCommand(
     process.platform === 'win32' ? 'registryctl.exe' : 'registryctl',
   );
   if (registryctl !== undefined) {
-    return { command: registryctl, args: ['authoring', 'language-server'] };
+    return { command: registryctl, args: ['tooling', 'language-server'] };
   }
   throw new Error(
-    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl authoring language-server".',
+    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl tooling language-server".',
   );
 }
 

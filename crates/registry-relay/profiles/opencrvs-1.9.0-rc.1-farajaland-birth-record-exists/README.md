@@ -57,11 +57,11 @@ violation fail closed.
 5. Run `registry-relay doctor`, bootstrap the dedicated PostgreSQL consultation
    state as documented in the operations runbook, and start Relay with only
    its runtime database identity.
-6. For a combined Relay and Notary deployment, initialize the maintained
-   OpenCRVS Registry Stack project with `registryctl init --from opencrvs` and
-   build its compiler-pinned product inputs. Do not hand-author a second Notary
-   copy of this Relay profile. Notary receives no OpenCRVS URL or OAuth
-   credential.
+6. For a combined Relay and Notary deployment, initialize an HTTP Registry
+   Stack project with `registryctl init <project-directory> --template http`,
+   author this reviewed OpenCRVS contract as an integration, and build its
+   compiler-pinned product inputs. Do not hand-author a second Notary copy of
+   this Relay profile. Notary receives no OpenCRVS URL or OAuth credential.
 7. Run the project-owned offline fixtures and `registryctl check --explain`
    before applying deployment-only source and workload bindings.
 

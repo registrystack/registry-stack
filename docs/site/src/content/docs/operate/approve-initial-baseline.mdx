@@ -1,0 +1,325 @@
+---
+title: Approve the initial product baseline
+description: Create independent lane anchors, sign the first three product bundles, verify them, and assemble an approved baseline set.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-31"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this guide after `registryctl build` to turn the three unsigned product-lane inputs into one
+`ApprovedBaselineSetV1` that a deployment operator can consume.
+
+## When to use this
+
+Use this procedure for the first governed approval of a project environment.
+For a later change, compare against the current approved set and follow
+[Approve a changed source](../advanced/compare-and-reapprove-source-change/).
+
+The public Relay, consultation Relay, and Notary lanes keep separate anchors, signing keys,
+signed bundles, and approval decisions.
+The approved-set owner assembles verified lane outputs but does not sign on behalf of a lane.
+
+## Before you start
+
+Use this procedure only when the selected build binds an operator-managed source and reports
+`Next: registryctl trust anchor create --help`.
+Do not sign a build that contains a project-local file dataset. Bind the operator-managed source
+in a separate governed environment, rerun its fixtures and review, and build that environment
+first.
+
+From the authored project, test, review, and build the target environment:
+
+```sh
+registryctl test --environment local
+registryctl check --environment local --explain
+registryctl review compare --environment local
+registryctl build --environment local
+```
+
+An initial comparison identifies all three lanes as requiring approval.
+The build creates one unsigned input under each of these directories:
+
+```text
+.registry-stack/build/local/signing-inputs/relay-public
+.registry-stack/build/local/signing-inputs/relay-consultation
+.registry-stack/build/local/signing-inputs/notary
+```
+
+The optional local evaluation-key procedure requires OpenSSL with Ed25519 support and Python 3.
+Production trust owners use their approved custody tooling instead.
+
+Prepare a fresh handoff directory.
+Each lane trust owner also needs an approved public JSON Web Key (JWK) file and the matching
+private key through an explicit `file:` or `op://` locator.
+
+```sh
+mkdir operator-handoff
+```
+
+Do not put a private signing key in the generated build or the handoff directory.
+
+## Generate evaluation-only lane keys
+
+The maintained HTTP starter declares only the `local` environment.
+For a local evaluation, this procedure creates one independent Ed25519 key pair per lane using
+OpenSSL and the Python 3 standard library:
+
+:::danger[Evaluation keys only]
+This procedure writes exportable private keys to local files.
+Never use these keys for a production approval.
+In production, each lane trust owner must generate and retain its private key inside the
+organization's approved external custody boundary, then provide only the public JWK and an
+approved signing locator.
+:::
+
+```sh
+umask 077
+python3 - <<'PY'
+from pathlib import Path
+
+Path("evaluation-keys").mkdir(mode=0o700)
+PY
+
+for lane in relay-public relay-consultation notary; do
+  openssl genpkey \
+    -algorithm ED25519 \
+    -outform DER \
+    -out "evaluation-keys/$lane.private.der"
+  openssl pkey \
+    -in "evaluation-keys/$lane.private.der" \
+    -inform DER \
+    -pubout \
+    -outform DER \
+    -out "evaluation-keys/$lane.public.der"
+  LANE="$lane" python3 - <<'PY'
+import base64
+import json
+import os
+from pathlib import Path
+
+root = Path("evaluation-keys")
+lane = os.environ["LANE"]
+private_der_path = root / f"{lane}.private.der"
+public_der_path = root / f"{lane}.public.der"
+private_der = private_der_path.read_bytes()
+public_der = public_der_path.read_bytes()
+private_prefix = bytes.fromhex("302e020100300506032b657004220420")
+public_prefix = bytes.fromhex("302a300506032b6570032100")
+if (
+    len(private_der) != len(private_prefix) + 32
+    or not private_der.startswith(private_prefix)
+    or len(public_der) != len(public_prefix) + 32
+    or not public_der.startswith(public_prefix)
+):
+    raise SystemExit("openssl emitted an unexpected Ed25519 key encoding")
+
+def encode(value):
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+public = {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": encode(public_der[-32:]),
+}
+private = {
+    **public,
+    "d": encode(private_der[-32:]),
+}
+for kind, value in (("private", private), ("public", public)):
+    path = root / f"{lane}.{kind}.jwk"
+    path.write_text(
+        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+private_der_path.unlink()
+public_der_path.unlink()
+PY
+done
+```
+
+The procedure refuses to reuse an existing `evaluation-keys` directory.
+It leaves each JWK owner-readable and owner-writable only.
+
+## Approve the public Relay lane
+
+The public Relay trust owner creates the lane anchor, signs the exact build input, and verifies the
+result:
+
+```sh
+registryctl trust anchor create \
+  --lane relay-public \
+  --input .registry-stack/build/local/signing-inputs/relay-public \
+  --public-key evaluation-keys/relay-public.public.jwk \
+  --threshold 1 \
+  --output-file operator-handoff/relay-public-anchor.json
+registryctl trust bundle sign \
+  --lane relay-public \
+  --input .registry-stack/build/local/signing-inputs/relay-public \
+  --anchor operator-handoff/relay-public-anchor.json \
+  --key file:evaluation-keys/relay-public.private.jwk \
+  --output-dir operator-handoff/relay-public-bundle
+registryctl trust bundle verify \
+  --bundle-dir operator-handoff/relay-public-bundle \
+  --anchor operator-handoff/relay-public-bundle/anchor.json
+```
+
+Verification must identify the signed input as the `relay-public` lane under that anchor.
+
+## Approve the consultation Relay lane
+
+The consultation Relay trust owner repeats the procedure with its own key and anchor:
+
+```sh
+registryctl trust anchor create \
+  --lane relay-consultation \
+  --input .registry-stack/build/local/signing-inputs/relay-consultation \
+  --public-key evaluation-keys/relay-consultation.public.jwk \
+  --threshold 1 \
+  --output-file operator-handoff/relay-consultation-anchor.json
+registryctl trust bundle sign \
+  --lane relay-consultation \
+  --input .registry-stack/build/local/signing-inputs/relay-consultation \
+  --anchor operator-handoff/relay-consultation-anchor.json \
+  --key file:evaluation-keys/relay-consultation.private.jwk \
+  --output-dir operator-handoff/relay-consultation-bundle
+registryctl trust bundle verify \
+  --bundle-dir operator-handoff/relay-consultation-bundle \
+  --anchor operator-handoff/relay-consultation-bundle/anchor.json
+```
+
+Verification must identify the signed input as the `relay-consultation` lane under that anchor.
+
+## Approve the Notary lane
+
+The Notary trust owner repeats the procedure with the Notary key and anchor:
+
+```sh
+registryctl trust anchor create \
+  --lane notary \
+  --input .registry-stack/build/local/signing-inputs/notary \
+  --public-key evaluation-keys/notary.public.jwk \
+  --threshold 1 \
+  --output-file operator-handoff/notary-anchor.json
+registryctl trust bundle sign \
+  --lane notary \
+  --input .registry-stack/build/local/signing-inputs/notary \
+  --anchor operator-handoff/notary-anchor.json \
+  --key file:evaluation-keys/notary.private.jwk \
+  --output-dir operator-handoff/notary-bundle
+registryctl trust bundle verify \
+  --bundle-dir operator-handoff/notary-bundle \
+  --anchor operator-handoff/notary-bundle/anchor.json
+```
+
+Verification must identify the signed input as the `notary` lane under that anchor.
+
+## Assemble the approved baseline set
+
+After all three lane owners transfer their verified outputs, the approved-set owner assembles the
+initial set:
+
+```sh
+registryctl trust approved-set assemble \
+  --environment local \
+  --relay-public operator-handoff/relay-public-bundle \
+  --relay-consultation operator-handoff/relay-consultation-bundle \
+  --notary operator-handoff/notary-bundle \
+  --output-file operator-handoff/approved-set.v1.json
+```
+
+Registryctl verifies the three lane bundles and writes one approved-set file.
+It reports the approved-set digest and the next `registryctl deploy generate` command.
+
+## Rotate an anchor after initial approval
+
+Do not create another version-1 anchor when an approved lane changes signer.
+Pin the current lane anchor and current approved set as the preceding trust state, then authorize
+the transition with the current threshold.
+For example, rotate the consultation Relay anchor and replace only that lane:
+
+```sh
+CURRENT_APPROVED_SET=operator-inputs/current-approved-set.v1.json
+CURRENT_ANCHOR=operator-handoff/relay-consultation-bundle/anchor.json
+ROTATED_TRUST=operator-handoff/relay-consultation-anchor.v2
+NEXT_SIGNING_INPUT=.registry-stack/build/local/signing-inputs/relay-consultation
+NEXT_BUNDLE=operator-handoff/relay-consultation-bundle.v2
+
+registryctl build \
+  --environment local \
+  --against "$CURRENT_APPROVED_SET" \
+  --rotate-anchor relay-consultation
+registryctl trust anchor rotate \
+  --current-anchor "$CURRENT_ANCHOR" \
+  --next-public-key evaluation-keys/relay-consultation.public.jwk \
+  --next-public-key operator-inputs/relay-consultation-next.public.jwk \
+  --next-threshold 1 \
+  --key file:evaluation-keys/relay-consultation.private.jwk \
+  --output-dir "$ROTATED_TRUST"
+registryctl trust bundle sign \
+  --lane relay-consultation \
+  --input "$NEXT_SIGNING_INPUT" \
+  --anchor "$ROTATED_TRUST/anchor.json" \
+  --key file:operator-inputs/relay-consultation-next.private.jwk \
+  --against "$CURRENT_APPROVED_SET" \
+  --output-dir "$NEXT_BUNDLE"
+registryctl trust bundle verify \
+  --bundle-dir "$NEXT_BUNDLE" \
+  --anchor "$NEXT_BUNDLE/anchor.json"
+registryctl trust approved-set assemble \
+  --from "$CURRENT_APPROVED_SET" \
+  --relay-consultation "$NEXT_BUNDLE" \
+  --output-file operator-handoff/approved-set.v2.json
+registryctl deploy generate \
+  --approved-set operator-handoff/approved-set.v2.json \
+  --output-dir operator-handoff/registry-stack.v2
+registryctl deploy verify --package operator-handoff/registry-stack.v2
+```
+
+The explicit build selector emits the unchanged consultation input and binds the reviewed update
+to that lane's anchor rotation.
+`trust anchor rotate` verifies that the transition is authorized by the pinned preceding anchor;
+the repeated public-key options keep the current signer during the overlap.
+`trust bundle sign --against` advances from the pinned preceding approved set, and assembly keeps
+the unchanged public Relay and Notary lanes from that set.
+Deployment verification does not accept the rotated anchor into an existing product state.
+For thresholds, overlap windows, and the required preview, stop, audited acceptance, exact
+verification, and startup order, follow
+[Rotate credentials and trust](../advanced/rotate-credentials-and-trust/).
+
+## Verify the handoff
+
+Inspect the result without printing key material:
+
+```sh
+test -f operator-handoff/approved-set.v1.json
+registryctl deploy generate \
+  --approved-set operator-handoff/approved-set.v1.json \
+  --output-dir operator-handoff/registry-stack
+GENERATED_CLOSURE_SHA256="<independently-recorded-generated-closure-sha256>"
+registryctl deploy verify \
+  --package operator-handoff/registry-stack \
+  --expected-closure-sha256 "$GENERATED_CLOSURE_SHA256"
+```
+
+Keep the approved-set digest and generated closure root outside the package before transfer.
+This check binds the generated package to that external record, but does not accept it for
+initialization.
+Continue with [Run the generated single-node Compose package](../single-node-compose-behind-proxy/)
+to supply and check operator files before one-time initialization and ordinary startup.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Anchor creation rejects the public key | The key is not a supported public JWK or does not match the selected threshold. | Export the lane owner's approved public JWK and retry into a fresh output path. |
+| Bundle signing refuses the key | The locator is missing `file:` or `op://`, or the key does not satisfy the anchor. | Use an explicit locator for the matching private key. |
+| Bundle verification fails | The bundle, lane, input, or anchor does not belong to the same approval. | Stop the handoff and return the exact input to that lane's trust owner. |
+| Approved-set assembly reports a missing lane | Initial assembly requires one verified public Relay, consultation Relay, and Notary bundle. | Supply all three verified lane directories. |

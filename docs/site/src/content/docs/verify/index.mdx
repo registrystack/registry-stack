@@ -1,6 +1,6 @@
 ---
 title: Validate your project
-description: Check your Registry Stack project before you start it or hand it to an operator.
+description: Test authored fixtures, inspect the derived plan, and verify local runtime readiness.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,94 +13,80 @@ locale: en
 standards_referenced: []
 ---
 
-Run these checks after you change a project file, environment, workbook, or
-fixture. They find configuration and source problems before Registry Stack
-starts.
+Use these checks after you change a project, integration, environment, script,
+snapshot, or fixture.
+Run them from the project directory.
 
-Run the commands from your project directory.
-
-## Run the project checks
+## Test authored behavior offline
 
 ```sh
-registryctl test --project-dir .
-registryctl check --project-dir . --environment local --explain
-registryctl build --project-dir . --environment local
+registryctl test
 ```
 
-| Command | What it tells you |
-| --- | --- |
-| `test` | The maintained offline fixtures produce their expected results. A project with no fixtures reports `0/0 passed`; that is not a source-data test. |
-| `check --explain` | The authored files agree with one another, and the effective plan matches what you intended. The explanation omits secret values and source records. |
-| `build` | Registryctl can produce the product configuration and artifact inventory under `.registry-stack/build/local/`. |
+The command executes synthetic fixtures through the production evaluation
+semantics without contacting a live source.
+Use `--trace` to include the bounded synthetic interaction trace or `--watch`
+to rerun after authored files change.
 
-Stop at the first failure. Correct an authored project file or the reviewed
-source, then rerun the checks. Do not correct a failure by editing anything
-under `.registry-stack/`.
-
-## Check runtime prerequisites
-
-If this environment is intended to run locally, check its files, secret
-references, and source prerequisites:
+## Review the effective plan
 
 ```sh
-registryctl preflight --project-dir . --environment local
+registryctl check --environment local --explain
+registryctl review compare --environment local
 ```
 
-`preflight` validates secret-reference availability, runtime-file posture,
-environment bindings, and product compatibility without contacting a source.
-An offline-only project may deliberately omit runtime bindings. You can test
-and build that project, but you cannot start it until an operator supplies the
-missing environment values.
+`check` validates authored intent and prints a redacted effective plan.
+An initial `review compare` reports every required product lane as needing
+approval.
+For an update, pass the current approved set with `--against`.
 
-For the supported local spreadsheet runtime, use `registryctl doctor --profile
-local` to validate the complete selected worksheet and the host prerequisites.
+Both commands are read-only.
+They do not resolve secrets, contact a source, or start Docker.
 
-## Check the local API
-
-For the supported local profile:
+## Build unsigned product inputs
 
 ```sh
-registryctl doctor --profile local
-registryctl start
-registryctl smoke
+registryctl build --environment local
 ```
 
-`doctor` checks the local Registryctl installation, matching release assets,
-container provider, and project. `start` prepares the loopback-only runtime.
-`smoke` checks readiness and the maintained allowed and denied requests.
+The build writes deterministic review material and lane-specific signing
+inputs under `.registry-stack/build/local/`.
+Do not edit generated product configuration.
 
-If you edit a workbook or authored YAML while the previous local runtime is
-still present, inspect that existing runtime before rebuilding it:
+## Check development prerequisites
 
 ```sh
-registryctl status
-registryctl logs
-registryctl open
+registryctl doctor --environment local
 ```
 
-These commands verify the existing generated runtime before reading its status
-or logs. They do not rebuild, start, or trust the changed authored input.
-After you correct the source problem, rerun `registryctl start` to replace the
-generated runtime.
+Doctor reports host, released-artifact, Docker Compose, and project
+prerequisites without changing the project.
+It does not start the runtime.
 
-For a stable diagnostic code and recovery action, use the [operator diagnostic
-catalog](../reference/diagnostics/operator/).
-
-Stop it when you finish:
+## Exercise the local product path
 
 ```sh
-registryctl stop
+registryctl dev --detach
+registryctl dev status
+registryctl dev smoke
+registryctl dev logs
+registryctl dev down
 ```
+
+`dev` rebuilds stale inputs and owns the disposable development environment.
+The nested commands inspect, exercise, or remove that same bound environment.
+Development credentials, trust material, and state are not production inputs.
 
 ## What these checks do not prove
 
-Local success does not approve a production deployment, prove that a live
-country source is interoperable, or replace data, security, and operational
-review. Production credentials, networking, signing, activation, migration,
-and rollback belong to the operator handoff.
+Local fixture and development success do not prove source interoperability,
+operator acceptance, or production readiness.
+The operator still reviews, signs, assembles, generates, verifies, and
+activates the governed deployment through separate product and operator
+boundaries.
 
 ## Next
 
-- [Understand the generated files](../generated-artifacts/)
+- [Understand generated files](../generated-artifacts/)
 - [Prepare the operator handoff](../operate/)
-- [Look up an error or status code](../reference/errors/)
+- [Look up a diagnostic](../reference/diagnostics/operator/)

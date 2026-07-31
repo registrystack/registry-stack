@@ -15,7 +15,7 @@ async function readSite(relative) {
   return readFile(resolve(siteRoot, relative), 'utf8');
 }
 
-test('v0.15 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
+test('1.0 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
   const [docsetsSource, generatedDocsetsSource, registryctl, configuration, tutorial, releaseSource] =
     await Promise.all([
       readSite('src/data/docsets.yaml'),
@@ -38,10 +38,11 @@ test('v0.15 release-form docs stay distinct from published v0.13 and current-sou
   assert.equal(current.availability, 'unreleased');
   assert.equal(lastRelease.availability, 'released');
 
-  const registryctlLead = registryctl.split('## Registry Stack project authoring')[0];
-  assert.match(registryctlLead, /This page describes `registryctl 0\.15\.2`/);
-  assert.match(registryctlLead, /binary, installer, image[\s\n]+lock, and verification material from that same release/);
+  const registryctlLead = registryctl.split('## Root commands')[0];
+  assert.match(registryctlLead, /Registryctl 1\.0 has seven ordinary workflow commands/);
+  assert.match(registryctlLead, /released command parser and `--help` output are the source of truth/);
   assert.doesNotMatch(registryctlLead, /Main source \(unreleased\)/);
+  assert.doesNotMatch(registryctlLead, /registryctl 0\.15\.2/);
   assert.doesNotMatch(
     registryctl,
     /The released command tree comes from the registryctl source at `v0\.13\.0`/,
@@ -58,9 +59,11 @@ test('v0.15 release-form docs stay distinct from published v0.13 and current-sou
   assert.doesNotMatch(configuration, /field baseline records when/);
   assert.doesNotMatch(configuration, /Configuration release: `0\.13\.0`/);
 
-  assert.match(tutorial, /uses Registryctl 0\.15\.2 and its matching release material/);
+  assert.match(tutorial, /A released Registryctl 1\.0 installation/);
+  assert.match(tutorial, /copies the template from its installed release/);
   assert.doesNotMatch(tutorial, /Main source \(unreleased\)/);
   assert.doesNotMatch(tutorial, /v0\.13\.0/);
+  assert.doesNotMatch(tutorial, /Registryctl 0\.15\.2/);
   const releaseCommands = releaseSource
     .split('enum Commands {')[1]
     .split('#[derive(Debug, Args)]')[0];
@@ -82,16 +85,9 @@ test('v0.15 release-form docs stay distinct from published v0.13 and current-sou
     .split('enum AuthoringCommand {')[1]
     .split('#[derive(Debug, Parser)]')[0];
   assert.doesNotMatch(releaseAuthoring, /\bReference\b/);
-  assert.match(tutorial, /Starter: http \(Registry Stack 0\.15\.2\)/);
-  for (const page of [registryctl, tutorial]) {
-    assert.match(page, /--show-authored-values/);
-    assert.match(page, /human(?:-only| output only)/i);
-    assert.match(
-      page,
-      /Secret values, secret references and runtime secret-file locators, fixture data, raw parser text,\s+defaulted values, and derived values remain hidden/,
-    );
-    assert.match(page, /not a\s+report, evidence, or export mode/);
-  }
-  assert.match(registryctl, /Default human output,[\s\S]*JSON output,[\s\S]*remain redacted/);
-  assert.match(tutorial, /combining[\s\S]*with JSON output is rejected/);
+  assert.match(registryctl, /--show-authored-values/);
+  assert.match(registryctl, /adds directly authored non-secret values to trusted local human output/);
+  assert.match(registryctl, /unavailable with JSON output/);
+  assert.match(tutorial, /inspect its redacted effective plan/);
+  assert.match(tutorial, /`check` is offline and does not resolve a secret/);
 });

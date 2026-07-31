@@ -240,7 +240,7 @@ const sampleFiles = [
   'explanation/architecture.md',
   'index.md',
   'products/registry-relay.md',
-  'tutorials/publish-spreadsheet-secured-registry-api.md',
+  'tutorials/author-registry-project.md',
 ];
 
 for (const f of sampleFiles) {

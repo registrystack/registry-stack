@@ -2,8 +2,8 @@
 
 This beta integration is installed from a Registry Stack source release.
 It is not yet listed in Zed Extensions and no release artifact is provided.
-For the stable beta path, run `registryctl init --from <starter>` or
-`registryctl authoring editor --project-dir <project>` and use the generated YAML schema settings.
+For the stable beta path, run `registryctl init <directory> --template http` or
+`registryctl -C <project> tooling editor` and use the generated YAML schema settings.
 Install this integration for optional semantic navigation.
 
 This extension attaches `registry-language-server` to Zed's built-in YAML language. It adds
@@ -60,7 +60,7 @@ Zed trust boundary, not missing automation.
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
   terminal. The launcher first looks for `registry-language-server`, then runs
-  `registryctl authoring language-server` when `registryctl` is on `PATH`. The two executables must
+  `registryctl tooling language-server` when `registryctl` is on `PATH`. The two executables must
   come from the same checkout or beta build that you are testing.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with

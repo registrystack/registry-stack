@@ -1,65 +1,73 @@
 ---
 title: Registry Stack documentation
-description: Run a protected registry API, connect reviewed data, and evaluate bounded claims with Registry Stack.
+description: Start a registry from a spreadsheet, expose bounded evidence, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
+  - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps an institution provide controlled access to data it
-already manages. You can expose a protected, read-only API or return a bounded
-claim without giving callers direct access to the source system.
+Registry Stack helps an institution expose selected registry data through
+Registry Relay and bounded evidence through Registry Notary without giving
+callers direct access to the source.
 
-## Start locally
+## Start a registry from a spreadsheet
 
-### 1. Run your first registry API
+Use the maintained spreadsheet path when the institution has a workbook or
+can prepare a reviewed workbook derivative.
+The first run starts Registry Relay and Registry Notary over the shipped
+synthetic workbook. It records a live authorization denial and a minimized
+evidence result; the offline derived fixture supplies the zero-source-access
+evidence that a local file cannot count itself.
 
-Install `registryctl`, create the maintained sample project, start Registry
-Relay, and make one denied request and one allowed request.
+[Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
+takes about 20 minutes and uses released artifacts without a source checkout.
+After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
 
-[Run your first registry API](tutorials/publish-spreadsheet-secured-registry-api/)
-takes about 20 minutes and does not require a repository checkout.
+## Expose bounded evidence
 
-### 2. Verify a live claim
+The spreadsheet starter already includes one evidence service.
+Registry Relay performs the exact source lookup and sends only the field needed
+by the rule to Registry Notary.
+Notary returns predicate claims rather than the workbook row.
 
-Continue with Registry Notary after the first API works. The claim tutorial
-uses maintained synthetic data to make match, no-match, and denied requests
-through a running local service.
+[Expose evidence from a spreadsheet registry](tutorials/verify-claim-registry-api/)
+shows how to change that rule while preserving authorization, source, and
+disclosure boundaries.
 
-[Verify a live registry-backed claim](tutorials/verify-claim-registry-api/)
-completes the local beginner path.
+## Connect an existing registry
 
-## Connect your data
+Use the HTTP path when the institution already operates a registry API.
+Start with a fixed bounded request and synthetic observations, then bind the
+reviewed source endpoint and its credentials.
 
-After the local sample works, replace it with one reviewed non-personal
-workbook. You will describe the sheet explicitly, choose which fields callers
-can receive, validate every row, and run the same protected checks.
+[Connect an existing HTTP registry](tutorials/author-registry-project/) covers
+the base integration.
+Continue with [OAuth client credentials](configure/oauth-client-credentials/)
+and a [reviewed Rhai adapter](tutorials/configure-project-script-adapter/) when
+the source requires authentication or response normalization.
 
-[Use your own spreadsheet](tutorials/use-your-spreadsheet/) is the shortest
-path from the sample to institution-owned data. The
-[Connect your data overview](configure/) points to the published explanation
-and reference material for more advanced source patterns.
+## Keep the product boundaries clear
 
-## Choose the product by the result
+Registry Relay owns source access and protected record surfaces.
+Registry Notary owns evidence evaluation and disclosure.
+The caller receives only the output authorized for that service.
 
-- Use **Registry Relay** when an authorized caller needs selected records or
-  fields from a source you operate.
-- Use **Registry Notary** when the caller needs a bounded answer, status, or
-  credential instead of the source record.
-
-Registry Stack keeps source access, caller permissions, disclosure, generated
-service configuration, and runtime operation as separate review boundaries.
-The [architecture overview](explanation/architecture/) explains how the
-products fit together after you complete a first task.
+Both paths use the same authoring, offline test, disposable development, and
+build commands. The 1.0 project-local workbook path stops there. A governed
+deployment starts after an operator-managed HTTP source is bound, then
+continues through independent approval and package generation.
 
 ## Move beyond the first run
 
-- [Decide when Registry Stack fits](start/when-to-use/)
+- [Choose a source path](configure/)
+- [Prepare an operator handoff](operate/)
+- [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)
-- [Operate Registry Stack](operate/)
+- [Cut over a pre-1.0 project](start/pre-1.0-cutover/)

@@ -19,7 +19,12 @@ async function withIsolatedProjectCatalog(run) {
     const catalog = YAML.parse(await readFile(resolve(repoRoot, catalogRelative), 'utf8'));
     await mkdir(dirname(catalogPath), { recursive: true });
     await writeFile(catalogPath, YAML.stringify(catalog));
-    for (const source of new Set(catalog.workspaces.map((workspace) => workspace.source))) {
+    const sources = new Set([
+      ...catalog.workspaces.map((workspace) => workspace.source),
+      'crates/registryctl/assets/project-starters/bounded-http',
+      'crates/registryctl/assets/project-starters/spreadsheet',
+    ]);
+    for (const source of sources) {
       const destination = resolve(root, source);
       await mkdir(dirname(destination), { recursive: true });
       await cp(resolve(repoRoot, source), destination, { recursive: true });
@@ -33,7 +38,7 @@ async function withIsolatedProjectCatalog(run) {
 test('classifies every golden and derives topology from committed workspace content', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
 
-  assert.equal(journeys.length, 13);
+  assert.equal(journeys.length, 15);
   assert.deepEqual(
     journeys.map(({ id, classification, topology }) => ({ id, classification, topology })),
     [
@@ -44,43 +49,34 @@ test('classifies every golden and derives topology from committed workspace cont
       { id: 'fhir-r4-coverage-active', classification: 'maintained', topology: 'combined' },
       { id: 'nia-attribute-release', classification: 'conformance-only', topology: 'relay-only' },
       { id: 'opencrvs-dci', classification: 'maintained', topology: 'combined' },
+      { id: 'opencrvs-events-api', classification: 'maintained', topology: 'combined' },
       { id: 'opencrvs-country-variant', classification: 'maintained', topology: 'combined' },
       { id: 'openspp-exact', classification: 'maintained', topology: 'combined' },
       { id: 'relay-only-materialization', classification: 'maintained', topology: 'relay-only' },
       { id: 'relay-only-records', classification: 'maintained', topology: 'relay-only' },
       { id: 'snapshot', classification: 'maintained', topology: 'combined' },
       { id: 'snapshot-with-records', classification: 'maintained', topology: 'combined' },
+      { id: 'spreadsheet', classification: 'maintained', topology: 'combined' },
     ],
   );
 });
 
-test('derives all advertised starter selections from committed workspaces', async () => {
+test('derives both public starters from committed workspace content', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
   assert.deepEqual(
     starters.map(({ starter, integration, fixture }) => ({ starter, integration, fixture })),
     [
+      { starter: 'spreadsheet', integration: 'project-record-snapshot', fixture: 'match' },
       { starter: 'http', integration: 'person-record', fixture: 'active-person' },
-      {
-        starter: 'dhis2-tracker',
-        integration: 'health-record',
-        fixture: 'complete-child-health-evidence',
-      },
-      {
-        starter: 'opencrvs-dci',
-        integration: 'birth-record',
-        fixture: 'birth-record-match',
-      },
-      { starter: 'fhir-r4', integration: 'coverage', fixture: 'coverage-active' },
-      { starter: 'snapshot', integration: 'person-snapshot', fixture: 'snapshot-match' },
     ],
   );
 });
 
-test('emits one canonical eight-command sequence for exactly five starters', async () => {
+test('emits one canonical 1.0 authoring and development sequence for both starters', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
-  assert.equal(starters.length, 5);
+  assert.equal(starters.length, 2);
   for (const starter of starters) {
     assert.deepEqual(starter.capabilities, [
       'init',
@@ -91,43 +87,41 @@ test('emits one canonical eight-command sequence for exactly five starters', asy
       'check',
       'compare',
       'build',
+      'dev',
     ]);
-    assert.equal(starter.commands.length, 8);
-    assert.match(starter.commands[0], /^registryctl init --from /);
-    assert.match(starter.commands[1], /^registryctl authoring editor --project-dir /);
+    assert.equal(starter.commands.length, 11);
+    assert.match(
+      starter.commands[0],
+      new RegExp(`^registryctl init ${starter.project_dir} --template ${starter.starter}$`),
+    );
+    assert.match(starter.commands[1], /^registryctl -C [^ ]+ tooling editor$/);
     assert.match(starter.commands[2], / --trace$/);
     assert.match(starter.commands[3], / --watch$/);
-    assert.match(starter.commands[4], /^registryctl test --project-dir [^ ]+$/);
+    assert.match(starter.commands[4], /^registryctl -C [^ ]+ test$/);
     assert.match(starter.commands[5], / --environment local --explain$/);
-    assert.match(starter.commands[6], / --environment local --from-starter$/);
+    assert.match(starter.commands[6], / review compare --environment local$/);
     assert.match(starter.commands[7], / --environment local$/);
+    assert.match(starter.commands[8], / dev --detach$/);
+    assert.match(starter.commands[9], / dev smoke$/);
+    assert.match(starter.commands[10], / dev down$/);
   }
 });
 
-test('non-starters never emit init and supported steps follow fixture maintenance status', async () => {
+test('internal workspaces never emit a public template command', async () => {
   const journeys = await buildProjectAuthoringJourneyMatrix(repoRoot);
   const nonStarters = journeys.filter((journey) => !journey.starter);
-  assert.equal(nonStarters.length, 8);
+  assert.equal(nonStarters.length, 13);
   for (const journey of nonStarters) {
-    assert.equal(journey.commands.some((command) => command.includes(' init --from ')), false);
+    assert.equal(journey.commands.some((command) => command.includes(' init ')), false);
     assert.equal(journey.project_dir, journey.source);
     assert.equal(
-      journey.commands.every((command) => command.includes(`--project-dir ${journey.source}`)),
+      journey.commands.every((command) => command.includes(`-C ${journey.source}`)),
       true,
     );
-  }
-
-  for (const id of [
-    'nia-attribute-release',
-    'relay-only-materialization',
-    'relay-only-records',
-  ]) {
-    const journey = journeys.find((candidate) => candidate.id === id);
-    assert.deepEqual(journey.capabilities, ['check', 'build']);
-    assert.deepEqual(journey.commands, [
-      `registryctl check --project-dir ${journey.project_dir} --environment local --explain`,
-      `registryctl build --project-dir ${journey.project_dir} --environment local`,
-    ]);
+    assert.doesNotMatch(
+      journey.commands.join('\n'),
+      /registryctl (?:authoring|project|compare|start|stop|smoke)\b/,
+    );
   }
 
   assert.deepEqual(
@@ -140,10 +134,12 @@ test('non-starters never emit init and supported steps follow fixture maintenanc
       'dhis2-tracker',
       'fhir-r4-coverage-active',
       'opencrvs-dci',
+      'opencrvs-events-api',
       'opencrvs-country-variant',
       'openspp-exact',
       'snapshot',
       'snapshot-with-records',
+      'spreadsheet',
     ],
   );
 });
@@ -272,53 +268,30 @@ test('rejects unsafe workspace and fixture command arguments before generation',
   });
 });
 
-test('rejects duplicate starter entries instead of collapsing them', async () => {
+test('does not publish legacy fixture starter markers as templates', async () => {
   await withIsolatedProjectCatalog(async ({ root, catalog, catalogPath }) => {
     const fhir = catalog.workspaces.find((workspace) => workspace.starter === 'fhir-r4');
     fhir.starter = 'http';
     await writeFile(catalogPath, YAML.stringify(catalog));
 
-    await assert.rejects(
-      buildProjectAuthoringJourneyMatrix(root),
-      /public starter catalog contains a duplicate starter/,
+    const starters = await buildProjectStarterMatrix(root);
+    assert.deepEqual(
+      starters.map(({ starter }) => starter),
+      ['spreadsheet', 'http'],
     );
   });
 });
 
-test('rejects a catalog with fewer than five starter entries', async () => {
-  await withIsolatedProjectCatalog(async ({ root, catalog, catalogPath }) => {
-    const fhir = catalog.workspaces.find((workspace) => workspace.starter === 'fhir-r4');
-    delete fhir.starter;
-    fhir.steps = fhir.steps.filter((step) => !['init', 'compare'].includes(step));
-    await writeFile(catalogPath, YAML.stringify(catalog));
-
-    await assert.rejects(
-      buildProjectAuthoringJourneyMatrix(root),
-      /public starter catalog must contain exactly 5 entries/,
-    );
-  });
-});
-
-test('keeps the advanced authoring tutorial complete but out of the adopter navigation', async () => {
-  const [starters, tutorial, astroConfig] = await Promise.all([
-    buildProjectStarterMatrix(repoRoot),
-    readFile(
-      resolve(repoRoot, 'docs/site/src/content/docs/tutorials/author-registry-project.mdx'),
-      'utf8',
-    ),
-    readFile(resolve(repoRoot, 'docs/site/astro.config.mjs'), 'utf8'),
-  ]);
-  const normalizedTutorial = tutorial.replaceAll(/\\\n\s*/g, '').replaceAll(/\s+/g, ' ');
-  const http = starters.find((starter) => starter.starter === 'http');
-
-  assert.match(tutorial, /^status: current$/m);
-  assert.match(tutorial, /^draft: true$/m);
-  for (const command of http.commands) {
-    assert.equal(
-      normalizedTutorial.includes(command),
-      true,
-      `authoring tutorial must document catalog command: ${command}`,
-    );
-  }
-  assert.doesNotMatch(astroConfig, /slug: 'tutorials\/author-registry-project'/);
+test('keeps generated template commands on the 1.0 command hierarchy', async () => {
+  const starters = await buildProjectStarterMatrix(repoRoot);
+  const commands = starters.flatMap(({ commands }) => commands).join('\n');
+  assert.doesNotMatch(
+    commands,
+    /registryctl (?:authoring|project|compare|start|stop|restart|status|open|smoke|logs|preflight|capabilities)\b/,
+  );
+  assert.doesNotMatch(commands, /registryctl init --from/);
+  assert.match(commands, /registryctl -C http-project tooling editor/);
+  assert.match(commands, /registryctl -C http-project dev smoke/);
+  assert.match(commands, /registryctl init spreadsheet-project --template spreadsheet/);
+  assert.match(commands, /registryctl -C spreadsheet-project dev smoke/);
 });

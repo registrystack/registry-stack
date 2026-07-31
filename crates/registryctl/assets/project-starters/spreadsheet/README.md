@@ -6,11 +6,13 @@ This starter publishes a protected records API from the synthetic workbook in
 From this project directory:
 
 ```bash
-registryctl authoring editor --project-dir .
-registryctl test --project-dir .
-registryctl preflight --project-dir . --environment local
-registryctl check --project-dir . --environment local --explain
-registryctl build --project-dir . --environment local
+registryctl -C . tooling editor
+registryctl -C . test
+registryctl -C . dev --environment local --detach
+registryctl -C . dev --environment local smoke
+registryctl -C . dev --environment local down
+registryctl -C . check --environment local --explain
+registryctl -C . build --environment local
 ```
 
 Adapt the workbook under `data/`, then keep `entities/projects.yaml`,
@@ -21,3 +23,9 @@ preflight. `path` is the read-only container path emitted to Registry Relay.
 Spreadsheet fields start as sensitive and are published only when they are
 listed in `api.projection`. Review the service purpose, sensitivity,
 access-rights classification, and projection before using real data.
+
+The authored `local` environment selects the synthetic `match` fixture for the
+project snapshot integration, so `registryctl dev` needs no integration or
+fixture flags. Generated development lanes under `.registry-stack/dev-artifacts/`
+and bound runtime state under `.registry-stack/dev/` are disposable, ignored by
+Git, and are not production inputs.

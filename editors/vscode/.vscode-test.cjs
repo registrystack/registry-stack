@@ -20,7 +20,7 @@ fs.writeFileSync(
   registryctlWrapper,
   [
     '#!/bin/sh',
-    'if [ "$#" -ne 2 ] || [ "$1" != "authoring" ] || [ "$2" != "language-server" ]; then',
+    'if [ "$#" -ne 2 ] || [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
     '  exit 64',
     'fi',
     `exec ${shellQuote(languageServer)}`,

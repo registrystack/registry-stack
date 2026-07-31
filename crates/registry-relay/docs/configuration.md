@@ -43,6 +43,7 @@ auth.oidc.allowed_token_types
 auth.oidc.allowed_token_types[]
 auth.oidc.audiences
 auth.oidc.audiences[]
+auth.oidc.development_jwks_file
 auth.oidc.discovery_url
 auth.oidc.issuer
 auth.oidc.jwks_cache_ttl
@@ -103,6 +104,14 @@ consultation.authorized_workload.audience
 consultation.authorized_workload.client_claim_selector
 consultation.authorized_workload.client_value
 consultation.authorized_workload.principal_id
+consultation.bootstrap
+consultation.bootstrap.active_key_id
+consultation.bootstrap.active_write_deadline_unix_ms
+consultation.bootstrap.audit_event_retention_ms
+consultation.bootstrap.keyring_maintenance_database_url_env
+consultation.bootstrap.keyring_reader_database_url_env
+consultation.bootstrap.migration_database_url_env
+consultation.bootstrap.owner_role
 consultation.source_credentials
 consultation.source_credentials[]
 consultation.source_credentials[].client_id_env
@@ -761,6 +770,19 @@ backend cannot exclude the Android system root directory.
 The epoch id and advisory-lock keys are stable, deployment-owned identifiers
 and must not collide with another state-plane user. Do not place a database URL
 in YAML.
+
+`bootstrap` is the signed, product-owned policy for the one supported
+state-plane installation and attestation operation. Governed product actions
+accept it only from the verified consultation bundle; deployment renderers
+cannot replace any of its fields with command arguments. The migration,
+keyring-maintenance, and keyring-reader database fields name distinct
+environment references, and `owner_role` names the database role that owns the
+installed state. `active_key_id` must select material declared in
+`audit_pseudonym_materials`; its write deadline and audit-event retention bind
+the initial key lifecycle. These are references and policy metadata only:
+database URLs, credentials, key material, and country-specific values must not
+appear in generated configuration documentation. The block remains optional
+only for the pre-1.0 local startup path.
 
 `artifacts` is a complete catalog. Every public contract listed there is an
 enabled consultation. Local development pins every file with both its typed

@@ -1,18 +1,27 @@
+use registry_platform_config::{
+    ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
+    ProductTrustDomainV1,
+};
 use registry_platform_ops::{
-    AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord, AntiRollbackStoreError,
-    ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit, ConfigOverrideMode,
-    ConfigOverridePin, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
-    LocalOperatorApproval, PostureApplyResult, ADMIN_CAPABILITIES_SCHEMA_V1, ADMIN_ERROR_SCHEMA_V1,
-    CONFIG_APPLY_REPORT_SCHEMA_V1,
+    AcceptedAnchorPinV1, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
+    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
+    ConfigOverrideMode, ConfigOverridePin, FileAntiRollbackStore, FileLocalApprovalStore,
+    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
+    ADMIN_CAPABILITIES_SCHEMA_V1, ADMIN_ERROR_SCHEMA_V1, CONFIG_APPLY_REPORT_SCHEMA_V1,
 };
 use serde_json::{json, Value};
 
 fn key() -> AntiRollbackKey {
     AntiRollbackKey {
-        product: "registry-relay".to_string(),
-        instance_id: "relay-a".to_string(),
-        environment: "production".to_string(),
-        stream_id: "national-config".to_string(),
+        acceptance_identity: ProductAcceptanceIdentityV1 {
+            trust_domain: ProductTrustDomainV1::Development,
+            project: "civil-registry".to_string(),
+            environment: "production".to_string(),
+            lane: ProductAcceptanceLaneV1::RelayPublic,
+            product: ProductAcceptanceProductV1::RegistryRelay,
+            stream: "national-config".to_string(),
+            instance: "relay-a".to_string(),
+        },
     }
 }
 
@@ -38,9 +47,14 @@ fn record(sequence: u64, config_hash: &str) -> AntiRollbackRecord {
         key: key(),
         last_sequence: sequence,
         last_config_hash: config_hash.to_string(),
-        last_bundle_manifest_hash: None,
-        last_bundle_id: None,
-        root_version: Some(3),
+        last_bundle_manifest_hash: hash("manifest"),
+        last_bundle_id: "bundle-1".to_string(),
+        accepted_anchor: AcceptedAnchorPinV1 {
+            digest: hash("anchor"),
+            version: 1,
+            threshold: 1,
+            enabled_signers: vec!["kid-1".to_string()],
+        },
         override_pin: None,
         break_glass: Default::default(),
         local_approvals: Default::default(),
@@ -384,21 +398,73 @@ fn antirollback_initialize_does_not_overwrite_existing_state() {
 }
 
 #[test]
-fn antirollback_state_key_serializes_without_instance_id() {
-    let serialized = serde_json::to_value(record(41, &hash("old"))).expect("record serializes");
+fn antirollback_state_key_serialization_and_equality_bind_complete_acceptance_identity() {
+    let original_record = record(41, &hash("old"));
+    let serialized = serde_json::to_value(&original_record).expect("record serializes");
 
-    assert_eq!(serialized["key"]["product"], "registry-relay");
-    assert_eq!(serialized["key"]["environment"], "production");
-    assert_eq!(serialized["key"]["stream_id"], "national-config");
-    assert!(serialized["key"].get("instance_id").is_none());
+    assert_eq!(
+        serialized["key"]["acceptance_identity"],
+        json!({
+            "trust_domain": "development",
+            "project": "civil-registry",
+            "environment": "production",
+            "lane": "relay-public",
+            "product": "registry-relay",
+            "stream": "national-config",
+            "instance": "relay-a",
+        })
+    );
+    assert_eq!(serialized["accepted_anchor"]["version"], 1);
+    assert_eq!(serialized["accepted_anchor"]["threshold"], 1);
+    assert_eq!(
+        serialized["accepted_anchor"]["enabled_signers"],
+        json!(["kid-1"])
+    );
+    assert_eq!(serialized["accepted_anchor"]["digest"], hash("anchor"));
+    assert_eq!(
+        serde_json::from_value::<AntiRollbackRecord>(serialized.clone())
+            .expect("record deserializes exactly"),
+        original_record
+    );
 
-    let same_stream_other_instance = AntiRollbackKey {
-        product: "registry-relay".to_string(),
-        instance_id: "relay-b".to_string(),
-        environment: "production".to_string(),
-        stream_id: "national-config".to_string(),
-    };
-    assert_eq!(key(), same_stream_other_instance);
+    let original = key();
+    for changed in [
+        ProductAcceptanceIdentityV1 {
+            trust_domain: ProductTrustDomainV1::Governed,
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            project: "other-project".to_string(),
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            environment: "staging".to_string(),
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            lane: ProductAcceptanceLaneV1::RelayConsultation,
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            product: ProductAcceptanceProductV1::RegistryNotary,
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            stream: "other-stream".to_string(),
+            ..original.acceptance_identity.clone()
+        },
+        ProductAcceptanceIdentityV1 {
+            instance: "relay-b".to_string(),
+            ..original.acceptance_identity.clone()
+        },
+    ] {
+        assert_ne!(
+            original,
+            AntiRollbackKey {
+                acceptance_identity: changed
+            }
+        );
+    }
 }
 
 #[test]
@@ -492,8 +558,8 @@ fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_resta
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     let mut current = record(42, &hash("current"));
-    current.last_bundle_id = Some("2026-07-07-rollout-3".to_string());
-    current.last_bundle_manifest_hash = Some(hash("manifest"));
+    current.last_bundle_id = "2026-07-07-rollout-3".to_string();
+    current.last_bundle_manifest_hash = hash("manifest");
     store.initialize(current).expect("initial state writes");
     store
         .persist_override_pin(
@@ -522,10 +588,7 @@ fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_resta
         .expect("normal verification clears pin");
 
     assert_eq!(accepted.last_sequence, 42);
-    assert_eq!(
-        accepted.last_bundle_id.as_deref(),
-        Some("2026-07-07-rollout-3")
-    );
+    assert_eq!(accepted.last_bundle_id, "2026-07-07-rollout-3");
     assert_eq!(accepted.override_pin, None);
 
     let serialized = serde_json::to_value(&accepted).expect("record serializes");
@@ -602,7 +665,7 @@ fn antirollback_accepts_idempotent_replay_without_advancing_sequence() {
 }
 
 #[test]
-fn antirollback_records_newer_root_version_for_idempotent_replay() {
+fn antirollback_legacy_root_version_cannot_change_pinned_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
@@ -623,10 +686,9 @@ fn antirollback_records_newer_root_version_for_idempotent_replay() {
                 local_approval_rate_limit: None,
             },
         )
-        .expect("same config under newer root is accepted");
+        .expect("legacy root version is ignored");
 
-    let mut expected = record(42, &hash("current"));
-    expected.root_version = Some(4);
+    let expected = record(42, &hash("current"));
     assert_eq!(accepted, expected);
     assert_eq!(
         store.load(&key()).expect("new root version persists"),
@@ -691,14 +753,14 @@ fn antirollback_treats_previous_hash_mismatch_as_advisory() {
 }
 
 #[test]
-fn antirollback_rejects_root_version_rollback() {
+fn antirollback_legacy_root_version_cannot_replace_pinned_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
         .initialize(record(42, &hash("current")))
         .expect("initial state writes");
 
-    let err = store
+    let accepted = store
         .accept(
             &key(),
             AntiRollbackProposal {
@@ -712,12 +774,11 @@ fn antirollback_rejects_root_version_rollback() {
                 local_approval_rate_limit: None,
             },
         )
-        .expect_err("root version rollback is rejected");
+        .expect("legacy root version is not an anchor transition");
 
-    assert_eq!(err, AntiRollbackStoreError::RootVersionRollback);
     assert_eq!(
-        store.load(&key()).expect("state did not advance"),
-        record(42, &hash("current"))
+        accepted.accepted_anchor,
+        record(42, &hash("current")).accepted_anchor
     );
 }
 
@@ -776,7 +837,7 @@ fn legacy_break_glass_records_valid_approval() {
 
     assert_eq!(accepted.last_sequence, 43);
     assert_eq!(accepted.last_config_hash, hash("recovery"));
-    assert_eq!(accepted.root_version, Some(4));
+    assert_eq!(accepted.accepted_anchor.version, 1);
     assert_eq!(accepted.break_glass.accepted.len(), 1);
     assert_eq!(accepted.break_glass.accepted[0].sequence, 43);
     assert_eq!(

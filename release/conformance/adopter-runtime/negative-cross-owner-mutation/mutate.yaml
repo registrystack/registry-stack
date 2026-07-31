@@ -1,4 +1,0 @@
-services:
-  registry-notary:
-    labels:
-      io.registrystack.probe.parent-mutation: attempted

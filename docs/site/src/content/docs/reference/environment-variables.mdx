@@ -37,7 +37,7 @@ The Registry Notary binary reads the variables below. Each also has an equivalen
 | --- | --- | --- |
 | `REGISTRY_NOTARY_CONFIG` | YAML config path. Equivalent to `--config`. | Required for commands that load config. |
 | `REGISTRY_NOTARY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars. Equivalent to `--env-file`. | Optional. |
-| `REGISTRY_NOTARY_BIND` | Override `server.bind` after config load. Equivalent to `--bind`. | Optional. |
+| `REGISTRY_NOTARY_BIND` | Override `server.bind` for direct server startup. Equivalent to `--bind`. Closed product and development actions use the verified bundle listener instead. | Optional. |
 | `REGISTRY_NOTARY_HEALTHCHECK_URL` | Health endpoint URL for the `healthcheck` command. | Defaults to `http://127.0.0.1:8080/healthz`. |
 | `REGISTRY_NOTARY_HEALTHCHECK_TIMEOUT_MS` | Health probe timeout in milliseconds for the `healthcheck` command. | Defaults to `5000`. |
 | `REGISTRY_NOTARY_LOG_FORMAT` | Operational log format: `text` or `json`. | Defaults to `text`. |
@@ -50,7 +50,7 @@ The Registry Relay binary reads the variables below.
 | --- | --- | --- |
 | `REGISTRY_RELAY_CONFIG` | YAML config path used when `--config` is not passed. | Falls back to `./config/example.yaml`. |
 | `REGISTRY_RELAY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars, used when `--env-file` is not passed. | Optional. |
-| `REGISTRY_RELAY_BIND` | Override `server.bind`. | Optional. |
+| `REGISTRY_RELAY_BIND` | Override `server.bind` for direct server startup. Closed product and development actions use the verified bundle listener instead. | Optional. |
 | `REGISTRY_RELAY_LOG_FORMAT` | Operational log format: `json` or `jsonl` select JSON output; any other value selects text. | Defaults to text. |
 | `DATA_GATE_POSTGRES_ROOT_CERT_PATH` | Path to a PEM file with a custom root certificate to trust for a Postgres source connector's TLS connection. | Optional. Falls back to the system default trust store when unset. |
 

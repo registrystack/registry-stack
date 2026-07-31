@@ -1,5 +1,6 @@
 {
-  "schema": "io.registrystack.deployment-plan.probe.v1",
+  "schema_id": "io.registrystack.deployment_plan",
+  "schema_version": "1.0",
   "single_instance": true,
   "workloads": [
     {
@@ -8,12 +9,13 @@
       "product_lane": "relay-public",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["relay-public-bundle", "relay-public-anchor"],
-      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
-      "secret_consumers": ["relay-public-tls"],
+      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "audit"],
+      "secret_consumers": [],
       "state_roles": ["relay-public-anti-rollback", "relay-public-audit"],
-      "endpoint_classes": ["public-application", "metrics", "posture"],
-      "network_relationships": ["edge"],
+      "endpoint_classes": ["public-application", "posture"],
+      "network_relationships": ["runtime"],
       "dependencies": [],
       "health_semantics": "relay-public-health",
       "restart_action": "restart",
@@ -25,13 +27,14 @@
       "product_lane": "relay-consultation",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["relay-consultation-bundle", "relay-consultation-anchor"],
-      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
-      "secret_consumers": ["relay-consultation-tls"],
+      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "audit"],
+      "secret_consumers": [],
       "state_roles": ["relay-consultation-anti-rollback", "relay-consultation-audit"],
-      "endpoint_classes": ["private-application", "metrics", "posture"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["postgresql-state-plane", "private-namespace-holder"],
+      "endpoint_classes": ["private-application", "posture"],
+      "network_relationships": ["runtime"],
+      "dependencies": ["postgresql-state-plane"],
       "health_semantics": "relay-consultation-health",
       "restart_action": "restart",
       "reactivation_action": "verify_state"
@@ -42,13 +45,14 @@
       "product_lane": "notary",
       "action": "serve",
       "image_identity": "example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "image_platform": "linux-amd64",
       "immutable_inputs": ["notary-bundle", "notary-anchor"],
-      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "secret", "certificate", "audit"],
-      "secret_consumers": ["notary-tls", "notary-signing-key"],
+      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "secret", "audit"],
+      "secret_consumers": ["notary-relay-workload-credential", "notary-signing-key"],
       "state_roles": ["notary-anti-rollback", "notary-audit"],
-      "endpoint_classes": ["private-application", "administration", "metrics", "posture"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["relay-consultation", "postgresql-state-plane", "private-namespace-holder"],
+      "endpoint_classes": ["public-application", "administration", "posture"],
+      "network_relationships": ["runtime"],
+      "dependencies": ["relay-consultation", "postgresql-state-plane"],
       "health_semantics": "notary-health",
       "restart_action": "restart",
       "reactivation_action": "verify_state"
@@ -58,43 +62,34 @@
       "kind": "supporting",
       "recipe": "postgresql_state_plane",
       "image_identity": "example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "image_platform": "linux-amd64",
       "secret_consumers": ["postgresql-tls", "postgresql-credentials"],
       "state_roles": ["postgresql-data"],
       "endpoint_classes": ["private-application"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["private-namespace-holder"],
+      "network_relationships": ["runtime"],
+      "dependencies": [],
       "health_semantics": "postgresql-health",
       "restart_action": "restart",
       "reactivation_action": "restore_consistency_group"
-    },
-    {
-      "id": "private-namespace-holder",
-      "kind": "supporting",
-      "recipe": "private_namespace_holder",
-      "image_identity": "example.invalid/registrystack/private-namespace@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "secret_consumers": [],
-      "state_roles": [],
-      "endpoint_classes": [],
-      "network_relationships": ["private"],
-      "dependencies": [],
-      "health_semantics": "namespace-holder-health",
-      "restart_action": "restart",
-      "reactivation_action": "restart_consistency_group"
     }
   ],
   "initialization_actions": [
+    {"id": "bootstrap-postgresql-state-plane", "workload": "postgresql-state-plane", "action": "bootstrap_state_plane"},
     {"id": "prepare-relay-public-state", "workload": "relay-public", "action": "prepare_state_store"},
     {"id": "prepare-relay-consultation-state", "workload": "relay-consultation", "action": "prepare_state_store"},
     {"id": "prepare-notary-state", "workload": "notary", "action": "prepare_state_store"},
     {"id": "initialize-relay-public", "workload": "relay-public", "action": "initialize_state"},
     {"id": "initialize-relay-consultation", "workload": "relay-consultation", "action": "initialize_state"},
-    {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"}
-  ],
-  "private_co_location_groups": [
-    {
-      "id": "private-consultation-namespace",
-      "members": ["relay-consultation", "notary", "postgresql-state-plane", "private-namespace-holder"]
-    }
+    {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"},
+    {"id": "preview-relay-public-state", "workload": "relay-public", "action": "preview_state"},
+    {"id": "preview-relay-consultation-state", "workload": "relay-consultation", "action": "preview_state"},
+    {"id": "preview-notary-state", "workload": "notary", "action": "preview_state"},
+    {"id": "accept-relay-public-state", "workload": "relay-public", "action": "accept_state"},
+    {"id": "accept-relay-consultation-state", "workload": "relay-consultation", "action": "accept_state"},
+    {"id": "accept-notary-state", "workload": "notary", "action": "accept_state"},
+    {"id": "verify-relay-public-state", "workload": "relay-public", "action": "verify_state"},
+    {"id": "verify-relay-consultation-state", "workload": "relay-consultation", "action": "verify_state"},
+    {"id": "verify-notary-state", "workload": "notary", "action": "verify_state"}
   ],
   "recovery_consistency_groups": [
     {
@@ -108,9 +103,8 @@
   ],
   "exposure_requirements": [
     {"endpoint_class": "public-application", "exposure": "operator-bound"},
-    {"endpoint_class": "private-application", "exposure": "private-namespace-only"},
-    {"endpoint_class": "administration", "exposure": "loopback-only"},
-    {"endpoint_class": "metrics", "exposure": "loopback-only"},
-    {"endpoint_class": "posture", "exposure": "loopback-only"}
+    {"endpoint_class": "private-application", "exposure": "private-network-only"},
+    {"endpoint_class": "administration", "exposure": "private-network-only"},
+    {"endpoint_class": "posture", "exposure": "private-network-only"}
   ]
 }

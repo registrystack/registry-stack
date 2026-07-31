@@ -1,6 +1,6 @@
 ---
 title: "RS-PR-REGISTRYCTL: registryctl compatibility contract"
-description: "The normative 1.0 contract for registryctl project authoring, machine-readable reports, generated-output discovery, and exit statuses."
+description: "The normative 1.0 contract for Registryctl project authoring, workflow boundaries, machine-readable reports, deployment packages, and exit statuses."
 status: draft
 owner: registry-docs
 source_repos:
@@ -20,17 +20,18 @@ audience:
   - tooling
 ---
 
-This document defines the Registry Stack 1.0 compatibility contract for `registryctl`: the
-authored project files that adopters maintain, the machine-readable reports that automation
-consumes, how automation discovers generated outputs, and the process exit statuses. The
-implementation meets these requirements, but the document remains `draft`; the compatibility
-promise takes effect with Registry Stack `v1.0.0`, not with a pre-1.0 release.
+This document defines the Registry Stack 1.0 compatibility contract for `registryctl`: adopter
+authored files, the ten root commands and their ownership boundaries, machine-readable reports,
+the generated deployment package, and process exit statuses. The implementation meets these
+requirements, but the document remains `draft`; the compatibility promise takes effect with
+Registry Stack `v1.0.0`, not with a pre-1.0 release.
 
 ## Version history
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
-| 0.1.0 | 2026-07-20 | draft | Initial registryctl compatibility contract. |
+| 0.2.0 | 2026-07-31 | draft | Aligned the contract with the 1.0 command and deployment design. |
+| 0.1.0 | 2026-07-20 | draft | Initial Registryctl compatibility contract. |
 
 ## 1. Scope and conventions
 
@@ -40,204 +41,285 @@ This specification refines the command-line compatibility promise in the
 
 This specification covers:
 
-- Authored Registry Stack project files rooted at `registry-stack.yaml`.
+- Authored project files rooted at `registry-stack.yaml`.
+- Public commands and their source-access, mutation, and authority boundaries.
 - Versioned JSON reports intended for automation.
-- Report fields that identify supported generated outputs.
-- Success, command-failure, and usage-failure exit statuses.
-- The credential-issuance boundary enforced by project compilation.
+- Generated deployment-package ownership and discovery.
+- Success, domain, usage, and operational exit statuses.
+- Authorization-before-source and the Registry Relay evidence boundary.
 
-This specification does not stabilize human-readable output, private generated directory
-internals, hidden commands, or implementation-owned worker protocols.
+Human-readable output, private build or development layouts, hidden worker protocols, and
+operator-owned orchestration outside a generated package are not compatibility surfaces.
 
-REQ-PR-REGISTRYCTL-001: A released `registryctl` MUST identify every machine-readable report with
-a `schema_version`. Within a major release, a report schema MUST remain backward compatible.
+REQ-PR-REGISTRYCTL-001: Every machine-readable report MUST identify its schema with a
+`schema_version` or a public `schema_id` and `schema_version` pair.
+A report schema MUST remain backward compatible within the 1.x release line.
 
-## 2. Authored project contract
+## 2. Command surface and project selection
 
-A Registry Stack project starts at `registry-stack.yaml`. The root document references authored
-environment, integration, fixture, and entity files. The strict schemas embedded in `registryctl`
-define these files, while project-local editor setup makes the same schemas available to common
-editors. The implementation and its path checks are in the
-[project loader](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/project.rs)
-and [project diagnostics](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/diagnostics.rs).
+Registryctl 1.0 exposes these root commands:
 
-REQ-PR-REGISTRYCTL-002: `registry-stack.yaml` and every authored file it references MUST be treated
-as adopter-owned input. `registryctl` MUST NOT overwrite an existing nonempty project destination
-during initialization.
+| Command | Contract |
+| --- | --- |
+| `init` | Create a project from a tested embedded template |
+| `test` | Execute authored fixtures offline through production semantics |
+| `dev` | Build and run an isolated disposable development environment |
+| `check` | Validate and explain authored intent without writing build state |
+| `build` | Emit deterministic unsigned product-lane signing inputs |
+| `deploy` | Generate or verify a governed deployment package |
+| `doctor` | Diagnose host, released-artifact, and product prerequisites |
+| `review` | Compare authored intent with an approved baseline |
+| `trust` | Inspect and create independently owned trust artifacts |
+| `tooling` | Print schemas and references or install editor support |
 
-REQ-PR-REGISTRYCTL-003: The project, environment, integration, fixture, and entity schemas MUST
-reject unknown fields. A minor or patch release MUST NOT remove a field, change its meaning, or
-narrow its accepted values after `v1.0.0`.
+REQ-PR-REGISTRYCTL-002: Registryctl MUST expose exactly `init`, `test`, `dev`, `check`, `build`,
+`deploy`, `doctor`, `review`, `trust`, and `tooling` as public root commands.
+Registryctl MUST NOT perform an automatic update check, expose an update-check command, or contact
+a release service when printing `--version`.
 
-REQ-PR-REGISTRYCTL-004: Authored paths MUST remain inside the project root. Project loading MUST
-reject path traversal, symbolic links, and unsupported file types before compilation or source
+REQ-PR-REGISTRYCTL-003: Global `-C <project-directory>` and
+`--project-dir <project-directory>` MUST select the project before discovery, whether the option
+appears before or after a root command.
+Without that option, Registryctl MUST select the nearest parent that contains
+`registry-stack.yaml`.
+The option MUST NOT replace the positional `init` destination.
+
+REQ-PR-REGISTRYCTL-004: Environment selection MUST use, in order, an explicit `--environment`,
+`REGISTRYCTL_ENVIRONMENT`, the project default, or the sole declared environment.
+Otherwise Registryctl MUST fail and name the declared environment identifiers.
+Signing, approved-set, deployment, and initialization authority inputs MUST remain explicit.
+
+## 3. Authored project contract
+
+A project root references adopter-owned environment, integration, fixture, and entity files.
+Strict schemas embedded in Registryctl define those files.
+
+REQ-PR-REGISTRYCTL-005: Registryctl MUST treat `registry-stack.yaml` and every referenced authored
+file as adopter-owned input.
+Initialization MUST accept only an absent destination or an empty real directory and MUST NOT
+overwrite an existing project.
+
+REQ-PR-REGISTRYCTL-006: The public 1.0 template selections MUST be
+`registryctl init <project-directory> --template http` and
+`registryctl init <project-directory> --template spreadsheet`.
+Initialization MUST be offline and MUST copy the selected tested template embedded in the
+installed release.
+OAuth-backed Rhai and domain-specific integrations MUST be authored adaptations, not additional
+templates.
+
+REQ-PR-REGISTRYCTL-007: Initialization MUST validate the embedded project and its editor setup in
+private staging before publishing the complete project.
+If validation or publication fails, an absent destination MUST remain absent.
+A pre-existing empty destination MUST remain empty.
+
+REQ-PR-REGISTRYCTL-008: The project, environment, integration, fixture, and entity schemas MUST
+reject unknown fields.
+Authored paths MUST remain inside the project root.
+Registryctl MUST reject traversal, symbolic links, and unsupported file types before compilation,
+fixture execution, or source access.
+
+## 4. Workflow boundaries
+
+REQ-PR-REGISTRYCTL-009: `test` MUST execute fixtures offline without Docker, secrets, or source
 access.
+`check` MUST validate without writing build state or contacting a source.
+Its ordinary explanation MUST redact secret references and source-returned values.
+Directly authored non-secret values MAY appear only when a user selects
+`--show-authored-values` in local human output.
 
-REQ-PR-REGISTRYCTL-005: `registryctl init --from` MUST validate a starter and its editor setup in
-private staging before publishing the complete project. If validation or publication fails, the
-command MUST leave an absent destination absent and a pre-existing empty destination empty.
-The [initialization implementation](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/commands.rs)
-and its staging tests verify this behavior.
+REQ-PR-REGISTRYCTL-010: `build` MUST publish a deterministic complete unit of unsigned signing
+inputs for the closed lanes `relay-public`, `relay-consultation`, and `notary`.
+It MUST NOT sign, assemble, deploy, activate, or contact an authored source.
 
-## 3. Generated-output discovery
+REQ-PR-REGISTRYCTL-011: `dev` MUST use the installed release lock and exact digest-locked images,
+isolate disposable development trust, credentials, and state, and bind public endpoints to
+loopback.
+It MUST reject production and evidence-grade environments.
+Authorization MUST succeed before Registry Relay contacts an operator-bound source.
 
-`registryctl` generates product inputs only after the authored project and its offline fixtures
-pass validation. Automation discovers supported output entry points from versioned reports instead
-of constructing paths from a private directory layout. The current compiler publication boundary
-is implemented in
-[`output.rs`](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/output.rs).
+REQ-PR-REGISTRYCTL-012: `doctor` MUST be read-only and MUST NOT fetch replacement artifacts or
+contact an authored source.
+`review compare` MUST perform no signing, deployment, source access, or project mutation.
+`tooling` MUST require no Docker, source access, secret, or deployed product.
 
-REQ-PR-REGISTRYCTL-006: The `registryctl.init.v1` report MUST identify the project root in `output`
-and supported generated entry points in `artifacts`. A consumer MUST use these fields instead of
-assuming a generated filename. The `registryctl.project_editor.v1` report MUST identify the project
-root in `project_directory` and every managed editor file in `files`.
+## 5. Trust and approved-set boundaries
 
-REQ-PR-REGISTRYCTL-007: A successful `build --format json` MUST return a
-`registryctl.project_command.v1` report whose `output` field identifies the complete build root.
-The exact files and directories below that root are implementation details unless another public
-contract names them.
+REQ-PR-REGISTRYCTL-013: `trust bundle inspect` MUST NOT grant trust.
+Bundle verification MUST use an explicit anchor for the same product lane and acceptance identity.
+Signing MUST consume one generated lane input, an explicit anchor, and explicit supported key
+locators, then create a fresh closed bundle directory without editing the input or anchor.
 
-REQ-PR-REGISTRYCTL-008: For identical authored inputs, environment, compiler version, and verified
-baseline, `build` MUST produce the same file closure. Publication MUST replace the selected
-environment output as one complete unit so product processes do not observe a partial closure.
+REQ-PR-REGISTRYCTL-014: Anchor creation and rotation MUST preserve product-lane ownership.
+Rotation MUST create a next anchor and authenticated transition without editing the current anchor.
 
-REQ-PR-REGISTRYCTL-009: Generated review material and private product inputs MUST remain separate.
-The implementation MAY change their directory names, but MUST NOT place secrets or private source
-bindings in the reviewable output.
+REQ-PR-REGISTRYCTL-015: Initial approved-set assembly MUST accept exactly the independently
+verified `relay-public`, `relay-consultation`, and `notary` lanes.
+An update MUST bind to the preceding approved set and replace every affected lane.
+The approved set MUST remain a handoff record, not a fourth signature or activation authority.
 
-## 4. Machine-readable reports
+## 6. Machine-readable reports
 
-Commands that accept `--format json` emit one JSON document on standard output. Human progress
-text does not share that stream. The command dispatch and JSON rendering are defined in the
-[registryctl entry point](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/main.rs).
+REQ-PR-REGISTRYCTL-016: A command in JSON format MUST write one versioned report and no human
+progress text to standard output.
+Warnings outside the report MAY use standard error.
 
-REQ-PR-REGISTRYCTL-010: A command in JSON format MUST write only its report to standard output.
-Warnings that are not part of the report MAY use standard error, but MUST NOT change the JSON
-document or a successful command's exit status.
+REQ-PR-REGISTRYCTL-017: `registryctl.init.v1` MUST contain `schema_version`, `status`, `project`,
+`project_kind`, `output`, `source`, and `artifacts`.
+Automation MUST use `output` and `artifacts` instead of assuming an initialization layout.
 
-### 4.1 Doctor report
+REQ-PR-REGISTRYCTL-018: `registryctl.project_command.v1` MUST satisfy the committed
+`registryctl.project_command.v1.schema.json` contract.
+When `output` is present, automation MUST treat that field as the supported complete build root
+and MUST NOT construct a private path below it.
 
-`doctor --format json` emits `registryctl.validation.report.v1`. Its committed
-[JSON Schema](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registry-config-report/schemas/registryctl.validation.report.v1.schema.json)
-and [canonical fixture](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registry-config-report/fixtures/registryctl/registryctl.validation.error.json)
-are the field-level contract.
+REQ-PR-REGISTRYCTL-019: `dev smoke --format json` MUST emit `registryctl.dev_smoke.v1` with
+`schema_version`, `project`, `environment`, `results`, and `passed`.
+Each result MUST contain `scenario_id`, `status`, `token_counter_delta`,
+`source_counter_delta`, `minimized_claim_ids`, and `passed`.
+The report MUST contain no credential or source-returned value.
+Counter deltas MUST be unavailable for operator-bound sources.
 
-REQ-PR-REGISTRYCTL-011: A doctor report MUST contain `schema_version`, `project`, `status`,
-`products`, and `generated_at`. It MAY contain `cross_product_diagnostics`. Its aggregate and
-product statuses MUST use `ok`, `warning`, `error`, or `not_run`.
+REQ-PR-REGISTRYCTL-020: `doctor --format json` MUST emit `registryctl.doctor.v1` with
+`schema_version`, `status`, `environment`, `profile`, and `checks`.
+Each check MUST contain `id`, `status`, `category`, and optional `remediation`.
+The aggregate status MUST be `ready` only when every check is ready.
 
-REQ-PR-REGISTRYCTL-012: Doctor aggregation MUST redact local secret values from captured product
-output. A report containing only `ok` or `warning` product statuses MUST exit successfully. A
-report containing `error` or `not_run` MUST be emitted before the command exits with status `1`.
-The [doctor tests](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/lib.rs)
-cover schema validation, redaction, and failure reporting.
-
-### 4.2 Smoke report
-
-`registryctl smoke` writes a `registryctl.smoke.v1` document to the configured local output
-directory as `smoke-results.json`. The committed schema at
-`crates/registryctl/schemas/registryctl.smoke.v1.schema.json` is the field-level contract.
-
-REQ-PR-REGISTRYCTL-013: A smoke report MUST contain `schema_version`, `base_url`, `passed`, and
-`checks`. Each check MUST contain `name`, `method`, `path`, `expected_status`, `actual_status`,
-`passed`, and `error`.
-
-REQ-PR-REGISTRYCTL-014: `registryctl smoke` MUST write the complete report when a check fails, then
-exit with status `1`. The report MUST NOT contain local API keys or other values loaded from the
-project secrets file. A report in which every check passes MUST set `passed` to `true` and exit
-with status `0`.
-
-REQ-PR-REGISTRYCTL-015: Within the 1.x release line, a report MUST continue to satisfy the committed
-schema identified by its `schema_version`. A release MUST NOT remove or rename a field, change a
-field's type or meaning, make an optional field required, add a field where the schema closes
+REQ-PR-REGISTRYCTL-021: A 1.x release MUST NOT remove or rename a versioned report field, change a
+field's type or meaning, make an optional field required, add a field where the schema rejects
 additional properties, or reuse a schema version for a different shape.
 
-## 5. Exit statuses
+## 7. Generated deployment package
 
-Registryctl has three process exit statuses. Tests in `crates/registryctl/tests/exit_status.rs`
-pin the status assigned to each class.
+Registryctl owns the generated closure.
+The operator owns the binding, secret and certificate inputs, and any parent application.
+
+REQ-PR-REGISTRYCTL-022: `deploy generate` MUST consume one verified three-lane approved set and the
+installed signed release lock.
+It MUST NOT sign bundles, create production secrets, initialize product state, start a product, or
+activate a deployment.
+
+REQ-PR-REGISTRYCTL-023: The public package root MUST contain:
+
+- Operator-owned `binding.yaml`.
+- Operator-owned `operator/` directories for inputs named by the package inventory.
+- Registryctl-owned `generated/compose.empty.env`, `generated/compose.yaml`,
+  `generated/compose.initialize.yaml`, `generated/postgresql-server.env`,
+  `generated/deployment-binding.v1.yaml`, `generated/deployment-plan.v1.json`,
+  `generated/operator-files.v1.json`, `generated/deployment-manifest.v1.json`, and
+  `generated/RUNBOOK.md`.
+- Registryctl-owned `generated/inputs/`, `generated/bundles/`, and `generated/anchors/` closures.
+
+Names below the three generated closure directories remain private unless a public schema names
+them.
+
+REQ-PR-REGISTRYCTL-024: The deployment manifest MUST authenticate every Registryctl-owned generated
+file and its canonical manifest content.
+Generation MUST report a closure digest for recording outside the package.
+Verification MUST fail when an explicitly expected closure digest does not match.
+
+REQ-PR-REGISTRYCTL-025: `deploy verify` MUST verify only the generated package.
+Its `io.registrystack.deployment_ownership_report` version `1.0` report MUST set
+`verification_scope` to `package` and `ownership` to `managed` or `invalid`.
+The report MUST NOT certify an operator-owned Compose application, include graph, or override.
+
+REQ-PR-REGISTRYCTL-026: Package verification MUST NOT read operator-file values by default.
+Explicit `--check-operator-files` MAY check existence, isolation, mode, and owner without reporting
+values.
+Safe regeneration MUST preserve `binding.yaml` and `operator/` and replace only the verified
+generated closure.
+An edited or incomplete generated closure MUST be `invalid` and unsafe to regenerate in place.
+
+## 8. Exit statuses
 
 | Status | Meaning |
 | --- | --- |
-| `0` | The requested command completed successfully. |
-| `1` | A parsed command failed during validation, execution, or runtime interaction. |
-| `2` | Command-line parsing failed because the command, subcommand, flag, or value was invalid or missing. |
+| `0` | The requested operation completed and every selected predicate passed. |
+| `1` | The parsed operation completed with a negative domain result. |
+| `2` | Usage or a portable contract version is invalid or unsupported. |
+| `3` | An operational dependency, file operation, Compose operation, or explicit secret provider failed. |
 
-REQ-PR-REGISTRYCTL-016: Registryctl MUST return exactly `0`, `1`, or `2` according to this table.
-A command MUST NOT return `0` when its machine-readable report has a failure status.
+REQ-PR-REGISTRYCTL-027: Registryctl MUST return exactly `0`, `1`, `2`, or `3` according to this
+table.
+A command MUST NOT return `0` when its machine-readable report has a selected failure status.
 
-The former hidden `init spreadsheet-api` alias is not part of the command surface. Invoking the
-removed alias is a usage failure and returns status `2`.
+## 9. Pre-1.0 removals and unstable surfaces
 
-## 6. Explicitly unstable surfaces
+REQ-PR-REGISTRYCTL-028: The removed public roots `add`, `start`, `stop`, `restart`, `status`,
+`open`, `smoke`, `logs`, `preflight`, `capabilities`, `compare`, `promote`, `migrate`, `bundle`,
+`anchor`, `authoring`, `project`, `bruno`, and `update-check` MUST be usage failures.
+The removed `init relay`, `init --from`, and `test --live` forms MUST also be usage failures.
 
 The following surfaces remain outside the 1.0 compatibility promise:
 
-- The generated layout below `.registry-stack/runtime/` for a canonical local
-  project, including Compose, state, credential, and product-input
-  subdirectories.
-- Directory names and intermediate files below a build root returned by
-  `registryctl.project_command.v1`.
-- Editor staging, backup, and transaction artifacts that are not returned by a versioned report.
+- Generated build and development layouts below a project root.
+- Editor staging, backup, and transaction artifacts not returned by a versioned report.
 - Human-readable output text, whitespace, ordering, and terminal formatting.
-- Hidden commands, worker processes, and their standard-input or standard-output protocols.
-- Smoke check ordering and human-readable check names or error text.
+- Hidden commands, worker processes, and their input or output protocols.
+- Operator-owned files and orchestration outside a generated deployment package.
 
-REQ-PR-REGISTRYCTL-017: Registryctl documentation MUST NOT present an unstable generated path as a
-1.0 compatibility guarantee. Automation MUST use a versioned report, a committed schema, or a
-separate public product contract to discover an output it consumes.
+REQ-PR-REGISTRYCTL-029: Automation MUST use a versioned report, a committed schema, or the public
+generated-package contract in Section 7.
+Documentation MUST NOT present an unstable path or human-readable value as an automation contract.
 
-## 7. Credential-issuance boundary
+## 10. Authorization and evidence boundaries
 
-Project authoring can compile a Notary service without configured claims. Every configured claim
-must derive from an exact compiler-pinned Registry Relay consultation. The compiler and end-to-end
-tests enforce this in
-[`compiler/notary.rs`](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/src/project_authoring/compiler/notary.rs)
-and [`project_authoring.rs`](https://github.com/registrystack/registry-stack/blob/1a9c33d31f4d4db523da0d36011358200696e16f/crates/registryctl/tests/project_authoring.rs).
+REQ-PR-REGISTRYCTL-030: Registryctl MUST reject a Notary claim that does not derive from exactly one
+declared Registry Relay consultation.
+Caller-provided, OpenID Connect (OIDC), and authorization-details data MUST NOT be compiled as claim
+evidence.
 
-REQ-PR-REGISTRYCTL-018: Registryctl MUST reject a Notary claim that does not
-derive from exactly one declared Registry Relay consultation. Caller-provided,
-OIDC, and authorization-details data MUST NOT be compiled as claim evidence.
+REQ-PR-REGISTRYCTL-031: Development source access MUST preserve authorization-before-source.
+The denial scenario MUST reach no token endpoint and no authored source.
+The authorized scenario MUST use the exact integration scope.
+The smoke report MUST expose no source-returned value.
 
 ## Conformance
 
-A registryctl release conforms to this specification when it:
+A Registryctl release conforms to this specification when it:
 
-- Preserves the authored project contract and validates it before compilation
-  (REQ-PR-REGISTRYCTL-002 through REQ-PR-REGISTRYCTL-005).
-- Publishes deterministic complete outputs and exposes supported entry points through versioned
-  reports without stabilizing private internals (REQ-PR-REGISTRYCTL-006 through
-  REQ-PR-REGISTRYCTL-009).
-- Emits compatible doctor and smoke reports without secret values (REQ-PR-REGISTRYCTL-010 through
+- Exposes only the ten public roots, honors global project selection, and performs no update checks
+  (REQ-PR-REGISTRYCTL-002 through REQ-PR-REGISTRYCTL-004).
+- Preserves authored ownership, strict schemas, bounded paths, and atomic HTTP-template
+  initialization (REQ-PR-REGISTRYCTL-005 through REQ-PR-REGISTRYCTL-008).
+- Preserves offline authoring, deterministic build, disposable development, independent lane
+  trust, and read-only review boundaries (REQ-PR-REGISTRYCTL-009 through
   REQ-PR-REGISTRYCTL-015).
-- Returns the exact process status for success, command failure, and usage failure
-  (REQ-PR-REGISTRYCTL-016).
-- Keeps unstable generated internals outside the compatibility promise
-  (REQ-PR-REGISTRYCTL-017).
-- Refuses claims without Registry Relay evidence (REQ-PR-REGISTRYCTL-018).
+- Emits compatible value-free reports (REQ-PR-REGISTRYCTL-016 through
+  REQ-PR-REGISTRYCTL-021).
+- Generates and verifies only the governed package while leaving operator orchestration outside
+  that result (REQ-PR-REGISTRYCTL-022 through REQ-PR-REGISTRYCTL-026).
+- Returns exact process statuses and keeps removed or unstable surfaces outside the promise
+  (REQ-PR-REGISTRYCTL-027 through REQ-PR-REGISTRYCTL-029).
+- Preserves authorization-before-source and refuses non-Relay claim evidence
+  (REQ-PR-REGISTRYCTL-030 and REQ-PR-REGISTRYCTL-031).
 
 ## Evidence
 
 This specification is `verified`: the requirements describe implemented behavior with automated
 tests.
 
-- `crates/registryctl/tests/init_output.rs` pins versioned initialization reports and supported
-  artifact entry points.
-- `crates/registryctl/tests/project_authoring.rs` and inline project-authoring tests pin authored
-  path checks, staged initialization, deterministic generation, complete publication, and the
-  registry-backed issuance boundary.
-- `crates/registry-config-report/tests/report_contract.rs` validates the doctor schema and its
-  canonical fixtures.
-- Inline registryctl tests validate doctor aggregation, redaction, the smoke schema, failure-report
-  persistence, and secret absence.
-- `crates/registryctl/tests/exit_status.rs` pins process statuses `0`, `1`, and `2`, including the
-  removed alias.
+- `crates/registryctl/src/main.rs` defines the ten-root parser, global project selection, command
+  ownership, report rendering, and exit mapping.
+- `crates/registryctl/tests/cli_contract.rs`, `cli_exit_codes.rs`, and `cli_doctor.rs` pin the
+  public roots, pre-1.0 removals, global `-C`, doctor report, and four exit statuses.
+- Project-authoring command and integration tests pin initialization reports, staged publication,
+  authored path checks, deterministic generation, and complete publication.
+- `crates/registryctl/schemas/project-reports/registryctl.project_command.v1.schema.json` pins the
+  shared authored-project report shape.
+- `crates/registryctl/src/dev_runtime.rs` and `tests/dev_runtime_core.rs` pin disposable runtime
+  ownership, exact image locking, source ordering, and `registryctl.dev_smoke.v1`.
+- `crates/registryctl/src/deployment.rs` and `tests/deployment_seams.rs` pin package ownership,
+  closure integrity, package-only verification, operator-file isolation, and safe regeneration.
+- Trust, approved-set, and project-authoring compiler tests pin lane identity, anchor verification,
+  three-lane assembly, and the Registry Relay evidence boundary.
 
 ## Next
 
-- [registryctl CLI reference](../../reference/registryctl/) lists the supported commands and flags.
+- [Registryctl CLI reference](../../reference/registryctl/) lists supported commands and flags.
+- [Cut over a pre-1.0 project](../../start/pre-1.0-cutover/) maps removed commands to the 1.0
+  workflow.
 - [API stability and versioning](../../reference/api-stability/) defines the stack-wide 1.0
   compatibility policy.
-- [RS-PR-RELAY](../rs-pr-relay/) specifies the Registry Relay protocol compiled project inputs
+- [RS-PR-RELAY](../rs-pr-relay/) specifies the Registry Relay protocol that compiled project inputs
   configure.
 - [RS-PR-NOTARY](../rs-pr-notary/) specifies the Registry Notary evaluation and issuance protocol.

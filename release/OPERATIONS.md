@@ -85,10 +85,17 @@ The successful candidate:
 - Publishes candidate images only to the private
   `registry-notary-candidate` and `registry-relay-candidate` packages.
 - Scans exact candidate digests and enforces the advisory decision.
-- Runs install and authoring smoke.
+- Runs the exact Linux candidate Registryctl binary through the offline HTTP,
+  OAuth and Rhai, and synthetic OpenCRVS authoring journeys using the exact
+  extracted candidate docs archive.
 - Seals one 24-hour candidate bundle and one
   `registry-stack.release-candidate.v2` manifest.
 - Attests both candidate files after an independent byte recheck.
+
+The candidate does not install Registryctl, accept a signed
+`RegistryReleaseLockV1`, or run Docker. Those release-identity and runtime
+proofs require the immutable tag and run in the tag-triggered release workflow
+before publication.
 
 Use the successful candidate run ID for local verification:
 
@@ -131,8 +138,11 @@ The tag-triggered workflow:
 5. Rechecks candidate expiry and final image destinations.
 6. Promotes each private candidate image manifest to its final tag at the same
    digest.
-7. Publishes the reconciled draft.
-8. Dispatches `docs-pages.yml` with the exact release tag and docs SHA-256.
+7. Creates and verifies the tag-bound signed `RegistryReleaseLockV1`, runs the
+   exact installer, and proves the full first-country Docker lifecycle against
+   the promoted images.
+8. Publishes the reconciled draft.
+9. Dispatches `docs-pages.yml` with the exact release tag and docs SHA-256.
 
 The docs workflow authenticates the published archive, promotes it to `/` and
 `/v/<version>/`, builds `/dev/` from protected `main`, deploys one Pages

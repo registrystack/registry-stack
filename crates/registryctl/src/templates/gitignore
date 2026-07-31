@@ -1,5 +1,0 @@
-.env
-secrets/
-output/
-state/
-bruno/registry-api/environments/local.bru

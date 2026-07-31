@@ -6,6 +6,7 @@
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -153,13 +154,38 @@ struct CachedJwkKey {
     jwk: Jwk,
 }
 
-#[derive(Debug)]
+enum JwksSource {
+    Http {
+        jwks_uri: String,
+        fetch_url_policy: FetchUrlPolicy,
+    },
+    Static(JwkSet),
+}
+
 pub struct JwksFetcher {
-    jwks_uri: String,
+    source: JwksSource,
     config: JwksFetcherConfig,
-    fetch_url_policy: FetchUrlPolicy,
     state: RwLock<JwksState>,
     refresh_lock: Mutex<()>,
+}
+
+impl fmt::Debug for JwksSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Http { .. } => "Http",
+            Self::Static(_) => "Static",
+        })
+    }
+}
+
+impl fmt::Debug for JwksFetcher {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JwksFetcher")
+            .field("source", &self.source)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl JwksFetcher {
@@ -175,9 +201,27 @@ impl JwksFetcher {
         fetch_url_policy: FetchUrlPolicy,
     ) -> Self {
         Self {
-            jwks_uri,
+            source: JwksSource::Http {
+                jwks_uri,
+                fetch_url_policy,
+            },
             config,
-            fetch_url_policy,
+            state: RwLock::new(JwksState::default()),
+            refresh_lock: Mutex::new(()),
+        }
+    }
+
+    /// Build a fetcher over a fixed in-memory JWKS document.
+    ///
+    /// Static sources use the same key validation, algorithm binding, cache,
+    /// and negative-cache behavior as HTTP sources, but never perform network
+    /// or filesystem I/O. The caller remains responsible for establishing the
+    /// provenance of the supplied keys and must supply only public keys.
+    #[must_use]
+    pub fn new_static(jwks: JwkSet, config: JwksFetcherConfig) -> Self {
+        Self {
+            source: JwksSource::Static(jwks),
+            config,
             state: RwLock::new(JwksState::default()),
             refresh_lock: Mutex::new(()),
         }
@@ -353,22 +397,29 @@ impl JwksFetcher {
     }
 
     async fn refresh(&self, forced: bool) -> Result<(), OidcError> {
-        let url = Url::parse(&self.jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
-        let validated_url = self
-            .fetch_url_policy
-            .validate_for_immediate_fetch_with_timeout(&url, self.config.request_timeout)
-            .await?;
-        let resp = validated_url
-            .immediate_get()?
-            .timeout(self.config.request_timeout)
-            .send()
-            .await
-            .map_err(OidcError::Transport)?;
-        if !resp.status().is_success() {
-            return Err(OidcError::HttpStatus(resp.status().as_u16()));
-        }
-        let body = read_bounded(resp, self.config.max_doc_bytes.max(1)).await?;
-        let jwks: JwkSet = serde_json::from_slice(&body).map_err(|_| OidcError::Parse)?;
+        let jwks = match &self.source {
+            JwksSource::Http {
+                jwks_uri,
+                fetch_url_policy,
+            } => {
+                let url = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
+                let validated_url = fetch_url_policy
+                    .validate_for_immediate_fetch_with_timeout(&url, self.config.request_timeout)
+                    .await?;
+                let resp = validated_url
+                    .immediate_get()?
+                    .timeout(self.config.request_timeout)
+                    .send()
+                    .await
+                    .map_err(OidcError::Transport)?;
+                if !resp.status().is_success() {
+                    return Err(OidcError::HttpStatus(resp.status().as_u16()));
+                }
+                let body = read_bounded(resp, self.config.max_doc_bytes.max(1)).await?;
+                serde_json::from_slice(&body).map_err(|_| OidcError::Parse)?
+            }
+            JwksSource::Static(jwks) => jwks.clone(),
+        };
         let keys = jwks
             .keys
             .into_iter()
@@ -2544,6 +2595,49 @@ mod tests {
             err,
             OidcError::FetchUrl(FetchUrlError::PrivateRangeDenied { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn static_jwks_fetcher_resolves_keys_without_an_endpoint() {
+        let jwks =
+            serde_json::from_value(jwks_with_kids(&["static-kid"])).expect("static JWKS parses");
+        let fetcher = JwksFetcher::new_static(jwks, jwks_test_config());
+
+        assert!(matches!(&fetcher.source, JwksSource::Static(_)));
+        fetcher
+            .key_for_kid("static-kid")
+            .await
+            .expect("static key resolves");
+        let err = fetcher
+            .key_for_kid("missing-kid")
+            .await
+            .expect_err("unknown static key is denied");
+        assert!(matches!(err, OidcError::UnknownKid));
+    }
+
+    #[test]
+    fn jwks_fetcher_debug_is_value_free_for_http_and_static_sources() {
+        const SENTINEL: &str = "JWKS_DEBUG_SENTINEL";
+
+        let http = JwksFetcher::new(
+            format!("https://identity.example.test/jwks?credential={SENTINEL}"),
+            jwks_test_config(),
+        );
+        let static_jwks = serde_json::from_value(json!({
+            "keys": [{
+                "kty": "oct",
+                "k": SENTINEL,
+                "kid": "symmetric-test-key"
+            }]
+        }))
+        .expect("symmetric test JWKS parses");
+        let static_fetcher = JwksFetcher::new_static(static_jwks, jwks_test_config());
+
+        let rendered = format!("{http:?} {static_fetcher:?}");
+        assert!(!rendered.contains(SENTINEL));
+        assert!(!rendered.contains("identity.example.test"));
+        assert!(rendered.contains("source: Http"));
+        assert!(rendered.contains("source: Static"));
     }
 
     #[tokio::test]

@@ -12,6 +12,29 @@ const PARSER_SENTINEL: &str = "SENTINEL_PRIVATE_PARSER_TEXT";
 const SECRET_SENTINEL: &str = "SENTINEL_PRIVATE_SECRET";
 const COUNTRY_SENTINEL: &str = "SENTINEL_PRIVATE_COUNTRY_VALUE";
 
+fn rewrite_signed_bundle_product(fixture: &SignedBundleFixture, product: &str) {
+    let mut manifest: ConfigBundleManifest = serde_json::from_slice(
+        &std::fs::read(fixture.bundle_dir.join("manifest.json")).expect("manifest reads"),
+    )
+    .expect("manifest parses");
+    assert_eq!(product, "registry-relay");
+    manifest.acceptance_identity.product = ProductAcceptanceProductV1::RegistryRelay;
+    manifest.acceptance_identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+    let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private JWK parses");
+    let kid = private.public().jkt().expect("signer thumbprint");
+    write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+
+    let mut anchor: ConfigTrustAnchor =
+        serde_json::from_slice(&std::fs::read(&fixture.anchor_path).expect("anchor reads"))
+            .expect("anchor parses");
+    anchor.acceptance_identity = manifest.acceptance_identity;
+    std::fs::write(
+        &fixture.anchor_path,
+        serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+    )
+    .expect("anchor writes");
+}
+
 fn config_bundle_error_cases() -> Vec<(ConfigBundleError, BundleVerificationCode)> {
     vec![
         (
@@ -27,6 +50,10 @@ fn config_bundle_error_cases() -> Vec<(ConfigBundleError, BundleVerificationCode
             BundleVerificationCode::REJECTED_VALIDATION,
         ),
         (
+            ConfigBundleError::InvalidAcceptanceIdentity(COUNTRY_SENTINEL),
+            BundleVerificationCode::REJECTED_BINDING,
+        ),
+        (
             ConfigBundleError::InvalidTrustAnchor(SECRET_SENTINEL),
             BundleVerificationCode::REJECTED_SIGNATURE,
         ),
@@ -40,6 +67,14 @@ fn config_bundle_error_cases() -> Vec<(ConfigBundleError, BundleVerificationCode
         ),
         (
             ConfigBundleError::InvalidSignatureEnvelope(SECRET_SENTINEL),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::InvalidAnchorTransition(SECRET_SENTINEL),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::AnchorTransitionRejected(SECRET_SENTINEL),
             BundleVerificationCode::REJECTED_SIGNATURE,
         ),
         (
@@ -345,6 +380,533 @@ fn signed_bundle_server_config_loads_with_pending_acceptance() {
         acceptance.state_action,
         BundleStateAction::Initialize
     ));
+}
+
+#[test]
+fn direct_signed_bundle_server_config_loads_without_bootstrap_config() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+
+    let loaded = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect("direct signed bundle config loads");
+
+    assert_eq!(loaded.config_source, ConfigSource::SignedBundleFile);
+    assert!(
+        loaded.config.config_trust.is_none(),
+        "direct startup must not inject bootstrap trust configuration into the signed document"
+    );
+    let provenance = loaded.config_provenance.expect("provenance");
+    assert_eq!(provenance.source, ConfigSource::SignedBundleFile);
+    assert_eq!(provenance.internal_config_hash, fixture.config_hash);
+    let acceptance = loaded
+        .pending_bundle_acceptance
+        .expect("pending acceptance");
+    assert_eq!(acceptance.state_path, fixture.state_path);
+    assert_eq!(
+        acceptance.bundle_id.as_deref(),
+        Some("notary-loader-bundle")
+    );
+    assert!(matches!(
+        acceptance.state_action,
+        BundleStateAction::Initialize
+    ));
+}
+
+#[test]
+fn direct_signed_serve_rejects_absent_state_without_initializing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        false,
+    )
+    .expect_err("ordinary serve requires existing acceptance state");
+
+    assert_eq!(
+        error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("missing-state failure is typed")
+            .code(),
+        BundleVerificationCode::REJECTED_ROLLBACK
+    );
+    assert!(
+        !fixture.state_path.exists(),
+        "ordinary serve must never initialize absent state"
+    );
+}
+
+#[test]
+fn direct_startup_rejects_missing_instance_id_before_state_resolution() {
+    const STATE_SENTINEL: &str = "SENTINEL_PRIVATE_ANTIROLLBACK_STATE";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_instance_id(&fixture, None);
+    std::fs::write(&fixture.state_path, STATE_SENTINEL).expect("malformed state writes");
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect_err("instance-unbound bundle must reject before reading direct startup state");
+
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("missing instance binding failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains(fixture.bundle_dir.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.anchor_path.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.state_path.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(STATE_SENTINEL));
+    assert_eq!(
+        std::fs::read_to_string(&fixture.state_path).expect("state remains readable"),
+        STATE_SENTINEL,
+        "missing instance binding must reject without consulting or changing anti-rollback state"
+    );
+}
+
+#[test]
+fn direct_startup_missing_instance_id_cannot_share_state_across_instance_anchors() {
+    const FIRST_INSTANCE_SENTINEL: &str = "SENTINEL_PRIVATE_NOTARY_INSTANCE_ALPHA";
+    const SECOND_INSTANCE_SENTINEL: &str = "SENTINEL_PRIVATE_NOTARY_INSTANCE_BRAVO";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_instance_id(&fixture, None);
+    let anchor: ConfigTrustAnchor =
+        serde_json::from_slice(&std::fs::read(&fixture.anchor_path).expect("anchor reads"))
+            .expect("anchor parses");
+    let first_anchor_path = tmp.path().join("first-trust-anchor.json");
+    let second_anchor_path = tmp.path().join("second-trust-anchor.json");
+    for (path, instance_id) in [
+        (&first_anchor_path, FIRST_INSTANCE_SENTINEL),
+        (&second_anchor_path, SECOND_INSTANCE_SENTINEL),
+    ] {
+        let mut instance_anchor = anchor.clone();
+        instance_anchor.acceptance_identity.instance = instance_id.to_string();
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&instance_anchor).expect("anchor serializes"),
+        )
+        .expect("anchor writes");
+    }
+
+    for anchor_path in [&first_anchor_path, &second_anchor_path] {
+        let error = load_direct_signed_bundle_server_config(
+            &fixture.bundle_dir,
+            anchor_path,
+            &fixture.state_path,
+            true,
+        )
+        .expect_err("instance-unbound bundle must reject every direct instance anchor");
+        let failure = error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("missing instance binding failure is typed");
+        assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+        let rendered = format!("{failure} {failure:?}");
+        assert!(!rendered.contains(FIRST_INSTANCE_SENTINEL));
+        assert!(!rendered.contains(SECOND_INSTANCE_SENTINEL));
+    }
+    assert!(
+        !fixture.state_path.exists(),
+        "different anchors must not converge on an empty-instance anti-rollback lane"
+    );
+}
+
+#[test]
+fn direct_startup_rejects_verified_cross_product_bundle_before_state_resolution() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_product(&fixture, "registry-relay");
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect_err("verified Relay bundle must not start the Notary");
+
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("cross-product failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains("registry-relay"));
+    assert!(!rendered.contains(fixture.bundle_dir.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.anchor_path.to_string_lossy().as_ref()));
+    assert!(
+        !fixture.state_path.exists(),
+        "product binding must reject before anti-rollback state mutation"
+    );
+}
+
+#[tokio::test]
+async fn product_serve_loader_uses_the_verified_bundle_after_its_path_changes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let verified =
+        verify_notary_product_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("verifies");
+    let candidate =
+        registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+            .expect("acceptance candidate");
+    let store = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path);
+    let plan = store.plan_initialize(&candidate).expect("initial plan");
+    store
+        .commit_acceptance(plan, |_| async { Ok::<(), std::convert::Infallible>(()) })
+        .await
+        .expect("state initializes");
+    let moved_bundle = tmp.path().join("bundle-after-verification");
+    std::fs::rename(&fixture.bundle_dir, &moved_bundle)
+        .expect("verified bundle path becomes unavailable");
+
+    let loaded = load_verified_product_server_config(
+        &fixture.state_path,
+        verified,
+        ProductTrustDomainV1::Governed,
+    )
+    .expect("preverified product input loads without reopening the bundle");
+
+    assert_eq!(loaded.config_source, ConfigSource::SignedBundleFile);
+    assert_eq!(
+        loaded
+            .verified_acceptance_state
+            .expect("verified acceptance state")
+            .expectation(),
+        candidate.expectation()
+    );
+}
+
+#[test]
+fn direct_startup_rejects_every_acceptance_identity_mismatch_before_state_access() {
+    const STATE_SENTINEL: &str = "SENTINEL_PRIVATE_ACCEPTANCE_STATE";
+
+    for dimension in [
+        "trust_domain",
+        "project",
+        "environment",
+        "lane",
+        "product",
+        "stream",
+        "instance",
+    ] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fixture = write_signed_notary_bundle(&tmp);
+        let mut manifest: ConfigBundleManifest = serde_json::from_slice(
+            &std::fs::read(fixture.bundle_dir.join("manifest.json")).expect("manifest reads"),
+        )
+        .expect("manifest parses");
+        match dimension {
+            "trust_domain" => {
+                manifest.acceptance_identity.trust_domain = ProductTrustDomainV1::Development;
+            }
+            "project" => {
+                manifest.acceptance_identity.project = "other-project".to_string();
+            }
+            "environment" => {
+                manifest.acceptance_identity.environment = "other-environment".to_string();
+            }
+            "lane" => {
+                manifest.acceptance_identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+            }
+            "product" => {
+                manifest.acceptance_identity.product = ProductAcceptanceProductV1::RegistryRelay;
+            }
+            "stream" => {
+                manifest.acceptance_identity.stream = "other-stream".to_string();
+            }
+            "instance" => {
+                manifest.acceptance_identity.instance = "other-instance".to_string();
+            }
+            _ => unreachable!(),
+        }
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private JWK parses");
+        let kid = private.public().jkt().expect("signer thumbprint");
+        write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+        std::fs::write(&fixture.state_path, STATE_SENTINEL).expect("state sentinel writes");
+
+        let error = load_direct_signed_bundle_server_config(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            &fixture.state_path,
+            false,
+        )
+        .expect_err("identity mismatch rejects direct startup");
+        let failure = error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("identity mismatch failure is typed");
+        assert!(
+            [
+                BundleVerificationCode::REJECTED_BINDING,
+                BundleVerificationCode::REJECTED_VALIDATION,
+            ]
+            .contains(&failure.code()),
+            "unexpected {dimension} failure: {failure}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&fixture.state_path).expect("state remains readable"),
+            STATE_SENTINEL,
+            "{dimension} mismatch accessed or changed state"
+        );
+    }
+}
+
+#[test]
+fn direct_startup_rejects_a_valid_relay_lane_swap_before_state_access() {
+    const STATE_SENTINEL: &str = "SENTINEL_PRIVATE_LANE_SWAP_STATE";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let mut manifest: ConfigBundleManifest = serde_json::from_slice(
+        &std::fs::read(fixture.bundle_dir.join("manifest.json")).expect("manifest reads"),
+    )
+    .expect("manifest parses");
+    manifest.acceptance_identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+    manifest.acceptance_identity.product = ProductAcceptanceProductV1::RegistryRelay;
+    let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private JWK parses");
+    let kid = private.public().jkt().expect("signer thumbprint");
+    write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
+    let mut anchor: ConfigTrustAnchor =
+        serde_json::from_slice(&std::fs::read(&fixture.anchor_path).expect("anchor reads"))
+            .expect("anchor parses");
+    anchor.acceptance_identity = manifest.acceptance_identity;
+    std::fs::write(
+        &fixture.anchor_path,
+        serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+    )
+    .expect("anchor writes");
+    std::fs::write(&fixture.state_path, STATE_SENTINEL).expect("state sentinel writes");
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        false,
+    )
+    .expect_err("Relay lane swap rejects Notary startup");
+    assert_eq!(
+        error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("lane-swap failure is typed")
+            .code(),
+        BundleVerificationCode::REJECTED_BINDING
+    );
+    assert_eq!(
+        std::fs::read_to_string(&fixture.state_path).expect("state remains readable"),
+        STATE_SENTINEL
+    );
+}
+
+#[test]
+fn bootstrap_startup_rejects_verified_cross_product_bundle_without_fallback() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_product(&fixture, "registry-relay");
+    let unsigned_path = tmp.path().join("authorized-unsigned-notary.yaml");
+    let unsigned_config = notary_bundle_runtime_config();
+    std::fs::write(&unsigned_path, unsigned_config.as_bytes()).expect("unsigned config writes");
+    let mut relay_identity = notary_acceptance_identity();
+    relay_identity.lane = ProductAcceptanceLaneV1::RelayConsultation;
+    relay_identity.product = ProductAcceptanceProductV1::RegistryRelay;
+    let key = registry_platform_ops::AntiRollbackKey {
+        acceptance_identity: relay_identity,
+    };
+    let fallback_state = registry_platform_ops::AntiRollbackRecord {
+        key: key.clone(),
+        last_sequence: 2,
+        last_config_hash: sha256_uri(b"newer-cross-product-config"),
+        last_bundle_manifest_hash:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        last_bundle_id: "newer-cross-product-bundle".to_string(),
+        accepted_anchor: notary_accepted_anchor_pin(),
+        override_pin: Some(registry_platform_ops::ConfigOverridePin {
+            active: true,
+            mode: ConfigOverrideMode::AcceptUnsigned,
+            config_hash: sha256_uri(unsigned_config.as_bytes()),
+            config_path: Some(unsigned_path.to_string_lossy().into_owned()),
+            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+            used_at: "2026-07-30T00:00:00Z".to_string(),
+            operator: "security-review".to_string(),
+            reason: "pin fallback regression".to_string(),
+        }),
+        break_glass: Default::default(),
+        local_approvals: Default::default(),
+    };
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&fallback_state).expect("fallback state serializes"),
+    )
+    .expect("pre-existing fallback state writes");
+    let config_path = tmp.path().join("bootstrap.yaml");
+    std::fs::write(&config_path, notary_bootstrap_config(&fixture)).expect("bootstrap writes");
+
+    let error = load_server_config(&config_path, false)
+        .expect_err("verified Relay bundle must not select Notary bootstrap fallback");
+
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("cross-product failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains("registry-relay"));
+    let retained = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
+        .load(&key)
+        .expect("existing fallback state remains readable");
+    assert_eq!(
+        retained.last_sequence, 2,
+        "product binding must reject before bootstrap fallback or state mutation"
+    );
+}
+
+#[test]
+fn server_config_input_debug_is_value_free() {
+    let signed = ServerConfigInput::SignedBundle {
+        bundle_dir: PathBuf::from("/private/SENTINEL_BUNDLE_PATH"),
+        anchor_path: PathBuf::from("/private/SENTINEL_ANCHOR_PATH"),
+        state_path: PathBuf::from("/private/SENTINEL_STATE_PATH"),
+    };
+    let local = ServerConfigInput::LocalFile(PathBuf::from("/private/SENTINEL_LOCAL_PATH"));
+
+    let rendered = format!("{signed:?} {local:?}");
+
+    assert!(rendered.contains("SignedBundle"));
+    assert!(rendered.contains("LocalFile"));
+    assert!(!rendered.contains("SENTINEL"));
+    assert!(!rendered.contains("/private"));
+}
+
+#[test]
+fn direct_signed_bundle_rejects_signature_and_binding_failures_exactly() {
+    let signature_tmp = tempfile::tempdir().expect("tempdir");
+    let signature_fixture = write_signed_notary_bundle(&signature_tmp);
+    std::fs::write(
+        signature_fixture.bundle_dir.join("manifest.sig.json"),
+        r#"{"schema":"registry.platform.config_bundle_signatures.v1","signatures":[]}"#,
+    )
+    .expect("invalid signature envelope writes");
+
+    let signature_error = load_direct_signed_bundle_server_config(
+        &signature_fixture.bundle_dir,
+        &signature_fixture.anchor_path,
+        &signature_fixture.state_path,
+        true,
+    )
+    .expect_err("invalid signature rejects direct startup");
+    assert_eq!(
+        signature_error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("signature failure is typed")
+            .code(),
+        BundleVerificationCode::REJECTED_SIGNATURE
+    );
+
+    let binding_tmp = tempfile::tempdir().expect("tempdir");
+    let binding_fixture = write_signed_notary_bundle(&binding_tmp);
+    let mut anchor: ConfigTrustAnchor =
+        serde_json::from_slice(&std::fs::read(&binding_fixture.anchor_path).expect("anchor reads"))
+            .expect("anchor parses");
+    anchor.acceptance_identity.instance = "SENTINEL_WRONG_PRIVATE_INSTANCE".to_string();
+    std::fs::write(
+        &binding_fixture.anchor_path,
+        serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+    )
+    .expect("mismatched anchor writes");
+
+    let binding_error = load_direct_signed_bundle_server_config(
+        &binding_fixture.bundle_dir,
+        &binding_fixture.anchor_path,
+        &binding_fixture.state_path,
+        true,
+    )
+    .expect_err("binding mismatch rejects direct startup");
+    assert_eq!(
+        binding_error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("binding failure is typed")
+            .code(),
+        BundleVerificationCode::REJECTED_BINDING
+    );
+    assert!(
+        !format!("{binding_error} {binding_error:?}").contains("SENTINEL_WRONG_PRIVATE_INSTANCE")
+    );
+}
+
+#[test]
+fn direct_signed_bundle_rejects_stale_antirollback_state() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let loaded = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect("first direct load resolves initialization");
+    let acceptance = loaded
+        .pending_bundle_acceptance
+        .expect("pending acceptance");
+    let mut newer_record = acceptance.initial_record();
+    newer_record.last_sequence += 1;
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&newer_record).expect("newer state serializes"),
+    )
+    .expect("pre-existing newer state writes");
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        false,
+    )
+    .expect_err("stale direct bundle rejects startup");
+    assert_eq!(
+        error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("rollback failure is typed")
+            .code(),
+        BundleVerificationCode::REJECTED_ROLLBACK
+    );
+}
+
+#[test]
+fn direct_signed_bundle_diagnostics_do_not_disclose_paths_or_verifier_values() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sentinel = "SENTINEL_PRIVATE_COUNTRY_BUNDLE_PATH_AND_SECRET";
+    let bundle_path = tmp.path().join(sentinel);
+    let anchor_path = tmp.path().join("SENTINEL_PRIVATE_TRUST_ANCHOR.json");
+    let state_path = tmp.path().join("SENTINEL_PRIVATE_ANTIROLLBACK_STATE.json");
+
+    let error =
+        load_direct_signed_bundle_server_config(&bundle_path, &anchor_path, &state_path, false)
+            .expect_err("missing direct bundle rejects startup");
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("direct verification failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_VALIDATION);
+    let rendered = format!("{failure} {failure:?}");
+    for forbidden in [
+        sentinel,
+        bundle_path.to_str().expect("bundle path is UTF-8"),
+        anchor_path.to_str().expect("anchor path is UTF-8"),
+        state_path.to_str().expect("state path is UTF-8"),
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "direct startup diagnostic exposed {forbidden:?}: {rendered}"
+        );
+    }
 }
 
 #[test]

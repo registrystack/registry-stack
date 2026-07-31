@@ -31,7 +31,7 @@
   ],
   "artifacts": [
     {
-      "path": ".registry-stack/build/local/relay/source-plans/person-record.json",
+      "path": ".registry-stack/build/local/private/relay-public/source-plans/person-record.json",
       "format_version": "registry.relay.source_plan.v1",
       "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
       "classes": [
@@ -57,7 +57,7 @@
       ]
     },
     {
-      "path": ".registry-stack/build/local/relay/config/relay.yaml",
+      "path": ".registry-stack/build/local/private/relay-public/config/relay.yaml",
       "format_version": "registry.relay.config.v1",
       "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
       "classes": [

@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1811);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1811);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1811);
-  assert.equal(coverage.distinct_reviewed_intent_count, 621);
+  assert.equal(reference.fields.length, 1829);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1829);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1829);
+  assert.equal(coverage.distinct_reviewed_intent_count, 629);
   assert.equal(coverage.distinct_reviewed_intents_reused_count, 86);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1276);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1286);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -51,33 +51,33 @@ test('committed internal and public reference artifacts are exact and complete',
   );
   assert.deepEqual(reference.coverage.by_schema, {
     project: 220,
-    environment: 206,
+    environment: 213,
     integration: 171,
     fixture: 63,
     entity: 35,
-    relay: 584,
-    notary: 532,
+    relay: 593,
+    notary: 534,
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1441,
+    property: 1458,
     map_key: 26,
     map_value: 48,
     array_item: 178,
-    branch: 111,
+    branch: 112,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
       (total, count) => total + count,
       0,
     ),
-    1116,
+    1127,
   );
-  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 521);
-  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 313);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 528);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 315);
   assert.equal(
     reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
-    977,
+    986,
   );
 });
 
@@ -143,8 +143,11 @@ test('published reference page identifies generated sources and the no-country-v
     readJson('package.json'),
   ]);
 
-  assert.match(page, /Generator: `registryctl authoring reference`/);
-  assert.match(page, /Coverage gate: `registryctl authoring reference --coverage`/);
+  assert.match(page, /Generator: `registryctl tooling reference configuration`/);
+  assert.match(
+    page,
+    /Coverage gate: `registryctl tooling reference configuration --coverage`/,
+  );
   assert.match(page, /Country workspace or runtime configuration reads: none/);
   assert.match(page, /Relay and Notary runtime schemas/);
   assert.match(page, /does not inspect a project, live runtime configuration, environment variables/);
@@ -176,7 +179,17 @@ test('committed reference and coverage are byte-exact to the CLI', async () => {
   ] = await Promise.all([
     execFileAsync(
       'cargo',
-      ['run', '--locked', '--quiet', '-p', 'registryctl', '--', 'authoring', 'reference'],
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'tooling',
+        'reference',
+        'configuration',
+      ],
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -192,8 +205,9 @@ test('committed reference and coverage are byte-exact to the CLI', async () => {
         '-p',
         'registryctl',
         '--',
-        'authoring',
+        'tooling',
         'reference',
+        'configuration',
         '--coverage',
       ],
       {
