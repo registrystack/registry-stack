@@ -872,36 +872,49 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertEqual(positions, sorted(positions))
         update_start = self.module.STABLE_COMMAND_ORDER.index("update_generate")
         updated_start = self.module.STABLE_COMMAND_ORDER.index("updated_start")
+        update_order = (
+            "update_generate",
+            "update_verify",
+            "failed_activation",
+            "failed_activation_recovery",
+            "update_verify_current",
+            "update_verify_current_relay_public_state",
+            "update_verify_current_relay_consultation_state",
+            "update_verify_current_notary_state",
+            "update_preview_relay_public",
+            "update_preview_relay_consultation",
+            "update_preview_notary",
+            "update_stop_current",
+            "update_accept_relay_consultation",
+            "update_accept_notary",
+            "update_verify_relay_public_state",
+            "update_verify_relay_consultation_state",
+            "update_verify_notary_state",
+            "update_stage_relay_public_serving_secrets",
+            "update_stage_relay_consultation_serving_secrets",
+            "update_stage_notary_serving_secrets",
+            "update_stage_postgresql_serving_secrets",
+            "updated_start",
+        )
         self.assertEqual(
             self.module.STABLE_COMMAND_ORDER[update_start : updated_start + 1],
-            (
-                "update_generate",
-                "update_verify",
-                "failed_activation",
-                "failed_activation_recovery",
-                "update_verify_current",
-                "update_verify_current_relay_public_state",
-                "update_verify_current_relay_consultation_state",
-                "update_verify_current_notary_state",
-                "update_preview_relay_public",
-                "update_preview_relay_consultation",
-                "update_preview_notary",
-                "update_stop_current",
-                "update_accept_relay_consultation",
-                "update_accept_notary",
-                "update_verify_relay_public_state",
-                "update_verify_relay_consultation_state",
-                "update_verify_notary_state",
-                "update_stage_relay_public_serving_secrets",
-                "update_stage_relay_consultation_serving_secrets",
-                "update_stage_notary_serving_secrets",
-                "update_stage_postgresql_serving_secrets",
-                "updated_start",
-            ),
+            update_order,
         )
         stable_source = SCRIPT.read_text(encoding="utf-8").split(
             "def run_stable_release_form", 1
         )[1].split("def run_release_form", 1)[0]
+        emitted_update_markers = {
+            "failed_activation": "run_failed_activation(",
+        }
+        emitted_update_positions = [
+            stable_source.index(emitted_update_markers.get(name, f'"{name}"'))
+            for name in update_order
+        ]
+        self.assertEqual(
+            emitted_update_positions,
+            sorted(emitted_update_positions),
+            "the implemented update dispatch must preserve the tested command order",
+        )
         for command_name in (
             "update_verify_current",
             "update_verify_current_relay_public_state",
