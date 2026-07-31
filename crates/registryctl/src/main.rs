@@ -339,16 +339,22 @@ enum TrustAnchorCommand {
         after_help = "Governed handoff:\n  Input owner: product-lane trust owner\n  Output owner: the same product-lane trust owner\n  Mutation: creates one new immutable anchor file; never edits an existing anchor\n  Next command: registryctl trust bundle sign --help"
     )]
     Create {
-        #[arg(long, value_enum)]
+        /// Product acceptance lane whose signing input establishes the identity.
+        #[arg(long, value_enum, value_name = "LANE")]
         lane: Lane,
-        #[arg(long)]
+        /// Generated product-lane signing-input directory.
+        #[arg(long, value_name = "DIRECTORY")]
         input: PathBuf,
-        #[arg(long = "public-key", required = true, action = clap::ArgAction::Append)]
+        /// Public Ed25519 JSON Web Key (JWK) file. Repeat for a quorum.
+        #[arg(long = "public-key", required = true, action = clap::ArgAction::Append, value_name = "JWK_FILE")]
         public_keys: Vec<PathBuf>,
-        #[arg(long)]
+        /// Minimum number of enabled signers required to approve a bundle.
+        #[arg(long, value_name = "COUNT")]
         threshold: u32,
-        #[arg(long)]
+        /// New immutable anchor file to create.
+        #[arg(long, value_name = "FILE")]
         output_file: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
@@ -357,16 +363,22 @@ enum TrustAnchorCommand {
         after_help = "Governed handoff:\n  Input owner: current product-lane trust owners\n  Output owner: next product-lane trust owners\n  Mutation: creates a next anchor and authenticated transition in a fresh directory\n  Next command: registryctl trust bundle sign --help"
     )]
     Rotate {
-        #[arg(long)]
+        /// Current immutable lane anchor.
+        #[arg(long, value_name = "FILE")]
         current_anchor: PathBuf,
-        #[arg(long = "next-public-key", required = true, action = clap::ArgAction::Append)]
+        /// Public Ed25519 JWK file for the next signer set. Repeat for a quorum.
+        #[arg(long = "next-public-key", required = true, action = clap::ArgAction::Append, value_name = "JWK_FILE")]
         next_public_keys: Vec<PathBuf>,
-        #[arg(long)]
+        /// Minimum number of next signers required to approve a bundle.
+        #[arg(long, value_name = "COUNT")]
         next_threshold: u32,
-        #[arg(long = "key", required = true, action = clap::ArgAction::Append)]
+        /// Private-key locator authorized by the current anchor. Repeat for a quorum.
+        #[arg(long = "key", required = true, action = clap::ArgAction::Append, value_name = "LOCATOR")]
         keys: Vec<String>,
-        #[arg(long)]
+        /// Fresh directory for the next anchor and authenticated transition.
+        #[arg(long, value_name = "DIRECTORY")]
         output_dir: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
@@ -376,11 +388,13 @@ enum TrustAnchorCommand {
 enum TrustBundleCommand {
     /// Inspect signed-manifest metadata without granting trust.
     #[command(
-        after_help = "Governed handoff:\n  Input owner: product-lane trust owner\n  Output owner: reviewer\n  Mutation: none\n  Next command: registryctl trust bundle verify --bundle-dir <directory> --anchor <file>"
+        after_help = "Governed handoff:\n  Input owner: product-lane trust owner\n  Output owner: reviewer\n  Mutation: none\n  Next command: registryctl trust bundle verify --bundle-dir <signed-artifact-directory> --anchor <file>"
     )]
     Inspect {
-        #[arg(long)]
+        /// Signed artifact directory produced by `trust bundle sign`.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         bundle_dir: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
@@ -389,32 +403,40 @@ enum TrustBundleCommand {
         after_help = "Governed handoff:\n  Input owner: product-lane signer and anchor owner\n  Output owner: approved-set assembler\n  Mutation: none\n  Next command: registryctl trust approved-set assemble --help"
     )]
     Verify {
-        #[arg(long)]
+        /// Signed artifact directory produced by `trust bundle sign`.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         bundle_dir: PathBuf,
-        #[arg(long)]
+        /// Immutable lane anchor used to verify the signed artifact.
+        #[arg(long, value_name = "FILE")]
         anchor: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
     /// Sign one generated lane input into a fresh closed directory.
     #[command(
-        after_help = "Governed handoff:\n  Input owner: country implementer for the signing input; product-lane trust owner for anchor and key locator\n  Output owner: product-lane trust owner\n  Mutation: creates one fresh signed bundle directory; never edits the input or anchor\n  Next command: registryctl trust bundle verify --bundle-dir <directory> --anchor <file>"
+        after_help = "Governed handoff:\n  Input owner: country implementer for the signing input; product-lane trust owner for anchor and key locator\n  Output owner: product-lane trust owner\n  Mutation: creates one fresh signed artifact directory; never edits the input or anchor\n  Next command: registryctl trust bundle verify --bundle-dir <signed-artifact-directory> --anchor <signed-artifact-directory>/anchor.json"
     )]
     Sign {
-        #[arg(long, value_enum)]
+        /// Product acceptance lane represented by the generated signing input.
+        #[arg(long, value_enum, value_name = "LANE")]
         lane: Lane,
-        #[arg(long)]
+        /// Generated product-lane signing-input directory.
+        #[arg(long, value_name = "DIRECTORY")]
         input: PathBuf,
-        #[arg(long)]
+        /// Immutable lane anchor authorizing the selected signing keys.
+        #[arg(long, value_name = "FILE")]
         anchor: PathBuf,
         /// Current approved set for an update.
-        #[arg(long)]
+        #[arg(long, value_name = "FILE")]
         against: Option<PathBuf>,
         /// Explicit file: or op:// key locator.
-        #[arg(long = "key", required = true, action = clap::ArgAction::Append)]
+        #[arg(long = "key", required = true, action = clap::ArgAction::Append, value_name = "LOCATOR")]
         keys: Vec<String>,
-        #[arg(long)]
+        /// Fresh signed artifact directory to create.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         output_dir: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
@@ -428,19 +450,24 @@ enum ApprovedSetCommand {
     )]
     Assemble {
         /// Select one declared project environment.
-        #[arg(long)]
+        #[arg(long, value_name = "ENVIRONMENT")]
         environment: Option<String>,
         /// Preceding approved set for an update.
-        #[arg(long = "from")]
+        #[arg(long = "from", value_name = "FILE")]
         preceding_set: Option<PathBuf>,
-        #[arg(long)]
+        /// Verified relay-public signed artifact directory.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         relay_public: Option<PathBuf>,
-        #[arg(long)]
+        /// Verified relay-consultation signed artifact directory.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         relay_consultation: Option<PathBuf>,
-        #[arg(long)]
+        /// Verified notary signed artifact directory.
+        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         notary: Option<PathBuf>,
-        #[arg(long)]
+        /// New immutable approved baseline set file.
+        #[arg(long, value_name = "FILE")]
         output_file: PathBuf,
+        /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
     },
@@ -590,6 +617,7 @@ fn run(cli: Cli) -> CliResult {
             watch,
             format,
         } => {
+            let selected_environment = environment.clone();
             let project = discover_project(project_dir.as_deref())?;
             let environment = resolve_environment(&project, environment)?;
             if watch && format == OutputFormat::Json {
@@ -611,7 +639,12 @@ fn run(cli: Cli) -> CliResult {
             } else {
                 let report = registryctl::test_registry_project_selected(&options, &selection)
                     .map_err(CliFailure::domain)?;
-                print_project_test_report(format, &report, trace, true)?;
+                let next_action = selected_project_command(
+                    project_dir.as_deref(),
+                    "dev",
+                    selected_environment.as_deref(),
+                );
+                print_project_test_report(format, &report, trace, Some(&next_action))?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -626,8 +659,14 @@ fn run(cli: Cli) -> CliResult {
                     "--show-authored-values requires human output"
                 )));
             }
+            let selected_environment = environment.clone();
             let project = discover_project(project_dir.as_deref())?;
             let environment = resolve_environment(&project, environment)?;
+            let next_action = selected_project_command(
+                project_dir.as_deref(),
+                "build",
+                selected_environment.as_deref(),
+            );
             let options = ProjectCheckOptions {
                 project_directory: project,
                 environment,
@@ -641,14 +680,22 @@ fn run(cli: Cli) -> CliResult {
                         &options,
                     )
                     .map_err(CliFailure::domain)?;
-                print_project_report(OutputFormat::Human, "check", &checked.report, explain)?;
+                print_project_report(
+                    OutputFormat::Human,
+                    "check",
+                    &checked.report,
+                    explain,
+                    Some(&next_action),
+                )?;
                 println!("Directly authored non-secret values:");
                 for value in checked.authored_values {
                     println!("  {}", value.terminal_line().map_err(CliFailure::domain)?);
                 }
             } else {
                 match registryctl::check_registry_project(&options) {
-                    Ok(report) => print_project_report(format, "check", &report, explain)?,
+                    Ok(report) => {
+                        print_project_report(format, "check", &report, explain, Some(&next_action))?
+                    }
                     Err(error) => {
                         if let Some(diagnostics) =
                             error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
@@ -697,7 +744,7 @@ fn run(cli: Cli) -> CliResult {
                             .map(ToString::to_string)
                             .unwrap_or_else(|| "<none>".to_string())
                     );
-                    println!("Next: {}", report.next_action);
+                    println!("Next: registryctl trust bundle sign --help");
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -739,8 +786,14 @@ fn run(cli: Cli) -> CliResult {
                 fail_on_change,
                 format,
             } => {
+                let selected_environment = environment.clone();
                 let project = discover_project(project_dir.as_deref())?;
                 let environment = resolve_environment(&project, environment)?;
+                let next_action = selected_project_command(
+                    project_dir.as_deref(),
+                    "build",
+                    selected_environment.as_deref(),
+                );
                 let report = registryctl::compare_reviewed_project(&ReviewCompareOptions {
                     project_directory: project,
                     environment,
@@ -760,7 +813,7 @@ fn run(cli: Cli) -> CliResult {
                         );
                         println!("Affected lanes: {}.", render_lanes(&report.affected_lanes));
                         println!("Mutation: {}.", report.mutation);
-                        println!("Next: {}", report.next_action);
+                        println!("Next: {next_action}");
                     }
                 }
                 Ok(if fail_on_change && report.changed {
@@ -781,6 +834,11 @@ fn run_dev(
     detach: bool,
     command: Option<DevCommand>,
 ) -> CliResult {
+    if command.is_some() && dev_runtime_is_absent(project, environment) {
+        return Err(CliFailure::domain(anyhow!(
+            "[registryctl.dev.no_runtime] no development runtime is bound to this project and environment; remediation: run registryctl dev"
+        )));
+    }
     let plan = if command.is_none() {
         registryctl::prepare_dev_runtime_plan(project, environment).map_err(dev_failure)?
     } else {
@@ -867,6 +925,18 @@ fn run_dev(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn dev_runtime_is_absent(project: &Path, environment: &str) -> bool {
+    let runtime_root = project
+        .join(".registry-stack")
+        .join("dev")
+        .join(environment);
+    match fs::read_dir(runtime_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => false,
+    }
 }
 
 fn dev_endpoint_line(endpoint_url: &str) -> CliResult<String> {
@@ -1194,7 +1264,7 @@ fn run_deploy(command: DeployCommand) -> CliResult {
                     binding_file: binding,
                 },
             )
-            .map_err(CliFailure::domain)?;
+            .map_err(deployment_failure)?;
             match format {
                 OutputFormat::Human => {
                     println!(
@@ -1246,7 +1316,7 @@ fn run_deploy(command: DeployCommand) -> CliResult {
                     externally_recorded_closure_sha256: expected_closure_sha256,
                     check_operator_files,
                 })
-                .map_err(CliFailure::domain)?;
+                .map_err(deployment_failure)?;
             let report_value = serde_json::to_value(&report).map_err(|error| {
                 CliFailure::operational(anyhow!(
                     "cannot render deployment ownership report: {error}"
@@ -1281,6 +1351,12 @@ fn run_deploy(command: DeployCommand) -> CliResult {
                     );
                     if invalid {
                         println!("Hard-invariant failures: {}.", report.violations.len());
+                        for line in deployment_violation_lines(&report.violations) {
+                            println!("{line}");
+                        }
+                        println!(
+                            "Remediation: restore the generated closure or rerun registryctl deploy generate from verified inputs."
+                        );
                     } else {
                         println!(
                             "Next operator Compose check: cd {} && docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet",
@@ -1296,6 +1372,26 @@ fn run_deploy(command: DeployCommand) -> CliResult {
             })
         }
     }
+}
+
+fn deployment_failure(error: Error) -> CliFailure {
+    if error
+        .chain()
+        .any(|cause| cause.to_string().contains("installed release lock"))
+    {
+        CliFailure::domain(anyhow!(
+            "installed release lock is missing or invalid; remediation: run registryctl doctor, then reinstall Registryctl from a verified Registry Stack release payload"
+        ))
+    } else {
+        CliFailure::domain(error)
+    }
+}
+
+fn deployment_violation_lines(violations: &[String]) -> Vec<String> {
+    violations
+        .iter()
+        .map(|violation| format!("  - {}", human_line(violation)))
+        .collect()
 }
 
 fn run_trust(project_dir: Option<&Path>, command: TrustCommand) -> CliResult {
@@ -1366,7 +1462,43 @@ fn run_trust(project_dir: Option<&Path>, command: TrustCommand) -> CliResult {
             TrustBundleCommand::Inspect { bundle_dir, format } => {
                 let report =
                     registryctl::inspect_config_bundle(&bundle_dir).map_err(CliFailure::domain)?;
-                print_serialized_or_debug(format, "Bundle inspection", &report)?;
+                match format {
+                    OutputFormat::Json => print_json(&report)?,
+                    OutputFormat::Human => {
+                        let identity = &report.manifest.acceptance_identity;
+                        println!(
+                            "Inspected signed {} artifact without granting trust.",
+                            render_acceptance_lane(identity.lane)
+                        );
+                        println!(
+                            "Identity: project={}; product={}; environment={}; stream={}; instance={}.",
+                            human_line(&identity.project),
+                            render_acceptance_product(identity.product),
+                            human_line(&identity.environment),
+                            human_line(&identity.stream),
+                            human_line(&identity.instance)
+                        );
+                        println!(
+                            "Bundle: id={}; sequence={}.",
+                            human_line(&report.manifest.bundle_id),
+                            report.manifest.sequence
+                        );
+                        println!(
+                            "Signatures: {} ({}).",
+                            report.signature_count,
+                            if report.signature_kids.is_empty() {
+                                "none".to_string()
+                            } else {
+                                human_list(&report.signature_kids)
+                            }
+                        );
+                        println!(
+                            "Next: registryctl trust bundle verify --bundle-dir {} --anchor {}",
+                            shell_quote_path(&bundle_dir),
+                            shell_quote_path(&bundle_dir.join("anchor.json"))
+                        );
+                    }
+                }
             }
             TrustBundleCommand::Verify {
                 bundle_dir,
@@ -1375,7 +1507,43 @@ fn run_trust(project_dir: Option<&Path>, command: TrustCommand) -> CliResult {
             } => {
                 let report = registryctl::verify_config_bundle_cli(&bundle_dir, &anchor)
                     .map_err(CliFailure::domain)?;
-                print_serialized_or_debug(format, "Bundle verification", &report)?;
+                match format {
+                    OutputFormat::Json => print_json(&report)?,
+                    OutputFormat::Human => {
+                        println!(
+                            "Verified signed {} artifact against {}.",
+                            render_acceptance_lane(report.lane),
+                            human_line(&anchor.to_string_lossy())
+                        );
+                        println!(
+                            "Identity: product={}; environment={}; stream={}; instance={}.",
+                            human_line(&report.product),
+                            human_line(&report.environment),
+                            human_line(&report.stream_id),
+                            report
+                                .instance_id
+                                .as_deref()
+                                .map(human_line)
+                                .unwrap_or_else(|| "<none>".to_string())
+                        );
+                        println!(
+                            "Bundle: id={}; sequence={}; config={}.",
+                            human_line(&report.bundle_id),
+                            report.sequence,
+                            human_line(&report.config_path.to_string_lossy())
+                        );
+                        println!("Configuration digest: {}", report.config_hash);
+                        println!(
+                            "Verified signers: {}.",
+                            if report.signer_kids.is_empty() {
+                                "none".to_string()
+                            } else {
+                                human_list(&report.signer_kids)
+                            }
+                        );
+                        println!("Next: registryctl trust approved-set assemble --help");
+                    }
+                }
             }
             TrustBundleCommand::Sign {
                 lane,
@@ -1584,14 +1752,15 @@ fn discover_project(explicit: Option<&Path>) -> CliResult<PathBuf> {
 }
 
 fn resolve_environment(project: &Path, explicit: Option<String>) -> CliResult<String> {
+    let environments = declared_environment_ids(project)?;
     if let Some(environment) = explicit {
-        return validate_environment_id(environment);
+        return select_declared_environment(environment, &environments);
     }
     if let Some(environment) = std::env::var_os("REGISTRYCTL_ENVIRONMENT") {
         let environment = environment.into_string().map_err(|_| {
             CliFailure::usage(anyhow!("REGISTRYCTL_ENVIRONMENT must contain Unicode"))
         })?;
-        return validate_environment_id(environment);
+        return select_declared_environment(environment, &environments);
     }
 
     let project_bytes = fs::read(project.join(PROJECT_FILE))
@@ -1604,9 +1773,22 @@ fn resolve_environment(project: &Path, explicit: Option<String>) -> CliResult<St
         .get("default_environment")
         .and_then(serde_json::Value::as_str)
     {
-        return validate_environment_id(default.to_string());
+        return select_declared_environment(default.to_string(), &environments);
     }
 
+    match environments.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err(CliFailure::domain(anyhow!(
+            "the project declares no environments; remediation: add an environments/<id>.yaml file"
+        ))),
+        _ => Err(CliFailure::domain(anyhow!(
+            "an environment must be selected; declared environment ids: {}; remediation: select one with --environment",
+            environments.join(", ")
+        ))),
+    }
+}
+
+fn declared_environment_ids(project: &Path) -> CliResult<Vec<String>> {
     let directory = project.join("environments");
     let entries = fs::read_dir(&directory).map_err(|error| {
         CliFailure::operational(anyhow!(
@@ -1630,19 +1812,13 @@ fn resolve_environment(project: &Path, explicit: Option<String>) -> CliResult<St
     }
     environments.sort();
     environments.dedup();
-    match environments.as_slice() {
-        [only] => Ok(only.clone()),
-        [] => Err(CliFailure::domain(anyhow!(
-            "the project declares no environments"
-        ))),
-        _ => Err(CliFailure::domain(anyhow!(
-            "select an environment with --environment; declared environment ids: {}",
-            environments.join(", ")
-        ))),
-    }
+    Ok(environments)
 }
 
-fn validate_environment_id(environment: String) -> CliResult<String> {
+fn select_declared_environment(
+    environment: String,
+    declared_environments: &[String],
+) -> CliResult<String> {
     let valid = !environment.is_empty()
         && environment.len() <= 64
         && environment
@@ -1652,13 +1828,23 @@ fn validate_environment_id(environment: String) -> CliResult<String> {
             .bytes()
             .next()
             .is_some_and(|byte| byte.is_ascii_lowercase());
-    if valid {
-        Ok(environment)
+    let selected = human_line(&environment);
+    let available = if declared_environments.is_empty() {
+        "<none>".to_string()
     } else {
-        Err(CliFailure::usage(anyhow!(
-            "environment id must begin with a lowercase letter and contain only lowercase letters, digits, and hyphens"
-        )))
+        declared_environments.join(", ")
+    };
+    if !valid {
+        return Err(CliFailure::usage(anyhow!(
+            "selected environment \"{selected}\" is invalid; declared environment ids: {available}; environment ids must begin with a lowercase letter and contain only lowercase letters, digits, and hyphens; remediation: select a declared id with --environment"
+        )));
     }
+    if !declared_environments.contains(&environment) {
+        return Err(CliFailure::domain(anyhow!(
+            "selected environment \"{selected}\" is not declared; declared environment ids: {available}; remediation: select a declared id with --environment"
+        )));
+    }
+    Ok(environment)
 }
 
 fn watch_project_tests(
@@ -1672,7 +1858,7 @@ fn watch_project_tests(
             &options, &selection, &context,
         )
         .map_err(CliFailure::domain)?;
-        print_project_test_report(OutputFormat::Human, &report, selection.trace, false)?;
+        print_project_test_report(OutputFormat::Human, &report, selection.trace, None)?;
         let observed = project_watch_fingerprint(&options.project_directory)
             .map_err(CliFailure::operational)?;
         loop {
@@ -1733,14 +1919,14 @@ fn print_project_test_report(
     format: OutputFormat,
     report: &registryctl::ProjectCommandReport,
     trace: bool,
-    show_next: bool,
+    next_action: Option<&str>,
 ) -> CliResult<()> {
     match format {
         OutputFormat::Json => print_json(report),
         OutputFormat::Human => {
             println!("{}", render_project_test_report(report, trace));
-            if show_next {
-                println!("Next: registryctl dev");
+            if let Some(next_action) = next_action {
+                println!("Next: {next_action}");
             }
             Ok(())
         }
@@ -1820,6 +2006,33 @@ fn human_line(value: &str) -> String {
     escaped
 }
 
+fn selected_project_command(
+    project_dir: Option<&Path>,
+    command: &str,
+    environment: Option<&str>,
+) -> String {
+    let mut next_action = "registryctl".to_string();
+    if let Some(project_dir) = project_dir {
+        next_action.push_str(" -C ");
+        next_action.push_str(&shell_quote_path(project_dir));
+    }
+    next_action.push(' ');
+    next_action.push_str(command);
+    if let Some(environment) = environment {
+        next_action.push_str(" --environment ");
+        next_action.push_str(&shell_quote(environment));
+    }
+    next_action
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote(&path.to_string_lossy())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 fn human_list(values: &[String]) -> String {
     values
         .iter()
@@ -1833,6 +2046,7 @@ fn print_project_report(
     operation: &str,
     report: &registryctl::ProjectCommandReport,
     show_explanation: bool,
+    next_action: Option<&str>,
 ) -> CliResult<()> {
     match format {
         OutputFormat::Json => print_json(report),
@@ -1850,8 +2064,8 @@ fn print_project_report(
                 })?;
                 print_project_explanation(explanation)?;
             }
-            if operation == "check" {
-                println!("Next: registryctl build");
+            if let Some(next_action) = next_action {
+                println!("Next: {next_action}");
             }
             Ok(())
         }
@@ -1924,20 +2138,6 @@ fn serialized_enum_name(value: &impl Serialize) -> CliResult<String> {
         })
 }
 
-fn print_serialized_or_debug<T: Serialize + std::fmt::Debug>(
-    format: OutputFormat,
-    label: &str,
-    value: &T,
-) -> CliResult<()> {
-    match format {
-        OutputFormat::Json => print_json(value),
-        OutputFormat::Human => {
-            println!("{label}: {value:#?}");
-            Ok(())
-        }
-    }
-}
-
 fn print_catalog<T: Serialize>(format: OutputFormat, label: &str, value: &T) -> CliResult<()> {
     match format {
         OutputFormat::Json => print_json(value),
@@ -1965,6 +2165,7 @@ fn print_json<T: Serialize>(value: &T) -> CliResult<()> {
 
 fn print_subcommand_help(name: &str) -> CliResult<()> {
     let mut command = Cli::command();
+    command.build();
     let subcommand = command
         .find_subcommand_mut(name)
         .ok_or_else(|| CliFailure::operational(anyhow!("missing {name} help contract")))?;
@@ -1995,6 +2196,15 @@ fn render_acceptance_lane(lane: registry_platform_config::ProductAcceptanceLaneV
             "relay-consultation"
         }
         registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+    }
+}
+
+fn render_acceptance_product(
+    product: registry_platform_config::ProductAcceptanceProductV1,
+) -> &'static str {
+    match product {
+        registry_platform_config::ProductAcceptanceProductV1::RegistryRelay => "registry-relay",
+        registry_platform_config::ProductAcceptanceProductV1::RegistryNotary => "registry-notary",
     }
 }
 
@@ -2063,5 +2273,29 @@ mod tests {
             human_line("GET /people\nidentifier\t\u{7}"),
             "GET /people\\nidentifier\\t\\u0007"
         );
+    }
+
+    #[test]
+    fn deployment_violations_are_explicit_and_terminal_safe() {
+        assert_eq!(
+            deployment_violation_lines(&[
+                "generated file changed".to_string(),
+                "unsafe\ninvariant".to_string(),
+            ]),
+            ["  - generated file changed", "  - unsafe\\ninvariant",]
+        );
+    }
+
+    #[test]
+    fn deployment_release_lock_failures_name_the_trust_first_remediation() {
+        let failure = deployment_failure(anyhow!(
+            "installed release lock is unavailable: file not found"
+        ));
+        assert_eq!(failure.status, EXIT_DOMAIN);
+        let message = failure.error.to_string();
+        assert!(message.contains("installed release lock is missing or invalid"));
+        assert!(message.contains("run registryctl doctor"));
+        assert!(message.contains("reinstall Registryctl from a verified Registry Stack release"));
+        assert!(!message.contains("file not found"));
     }
 }

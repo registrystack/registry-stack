@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added the 1.0 `dev` lifecycle and governed `deploy generate` and
+  `deploy verify` journey. Fresh lifecycle queries now report that no runtime
+  is bound without creating state, and deployment verification lists
+  value-free hard-invariant violations.
+- Added one signed-artifact root contract across `trust bundle sign`,
+  `trust bundle inspect`, `trust bundle verify`, and
+  `trust approved-set assemble`.
 - Project builds with consultation profiles now emit a separate
   `private/relay-consultation` signing input whose primary configuration is
   `config/relay.yaml`. Public and consultation Relay instances receive only
@@ -34,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `token_type: Bearer` without `expires_in`. The generated Relay contract
   disables token caching, rejects expiry and extra response members, and does
   not infer freshness from token contents.
+
+### Changed
+
+- **BREAKING:** Pre-1.0 product anti-rollback state is not readable as a 1.0
+  acceptance record. The 1.0 record requires the complete product identity,
+  bundle identity, and accepted anchor pin. Recreate a reviewed 1.0 lineage;
+  do not edit or reset governed state in place.
 
 ## [0.15.2] - 2026-07-28
 

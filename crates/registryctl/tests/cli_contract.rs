@@ -211,7 +211,13 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
     assert!(!deploy_verify_help.contains("--parent-compose"));
 
     let anchor_help = stdout(&["trust", "anchor", "create", "--help"]);
-    assert!(anchor_help.contains("--output-file <OUTPUT_FILE>"));
+    assert!(anchor_help.contains("--public-key <JWK_FILE>"));
+    assert!(anchor_help.contains("Public Ed25519 JSON Web Key (JWK) file"));
+    assert!(anchor_help.contains("--output-file <FILE>"));
+
+    let bundle_help = stdout(&["trust", "bundle", "verify", "--help"]);
+    assert!(bundle_help.contains("--bundle-dir <SIGNED_ARTIFACT_DIRECTORY>"));
+    assert!(bundle_help.contains("Signed artifact directory produced by"));
 
     assert_eq!(run(&["check", "--format", "yaml"]).status.code(), Some(2));
     assert_eq!(run(&["check", "--format", "jsonl"]).status.code(), Some(2));
@@ -251,14 +257,55 @@ fn check_explain_adds_the_classifier_safe_review_to_human_output() {
         "[authored, effective]",
         "<redacted:secret_reference>",
         "Full provenance and constraint metadata: rerun with --format json.",
-        "Next: registryctl build",
     ] {
         assert!(
             explained_stdout.contains(expected),
             "{expected:?} is missing from {explained_stdout}"
         );
     }
+    assert!(
+        explained_stdout.contains(&format!(
+            "Next: registryctl -C '{}' build",
+            project.display()
+        )),
+        "{explained_stdout}"
+    );
     assert!(!explained_stdout.contains("\"reported_value\""));
+}
+
+#[test]
+fn project_next_actions_preserve_explicit_project_and_environment_selection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+    let initialized = run(&["init", project_argument, "--template", "http"]);
+    assert!(initialized.status.success());
+
+    for (command, next) in [
+        (
+            "test",
+            format!(
+                "Next: registryctl -C '{}' dev --environment 'local'",
+                project.display()
+            ),
+        ),
+        (
+            "check",
+            format!(
+                "Next: registryctl -C '{}' build --environment 'local'",
+                project.display()
+            ),
+        ),
+    ] {
+        let output = run(&["-C", project_argument, command, "--environment", "local"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("command output is UTF-8");
+        assert!(stdout.contains(&next), "{next:?} is missing from {stdout}");
+    }
 }
 
 #[test]
@@ -279,7 +326,7 @@ fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
         ),
         (
             &["trust", "bundle", "inspect", "--help"][..],
-            "registryctl trust bundle verify --bundle-dir <directory> --anchor <file>",
+            "registryctl trust bundle verify --bundle-dir <signed-artifact-directory> --anchor <file>",
         ),
         (
             &["trust", "bundle", "verify", "--help"][..],
@@ -287,7 +334,7 @@ fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
         ),
         (
             &["trust", "bundle", "sign", "--help"][..],
-            "registryctl trust bundle verify --bundle-dir <directory> --anchor <file>",
+            "registryctl trust bundle verify --bundle-dir <signed-artifact-directory> --anchor <signed-artifact-directory>/anchor.json",
         ),
         (
             &["trust", "approved-set", "assemble", "--help"][..],
@@ -435,13 +482,16 @@ fn trace_renders_the_selected_synthetic_fixture_in_human_output() {
         "outputs: active",
         "claims: person-active, person-record-exists",
         "outcome: match",
-        "Next: registryctl dev",
     ] {
         assert!(
             traced_stdout.contains(expected),
             "{expected:?} is missing from {traced_stdout}"
         );
     }
+    assert!(
+        traced_stdout.contains(&format!("Next: registryctl -C '{}' dev", project.display())),
+        "{traced_stdout}"
+    );
 }
 
 #[test]
@@ -493,6 +543,8 @@ fn bare_deploy_prints_help_without_performing_an_action() {
     assert_eq!(output.status.code(), Some(0));
     let text = String::from_utf8(output.stdout).expect("deploy help is UTF-8");
     assert!(text.contains("Generate or verify a governed deployment package"));
+    assert!(text.contains("Usage: registryctl deploy [OPTIONS] [COMMAND]"));
     assert!(text.contains("generate"));
     assert!(text.contains("verify"));
+    assert!(!text.contains("help  Print this message"));
 }

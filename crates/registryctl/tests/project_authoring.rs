@@ -8297,11 +8297,8 @@ fn generated_product_inputs_sign_and_verify_without_secret_values() {
             output_dir: signed_output.clone(),
         })
         .expect("generated lane input signs");
-        let verified = verify_config_bundle_cli(
-            &signed_output.join("bundle"),
-            &signed_output.join("anchor.json"),
-        )
-        .expect("signed lane bundle verifies");
+        let verified = verify_config_bundle_cli(&signed_output, &signed_output.join("anchor.json"))
+            .expect("signed lane bundle verifies");
         assert_eq!(verified.product, product);
         assert_eq!(verified.signer_kids.len(), 1);
     }

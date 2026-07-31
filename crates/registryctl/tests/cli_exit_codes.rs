@@ -92,9 +92,22 @@ fn dev_lifecycle_queries_do_not_create_a_runtime() {
         String::from_utf8_lossy(&initialized.stderr)
     );
 
-    let output = run(&["-C", project_argument, "dev", "status"]);
-
-    assert_eq!(output.status.code(), Some(1));
+    for command in ["status", "logs", "smoke", "down"] {
+        let output = run(&["-C", project_argument, "dev", command]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "dev {command}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("[registryctl.dev.no_runtime]"), "{stderr}");
+        assert!(
+            stderr.contains("remediation: run registryctl dev"),
+            "{stderr}"
+        );
+    }
     assert!(
         !project.join(".registry-stack/dev").exists(),
         "dev status generated runtime state"
@@ -103,4 +116,42 @@ fn dev_lifecycle_queries_do_not_create_a_runtime() {
         !project.join(".registry-stack/dev-artifacts").exists(),
         "dev status generated signed artifacts or credentials"
     );
+}
+
+#[test]
+fn explicitly_selected_environment_must_be_declared() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+    let initialized = run(&["init", project_argument, "--template", "http"]);
+    assert!(initialized.status.success());
+
+    let unknown = run(&[
+        "-C",
+        project_argument,
+        "check",
+        "--environment",
+        "production",
+    ]);
+    assert_eq!(unknown.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    for expected in [
+        "selected environment \"production\" is not declared",
+        "declared environment ids: local",
+        "remediation: select a declared id with --environment",
+    ] {
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+
+    let invalid = run(&[
+        "-C",
+        project_argument,
+        "check",
+        "--environment",
+        "Production",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(stderr.contains("selected environment \"Production\" is invalid"));
+    assert!(stderr.contains("declared environment ids: local"));
 }

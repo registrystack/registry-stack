@@ -209,6 +209,7 @@ pub struct BundleInspectReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct BundleVerifyReport {
     pub schema_version: String,
+    pub lane: ProductAcceptanceLaneV1,
     pub product: String,
     pub environment: String,
     pub stream_id: String,
@@ -268,7 +269,8 @@ pub enum DeploymentProfile {
     EvidenceGrade,
 }
 
-pub fn inspect_config_bundle(bundle_dir: &Path) -> Result<BundleInspectReport> {
+pub fn inspect_config_bundle(artifact_root: &Path) -> Result<BundleInspectReport> {
+    let bundle_dir = artifact_root.join("bundle");
     let manifest_path = bundle_dir.join("manifest.json");
     let signature_path = bundle_dir.join("manifest.sig.json");
     let manifest: ConfigBundleManifest =
@@ -297,21 +299,32 @@ pub fn inspect_config_bundle(bundle_dir: &Path) -> Result<BundleInspectReport> {
 }
 
 pub fn verify_config_bundle_cli(
-    bundle_dir: &Path,
+    artifact_root: &Path,
     anchor_path: &Path,
 ) -> Result<BundleVerifyReport> {
-    let verified = verify_config_bundle(bundle_dir, anchor_path)
-        .with_context(|| format!("failed to verify config bundle {}", bundle_dir.display()))?;
+    let bundle_dir = artifact_root.join("bundle");
+    let verified = verify_config_bundle(&bundle_dir, anchor_path).with_context(|| {
+        format!(
+            "failed to verify signed artifact {}",
+            artifact_root.display()
+        )
+    })?;
+    let config_path = verified
+        .config_path
+        .strip_prefix(&bundle_dir)
+        .context("verified configuration path escaped the signed artifact bundle")?
+        .to_path_buf();
     let identity = verified.manifest.acceptance_identity.clone();
     Ok(BundleVerifyReport {
         schema_version: "registryctl.config_bundle.verify.v1".to_string(),
+        lane: identity.lane,
         product: product_acceptance_product_name(identity.product).to_string(),
         environment: identity.environment,
         stream_id: identity.stream,
         instance_id: Some(identity.instance),
         bundle_id: verified.manifest.bundle_id,
         sequence: verified.manifest.sequence,
-        config_path: verified.config_path,
+        config_path,
         config_hash: verified.manifest.config_hash,
         signer_kids: verified.signer_kids,
     })

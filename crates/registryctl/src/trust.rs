@@ -153,7 +153,7 @@ pub struct ProductBundleSignReportV1 {
     pub signer_kids: Vec<String>,
     pub anchor_digest: String,
     pub output_dir: PathBuf,
-    pub next_action: &'static str,
+    pub next_action: String,
 }
 
 pub fn create_trust_anchor(
@@ -522,6 +522,8 @@ fn sign_product_bundle_with_resolver(
         bail!("generated bundle self-verification returned an inconsistent signer set");
     }
     publish_staged_directory(staging, &options.output_dir)?;
+    let quoted_output = shell_quote_path(&options.output_dir);
+    let quoted_anchor = shell_quote_path(&options.output_dir.join("anchor.json"));
 
     Ok(ProductBundleSignReportV1 {
         schema_version: PRODUCT_BUNDLE_SIGN_REPORT_SCHEMA_VERSION,
@@ -533,8 +535,14 @@ fn sign_product_bundle_with_resolver(
         anchor_digest: trust_anchor_digest(&anchor)
             .context("failed to digest selected lane anchor")?,
         output_dir: options.output_dir.clone(),
-        next_action: "assemble or update the three-lane approved set",
+        next_action: format!(
+            "registryctl trust bundle verify --bundle-dir {quoted_output} --anchor {quoted_anchor}"
+        ),
     })
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
 }
 
 pub fn load_signing_input_marker(input: &Path) -> Result<SigningInputMarkerV1> {
