@@ -94,6 +94,10 @@ function archiveBuildEnvironment(inheritedEnvironment, docset, {
     PUBLIC_UMAMI_DOMAINS: '',
     PUBLIC_UMAMI_SCRIPT_SRC: '',
     PUBLIC_UMAMI_WEBSITE_ID: '',
+    // Pagefind assembles its content-hashed index through Rayon. Parallel
+    // scheduling can change the index chunk bytes even when every page is
+    // identical, so immutable release archives must build it on one worker.
+    RAYON_NUM_THREADS: '1',
     SOURCE_DATE_EPOCH: '0',
     TZ: 'UTC',
     USERPROFILE: homeDirectory,

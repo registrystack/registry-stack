@@ -274,6 +274,7 @@ test('archived docset builds use isolated generation with release-bound environm
     LC_ALL: 'mutable-locale',
     PATH: '/archive-test/bin',
     PUBLIC_UMAMI_WEBSITE_ID: 'mutable-analytics-id',
+    RAYON_NUM_THREADS: '64',
     SSL_CERT_FILE: '/archive-test/ca.pem',
     SOURCE_DATE_EPOCH: '1234',
     TMPDIR: '/archive-test/tmp',
@@ -343,6 +344,7 @@ test('archived docset builds use isolated generation with release-bound environm
     assert.equal(env.PUBLIC_UMAMI_WEBSITE_ID, '');
     assert.equal(env.PUBLIC_UMAMI_SCRIPT_SRC, '');
     assert.equal(env.PUBLIC_UMAMI_DOMAINS, '');
+    assert.equal(env.RAYON_NUM_THREADS, '1');
     for (const key of [
       'BASE_URL',
       'DOCS_ARCHIVE_BASE_URL',
