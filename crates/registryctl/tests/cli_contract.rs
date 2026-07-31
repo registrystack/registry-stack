@@ -383,6 +383,68 @@ fn trace_and_watch_are_composable_human_test_options() {
 }
 
 #[test]
+fn trace_renders_the_selected_synthetic_fixture_in_human_output() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+    let initialized = run(&["init", project_argument, "--template", "http"]);
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+
+    let ordinary = run(&[
+        "-C",
+        project_argument,
+        "test",
+        "--integration",
+        "person-record",
+        "--fixture",
+        "active-person",
+    ]);
+    assert!(
+        ordinary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ordinary.stderr)
+    );
+    let ordinary_stdout =
+        String::from_utf8(ordinary.stdout).expect("ordinary test output is UTF-8");
+    assert!(!ordinary_stdout.contains("PASS person-record.active-person"));
+
+    let traced = run(&[
+        "-C",
+        project_argument,
+        "test",
+        "--integration",
+        "person-record",
+        "--fixture",
+        "active-person",
+        "--trace",
+    ]);
+    assert!(
+        traced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&traced.stderr)
+    );
+    let traced_stdout = String::from_utf8(traced.stdout).expect("trace test output is UTF-8");
+    for expected in [
+        "PASS person-record.active-person",
+        "inputs: person_id",
+        "calls:",
+        "outputs: active",
+        "claims: person-active, person-record-exists",
+        "outcome: match",
+        "Next: registryctl dev",
+    ] {
+        assert!(
+            traced_stdout.contains(expected),
+            "{expected:?} is missing from {traced_stdout}"
+        );
+    }
+}
+
+#[test]
 fn shipped_http_starter_readme_uses_the_1_0_hierarchy_and_runtime_ownership() {
     let readme = include_str!("../assets/project-starters/bounded-http/README.md");
 

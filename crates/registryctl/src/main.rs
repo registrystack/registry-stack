@@ -611,7 +611,7 @@ fn run(cli: Cli) -> CliResult {
             } else {
                 let report = registryctl::test_registry_project_selected(&options, &selection)
                     .map_err(CliFailure::domain)?;
-                print_project_report(format, "test", &report, false)?;
+                print_project_test_report(format, &report, trace, true)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1672,11 +1672,7 @@ fn watch_project_tests(
             &options, &selection, &context,
         )
         .map_err(CliFailure::domain)?;
-        println!(
-            "Registry Stack test: {} ({} fixtures).",
-            report.status,
-            report.fixtures.len()
-        );
+        print_project_test_report(OutputFormat::Human, &report, selection.trace, false)?;
         let observed = project_watch_fingerprint(&options.project_directory)
             .map_err(CliFailure::operational)?;
         loop {
@@ -1733,6 +1729,105 @@ fn project_watch_fingerprint(root: &Path) -> Result<Vec<(PathBuf, u64, Option<Sy
     Ok(values)
 }
 
+fn print_project_test_report(
+    format: OutputFormat,
+    report: &registryctl::ProjectCommandReport,
+    trace: bool,
+    show_next: bool,
+) -> CliResult<()> {
+    match format {
+        OutputFormat::Json => print_json(report),
+        OutputFormat::Human => {
+            println!("{}", render_project_test_report(report, trace));
+            if show_next {
+                println!("Next: registryctl dev");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn render_project_test_report(report: &registryctl::ProjectCommandReport, trace: bool) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = format!(
+        "Registry Stack test: {} for {}.\nFixtures: {}.",
+        report.status,
+        human_line(&report.project),
+        report.fixtures.len()
+    );
+    if trace {
+        for fixture in &report.fixtures {
+            write!(
+                output,
+                "\n  {} {}.{}",
+                if fixture.passed { "PASS" } else { "FAIL" },
+                human_line(&fixture.integration),
+                human_line(&fixture.fixture)
+            )
+            .expect("writing to a String cannot fail");
+            for (label, values) in [
+                ("inputs", &fixture.inputs),
+                ("calls", &fixture.calls),
+                ("outputs", &fixture.outputs),
+                ("claims", &fixture.claims),
+            ] {
+                if !values.is_empty() {
+                    write!(output, "\n    {label}: {}", human_list(values))
+                        .expect("writing to a String cannot fail");
+                }
+            }
+            if let Some(outcome) = &fixture.outcome {
+                write!(output, "\n    outcome: {}", human_line(outcome))
+                    .expect("writing to a String cannot fail");
+            }
+            if let Some(expected_error) = &fixture.expected_error {
+                write!(
+                    output,
+                    "\n    expected error: {}",
+                    human_line(expected_error)
+                )
+                .expect("writing to a String cannot fail");
+            }
+            if let Some(source_access) = fixture.source_access {
+                write!(output, "\n    source access: {source_access}")
+                    .expect("writing to a String cannot fail");
+            }
+            if let Some(failure) = &fixture.failure {
+                write!(output, "\n    failure: {}", human_line(failure))
+                    .expect("writing to a String cannot fail");
+            }
+        }
+    }
+    output
+}
+
+fn human_line(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                write!(escaped, "\\u{:04x}", character as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn human_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| human_line(value))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn print_project_report(
     format: OutputFormat,
     operation: &str,
@@ -1755,10 +1850,8 @@ fn print_project_report(
                 })?;
                 print_project_explanation(explanation)?;
             }
-            match operation {
-                "test" => println!("Next: registryctl dev"),
-                "check" => println!("Next: registryctl build"),
-                _ => {}
+            if operation == "check" {
+                println!("Next: registryctl build");
             }
             Ok(())
         }
@@ -1962,5 +2055,13 @@ mod tests {
             dev_endpoint_line("http://127.0.0.1:4255").expect_err("HTTP endpoint must fail closed");
         assert_eq!(error.status, EXIT_OPERATIONAL);
         assert!(error.error.to_string().contains("non-HTTPS"));
+    }
+
+    #[test]
+    fn human_trace_lines_escape_terminal_control_characters() {
+        assert_eq!(
+            human_line("GET /people\nidentifier\t\u{7}"),
+            "GET /people\\nidentifier\\t\\u0007"
+        );
     }
 }
