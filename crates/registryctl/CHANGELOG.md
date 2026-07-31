@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-01
+
 ### Removed
 
 - Removed project authoring for claims without declared Registry Relay
@@ -54,6 +56,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Generated Relay and Notary deployments now write hash-chained audit records
   to their managed persistent file volumes instead of bare standard output.
   Operators still own retention and off-host shipping for those records.
+
+### Fixed
+
+- Project validation rejects an empty public Relay client set. Public Relay
+  deployments must configure OIDC or an API key.
 
 ## [0.15.2] - 2026-07-28
 

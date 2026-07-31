@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-01
+
 - Relay can now start directly from a signed Config Bundle with the complete
   `--bundle-dir`, `--anchor-path`, and `--state-path` argument set. This mode
   verifies the bundle and anti-rollback state without an unsigned bootstrap
@@ -25,6 +27,10 @@
   isolated worker is running or exchanging IPC. Relay-owned credential,
   permit, TLS, and source waits remain bounded by the existing absolute durable
   consultation deadline and no longer consume the script CPU budget.
+- Sensitive dataset reads now require the configured release gates even when
+  source metadata is omitted.
+- Active datasets recover a missing local snapshot through the governed
+  refresh path instead of remaining unavailable.
 
 ## 0.15.2 - 2026-07-28
 
