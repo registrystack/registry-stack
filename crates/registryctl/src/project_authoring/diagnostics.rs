@@ -2282,7 +2282,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
                 FIXTURE_BODY_FILE_REFERENCE_REMEDIATION
             } else {
                 match kind {
-                    "project" => "Correct the project YAML using the project authoring schema. If this project passed with a pre-1.0 Registryctl, create a separate 1.0 project with `registryctl init <project-directory> --template http`, then copy only reviewed authored intent. Registryctl does not migrate or approve the source project.",
+                    "project" => "Correct the project YAML using the project authoring schema. If this project passed with a pre-1.0 Registryctl, create a separate 1.0 project with the `spreadsheet` or `http` template that matches the source, then copy only reviewed authored intent. Registryctl does not migrate or approve the source project.",
                     "entity" => "Correct the entity YAML using the entity authoring schema.",
                     "integration" => {
                         "Correct the integration YAML using the integration authoring schema."

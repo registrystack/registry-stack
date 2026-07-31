@@ -200,7 +200,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 schema["properties"]["embedded_starters"]["maxItems"],
                 len(payload["embedded_starters"]),
             )
-            expected_starter_ids = {"http"}
+            expected_starter_ids = {"http", "spreadsheet"}
             self.assertEqual(
                 {starter["id"] for starter in payload["embedded_starters"]},
                 expected_starter_ids,

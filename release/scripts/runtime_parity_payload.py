@@ -28,14 +28,17 @@ def create_payload(output: Path) -> None:
                 f"registryctl {platform}\n".encode()
             )
 
-        starter = root / "http.yaml"
-        starter.write_text(
-            "starter:\n"
-            "  id: http\n"
-            f"  release: {VERSION}\n"
-            f"  content_digest: sha256:{'3' * 64}\n",
-            encoding="utf-8",
-        )
+        starters = {}
+        for starter_id, digest_character in (("http", "3"), ("spreadsheet", "4")):
+            starter = root / f"{starter_id}.yaml"
+            starter.write_text(
+                "starter:\n"
+                f"  id: {starter_id}\n"
+                f"  release: {VERSION}\n"
+                f"  content_digest: sha256:{digest_character * 64}\n",
+                encoding="utf-8",
+            )
+            starters[starter_id] = starter
         image_indexes = {}
         image_identities = {}
         for name, repository, digest_character in [
@@ -87,7 +90,7 @@ def create_payload(output: Path) -> None:
         )
 
         original_starters = registry_release_lock.STARTERS
-        registry_release_lock.STARTERS = {"http": starter}
+        registry_release_lock.STARTERS = starters
         try:
             registry_release_lock.create_payload(
                 argparse.Namespace(

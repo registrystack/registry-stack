@@ -20,12 +20,11 @@ POSTGRESQL_REF_PATH = ROOT / "release/registryctl-postgresql-image.ref"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 NATIVE_CLI_AUTHORING_COMMANDS = (
-    '"${registryctl}" init --from spreadsheet --project-dir "${project_dir}"',
-    '"${registryctl}" test --project-dir "${project_dir}"',
-    '"${registryctl}" preflight --project-dir "${project_dir}" --environment local',
-    '"${registryctl}" check --project-dir "${project_dir}" '
+    '"${registryctl}" init "${project_dir}" --template spreadsheet',
+    '"${registryctl}" -C "${project_dir}" test',
+    '"${registryctl}" -C "${project_dir}" check '
     "--environment local --explain",
-    '"${registryctl}" build --project-dir "${project_dir}" --environment local',
+    '"${registryctl}" -C "${project_dir}" build --environment local',
 )
 NATIVE_CLI_PROVENANCE_CONTROLS = (
     'candidate_expected_sha256="$(expected_sha256_for "${asset}")"',

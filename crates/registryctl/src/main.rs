@@ -86,7 +86,7 @@ type CliResult<T = ExitCode> = std::result::Result<T, CliFailure>;
 #[command(
     about = "Create, test, run, and prepare a Registry Stack project",
     long_about = "Create, test, run, and prepare a Registry Stack project.\n\n\
-Start here: registryctl init my-registry --template http\n\
+Start here: registryctl init my-registry --template spreadsheet\n\
 Then run:  cd my-registry && registryctl test && registryctl dev",
     after_help = "Newcomer workflow:\n  init -> test -> dev -> check -> build\n\n\
 Governed handoff:\n  review -> build -> trust -> deploy\n\n\
@@ -533,12 +533,14 @@ enum OutputFormat {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
 enum InitTemplate {
+    Spreadsheet,
     Http,
 }
 
 impl From<InitTemplate> for ProjectStarter {
     fn from(value: InitTemplate) -> Self {
         match value {
+            InitTemplate::Spreadsheet => Self::Spreadsheet,
             InitTemplate::Http => Self::Http,
         }
     }

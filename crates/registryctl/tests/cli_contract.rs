@@ -70,6 +70,7 @@ fn root_help_exposes_only_the_ten_1_0_roots_in_newcomer_order() {
         "ordinary workflow is not newcomer-first: {help}"
     );
     assert!(help.contains("Newcomer workflow:"));
+    assert!(help.contains("Start here: registryctl init my-registry --template spreadsheet"));
     assert!(help.find("  doctor").unwrap() < help.find("  review").unwrap());
 }
 
@@ -178,13 +179,9 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
         "{init_help}"
     );
     assert!(init_help.contains("--template <TEMPLATE>"));
-    assert!(init_help.contains("possible values: http"));
-    assert!(!init_help.contains("spreadsheet"), "{init_help}");
-    assert_eq!(
-        run(&["init", "project", "--template", "spreadsheet"])
-            .status
-            .code(),
-        Some(2)
+    assert!(
+        init_help.contains("possible values: spreadsheet, http"),
+        "{init_help}"
     );
     for internal_fixture in ["dhis2-tracker", "opencrvs-dci", "fhir-r4", "snapshot"] {
         assert!(!init_help.contains(internal_fixture), "{init_help}");

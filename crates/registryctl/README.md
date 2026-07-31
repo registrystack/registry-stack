@@ -22,7 +22,7 @@ Create a project from a tested embedded template, exercise its offline
 fixtures, and start the disposable local runtime:
 
 ```sh
-registryctl init my-registry --template http
+registryctl init my-registry --template spreadsheet
 cd my-registry
 registryctl test
 registryctl dev
@@ -38,6 +38,9 @@ init -> test -> dev -> check -> build
 request, and the exact `smoke`, `logs`, and `down` follow-up commands. Add
 `--detach` to return after startup. Runtime state, credentials, and trust are
 disposable development inputs and are not production inputs.
+
+Use `--template http` instead when connecting an existing registry API.
+Both public starters use the same lifecycle commands.
 
 Use the project-independent lifecycle commands when needed:
 

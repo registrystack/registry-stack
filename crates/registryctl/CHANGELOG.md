@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added `spreadsheet` beside `http` as the closed public 1.0 starter pair.
+  Both use the same authoring, offline test, disposable development, build,
+  trust, and deployment commands.
 - Added the 1.0 `dev` lifecycle and governed `deploy generate` and
   `deploy verify` journey. Fresh lifecycle queries now report that no runtime
   is bound without creating state, and deployment verification lists

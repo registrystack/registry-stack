@@ -24,6 +24,7 @@ IMAGE = re.compile(r"^[^@\s]+@(?P<digest>sha256:[0-9a-f]{64})$")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 STARTERS = {
     "http": ROOT / "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
+    "spreadsheet": ROOT / "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
 }
 PLATFORMS = {
     "linux-amd64": "linux-amd64",

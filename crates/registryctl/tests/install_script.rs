@@ -285,11 +285,14 @@ fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("registryctl init my-first-api --template http"),
+        stdout.contains("registryctl init my-first-registry --template spreadsheet"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("registryctl init my-registry-integration --template http"),
         "{stdout}"
     );
     assert!(stdout.contains("registryctl test"), "{stdout}");
-    assert!(!stdout.contains("spreadsheet"), "{stdout}");
     assert!(
         !stdout.contains("registryctl doctor --profile local"),
         "{stdout}"

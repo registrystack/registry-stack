@@ -92,8 +92,8 @@
     },
     "embedded_starters": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 1,
+      "minItems": 2,
+      "maxItems": 2,
       "items": {
         "$ref": "#/$defs/starter"
       }
@@ -545,7 +545,8 @@
       "properties": {
         "id": {
           "enum": [
-            "http"
+            "http",
+            "spreadsheet"
           ]
         },
         "release": {

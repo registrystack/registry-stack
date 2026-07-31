@@ -1596,7 +1596,7 @@ fn validate_registryctl_artifacts(
 }
 
 fn validate_starters(starters: &[LockedEmbeddedStarterV1], product_version: &str) -> Result<()> {
-    let expected = BTreeSet::from(["http"]);
+    let expected = BTreeSet::from(["http", "spreadsheet"]);
     let mut actual = BTreeSet::new();
     for starter in starters {
         if !actual.insert(starter.id.as_str()) {
@@ -1919,26 +1919,22 @@ mod tests {
     }
 
     #[test]
-    fn signed_lock_starter_roster_is_only_the_public_http_starter() {
+    fn signed_lock_starter_roster_is_the_closed_public_pair() {
         let starter = |id: &str| LockedEmbeddedStarterV1 {
             id: id.to_string(),
             release: "1.0.0".to_string(),
             content_digest: format!("sha256:{}", "a".repeat(64)),
         };
-        let mut starters = vec![starter("http")];
+        let mut starters = vec![starter("http"), starter("spreadsheet")];
         validate_starters(&starters, "1.0.0").expect("the closed 1.0 starter roster is accepted");
 
-        for internal_fixture in [
-            "dhis2-tracker",
-            "fhir-r4",
-            "opencrvs-dci",
-            "snapshot",
-            "spreadsheet",
-        ] {
+        for internal_fixture in ["dhis2-tracker", "fhir-r4", "opencrvs-dci", "snapshot"] {
             starters.push(starter(internal_fixture));
             assert!(validate_starters(&starters, "1.0.0").is_err());
             starters.pop();
         }
+        starters.pop();
+        assert!(validate_starters(&starters, "1.0.0").is_err());
         assert!(validate_starters(&[], "1.0.0").is_err());
     }
 

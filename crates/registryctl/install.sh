@@ -307,9 +307,12 @@ fi
 cat <<EOF
 
 Try it:
-  registryctl init my-first-api --template http
-  cd my-first-api
+  registryctl init my-first-registry --template spreadsheet
+  cd my-first-registry
   registryctl test
+
+To connect an existing registry API:
+  registryctl init my-registry-integration --template http
 
 EOF
 
