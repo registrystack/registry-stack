@@ -996,6 +996,33 @@ fn binding_contains_only_locators_not_secret_values() {
 }
 
 #[test]
+fn binding_rejects_shared_or_aliased_operator_file_locators() {
+    let mut shared = binding();
+    let relay_environment = shared
+        .secret_files
+        .get("relay-public-environment")
+        .unwrap()
+        .clone();
+    shared
+        .secret_files
+        .insert("notary-environment".to_string(), relay_environment);
+    let error = shared.validate().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("operator-file locators must be distinct"));
+
+    let mut aliased = binding();
+    aliased.secret_files.insert(
+        "notary-environment".to_string(),
+        "operator//secrets/notary-environment".to_string(),
+    );
+    let error = aliased.validate().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("normalized package-relative path"));
+}
+
+#[test]
 fn removed_external_edge_binding_is_rejected() {
     let mut rendered = serde_norway::to_string(&binding()).unwrap();
     rendered.push_str("edge_network_name: operator-edge\n");
@@ -2484,6 +2511,73 @@ fn regeneration_verifies_the_older_lock_and_retains_its_generated_closure() {
         .unwrap(),
         old_lock
     );
+}
+
+#[test]
+fn regeneration_verifies_the_preceding_approved_set_before_staging_its_replacement() {
+    let fixture = package_fixture();
+    let preceding_manifest: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .package
+                .join("generated/deployment-manifest.v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let next_approved_set = fixture
+        .approved_set_file
+        .parent()
+        .unwrap()
+        .join("approved-baseline-set-next.v1.json");
+    let mut approved_set: ApprovedBaselineSetV1 =
+        serde_json::from_slice(&fs::read(&fixture.approved_set_file).unwrap()).unwrap();
+    approved_set.lanes.relay_public.signed_manifest_digest = format!("sha256:{}", "9".repeat(64));
+    fs::write(&next_approved_set, approved_set.canonical_bytes().unwrap()).unwrap();
+    let release_lock = fixture
+        .approved_set_file
+        .parent()
+        .unwrap()
+        .join("registry-release-lock.v1.json");
+    let next_inputs = VerifiedDeploymentInputsV1::from_test_components(
+        &next_approved_set,
+        &release_lock,
+        plan(),
+        runtime(),
+        DeploymentReleaseMetadataV1 {
+            generator_release: "registryctl 1.0.0-test".to_string(),
+            minimum_compose_version: "2.35.0".to_string(),
+            postgresql_major: 17,
+        },
+        approved_set_support::identity(ApprovedLaneV1::RelayPublic, "deployment-test"),
+    )
+    .unwrap();
+
+    generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: next_approved_set,
+            output_dir: fixture.package.clone(),
+            binding_file: None,
+        },
+        next_inputs,
+        Some(&fixture.verified_inputs),
+    )
+    .unwrap();
+
+    let current_manifest: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .package
+                .join("generated/deployment-manifest.v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        current_manifest["source_approved_baseline_set_sha256"],
+        preceding_manifest["source_approved_baseline_set_sha256"]
+    );
+    assert!(fixture.package.join("generated.previous").is_dir());
 }
 
 #[test]

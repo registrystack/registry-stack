@@ -848,14 +848,18 @@ impl DeploymentBindingV1 {
         {
             bail!("deployment binding secret consumer inventory is incomplete");
         }
+        let mut operator_file_locators = BTreeSet::new();
         for locator in self
             .secret_files
             .values()
             .chain(self.certificate_files.values())
         {
-            validate_package_relative_path(locator)?;
+            let normalized = normalized_package_relative_locator(locator)?;
             if !locator.starts_with("operator/") {
                 bail!("secret and certificate locators must remain operator-owned");
+            }
+            if !operator_file_locators.insert(normalized) {
+                bail!("deployment binding operator-file locators must be distinct");
             }
         }
         Ok(())
@@ -1744,7 +1748,7 @@ fn generate_deployment_package_core(
         check_operator_files: false,
         expected_inputs: ExpectedGenerationInputsV1 {
             source_approved_baseline_set_sha256: Some(
-                verified_inputs.source_approved_set_sha256.clone(),
+                preceding_inputs.source_approved_set_sha256.clone(),
             ),
             ..ExpectedGenerationInputsV1::default()
         },
@@ -1763,7 +1767,8 @@ fn generate_deployment_package_core(
     {
         bail!("deployment regeneration requires an intact managed package");
     }
-    if preceding_report.ownership == DeploymentOwnershipStateV1::Managed
+    if !product_or_evidence_update
+        && preceding_report.ownership == DeploymentOwnershipStateV1::Managed
         && preceding_report.package_freshness == PackageFreshnessV1::Current
     {
         return existing_render_report(&request.output_dir, &verified_inputs, &binding);
@@ -4108,7 +4113,7 @@ fn normalized_relative_path(root: &Path, path: &Path) -> Result<String> {
     Ok(parts.join("/"))
 }
 
-fn validate_package_relative_path(path: &str) -> Result<()> {
+fn normalized_package_relative_locator(path: &str) -> Result<String> {
     let parsed = Path::new(path);
     if parsed.is_absolute()
         || parsed
@@ -4117,7 +4122,18 @@ fn validate_package_relative_path(path: &str) -> Result<()> {
     {
         bail!("deployment binding locator must be a normalized package-relative path");
     }
-    Ok(())
+    let normalized = parsed
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if normalized.is_empty() || normalized != path {
+        bail!("deployment binding locator must be a normalized package-relative path");
+    }
+    Ok(normalized)
 }
 
 fn validate_id(field: &str, value: &str) -> Result<()> {
