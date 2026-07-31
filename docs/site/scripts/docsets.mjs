@@ -153,7 +153,10 @@ export function applyDocsetRefs(repoManifest, docset, { requireAllActive = true 
     repo.ref = product.ref;
     repo.version = product.version;
     if (docset.status === 'archived') {
-      delete repo.local;
+      const usesCheckedOutCandidate =
+        docset.repo_docs_source === 'monorepo' &&
+        isCandidateSourceProduct(docset, product);
+      if (!usesCheckedOutCandidate) delete repo.local;
       if (docset.repo_docs_source !== 'monorepo') {
         if (repo.archive_remote) repo.remote = repo.archive_remote;
         if (Object.hasOwn(repo, 'archive_local')) {
