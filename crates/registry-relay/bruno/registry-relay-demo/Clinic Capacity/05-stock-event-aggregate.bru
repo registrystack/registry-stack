@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Runs the stock event aggregate grouped by medicine code and stock status.
   Uses planning_analyst persona (aggregateKey).

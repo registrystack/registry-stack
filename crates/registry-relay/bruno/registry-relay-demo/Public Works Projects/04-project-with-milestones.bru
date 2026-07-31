@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Reads project prj-5001 with milestones relationship expanded inline.
   Uses casework_system persona (rowsKey).

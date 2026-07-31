@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Reads the aggregate structure document for the payment aggregate.
   Expected: 200 with dimensions, measures, disclosure control, and links.

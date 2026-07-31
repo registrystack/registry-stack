@@ -222,6 +222,7 @@ Example sync status request:
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/dr/registry/sync/disabled \
   -H "Authorization: Bearer $VERIFICATION_SERVICE_RAW" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/disability-benefit-eligibility" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-dr-001","disabled_criteria":{"query":{"personal_details.member_identifier":{"eq":"DR-MEMBER-001"}}}}}'
 ```
@@ -239,6 +240,7 @@ Disability Registry (`dr`):
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/dr/registry/sync/search \
   -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/disability-benefit-eligibility" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-search-001","search_request":[{"reference_id":"ref-demo-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"DISABILITY_ID","value":"DR-MEMBER-001"}}}]}}}'
 ```
@@ -248,6 +250,7 @@ Social Registry (`sr`):
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/sr/registry/sync/search \
   -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/social-protection-eligibility" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-sr-search-001","search_request":[{"reference_id":"ref-demo-sr-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"GROUP_ID","value":"SR-GROUP-001"}}}]}}}'
 ```
@@ -257,6 +260,7 @@ Civil Registration and Vital Statistics (`crvs`):
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/crvs/registry/sync/search \
   -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/social-protection-eligibility" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-crvs-search-001","search_request":[{"reference_id":"ref-demo-crvs-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"UIN","value":"FAKE-810001"}}}]}}}'
 ```
@@ -266,6 +270,7 @@ Farmer Registry (`fr`):
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/fr/registry/sync/search \
   -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/agricultural-subsidy-eligibility" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-fr-search-001","search_request":[{"reference_id":"ref-demo-fr-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"FARMER_ID","value":"FR-MEMBER-001"}}}]}}}'
 ```

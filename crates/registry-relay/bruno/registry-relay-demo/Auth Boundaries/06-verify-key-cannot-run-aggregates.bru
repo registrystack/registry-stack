@@ -14,6 +14,10 @@ auth:bearer {
   token: {{evidenceVerificationKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Attempts to run a household aggregate using the verification_service key (evidenceVerificationKey).
   evidenceVerificationKey holds only evidence-verification scopes; aggregates require an aggregate scope.

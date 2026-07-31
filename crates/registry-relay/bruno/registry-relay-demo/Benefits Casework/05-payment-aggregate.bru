@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Runs the payment aggregate grouped by household district and payment cycle.
   Uses planning_analyst persona (aggregateKey).

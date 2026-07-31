@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Step 1 of 3: Emergency planning workflow.
   Reads stock event aggregate (counts and total stockout days by medicine and status)
