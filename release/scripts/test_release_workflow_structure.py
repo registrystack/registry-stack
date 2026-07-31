@@ -102,6 +102,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             '--source-sha "${{ needs.validate.outputs.source_sha }}"',
             text,
         )
+        self.assertIn("release_candidate.py select-canary", validation)
+        self.assertNotIn("| {\n", validation)
 
     def test_candidate_images_are_private_and_layouts_are_built_without_token(self) -> None:
         text, _ = workflow("release-candidate.yml")
@@ -127,6 +129,20 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("tag_lookup_status=$?", validation)
         self.assertIn('[[ "${tag_lookup_status}" -ne 2 ]]', validation)
         self.assertIn("cannot prove tag ${tag} is absent", validation)
+
+    def test_forces_the_v1_runtime_contract_before_the_candidate_is_sealed(
+        self,
+    ) -> None:
+        text, _ = workflow("release-candidate.yml")
+        rehearsal = text.index(
+            "Rehearse forced 1.x release-lock runtime contract"
+        )
+        seal = text.index("Seal compact candidate manifest and bundle")
+        self.assertLess(rehearsal, seal)
+        self.assertIn(
+            "release/scripts/check-runtime-contract-parity.sh",
+            text[rehearsal:seal],
+        )
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
@@ -167,6 +183,10 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertLess(reconcile, image_copy)
         self.assertLess(image_copy, runtime)
         self.assertLess(runtime, publish)
+        self.assertIn(
+            "their exact identities do not exist before tagging",
+            workflow("release-candidate.yml")[0],
+        )
 
     def test_uses_compact_tag_binding_and_delays_oidc(self) -> None:
         text, document = workflow("release.yml")
@@ -183,18 +203,21 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         provenance = document["jobs"]["release-provenance"]["uses"]
         self.assertRegex(provenance, r"@[0-9a-f]{40}$")
 
-    def test_exact_nonpublic_draft_can_be_safely_recreated(self) -> None:
+    def test_exact_nonpublic_draft_can_be_safely_reconciled(self) -> None:
         text, _ = workflow("release.yml")
+        staging = text.split("  stage-draft:", 1)[1].split(
+            "  promote-images:", 1
+        )[0]
         self.assertIn(
-            "Verify every public destination is absent or safely resumable",
+            "Verify public images are absent and any draft is bound",
             text,
         )
         self.assertIn(
-            "Recreate resumable draft and upload exact staged inventory",
+            "Reconcile bound draft and upload exact staged inventory",
             text,
         )
         self.assertIn(".draft == true", text)
-        self.assertIn("gh api --method DELETE", text)
+        self.assertNotIn("gh api --method DELETE", staging)
         self.assertGreaterEqual(
             text.count(
                 "registry-stack-release-candidate-v2 manifest_sha256:"
@@ -203,6 +226,61 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn(".name == $title", text)
         self.assertIn("contains($marker)", text)
+
+    def test_public_image_promotion_is_fail_closed_and_burns_the_version(
+        self,
+    ) -> None:
+        candidate, _ = workflow("release-candidate.yml")
+        release, document = workflow("release.yml")
+        combined = candidate + release
+        self.assertEqual(
+            combined.count("release_workflow_guard.py http-status"),
+            3,
+        )
+        self.assertNotIn("awk '/^HTTP", combined)
+        self.assertNotIn("sed -E 's#^ghcr", combined)
+        self.assertNotIn("image-tag-state", combined)
+        self.assertNotIn("--expected-digest", combined)
+        self.assertEqual(combined.count("gh api --paginate --slurp"), 3)
+        self.assertEqual(combined.count("require-image-tag-absent"), 3)
+        promotion = next(
+            step["run"]
+            for step in document["jobs"]["promote-images"]["steps"]
+            if step.get("name") == "Burn version on first exact digest promotion"
+        )
+        self.assertIn("public-image-destination", promotion)
+        self.assertIn("require-image-tag-absent", promotion)
+        absence = promotion.index("require-image-tag-absent")
+        copy = promotion.index('crane copy "${candidate_ref}" "${final_ref}"')
+        self.assertLess(absence, copy)
+        self.assertNotIn("--expected-digest", promotion)
+        self.assertNotIn("state=", promotion)
+        self.assertIn("irreversible version burn", promotion)
+        self.assertIn(
+            'test "$(crane digest "${final_ref}")" = "${digest}"',
+            promotion,
+        )
+        verify = next(
+            step["run"]
+            for step in document["jobs"]["verify"]["steps"]
+            if step.get("name")
+            == "Verify public images are absent and any draft is bound"
+        )
+        self.assertIn(
+            "require-image-tag-absent",
+            verify,
+        )
+        self.assertNotIn("--expected-digest", verify)
+
+    def test_canary_selection_uses_the_complete_shared_schema(self) -> None:
+        candidate, _ = workflow("release-candidate.yml")
+        release, _ = workflow("release.yml")
+        combined = candidate + release
+        self.assertEqual(combined.count("release_candidate.py select-canary"), 2)
+        for field in ("id", "run_attempt", "event"):
+            self.assertIn(f'"{field}": value.get("{field}")', (
+                ROOT / "release/scripts/release_candidate.py"
+            ).read_text(encoding="utf-8"))
 
     def test_publishes_one_signature_bundle_and_dispatches_exact_docs(self) -> None:
         text, _ = workflow("release.yml")
@@ -356,6 +434,10 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 ),
             ),
             ("verify-canary", ("--metadata", "--workflow-revision")),
+            (
+                "select-canary",
+                ("--metadata", "--workflow-revision", "--output"),
+            ),
         ):
             result = subprocess.run(
                 ["python3", str(helper), command, "--help"],

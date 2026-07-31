@@ -1240,6 +1240,50 @@ def canary_run_from_json(document: Any) -> dict[str, Any]:
     return normalized
 
 
+def select_canary_run(document: Any, *, workflow_revision: str) -> dict[str, Any]:
+    revision = require_sha(workflow_revision, "workflow revision")
+    if not isinstance(document, dict):
+        raise CandidateError("canary workflow-runs response must be an object")
+    runs = require_list(document.get("workflow_runs"), "workflow_runs")
+    selected: list[tuple[datetime, dict[str, Any]]] = []
+    for value in runs:
+        if not isinstance(value, dict):
+            raise CandidateError("workflow_runs entries must be objects")
+        if (
+            value.get("head_sha") != revision
+            or value.get("conclusion") != "success"
+            or value.get("event") not in {"schedule", "workflow_dispatch"}
+            or value.get("path") != CANARY_WORKFLOW_PATH
+        ):
+            continue
+        completed_at = value.get("updated_at")
+        completed = parse_timestamp(
+            completed_at,
+            "trusted canary workflow run.updated_at",
+        )
+        selected.append(
+            (
+                completed,
+                canary_run_from_json(
+                    {
+                        "id": value.get("id"),
+                        "run_attempt": value.get("run_attempt"),
+                        "event": value.get("event"),
+                        "head_sha": value.get("head_sha"),
+                        "path": value.get("path"),
+                        "conclusion": value.get("conclusion"),
+                        "completed_at": completed_at,
+                    }
+                ),
+            )
+        )
+    if not selected:
+        raise CandidateError(
+            "no successful trusted canary matches the workflow revision"
+        )
+    return max(selected, key=lambda item: item[0])[1]
+
+
 def validate_canary_run(
     document: Any,
     *,
@@ -2218,6 +2262,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_canary.add_argument("--metadata", type=Path, required=True)
     verify_canary.add_argument("--workflow-revision", required=True)
 
+    select_canary = subparsers.add_parser("select-canary")
+    select_canary.add_argument("--metadata", type=Path, required=True)
+    select_canary.add_argument("--workflow-revision", required=True)
+    select_canary.add_argument("--output", type=Path, required=True)
+
     inventory = subparsers.add_parser("inventory")
     inventory.add_argument("--root", type=Path, required=True)
 
@@ -2362,6 +2411,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(
                 "verified recent release canary "
+                f"{run['id']}/{run['run_attempt']} at {run['head_sha']}"
+            )
+            return 0
+        if args.command == "select-canary":
+            run = select_canary_run(
+                read_json(args.metadata),
+                workflow_revision=args.workflow_revision,
+            )
+            args.output.write_bytes(canonical_json(run))
+            print(
+                "selected trusted release canary "
                 f"{run['id']}/{run['run_attempt']} at {run['head_sha']}"
             )
             return 0

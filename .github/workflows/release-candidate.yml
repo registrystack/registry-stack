@@ -103,16 +103,11 @@ jobs:
             exit 1
           fi
           gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-canary.yml/runs?branch=main&status=success&per_page=100" \
-            | jq --arg sha "${workflow_revision}" \
-            '[.workflow_runs[] | select(
-              .head_sha == $sha and .conclusion == "success"
-            )] | sort_by(.updated_at) | last
-            | {
-                path: ".github/workflows/release-canary.yml",
-                head_sha: .head_sha,
-                conclusion: .conclusion,
-                completed_at: .updated_at
-              }' > "${RUNNER_TEMP}/canary-run.json"
+            > "${RUNNER_TEMP}/canary-runs.json"
+          python3 release/scripts/release_candidate.py select-canary \
+            --metadata "${RUNNER_TEMP}/canary-runs.json" \
+            --workflow-revision "${workflow_revision}" \
+            --output "${RUNNER_TEMP}/canary-run.json"
           python3 release/scripts/release_candidate.py verify-canary \
             --metadata "${RUNNER_TEMP}/canary-run.json" \
             --workflow-revision "${workflow_revision}"
@@ -135,7 +130,8 @@ jobs:
             release_status=200
           else
             release_status="$(
-              awk '/^HTTP\\// {code=$2} END {print code}' "${release_response}"
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${release_response}"
             )"
           fi
           if [[ "${release_status}" != "404" ]]; then
@@ -143,14 +139,14 @@ jobs:
             exit 1
           fi
           for package in registry-notary registry-relay; do
-            if gh api --paginate \
-                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
-                | jq -r --arg tag "${tag}" \
-                '.[] | .metadata.container.tags[]? | select(. == $tag)' \
-                | grep -Fxq "${tag}"; then
-              echo "public image ${package}:${tag} already exists" >&2
-              exit 1
-            fi
+            versions="${RUNNER_TEMP}/${package}-versions.json"
+            gh api --paginate --slurp \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
+              > "${versions}"
+            python3 release/scripts/release_workflow_guard.py \
+              require-image-tag-absent \
+              --metadata "${versions}" \
+              --tag "${tag}"
           done
           manifest="$(
             python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
@@ -235,6 +231,13 @@ jobs:
           release/scripts/registry-release verify-registryctl-binary-version \
             "dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
             --version "${{ needs.validate.outputs.version }}"
+
+      # This forces the v1 payload/schema/runtime renderer through the real
+      # generator on every candidate, including the final 0.x train before
+      # v1.0. The authenticated installer and public-image lifecycle remain
+      # tag-only because their exact identities do not exist before tagging.
+      - name: Rehearse forced 1.x release-lock runtime contract
+        run: release/scripts/check-runtime-contract-parity.sh
 
       - name: Set up Docker Buildx
         id: buildx

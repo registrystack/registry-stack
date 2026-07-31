@@ -1473,6 +1473,80 @@ class ReleaseCandidateTest(TestCase):
                         changed, workflow_revision="b" * 40, now=self.now
                     )
 
+    def test_canary_selector_emits_the_complete_consumer_schema(self) -> None:
+        revision = "b" * 40
+        response = {
+            "workflow_runs": [
+                {
+                    "id": 455,
+                    "run_attempt": 1,
+                    "event": "schedule",
+                    "head_sha": revision,
+                    "path": ".github/workflows/release-canary.yml",
+                    "conclusion": "success",
+                    "updated_at": "2026-07-30T01:00:00Z",
+                },
+                {
+                    "id": 456,
+                    "run_attempt": 2,
+                    "event": "workflow_dispatch",
+                    "head_sha": revision,
+                    "path": ".github/workflows/release-canary.yml",
+                    "conclusion": "success",
+                    "updated_at": "2026-07-30T02:00:00Z",
+                },
+            ]
+        }
+        selected = self.module.select_canary_run(
+            response,
+            workflow_revision=revision,
+        )
+        self.assertEqual(
+            selected,
+            {
+                "id": 456,
+                "run_attempt": 2,
+                "event": "workflow_dispatch",
+                "head_sha": revision,
+                "path": ".github/workflows/release-canary.yml",
+                "conclusion": "success",
+                "completed_at": "2026-07-30T02:00:00Z",
+            },
+        )
+        self.module.validate_canary_run(
+            selected,
+            workflow_revision=revision,
+            now=datetime(2026, 7, 30, 3, tzinfo=timezone.utc),
+        )
+
+    def test_canary_selector_rejects_incomplete_or_untrusted_runs(self) -> None:
+        revision = "b" * 40
+        base = {
+            "id": 456,
+            "run_attempt": 1,
+            "event": "schedule",
+            "head_sha": revision,
+            "path": ".github/workflows/release-canary.yml",
+            "conclusion": "success",
+            "updated_at": "2026-07-30T02:00:00Z",
+        }
+        for field, value in [
+            ("id", None),
+            ("run_attempt", None),
+            ("event", "push"),
+            ("path", ".github/workflows/ci.yml"),
+            ("conclusion", "failure"),
+            ("head_sha", "c" * 40),
+        ]:
+            changed = dict(base)
+            changed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaises(self.module.CandidateError):
+                    self.module.select_canary_run(
+                        {"workflow_runs": [changed]},
+                        workflow_revision=revision,
+                    )
+
     def test_verify_tag_binding_cli_rechecks_identity_and_expiry_before_public_write(
         self,
     ) -> None:

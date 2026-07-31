@@ -951,7 +951,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Draft-first exact staged publication",
         ".github/workflows/release.yml",
         (
-            "stage-draft:\n    name: Create exact resumable draft",
+            "stage-draft:\n    name: Create or reconcile the bound draft",
             "name: Reverify and stage exact candidate payloads",
             "gh release create",
             "--draft",
@@ -975,7 +975,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Reconcile exact staged draft before first public image write",
             "diff -u contract/expected-assets contract/actual-assets",
             "name: Reverify candidate expiry immediately before registry login",
-            "name: Recheck all destinations before exact digest promotion",
+            "name: Burn version on first exact digest promotion",
+            "require-image-tag-absent",
             'crane copy "${candidate_ref}" "${final_ref}"',
             'test "$(crane digest "${final_ref}")" = "${digest}"',
         ),
@@ -1157,18 +1158,18 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "Candidate verification before draft creation",
         ".github/workflows/release.yml",
         "name: Reverify and stage exact candidate payloads",
-        "name: Recreate resumable draft and upload exact staged inventory",
+        "name: Reconcile bound draft and upload exact staged inventory",
     ),
     (
         "Draft reconciliation before image promotion",
         ".github/workflows/release.yml",
         "name: Reconcile exact staged draft before first public image write",
-        "name: Recheck all destinations before exact digest promotion",
+        "name: Burn version on first exact digest promotion",
     ),
     (
         "Exact image promotion before final runtime proof",
         ".github/workflows/release.yml",
-        "name: Recheck all destinations before exact digest promotion",
+        "name: Burn version on first exact digest promotion",
         "name: Generate signed 1.x lock and run the clean released runtime",
     ),
     (
@@ -1186,7 +1187,7 @@ ORDERED_RELEASE_SECURITY_GATES = (
     (
         "Exact image promotion before release publication",
         ".github/workflows/release.yml",
-        "name: Recheck all destinations before exact digest promotion",
+        "name: Burn version on first exact digest promotion",
         "name: Publish immutable release",
     ),
     (
@@ -1453,32 +1454,42 @@ def promotion_first_write_barrier_violations(
     publish = yaml_job_block(workflow, "promote-images")
     if publish is None:
         return [gate]
-    barrier_steps = [
+    promotion_steps = [
         step
         for step in yaml_step_blocks(publish)
-        if "name: Recheck all destinations before exact digest promotion" in step
+        if "name: Burn version on first exact digest promotion" in step
     ]
-    if len(barrier_steps) != 1:
+    if len(promotion_steps) != 1:
         return [gate]
-    barrier_step = barrier_steps[0]
-    barrier_required = (
-        "name: Recheck all destinations before exact digest promotion",
-        "while IFS= read -r final_ref; do",
-        'crane digest "${final_ref}"',
-        "Final image destination ${final_ref} is no longer absent",
-        "done < <(jq -r '.images[].final_ref' \"${manifest}\")",
+    promotion_step = promotion_steps[0]
+    promotion_required = (
+        "name: Burn version on first exact digest promotion",
+        "while IFS=$'\\t' read -r candidate_ref digest final_ref; do",
+        'test "$(crane digest "${candidate_ref}")" = "${digest}"',
+        "gh api --paginate --slurp",
+        "require-image-tag-absent",
+        "irreversible version burn",
+        'crane copy "${candidate_ref}" "${final_ref}"',
+        'test "$(crane digest "${final_ref}")" = "${digest}"',
+        "[.candidate_ref,.digest,.final_ref] | @tsv",
     )
     publish_required = (
         "name: Reconcile exact staged draft before first public image write",
         "name: Reverify candidate expiry immediately before registry login",
-        'crane copy "${candidate_ref}" "${final_ref}"',
     )
-    barrier = "done < <(jq -r '.images[].final_ref' \"${manifest}\")"
+    source_check = 'test "$(crane digest "${candidate_ref}")" = "${digest}"'
+    absence_check = "require-image-tag-absent"
     first_write = 'crane copy "${candidate_ref}" "${final_ref}"'
+    final_check = 'test "$(crane digest "${final_ref}")" = "${digest}"'
     if (
-        any(marker not in barrier_step for marker in barrier_required)
+        any(marker not in promotion_step for marker in promotion_required)
         or any(marker not in publish for marker in publish_required)
-        or publish.rfind(barrier) >= publish.find(first_write)
+        or promotion_step.find(source_check)
+        >= promotion_step.find(absence_check)
+        or promotion_step.find(absence_check)
+        >= promotion_step.find(first_write)
+        or promotion_step.find(first_write)
+        >= promotion_step.find(final_check)
     ):
         return [gate]
     return []

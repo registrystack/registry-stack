@@ -193,16 +193,11 @@ jobs:
               --deny-self-hosted-runners
           done
           gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-canary.yml/runs?branch=main&status=success&per_page=100" \
-            | jq --arg sha "${workflow_revision}" \
-            '[.workflow_runs[] | select(
-              .head_sha == $sha and .conclusion == "success"
-            )] | sort_by(.updated_at) | last
-            | {
-                path: ".github/workflows/release-canary.yml",
-                head_sha: .head_sha,
-                conclusion: .conclusion,
-                completed_at: .updated_at
-              }' > promotion/canary-run.json
+            > promotion/canary-runs.json
+          python3 release/scripts/release_candidate.py select-canary \
+            --metadata promotion/canary-runs.json \
+            --workflow-revision "${workflow_revision}" \
+            --output promotion/canary-run.json
           python3 release/scripts/release_candidate.py verify-canary \
             --metadata promotion/canary-run.json \
             --workflow-revision "${workflow_revision}"
@@ -212,7 +207,7 @@ jobs:
             echo "docs_sha256=$(jq -er .docs.sha256 "${manifest}")"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Verify every public destination is absent or safely resumable
+      - name: Verify public images are absent and any draft is bound
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -225,7 +220,10 @@ jobs:
               >"${response}" 2>&1; then
             status=200
           else
-            status="$(awk '/^HTTP\\// {code=$2} END {print code}' "${response}")"
+            status="$(
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${response}"
+            )"
           fi
           if [[ "${status}" == 200 ]]; then
             gh api \
@@ -246,20 +244,23 @@ jobs:
             echo "GitHub Release destination is neither absent nor an exact draft" >&2
             exit 1
           fi
-          while IFS= read -r final_ref; do
-            package="$(
-              sed -E 's#^ghcr\\.io/registrystack/([^:]+):.*#\\1#' <<<"${final_ref}"
+          while IFS=$'\t' read -r final_ref _digest; do
+            destination="$(
+              python3 release/scripts/release_workflow_guard.py \
+                public-image-destination \
+                --final-ref "${final_ref}" \
+                --namespace "${IMAGE_NAMESPACE}"
             )"
-            tag="${final_ref##*:}"
-            if gh api --paginate \
-                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
-                | jq -r --arg tag "${tag}" \
-                '.[] | .metadata.container.tags[]? | select(. == $tag)' \
-                | grep -Fxq "${tag}"; then
-              echo "Public image destination ${final_ref} already exists" >&2
-              exit 1
-            fi
-          done < <(jq -r '.images[].final_ref' "${manifest}")
+            IFS=$'\t' read -r package tag <<<"${destination}"
+            versions="${RUNNER_TEMP}/${package}-versions.json"
+            gh api --paginate --slurp \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
+              > "${versions}"
+            python3 release/scripts/release_workflow_guard.py \
+              require-image-tag-absent \
+              --metadata "${versions}" \
+              --tag "${tag}"
+          done < <(jq -r '.images[] | [.final_ref,.digest] | @tsv' "${manifest}")
 
       - name: Upload verified promotion input
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -271,7 +272,7 @@ jobs:
           retention-days: 2
 
   stage-draft:
-    name: Create exact resumable draft
+    name: Create or reconcile the bound draft
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -324,60 +325,13 @@ jobs:
           public_manifest="registry-stack-${{ needs.verify.outputs.tag }}-release-manifest.json"
           cp "${manifest}" "release-assets/${public_manifest}"
 
-      - name: Recreate resumable draft and upload exact staged inventory
+      - name: Reconcile bound draft and upload exact staged inventory
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
-          response="${RUNNER_TEMP}/release-response"
-          if gh api --include --silent \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              >"${response}" 2>&1; then
-            status=200
-          else
-            status="$(awk '/^HTTP\\// {code=$2} END {print code}' "${response}")"
-          fi
-          if [[ "${status}" == 200 ]]; then
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              > "${RUNNER_TEMP}/existing-draft.json"
-            release_id="$(
-              jq -er \
-                --arg tag "${tag}" \
-                --arg title "RegistryStack ${tag}" \
-                --arg marker \
-                  "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
-                'select(
-                  .draft == true and
-                  .prerelease == false and
-                  .tag_name == $tag and
-                  .name == $title and
-                  ((.body // "") | contains($marker))
-                ) | .id' \
-                "${RUNNER_TEMP}/existing-draft.json"
-            )"
-            gh api --method DELETE \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
-          elif [[ "${status}" != 404 ]]; then
-            echo "GitHub Release destination is neither absent nor an exact draft" >&2
-            exit 1
-          fi
-          cp "release/notes/${tag}.md" contract/draft-notes.md
-          printf \
-            '\n<!-- registry-stack-release-candidate-v2 manifest_sha256:%s -->\n' \
-            "${{ needs.verify.outputs.manifest_sha256 }}" \
-            >> contract/draft-notes.md
-          gh release create "${tag}" \
-            --verify-tag \
-            --draft \
-            --title "RegistryStack ${tag}" \
-            --notes-file contract/draft-notes.md
-          mapfile -d '' -t assets < <(
-            find release-assets -maxdepth 1 -type f -print0 | sort -z
-          )
-          gh release upload "${tag}" "${assets[@]}" \
-            --repo "${GITHUB_REPOSITORY}"
           while IFS= read -r -d '' file; do
             jq -n \
               --arg name "$(basename "${file}")" \
@@ -386,6 +340,112 @@ jobs:
               '{name:$name,sha256:$sha256,size:$size}'
           done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z) \
             | jq -s 'sort_by(.name)' > contract/staged-assets.json
+          response="${RUNNER_TEMP}/release-response"
+          if gh api --include --silent \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              >"${response}" 2>&1; then
+            status=200
+          else
+            status="$(
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${response}"
+            )"
+          fi
+          if [[ "${status}" == 200 ]]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              > "${RUNNER_TEMP}/existing-draft.json"
+            jq -e \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
+              --arg marker \
+                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+              'select(
+                .draft == true and
+                .prerelease == false and
+                .tag_name == $tag and
+                .name == $title and
+                ((.body // "") | contains($marker))
+              ) | .id' \
+              "${RUNNER_TEMP}/existing-draft.json" >/dev/null
+          elif [[ "${status}" != 404 ]]; then
+            echo "GitHub Release destination is neither absent nor an exact draft" >&2
+            exit 1
+          else
+            cp "release/notes/${tag}.md" contract/draft-notes.md
+            printf \
+              '\n<!-- registry-stack-release-candidate-v2 manifest_sha256:%s -->\n' \
+              "${{ needs.verify.outputs.manifest_sha256 }}" \
+              >> contract/draft-notes.md
+            gh release create "${tag}" \
+              --verify-tag \
+              --draft \
+              --title "RegistryStack ${tag}" \
+              --notes-file contract/draft-notes.md
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > "${RUNNER_TEMP}/staged-draft.json"
+          jq -r '.[].name' contract/staged-assets.json \
+            | sort -u > contract/expected-staged-assets
+          jq -r '.assets[].name' "${RUNNER_TEMP}/staged-draft.json" \
+            | sort -u > contract/actual-staged-assets
+          if ! comm -13 \
+              contract/expected-staged-assets \
+              contract/actual-staged-assets \
+              > contract/unexpected-staged-assets; then
+            exit 1
+          fi
+          if [[ -s contract/unexpected-staged-assets ]]; then
+            echo "Draft contains assets outside the deterministic staged roster" >&2
+            cat contract/unexpected-staged-assets >&2
+            exit 1
+          fi
+          additions=()
+          while IFS=$'\t' read -r name sha256 size; do
+            matches="$(
+              jq -c --arg name "${name}" \
+                '[.assets[] | select(.name == $name)]' \
+                "${RUNNER_TEMP}/staged-draft.json"
+            )"
+            count="$(jq -r length <<<"${matches}")"
+            if [[ "${count}" == 0 ]]; then
+              additions+=("release-assets/${name}")
+            elif [[ "${count}" == 1 ]]; then
+              jq -e \
+                --arg digest "sha256:${sha256}" \
+                --argjson size "${size}" \
+                '.[0].digest == $digest and .[0].size == $size' \
+                <<<"${matches}" >/dev/null
+            else
+              echo "Draft repeats staged asset ${name}" >&2
+              exit 1
+            fi
+          done < <(
+            jq -r '.[] | [.name,.sha256,.size] | @tsv' \
+              contract/staged-assets.json
+          )
+          if ((${#additions[@]} > 0)); then
+            gh release upload "${tag}" "${additions[@]}" \
+              --repo "${GITHUB_REPOSITORY}"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > "${RUNNER_TEMP}/staged-draft.json"
+          while IFS=$'\t' read -r name sha256 size; do
+            jq -e \
+              --arg name "${name}" \
+              --arg digest "sha256:${sha256}" \
+              --argjson size "${size}" \
+              '[.assets[]
+                | select(
+                    .name == $name and
+                    .digest == $digest and
+                    .size == $size
+                  )]
+               | length == 1' \
+              "${RUNNER_TEMP}/staged-draft.json" >/dev/null
+          done < <(
+            jq -r '.[] | [.name,.sha256,.size] | @tsv' \
+              contract/staged-assets.json
+          )
 
       - name: Upload draft reconciliation contract
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -495,19 +555,33 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Recheck all destinations before exact digest promotion
+      - name: Burn version on first exact digest promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           manifest="inputs/release-promotion-input-${GITHUB_RUN_ID}/release-candidate-manifest.json"
-          while IFS= read -r final_ref; do
-            if crane digest "${final_ref}" >/dev/null 2>&1; then
-              echo "Final image destination ${final_ref} is no longer absent" >&2
-              exit 1
-            fi
-          done < <(jq -r '.images[].final_ref' "${manifest}")
           while IFS=$'\t' read -r candidate_ref digest final_ref; do
             test "$(crane digest "${candidate_ref}")" = "${digest}"
+            destination="$(
+              python3 release/scripts/release_workflow_guard.py \
+                public-image-destination \
+                --final-ref "${final_ref}" \
+                --namespace "${IMAGE_NAMESPACE}"
+            )"
+            IFS=$'\t' read -r package tag <<<"${destination}"
+            versions="${RUNNER_TEMP}/${package}-versions.json"
+            gh api --paginate --slurp \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
+              > "${versions}"
+            # Each public write is an irreversible version burn. Rechecking
+            # absence immediately before each copy prevents a rerun from
+            # resuming a partially published version.
+            python3 release/scripts/release_workflow_guard.py \
+              require-image-tag-absent \
+              --metadata "${versions}" \
+              --tag "${tag}"
             crane copy "${candidate_ref}" "${final_ref}"
             test "$(crane digest "${final_ref}")" = "${digest}"
           done < <(
@@ -708,6 +782,16 @@ jobs:
             --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
             --output \
               "release-assets/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
+          image_lock="registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
+          expected_image_lock_sha256="$(
+            jq -er --arg name "${image_lock}" \
+              '.payloads[]
+               | select(.kind == "image-lock" and .name == $name)
+               | .sha256' "${candidate}"
+          )"
+          test "$(
+            sha256sum "release-assets/${image_lock}" | awk '{print $1}'
+          )" = "${expected_image_lock_sha256}"
 
       - name: Generate signed 1.x lock and run the clean released runtime
         shell: bash
@@ -735,6 +819,12 @@ jobs:
             cosign sign-blob --yes \
               --bundle contract/registry-release-lock.sigstore.json \
               contract/registry-release-lock.payload.json
+            identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}"
+            cosign verify-blob contract/registry-release-lock.payload.json \
+              --bundle contract/registry-release-lock.sigstore.json \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer \
+                https://token.actions.githubusercontent.com
             python3 release/scripts/registry_release_lock.py assemble \
               --payload contract/registry-release-lock.payload.json \
               --bundle contract/registry-release-lock.sigstore.json \

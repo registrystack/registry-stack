@@ -365,8 +365,10 @@ class GateInventoryTest(unittest.TestCase):
         self.assertIsNotNone(publish)
         for marker in (
             "name: Reconcile exact staged draft before first public image write",
-            "while IFS= read -r final_ref; do",
-            "Final image destination ${final_ref} is no longer absent",
+            "name: Burn version on first exact digest promotion",
+            "require-image-tag-absent",
+            "irreversible version burn",
+            'test "$(crane digest "${final_ref}")" = "${digest}"',
         ):
             with self.subTest(marker=marker):
                 mutated_publish = publish.replace(marker, "removed-prewrite-proof", 1)
