@@ -149,6 +149,92 @@ fn representative_oid4vci_accepts_a_delegation_only_target_contract() {
 }
 
 #[test]
+fn representative_oid4vci_rejects_a_requester_only_credential_root() {
+    let mut config = valid_representative_oid4vci_config();
+    let root = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("representative credential root exists");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut root.evidence_mode else {
+        panic!("representative credential root is registry-backed");
+    };
+    let inputs = &mut consultations
+        .get_mut("civil_status")
+        .expect("civil status consultation exists")
+        .inputs;
+    inputs.clear();
+    inputs.insert(
+        "requester_id".to_string(),
+        RelayConsultationInput::RequesterIdentifier(
+            "request.requester.identifiers.national_id".to_string(),
+        ),
+    );
+
+    let reason = expect_oid4vci_error(&config);
+    assert!(
+        reason.contains("credential configuration 'date_of_birth_sd_jwt'")
+            && reason.contains("claim 'dependent-date-of-birth'")
+            && reason.contains("consultation 'civil_status'")
+            && reason.contains("does not consume the selected target")
+            && reason.contains("'requester_id' maps 'requester.identifiers.national_id'")
+            && reason.contains("target.identifiers.civil_registration_id"),
+        "unexpected error: {reason}"
+    );
+}
+
+#[test]
+fn representative_oid4vci_rejects_a_requester_only_credential_dependency() {
+    let mut config = valid_representative_oid4vci_config();
+    let mut dependency = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("representative credential root exists")
+        .clone();
+    dependency.id = "dependent-source-record".to_string();
+    dependency.title = "Dependent source record".to_string();
+    dependency.depends_on.clear();
+    dependency.credential_profiles.clear();
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut dependency.evidence_mode else {
+        panic!("representative dependency is registry-backed");
+    };
+    let inputs = &mut consultations
+        .get_mut("civil_status")
+        .expect("civil status consultation exists")
+        .inputs;
+    inputs.clear();
+    inputs.insert(
+        "requester_id".to_string(),
+        RelayConsultationInput::RequesterIdentifier(
+            "request.requester.identifiers.national_id".to_string(),
+        ),
+    );
+    config.evidence.claims.push(dependency);
+    config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("representative credential root exists")
+        .depends_on
+        .push("dependent-source-record".to_string());
+
+    let reason = expect_oid4vci_error(&config);
+    assert!(
+        reason.contains("credential configuration 'date_of_birth_sd_jwt'")
+            && reason.contains("claim 'dependent-source-record'")
+            && reason.contains("consultation 'civil_status'")
+            && reason.contains("does not consume the selected target")
+            && reason.contains("'requester_id' maps 'requester.identifiers.national_id'")
+            && reason.contains("target.identifiers.civil_registration_id"),
+        "unexpected error: {reason}"
+    );
+}
+
+#[test]
 fn representative_oid4vci_requires_delegated_evaluation() {
     let mut config = valid_representative_oid4vci_config();
     config.subject_access.allowed_operations.evaluate = false;
@@ -330,10 +416,13 @@ fn representative_oid4vci_rejects_credential_inputs_the_ceremony_cannot_supply()
             ),
         );
 
-    let reason = expect_oid4vci_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
-        reason.contains("representative_issuance claim 'dependent-date-of-birth'")
-            && reason.contains("outside the representative ceremony")
+        reason.contains("delegated relationship 'guardian'")
+            && reason.contains("closure claim 'dependent-date-of-birth'")
+            && reason.contains("consultation 'civil_status'")
+            && reason.contains("input 'case_reference'")
+            && reason.contains("target.identifiers.case_reference")
             && reason.contains("target.identifiers.civil_registration_id"),
         "unexpected error: {reason}"
     );
@@ -376,10 +465,13 @@ fn representative_oid4vci_rejects_transitive_inputs_the_ceremony_cannot_supply()
         .depends_on
         .push("dependent-source-record".to_string());
 
-    let reason = expect_oid4vci_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
-        reason.contains("representative_issuance claim 'dependent-source-record'")
-            && reason.contains("outside the representative ceremony")
+        reason.contains("delegated relationship 'guardian'")
+            && reason.contains("closure claim 'dependent-source-record'")
+            && reason.contains("consultation 'civil_status'")
+            && reason.contains("input 'case_reference'")
+            && reason.contains("target.identifiers.case_reference")
             && reason.contains("target.identifiers.civil_registration_id"),
         "unexpected error: {reason}"
     );

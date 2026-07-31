@@ -1106,9 +1106,101 @@ fn delegated_subject_access_allows_registry_backed_dependency_closures() {
         .expect("delegated claim");
     make_registry_backed(delegated, "civil_status");
     delegated.purpose = Some("dependent_attestation".to_string());
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut delegated.evidence_mode else {
+        panic!("delegated claim is registry-backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("civil status consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.civil_registration_id".to_string(),
+            ),
+        );
     registry_dependent
         .validate()
         .expect("a delegated root may use its committed registry-backed dependency closure");
+}
+
+#[test]
+fn delegated_subject_access_rejects_non_canonical_root_inputs() {
+    let cases = [
+        RelayConsultationInput::TargetAttribute("request.target.attributes.birthdate".to_string()),
+        RelayConsultationInput::TargetIdentifier(
+            "request.target.identifiers.national_id".to_string(),
+        ),
+    ];
+
+    for input in cases {
+        let mut config = valid_delegated_subject_access_config();
+        delegated_claim_consultation_mut(&mut config)
+            .inputs
+            .insert("national_id".to_string(), input);
+
+        let reason = expect_subject_access_error(&config);
+        assert!(
+            reason.contains("delegated relationship 'guardian'")
+                && reason.contains("allowed claim 'dependent-date-of-birth'")
+                && reason.contains("closure claim 'dependent-date-of-birth'")
+                && reason.contains("consultation 'civil_status'")
+                && reason.contains("input 'national_id'")
+                && reason.contains("target.identifiers.civil_registration_id")
+                && reason.contains("requester.identifiers.national_id"),
+            "unexpected error: {reason}"
+        );
+    }
+}
+
+#[test]
+fn delegated_subject_access_rejects_non_canonical_transitive_inputs() {
+    let mut config = valid_delegated_subject_access_config();
+    let mut dependency = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("delegated root exists")
+        .clone();
+    dependency.id = "dependent-source-record".to_string();
+    dependency.title = "Dependent source record".to_string();
+    dependency.depends_on.clear();
+    dependency.credential_profiles.clear();
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut dependency.evidence_mode else {
+        panic!("delegated dependency is registry-backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("civil status consultation exists")
+        .inputs
+        .insert(
+            "national_id".to_string(),
+            RelayConsultationInput::TargetAttribute(
+                "request.target.attributes.birthdate".to_string(),
+            ),
+        );
+    config.evidence.claims.push(dependency);
+    config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("delegated root exists")
+        .depends_on
+        .push("dependent-source-record".to_string());
+
+    let reason = expect_subject_access_error(&config);
+    assert!(
+        reason.contains("delegated relationship 'guardian'")
+            && reason.contains("allowed claim 'dependent-date-of-birth'")
+            && reason.contains("closure claim 'dependent-source-record'")
+            && reason.contains("consultation 'civil_status'")
+            && reason.contains("input 'national_id'")
+            && reason.contains("target.attributes.birthdate")
+            && reason.contains("target.identifiers.civil_registration_id"),
+        "unexpected error: {reason}"
+    );
 }
 
 #[test]
@@ -1184,6 +1276,23 @@ fn delegated_proof_consultation_mut(
     consultations
         .get_mut("guardian_link")
         .expect("delegated proof consultation")
+}
+
+fn delegated_claim_consultation_mut(
+    config: &mut StandaloneRegistryNotaryConfig,
+) -> &mut RelayConsultationConfig {
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "dependent-date-of-birth")
+        .expect("delegated claim exists");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("delegated claim is registry-backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("delegated consultation exists")
 }
 
 #[test]
