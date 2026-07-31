@@ -82,20 +82,15 @@ registryctl deploy verify \
   --package . \
   --approved-set ../approved-set.v1.json \
   --check-operator-files
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  config --no-interpolate --no-env-resolution --quiet
+export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<package-id-from-generated-RUNBOOK.md>}"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```
 
 Compare the reported closure digest with the value in the external recovery record.
 Stop dependent traffic and source updates, then stop the generated deployment:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  down
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml down
 ```
 
 Keep the traffic and source freeze in place until every member of each selected recovery
@@ -174,50 +169,20 @@ registryctl deploy verify \
   --package . \
   --approved-set ../approved-set.v1.json \
   --check-operator-files
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  config --no-interpolate --no-env-resolution --quiet
+export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<package-id-from-generated-RUNBOOK.md>}"
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
 ```
 
 Compare the reported closure digest with the external recovery record. Any mismatch is
 a manual abort.
 
-Stage the public Relay, consultation Relay, Notary, and PostgreSQL operator files through
-separate stagers. Then run all three read-only state checks required by the generated runbook:
+Run all three dedicated, networkless state checks required by the generated runbook before
+staging serving secrets:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-public-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-consultation-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-notary-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-postgresql-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-public \
-  'product-action' 'relay-public' 'verify_state'
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-consultation \
-  'product-action' 'relay-consultation' 'verify_state'
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-notary \
-  'product-action' 'verify_state'
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
 ```
 
 If any check rejects the restored state, do not delete anti-rollback state, change an
@@ -226,17 +191,15 @@ the same or newer accepted sequence. If no such backup exists, provision a new i
 identity, review and sign every affected lane, generate a new package, and follow the
 first-installation section of its runbook.
 
-Start only after all checks succeed:
+Only after all checks succeed, stage the four serving-secret groups and start:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  up --detach --wait --wait-timeout 120
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  ps
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
+docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
 For a private-lane recovery, keep externally reachable dependants stopped until

@@ -182,17 +182,9 @@ test('anchor rotation uses explicit review, stateless verification, preview, and
     'registryctl -C "$PROJECT_DIRECTORY" trust approved-set assemble',
     '--from "$CURRENT_APPROVED_SET"',
     '--relay-consultation "$SIGNED_PRODUCT_BUNDLE"',
-    'registry-relay-public-preview-state',
-    'registry-relay-consultation-preview-state',
-    'registry-notary-preview-state',
-    'generated/compose.yaml stop',
-    'registry-relay-public-accept-state',
-    'registry-relay-consultation-accept-state',
-    'registry-notary-accept-state',
-    "'product-action' 'relay-public' 'verify_state'",
-    "'product-action' 'relay-consultation' 'verify_state'",
-    "'product-action' 'verify_state'",
-    'up --detach --wait --wait-timeout 120',
+    'generated',
+    'RUNBOOK.md',
+    'Preview, accept, verify, and start the candidate',
   ]);
   assert.match(
     source,
@@ -305,16 +297,19 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
   assert.match(update, /Do not configure an automated rollback/i);
   assert.doesNotMatch(source, /registry-runtime-stage-secrets/);
 
-  const ordinaryOrderedStagers = new RegExp(
+  const ordinaryStartOrder = new RegExp(
     [
+      'registry-relay-public-verify-state',
+      'registry-relay-consultation-verify-state',
+      'registry-notary-verify-state',
       'registry-relay-public-stage-secrets',
       'registry-relay-consultation-stage-secrets',
       'registry-notary-stage-secrets',
       'registry-postgresql-stage-secrets',
-      "'verify_state'",
+      'up --detach --wait --wait-timeout 120',
     ].join('[\\s\\S]*'),
   );
-  assert.match(backup, ordinaryOrderedStagers);
+  assert.match(backup, ordinaryStartOrder);
   for (const page of [backup, update]) {
     for (const stager of [
       'registry-relay-public-stage-secrets',
@@ -326,13 +321,19 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
     }
     assert.match(page, /generated\/compose\.empty\.env/);
     assert.match(page, /generated\/compose\.yaml/);
-    assert.match(page, /'verify_state'/);
+    for (const verifier of [
+      'registry-relay-public-verify-state',
+      'registry-relay-consultation-verify-state',
+      'registry-notary-verify-state',
+    ]) {
+      assert.match(page, new RegExp(`run --rm --no-deps ${verifier}`));
+    }
   }
-  assert.match(backup, /\n\s+down\n/);
-  assert.match(backup, /\n\s+up --detach --wait --wait-timeout 120/);
+  assert.match(backup, /generated\/compose\.yaml down/);
+  assert.match(backup, /generated\/compose\.yaml up --detach --wait --wait-timeout 120/);
   assert.match(
     update,
-    /registry-relay-public-preview-state[\s\S]*registry-relay-consultation-preview-state[\s\S]*registry-notary-preview-state[\s\S]*\n\S[^\n]* stop\n[\s\S]*registry-relay-public-accept-state[\s\S]*registry-relay-consultation-accept-state[\s\S]*registry-notary-accept-state[\s\S]*'verify_state'[\s\S]*\n\S[^\n]* up --detach --wait --wait-timeout 120\n/,
+    /registry-relay-public-preview-state[\s\S]*registry-relay-consultation-preview-state[\s\S]*registry-notary-preview-state[\s\S]*\n\S[^\n]* stop\n[\s\S]*registry-relay-public-accept-state[\s\S]*registry-relay-consultation-accept-state[\s\S]*registry-notary-accept-state[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state[\s\S]*registry-relay-public-stage-secrets[\s\S]*registry-postgresql-stage-secrets[\s\S]*\n\S[^\n]* up --detach --wait --wait-timeout 120\n[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state/,
   );
   assert.match(update, /\n\S[^\n]* up --detach --wait --wait-timeout 120/);
 });
