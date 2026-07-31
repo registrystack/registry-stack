@@ -181,6 +181,60 @@ export function assertFenceInFile(markdown, heading, language, occurrence, sourc
   );
 }
 
+export function replaceFencePair(
+  markdown,
+  sourceHeading,
+  sourceLanguage,
+  sourceOccurrence,
+  replacementHeading,
+  replacementLanguage,
+  replacementOccurrence,
+  target,
+) {
+  const source = findFence(
+    markdown,
+    sourceHeading,
+    sourceLanguage,
+    sourceOccurrence,
+  ).content;
+  const replacement = findFence(
+    markdown,
+    replacementHeading,
+    replacementLanguage,
+    replacementOccurrence,
+  ).content;
+  invariant(source !== replacement, 'fence-pair replacement must change the target');
+  const occurrences = target.split(source).length - 1;
+  invariant(
+    occurrences === 1,
+    `expected one exact source fence in replacement target, found ${occurrences}`,
+  );
+  return target.replace(source, replacement);
+}
+
+export function replaceFencePairInFile(
+  markdownPath,
+  sourceHeading,
+  sourceLanguage,
+  sourceOccurrence,
+  replacementHeading,
+  replacementLanguage,
+  replacementOccurrence,
+  targetPath,
+) {
+  const target = replaceFencePair(
+    readFileSync(markdownPath, 'utf8'),
+    sourceHeading,
+    sourceLanguage,
+    sourceOccurrence,
+    replacementHeading,
+    replacementLanguage,
+    replacementOccurrence,
+    readFileSync(targetPath, 'utf8'),
+  );
+  writeFileSync(targetPath, target, 'utf8');
+}
+
 export function parseJsonOutput(output) {
   const value = output.trim();
   invariant(value !== '', 'command output is empty');
@@ -293,12 +347,23 @@ export function assertProjectReports(
     invariant(minimizationMode === 'snapshot', 'unexpected minimization mode');
     const snapshotResult = testReport.fixtures.find(
       (fixture) =>
-        !fixture.fixture.includes('::derived/') &&
-        fixture.outcome === 'match' &&
-        fixture.outputs.length > 0 &&
-        fixture.claims.length > 0,
+        fixture.integration === 'project-record-snapshot' &&
+        fixture.fixture === 'match',
     );
-    invariant(snapshotResult, 'snapshot fixture has no minimized output and claim projection');
+    invariant(snapshotResult, 'project-record-snapshot.match fixture is missing');
+    invariant(
+      snapshotResult.passed === true && snapshotResult.outcome === 'match',
+      'project-record-snapshot.match did not pass with outcome match',
+    );
+    invariant(
+      JSON.stringify(snapshotResult.outputs) === JSON.stringify(['status']),
+      'project-record-snapshot.match outputs must be exactly ["status"]',
+    );
+    invariant(
+      JSON.stringify(snapshotResult.claims) ===
+        JSON.stringify(['project-record-exists', 'project-status-accepted']),
+      'project-record-snapshot.match claims must be exactly the two documented predicate claims',
+    );
   }
 
   const affectedLanes = buildEnvelope.affected_lanes;
@@ -338,6 +403,7 @@ export function writeEvidenceManifest(
       {
         id: 'spreadsheet',
         source: 'embedded-spreadsheet-template',
+        covers: ['starter', 'evidence-rule-change', 'offline-fixtures', 'reviewed-build'],
         reports: [
           'spreadsheet/init.txt',
           'spreadsheet/test.txt',
@@ -346,6 +412,22 @@ export function writeEvidenceManifest(
           'spreadsheet/test.json',
           'spreadsheet/check.json',
           'spreadsheet/build.json',
+          'spreadsheet-evidence/before-trace.txt',
+          'spreadsheet-evidence/after-trace.txt',
+          'spreadsheet-evidence/test.txt',
+          'spreadsheet-evidence/test.json',
+          'spreadsheet-evidence/check.json',
+          'spreadsheet-evidence/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'spreadsheet-evidence/dev-start.txt',
+                'spreadsheet-evidence/records-denied.json',
+                'spreadsheet-evidence/records-request.json',
+                'spreadsheet-evidence/evidence-request.json',
+                'spreadsheet-evidence/dev-smoke.txt',
+                'spreadsheet-evidence/dev-down.txt',
+              ]
+            : []),
         ],
       },
       {
@@ -354,20 +436,11 @@ export function writeEvidenceManifest(
         covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
         reports: ['opencrvs/test.json', 'opencrvs/check.json', 'opencrvs/build.json'],
       },
-      {
-        id: 'initial-local-approval',
-        source: 'maintained-spreadsheet-template',
-        covers: ['independent-lane-keys', 'anchors', 'bundles', 'approved-set'],
-        reports: [
-          'initial-approval/relay-public-verify.txt',
-          'initial-approval/relay-consultation-verify.txt',
-          'initial-approval/notary-verify.txt',
-          'initial-approval/approved-set.txt',
-        ],
-      },
     ],
     release_boundary:
-      'Installer, release lock, doctor, and disposable development runtime evidence are separate.',
+      mode === 'sealed'
+        ? 'Disposable development runtime evidence is recorded; installer, release lock, doctor, and governed deployment evidence are separate.'
+        : 'Disposable development runtime, installer, release lock, doctor, and governed deployment evidence require sealed candidate bytes.',
     retained_project: retainedProject || null,
     retained_oauth_project: retainedOauthProject || null,
   };
@@ -442,6 +515,23 @@ async function main([command, ...args]) {
         'usage: assert-fence-in-file <tutorial> <heading> <language> <occurrence> <source-file>',
       );
       assertFenceInFile(read(args[0]), args[1], args[2], Number(args[3]), read(args[4]));
+      return;
+    }
+    case 'replace-fence-pair': {
+      invariant(
+        args.length === 8,
+        'usage: replace-fence-pair <tutorial> <source-heading> <source-language> <source-occurrence> <replacement-heading> <replacement-language> <replacement-occurrence> <target-file>',
+      );
+      replaceFencePairInFile(
+        args[0],
+        args[1],
+        args[2],
+        Number(args[3]),
+        args[4],
+        args[5],
+        Number(args[6]),
+        args[7],
+      );
       return;
     }
     case 'assert-json-subset': {

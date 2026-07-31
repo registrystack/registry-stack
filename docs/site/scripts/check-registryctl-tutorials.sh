@@ -23,7 +23,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 	fi
 	HTTP_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/author-registry-project.md"
 	SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/publish-spreadsheet-secured-registry-api.md"
-	APPROVAL_TUTORIAL="$RELEASED_DOCS_ROOT/operate/approve-initial-baseline.md"
+	EVIDENCE_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-claim-registry-api.md"
 	OAUTH_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/configure-project-script-adapter.md"
 	OAUTH_HOWTO="$RELEASED_DOCS_ROOT/configure/oauth-client-credentials.md"
 	OPENCRVS_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-opencrvs-claims.md"
@@ -32,7 +32,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 else
 	HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
 	SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
-	APPROVAL_TUTORIAL="$SITE_ROOT/src/content/docs/operate/approve-initial-baseline.mdx"
+	EVIDENCE_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx"
 	OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
 	OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
 	OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
@@ -49,10 +49,14 @@ RETAINED_OAUTH_PROJECT="${REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR:-}"
 RUNNER_MODE="source"
 REPORT_ROOT="$WORK_ROOT/reports"
 REGISTRYCTL_VERSION="unknown"
+ACTIVE_DEV_PROJECT=""
 
 cleanup() {
 	local exit_code=$?
 	set +e
+	if [[ -n "$ACTIVE_DEV_PROJECT" && -x "$REGISTRYCTL_BIN" ]]; then
+		"$REGISTRYCTL_BIN" -C "$ACTIVE_DEV_PROJECT" dev down >/dev/null 2>&1
+	fi
 	rm -rf "$WORK_ROOT"
 	if ((exit_code == 0)); then
 		printf 'Registryctl %s reader journeys: PASS\n' "$REGISTRYCTL_VERSION"
@@ -64,7 +68,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-for tool in node grep python3; do
+for tool in curl node grep python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
@@ -110,7 +114,7 @@ if [[ -n "$RETAINED_PROJECT" ]]; then
 		exit 1
 	fi
 	if [[ -e "$RETAINED_PROJECT" ]]; then
-		printf 'retained tutorial project must be absent: %s\n' "$RETAINED_PROJECT" >&2
+		printf 'retained HTTP tutorial project must be absent: %s\n' "$RETAINED_PROJECT" >&2
 		exit 1
 	fi
 fi
@@ -126,7 +130,7 @@ if [[ -n "$RETAINED_OAUTH_PROJECT" ]]; then
 		exit 1
 	fi
 	if [[ "$RETAINED_OAUTH_PROJECT" == "$RETAINED_PROJECT" ]]; then
-		printf 'retained spreadsheet and OAuth tutorial projects must be distinct\n' >&2
+		printf 'retained HTTP and OAuth tutorial projects must be distinct\n' >&2
 		exit 1
 	fi
 fi
@@ -142,6 +146,15 @@ node "$HELPER" assert-contains "$SPREADSHEET_TUTORIAL" \
 	'project-record-snapshot' \
 	'registryctl test' \
 	'registryctl dev smoke' \
+	'registryctl check --explain' \
+	'registryctl build'
+node "$HELPER" assert-contains "$EVIDENCE_TUTORIAL" \
+	'project-status-accepted' \
+	'project.status == "planned"' \
+	'default_fixture: planned' \
+	'registryctl dev --detach' \
+	'registryctl dev smoke' \
+	'registryctl dev down' \
 	'registryctl check --explain' \
 	'registryctl build'
 node "$HELPER" assert-contains "$OAUTH_HOWTO" \
@@ -270,7 +283,7 @@ run_reports() {
 	fi
 }
 
-HTTP_PROJECT="$WORK_ROOT/http-reader"
+HTTP_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/http-reader}"
 mkdir -p "$REPORT_ROOT/http"
 "$REGISTRYCTL_BIN" init "$HTTP_PROJECT" --template http >"$REPORT_ROOT/http/init.txt"
 node "$HELPER" assert-fence-equals \
@@ -305,7 +318,7 @@ node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/build.txt" "$HTTP_TUTORIAL" 'Review and build the project' text 1
 printf 'HTTP reader journey: PASS\n'
 
-SPREADSHEET_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/spreadsheet-reader}"
+SPREADSHEET_PROJECT="$WORK_ROOT/spreadsheet-reader"
 mkdir -p "$REPORT_ROOT/spreadsheet"
 "$REGISTRYCTL_BIN" init "$SPREADSHEET_PROJECT" --template spreadsheet \
 	>"$REPORT_ROOT/spreadsheet/init.txt"
@@ -327,11 +340,11 @@ run_reports \
 	"$REGISTRYCTL_BIN" test
 ) >"$REPORT_ROOT/spreadsheet/test.txt"
 node "$HELPER" assert-fence-equals \
-	"$REPORT_ROOT/spreadsheet/test.txt" \
-	"$SPREADSHEET_TUTORIAL" \
-	'Test the registry and evidence rules' \
-	text \
-	1
+		"$REPORT_ROOT/spreadsheet/test.txt" \
+		"$SPREADSHEET_TUTORIAL" \
+		'Test the starter' \
+		text \
+		1
 (
 	cd "$SPREADSHEET_PROJECT"
 	"$REGISTRYCTL_BIN" test \
@@ -340,11 +353,11 @@ node "$HELPER" assert-fence-equals \
 		--trace
 ) >"$REPORT_ROOT/spreadsheet/trace.txt"
 node "$HELPER" assert-fence-equals \
-	"$REPORT_ROOT/spreadsheet/trace.txt" \
-	"$SPREADSHEET_TUTORIAL" \
-	'Test the registry and evidence rules' \
-	text \
-	2
+		"$REPORT_ROOT/spreadsheet/trace.txt" \
+		"$SPREADSHEET_TUTORIAL" \
+		'Inspect the contract you own' \
+		text \
+		1
 (
 	cd "$SPREADSHEET_PROJECT"
 	"$REGISTRYCTL_BIN" build
@@ -357,49 +370,132 @@ node "$HELPER" assert-fence-equals \
 	1
 printf 'Spreadsheet reader journey: PASS\n'
 
-APPROVAL_REPORT="$REPORT_ROOT/initial-approval"
-KEY_PROCEDURE="$WORK_ROOT/generate-evaluation-lane-keys.sh"
-mkdir -p "$APPROVAL_REPORT"
-node "$HELPER" extract-fence \
-	"$APPROVAL_TUTORIAL" \
-	'Generate evaluation-only lane keys' \
-	sh \
-	1 \
-	"$KEY_PROCEDURE"
+EVIDENCE_PROJECT="$SPREADSHEET_PROJECT"
+EVIDENCE_REPORT="$REPORT_ROOT/spreadsheet-evidence"
+mkdir -p "$EVIDENCE_REPORT"
 (
-	cd "$SPREADSHEET_PROJECT"
-	sh "$KEY_PROCEDURE"
-	mkdir operator-handoff
-	for lane in relay-public relay-consultation notary; do
-		"$REGISTRYCTL_BIN" trust anchor create \
-			--lane "$lane" \
-			--input ".registry-stack/build/local/signing-inputs/$lane" \
-			--public-key "evaluation-keys/$lane.public.jwk" \
-			--threshold 1 \
-			--output-file "operator-handoff/$lane-anchor.json" \
-			>"$APPROVAL_REPORT/$lane-anchor.txt"
-		"$REGISTRYCTL_BIN" trust bundle sign \
-			--lane "$lane" \
-			--input ".registry-stack/build/local/signing-inputs/$lane" \
-			--anchor "operator-handoff/$lane-anchor.json" \
-			--key "file:evaluation-keys/$lane.private.jwk" \
-			--output-dir "operator-handoff/$lane-bundle" \
-			>"$APPROVAL_REPORT/$lane-sign.txt"
-		"$REGISTRYCTL_BIN" trust bundle verify \
-			--bundle-dir "operator-handoff/$lane-bundle" \
-			--anchor "operator-handoff/$lane-bundle/anchor.json" \
-			>"$APPROVAL_REPORT/$lane-verify.txt"
+	cd "$EVIDENCE_PROJECT"
+	"$REGISTRYCTL_BIN" test \
+		--integration project-record-snapshot \
+		--fixture planned \
+		--trace
+) >"$EVIDENCE_REPORT/before-trace.txt"
+node "$HELPER" assert-contains "$EVIDENCE_REPORT/before-trace.txt" \
+	'PASS project-record-snapshot.planned' \
+	'claims: project-record-exists'
+
+node "$HELPER" replace-fence-pair \
+	"$EVIDENCE_TUTORIAL" \
+	'Change the authored evidence rule' yaml 1 \
+	'Change the authored evidence rule' yaml 2 \
+	"$EVIDENCE_PROJECT/registry-stack.yaml"
+node "$HELPER" replace-fence-pair \
+	"$EVIDENCE_TUTORIAL" \
+	'Observe the current policy result' yaml 1 \
+	'Change the authored evidence rule' yaml 3 \
+	"$EVIDENCE_PROJECT/integrations/project-record-snapshot/fixtures/planned.yaml"
+node "$HELPER" replace-fence-pair \
+	"$EVIDENCE_TUTORIAL" \
+	'Run the changed Relay and Notary path' yaml 1 \
+	'Run the changed Relay and Notary path' yaml 2 \
+	"$EVIDENCE_PROJECT/environments/local.yaml"
+
+(
+	cd "$EVIDENCE_PROJECT"
+	"$REGISTRYCTL_BIN" test \
+		--integration project-record-snapshot \
+		--fixture planned \
+		--trace
+) >"$EVIDENCE_REPORT/after-trace.txt"
+node "$HELPER" assert-contains "$EVIDENCE_REPORT/after-trace.txt" \
+	'PASS project-record-snapshot.planned' \
+	'claims: project-record-exists, project-status-accepted' \
+	'outcome: match'
+(
+	cd "$EVIDENCE_PROJECT"
+	"$REGISTRYCTL_BIN" test
+) >"$EVIDENCE_REPORT/test.txt"
+
+if [[ "$RUNNER_MODE" == "sealed" ]]; then
+	ACTIVE_DEV_PROJECT="$EVIDENCE_PROJECT"
+	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev --detach \
+		>"$EVIDENCE_REPORT/dev-start.txt"
+	RECORDS_DENIED_CONFIG="$(find \
+		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
+		-type f -path '*/credentials/records-denied.curl' -print)"
+	RECORDS_CONFIG="$(find \
+		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
+		-type f -path '*/credentials/records-request.curl' -print)"
+	EVIDENCE_CONFIG="$(find \
+		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
+		-type f -path '*/credentials/request.curl' -print)"
+	EVIDENCE_BODY="$(find \
+		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
+		-type f -path '*/credentials/request.json' -print)"
+	for request_config in \
+		"$RECORDS_DENIED_CONFIG" \
+		"$RECORDS_CONFIG" \
+		"$EVIDENCE_CONFIG" \
+		"$EVIDENCE_BODY"; do
+		if [[ -z "$request_config" || "$request_config" == *$'\n'* ]]; then
+			printf 'expected exactly one generated development request artifact per public journey\n' >&2
+			exit 1
+		fi
 	done
-	"$REGISTRYCTL_BIN" trust approved-set assemble \
-		--environment local \
-		--relay-public operator-handoff/relay-public-bundle \
-		--relay-consultation operator-handoff/relay-consultation-bundle \
-		--notary operator-handoff/notary-bundle \
-		--output-file operator-handoff/approved-set.v1.json \
-		>"$APPROVAL_REPORT/approved-set.txt"
-)
-test -f "$SPREADSHEET_PROJECT/operator-handoff/approved-set.v1.json"
-printf 'Initial local approval journey: PASS\n'
+	node "$HELPER" assert-contains "$EVIDENCE_REPORT/dev-start.txt" \
+		'Relay API: https://127.0.0.1:4242' \
+		'Evidence API: https://127.0.0.1:4243' \
+		"Records denied request: curl --config '$RECORDS_DENIED_CONFIG'" \
+		"Records request: curl --config '$RECORDS_CONFIG'" \
+		"Evidence request: curl --config '$EVIDENCE_CONFIG'"
+	DENIED_STATUS="$(curl --silent --show-error \
+		--config "$RECORDS_DENIED_CONFIG" \
+		--no-include \
+		--output "$EVIDENCE_REPORT/records-denied.json" \
+		--write-out '%{http_code}')"
+	if [[ "$DENIED_STATUS" != "401" ]]; then
+		printf 'anonymous records request returned HTTP %s, expected 401\n' \
+			"$DENIED_STATUS" >&2
+		exit 1
+	fi
+	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/records-denied.json" \
+		'{"status":401,"code":"auth.missing_credential"}'
+	curl --silent --show-error --config "$RECORDS_CONFIG" \
+		>"$EVIDENCE_REPORT/records-request.json"
+	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/records-request.json" \
+		'{"project_id":"pw_001","district_code":"north-01","sector":"water","status":"active"}'
+	node "$HELPER" assert-not-contains "$EVIDENCE_REPORT/records-request.json" \
+		'PW-002' \
+		'PW-003'
+	node "$HELPER" assert-json-subset "$EVIDENCE_BODY" \
+		'{"target":{"identifiers":[{"scheme":"project_id","value":"PW-002"}]}}'
+	curl --silent --show-error --config "$EVIDENCE_CONFIG" \
+		>"$EVIDENCE_REPORT/evidence-request.json"
+	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/evidence-request.json" \
+		'{"results":[{"claim_id":"project-record-exists","value":true,"satisfied":true,"disclosure":"predicate"},{"claim_id":"project-status-accepted","value":true,"satisfied":true,"disclosure":"predicate"}]}'
+	node "$HELPER" assert-not-contains "$EVIDENCE_REPORT/evidence-request.json" \
+		'north-01' \
+		'water' \
+		'active' \
+		'planned'
+	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev smoke \
+		>"$EVIDENCE_REPORT/dev-smoke.txt"
+	node "$HELPER" assert-contains "$EVIDENCE_REPORT/dev-smoke.txt" \
+		'Development smoke: passed.' \
+		'unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0' \
+		'authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1' \
+		'minimized_claim_ids=project-record-exists,project-status-accepted'
+	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev down \
+		>"$EVIDENCE_REPORT/dev-down.txt"
+	ACTIVE_DEV_PROJECT=""
+fi
+
+run_reports \
+	"$EVIDENCE_PROJECT" \
+	spreadsheet-evidence \
+	fictional-public-works-registry \
+	snapshot
+printf 'Spreadsheet evidence-change reader journey: PASS\n'
 
 PUBLIC_SOURCE_PROJECT="$WORK_ROOT/public-source-reader"
 "$REGISTRYCTL_BIN" init "$PUBLIC_SOURCE_PROJECT" --template http \
@@ -510,10 +606,10 @@ if [[ -n "$EVIDENCE_DIR" ]]; then
 	printf 'reader-journey evidence: %s\n' "$EVIDENCE_DIR"
 fi
 if [[ -n "$RETAINED_PROJECT" ]]; then
-	printf 'retained spreadsheet project: %s\n' "$RETAINED_PROJECT"
+	printf 'retained HTTP project: %s\n' "$RETAINED_PROJECT"
 fi
 if [[ -n "$RETAINED_OAUTH_PROJECT" ]]; then
 	printf 'retained OAuth and Rhai project: %s\n' "$RETAINED_OAUTH_PROJECT"
 fi
 printf '%s\n' \
-	'release-boundary note: exact runtime sequence is release-gated from the sealed candidate payload'
+	'release-boundary note: disposable runtime runs only with an explicitly installed sealed binary'

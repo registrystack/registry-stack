@@ -14,6 +14,7 @@ import {
   assertTutorialLayout,
   extractFencedBlocks,
   parseJsonOutput,
+  replaceFencePair,
   writeFence,
   writeEvidenceManifest,
 } from './registryctl-tutorial.mjs';
@@ -96,6 +97,63 @@ test('writes one selected fenced procedure as an owner-only executable input', (
 
   assert.equal(readFileSync(output, 'utf8'), 'registryctl test --environment local\n');
   assert.equal(statSync(output).mode & 0o777, 0o600);
+});
+
+test('replaces one exact fenced source fragment with its paired replacement', () => {
+  const markdown = `## Change
+
+\`\`\`yaml
+status: active
+\`\`\`
+
+\`\`\`yaml
+status: planned
+\`\`\`
+`;
+
+  assert.equal(
+    replaceFencePair(
+      markdown,
+      'Change',
+      'yaml',
+      1,
+      'Change',
+      'yaml',
+      2,
+      'before\nstatus: active\nafter\n',
+    ),
+    'before\nstatus: planned\nafter\n',
+  );
+});
+
+test('rejects a fence-pair replacement when the source is absent or repeated', () => {
+  const markdown = `## Change
+
+\`\`\`yaml
+status: active
+\`\`\`
+
+\`\`\`yaml
+status: planned
+\`\`\`
+`;
+  const replace = (target) =>
+    replaceFencePair(
+      markdown,
+      'Change',
+      'yaml',
+      1,
+      'Change',
+      'yaml',
+      2,
+      target,
+    );
+
+  assert.throws(() => replace('status: missing\n'), /found 0/);
+  assert.throws(
+    () => replace('status: active\nstatus: active\n'),
+    /found 2/,
+  );
 });
 
 test('parses one strict JSON document and asserts subsets without array-order coupling', () => {
@@ -201,25 +259,93 @@ test('accepts snapshot reports with explicit minimized outputs and claims', () =
       'snapshot',
     ),
   );
+
+  const extraOutput = {
+    ...snapshot,
+    outputs: ['status', 'project_id'],
+  };
+  const reportWithExtraOutput = JSON.stringify({
+    ...common,
+    status: 'passed',
+    fixtures: [extraOutput, authorization],
+  });
+  const checkWithExtraOutput = JSON.stringify({
+    ...common,
+    status: 'valid',
+    fixtures: [extraOutput, authorization],
+  });
+  assert.throws(
+    () =>
+      assertProjectReports(
+        reportWithExtraOutput,
+        checkWithExtraOutput,
+        JSON.stringify({
+          schema_version: 'registryctl.reviewed_project_build_report.v1',
+          build: {
+            ...common,
+            status: 'built',
+            fixtures: [extraOutput, authorization],
+          },
+          affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+        }),
+        'fictional-public-works-registry',
+        'snapshot',
+      ),
+    /outputs must be exactly/,
+  );
 });
 
-test('evidence manifest records distinct retained spreadsheet and OAuth projects', (t) => {
+test('evidence manifest keeps three journeys and records retained HTTP and OAuth projects', (t) => {
   const root = mkdtempSync(resolve(tmpdir(), 'registryctl-tutorial-manifest-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const reports = resolve(root, 'reports');
-  const retainedSpreadsheet = resolve(root, 'reader-spreadsheet-project');
+  const retainedHttp = resolve(root, 'reader-http-project');
   const retainedOauth = resolve(root, 'reader-opencrvs-project');
 
-  writeEvidenceManifest(reports, 'sealed', '1.0.0', retainedSpreadsheet, retainedOauth);
+  writeEvidenceManifest(reports, 'sealed', '1.0.0', retainedHttp, retainedOauth);
   const manifest = JSON.parse(readFileSync(resolve(reports, 'manifest.json'), 'utf8'));
 
   assert.equal(manifest.mode, 'sealed');
-  assert.equal(manifest.retained_project, retainedSpreadsheet);
+  assert.deepEqual(
+    manifest.projects.map((project) => project.id),
+    ['http', 'spreadsheet', 'opencrvs-events-api'],
+  );
+  assert.equal(manifest.retained_project, retainedHttp);
   assert.equal(manifest.retained_oauth_project, retainedOauth);
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.includes('spreadsheet-evidence/dev-smoke.txt'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.includes('spreadsheet-evidence/records-denied.json'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.includes('spreadsheet-evidence/records-request.json'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.includes('spreadsheet-evidence/evidence-request.json'),
+  );
 });
 
-test('reader gate uses current commands, a public overlay, and leaves runtime evidence to release', () => {
+test('reader gate executes the evidence change and limits development runtime to sealed mode', () => {
   const script = read('scripts/check-registryctl-tutorials.sh');
+  const spreadsheet = extractFencedBlocks(
+    read('src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
+  );
+  const spreadsheetFence = (heading, language, occurrence) =>
+    spreadsheet.some(
+      (block) =>
+        block.heading === heading &&
+        block.language === language &&
+        block.occurrence === occurrence,
+    );
 
   assert.match(script, /init "\$HTTP_PROJECT" --template http >"\$REPORT_ROOT\/http\/init\.txt"/);
   assert.match(script, /init "\$SPREADSHEET_PROJECT" --template spreadsheet/);
@@ -237,10 +363,29 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.match(script, /todo-verification/);
   assert.match(script, /assert-fence-file-equals/);
   assert.match(script, /assert-fence-equals/);
-  assert.match(script, /extract-fence \\\n\t"\$APPROVAL_TUTORIAL"/);
-  assert.match(script, /Initial local approval journey: PASS/);
-  assert.match(script, /--input "\.registry-stack\/build\/local\/signing-inputs\/\$lane"/);
+  assert.match(script, /replace-fence-pair/);
+  assert.match(script, /'Test the starter' \\\n\t\ttext \\\n\t\t1/);
+  assert.match(script, /'Inspect the contract you own' \\\n\t\ttext \\\n\t\t1/);
+  assert.ok(spreadsheetFence('Test the starter', 'text', 1));
+  assert.ok(spreadsheetFence('Inspect the contract you own', 'text', 1));
+  assert.ok(spreadsheetFence('Build the review inputs', 'text', 1));
+  assert.match(script, /Spreadsheet evidence-change reader journey: PASS/);
+  assert.match(script, /if \[\[ "\$RUNNER_MODE" == "sealed" \]\]; then/);
+  assert.match(script, /dev --detach/);
+  assert.match(script, /records-denied\.curl/);
+  assert.match(script, /records-request\.curl/);
+  assert.match(script, /anonymous records request returned HTTP/);
+  assert.match(script, /auth\.missing_credential/);
+  assert.match(script, /assert-json-subset "\$EVIDENCE_REPORT\/records-request\.json"/);
+  assert.match(script, /assert-json-subset "\$EVIDENCE_REPORT\/evidence-request\.json"/);
+  assert.match(script, /assert-json-subset "\$EVIDENCE_BODY"/);
+  assert.match(script, /"value":"PW-002"/);
+  assert.match(script, /north-01/);
+  assert.match(script, /'planned'/);
+  assert.match(script, /dev smoke/);
+  assert.match(script, /dev down/);
   assert.match(script, /--environment local/);
+  assert.doesNotMatch(script, /APPROVAL_TUTORIAL|Initial local approval|trust anchor|trust bundle|approved-set/);
   assert.doesNotMatch(script, /deploy generate/);
   assert.match(script, /oauth2_bearer_no_expiry/);
   assert.match(script, /REGISTRYCTL_BIN must be an absolute installed-binary path/);
@@ -250,14 +395,16 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.match(script, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
   assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/author-registry-project\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/publish-spreadsheet-secured-registry-api\.md/);
-  assert.match(script, /RELEASED_DOCS_ROOT\/operate\/approve-initial-baseline\.md/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/verify-claim-registry-api\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/configure\/oauth-client-credentials\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/opencrvs-events-api-overlay-v1\.sh/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/);
   assert.match(script, /OPENCRVS_PROJECT="\$\{RETAINED_OAUTH_PROJECT:-\$WORK_ROOT\/opencrvs-reader\}"/);
-  assert.match(script, /SPREADSHEET_PROJECT="\$\{RETAINED_PROJECT:-\$WORK_ROOT\/spreadsheet-reader\}"/);
+  assert.match(script, /HTTP_PROJECT="\$\{RETAINED_PROJECT:-\$WORK_ROOT\/http-reader\}"/);
+  assert.match(script, /SPREADSHEET_PROJECT="\$WORK_ROOT\/spreadsheet-reader"/);
+  assert.match(script, /EVIDENCE_PROJECT="\$SPREADSHEET_PROJECT"/);
   assert.match(script, /"\$RETAINED_OAUTH_PROJECT"/);
-  assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
+  assert.match(script, /disposable runtime runs only with an explicitly installed sealed binary/);
   assert.doesNotMatch(
     script,
     /OPENCRVS_FIXTURE|cp -R|registryctl preflight|init --from|docker build|fake image|v0\.15\.2/,
