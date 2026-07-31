@@ -713,15 +713,6 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FilterMissing);
                 }
             }
-            if governed_runtime_surface_is_inert(dataset, entity) {
-                tracing::error!(
-                    code = "runtime.binding.ecosystem_binding_invalid",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    "sensitive runtime entities require an enforced purpose header or governed policy gate"
-                );
-                return Err(RuntimeBindingError::EcosystemBindingInvalid);
-            }
             for relationship in &entity.relationships {
                 if !metadata_dataset.entities.contains_key(&relationship.target) {
                     tracing::error!(
@@ -2982,8 +2973,25 @@ fn validate_entities(
         validate_entity_spatial(dataset, entity, table, &exposed_fields, &mut collection_ids)?;
         validate_entity_relationships(dataset, entity, table, &tables, &entities)?;
         validate_entity_release_profiles(dataset, entity, &exposed_fields)?;
+        validate_sensitive_entity_gate(dataset, entity)?;
     }
 
+    Ok(())
+}
+
+fn validate_sensitive_entity_gate(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+) -> Result<(), ConfigError> {
+    if governed_runtime_surface_is_inert(dataset, entity) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            "sensitive runtime entities require an enforced purpose header or governed policy gate"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 

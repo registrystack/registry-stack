@@ -153,6 +153,15 @@ fn remove_runtime_purpose_header(path: &std::path::Path) {
     .expect("runtime config rewrites");
 }
 
+fn remove_runtime_metadata(path: &std::path::Path) {
+    let yaml = std::fs::read_to_string(path).expect("runtime config reads");
+    std::fs::write(
+        path,
+        yaml.replace("metadata:\n  source:\n    path: metadata.yaml\n\n", ""),
+    )
+    .expect("runtime config rewrites");
+}
+
 fn write_metadata_manifest(tmp: &TempDir, include_region: bool) {
     let region_field = if include_region {
         r#"
@@ -428,7 +437,20 @@ fn load_with_metadata_rejects_sensitive_runtime_surface_without_governed_binding
     let err = config::load_with_metadata(&runtime_path)
         .expect_err("sensitive runtime surface without an enforced gate should fail");
 
-    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn load_rejects_sensitive_runtime_surface_without_metadata_or_gate() {
+    let tmp = TempDir::new().expect("tempdir");
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    remove_runtime_metadata(&runtime_path);
+    remove_runtime_purpose_header(&runtime_path);
+
+    let err = config::load(&runtime_path)
+        .expect_err("sensitive runtime surface without metadata or a gate should fail");
+
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[test]
@@ -443,7 +465,7 @@ fn load_with_metadata_rejects_selected_binding_when_sensitive_runtime_surface_is
     let err = config::load_with_metadata(&runtime_path)
         .expect_err("selected governed binding without runtime enforcement should fail");
 
-    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[test]
@@ -459,7 +481,7 @@ fn load_with_metadata_rejects_selected_binding_without_runtime_or_compiled_purpo
     let err = config::load_with_metadata(&runtime_path)
         .expect_err("selected governed binding without any enforced purpose gate should fail");
 
-    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[test]

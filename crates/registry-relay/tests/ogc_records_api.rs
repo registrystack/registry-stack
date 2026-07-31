@@ -40,7 +40,7 @@ datasets:
     title: Social Registry
     description: Synthetic registry
     owner: Social Ministry
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     conforms_to:
@@ -84,7 +84,7 @@ datasets:
     title: Payments
     description: Payment records
     owner: Finance Ministry
-    sensitivity: confidential
+    sensitivity: public
     access_rights: non_public
     update_frequency: weekly
     defaults:

@@ -81,6 +81,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: id
               ops: [eq]
@@ -97,6 +98,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
 
   - id: payments
     title: Payments
@@ -133,6 +135,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
 
 audit:
   sink: stdout

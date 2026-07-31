@@ -66,7 +66,7 @@ datasets:
     title: Social Registry
     description: Synthetic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:
@@ -1022,7 +1022,7 @@ async fn aggregate_only_execution_requires_explicit_opt_in() {
 
 fn aggregate_only_config_with_sensitivity(sensitivity: &str) -> String {
     AGGREGATE_CONFIG
-        .replace("    sensitivity: personal\n", &format!("    sensitivity: {sensitivity}\n"))
+        .replace("    sensitivity: public\n", &format!("    sensitivity: {sensitivity}\n"))
         .replace(
             "      - id: by_municipality\n",
             "      - id: by_municipality\n        access:\n          aggregate_only_execution: true\n",

@@ -63,7 +63,7 @@ datasets:
     title: Civic Registry
     description: Synthetic civic registry
     owner: Test
-    sensitivity: personal
+    sensitivity: public
     access_rights: restricted
     update_frequency: monthly
     defaults:
