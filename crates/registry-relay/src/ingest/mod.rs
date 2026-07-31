@@ -249,6 +249,12 @@ struct PreparedIngest {
     source_observed_at_unix_ms: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveSnapshotPathError {
+    Missing,
+    Invalid,
+}
+
 impl PreparedIngest {
     fn materialization_candidate(&self) -> SnapshotMaterializationCandidate {
         SnapshotMaterializationCandidate {
@@ -384,14 +390,30 @@ impl IngestPlan {
         prior: &ResourceReadiness,
     ) -> Result<(), IngestError> {
         let provider_id = table_name(&self.dataset_id, &self.resource_id);
-
-        if let Some(active) = coordinator
+        let active = coordinator
             .active_candidate(&provider_id)
             .await
-            .map_err(|_| IngestError::MaterializationFailed)?
-        {
+            .map_err(|_| IngestError::MaterializationFailed)?;
+        let generation_floor = active.as_ref().map(|active| active.generation);
+
+        if let Some(active) = active {
             if snapshot_exact_requires_reconciliation(prior, active.generation) {
-                return self.reconcile_snapshot_exact(coordinator, active).await;
+                match self
+                    .verified_active_snapshot_path(active.generation, active.digest)
+                    .await
+                {
+                    Ok((path, digest)) => {
+                        return self
+                            .reconcile_snapshot_exact(coordinator, active, path, digest)
+                            .await;
+                    }
+                    Err(ActiveSnapshotPathError::Missing) => {
+                        self.log_missing_active_snapshot();
+                    }
+                    Err(ActiveSnapshotPathError::Invalid) => {
+                        return Err(IngestError::MaterializationFailed);
+                    }
+                }
             }
         }
 
@@ -402,7 +424,10 @@ impl IngestPlan {
         let footprint_limits = coordinator
             .footprint_limits(&provider_id)
             .ok_or(IngestError::MaterializationFailed)?;
-        let prepared = match self.prepare_snapshot_pipeline(Some(footprint_limits)).await {
+        let prepared = match self
+            .prepare_snapshot_pipeline(Some(footprint_limits), generation_floor)
+            .await
+        {
             Ok(prepared) => prepared,
             Err(error) => {
                 if coordinator
@@ -447,11 +472,10 @@ impl IngestPlan {
         &self,
         coordinator: &Arc<SnapshotMaterializationCoordinator>,
         active: crate::source_backend::ActiveSnapshotCandidate,
+        path: PathBuf,
+        digest: [u8; 32],
     ) -> Result<(), IngestError> {
         let provider_id = table_name(&self.dataset_id, &self.resource_id);
-        let (path, digest) = self
-            .verified_active_snapshot_path(active.generation, active.digest)
-            .await?;
         let schema = self.declared.to_arrow_schema();
         let provider = self
             .snapshot_table_provider(&path, Arc::clone(&schema))
@@ -498,15 +522,30 @@ impl IngestPlan {
         &self,
         generation: Ulid,
         expected_digest: [u8; 32],
-    ) -> Result<(PathBuf, [u8; 32]), IngestError> {
+    ) -> Result<(PathBuf, [u8; 32]), ActiveSnapshotPathError> {
         let path = self
             .cache_layout
             .final_path(&self.dataset_id, &self.resource_id, generation);
-        let digest = sha256_file(&path).await?;
+        let digest = sha256_file(&path).await.map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                ActiveSnapshotPathError::Missing
+            } else {
+                ActiveSnapshotPathError::Invalid
+            }
+        })?;
         if digest != expected_digest {
-            return Err(IngestError::MaterializationFailed);
+            return Err(ActiveSnapshotPathError::Invalid);
         }
         Ok((path, digest))
+    }
+
+    fn log_missing_active_snapshot(&self) {
+        tracing::warn!(
+            event = "ingest.snapshot_exact_active_file_missing",
+            dataset_id = %self.dataset_id,
+            resource_id = %self.resource_id,
+            "snapshot-exact active cache file is missing; reacquiring a newer generation",
+        );
     }
 
     /// Current readiness state. Cheap arc-swap load.
@@ -588,12 +627,13 @@ impl IngestPlan {
     // ── Inner pipeline ────────────────────────────────────────────────────────
 
     async fn prepare_pipeline(&self) -> Result<PreparedIngest, IngestError> {
-        self.prepare_snapshot_pipeline(None).await
+        self.prepare_snapshot_pipeline(None, None).await
     }
 
     async fn prepare_snapshot_pipeline(
         &self,
         footprint_limits: Option<(u64, u64)>,
+        generation_floor: Option<Ulid>,
     ) -> Result<PreparedIngest, IngestError> {
         let dataset_id = &self.dataset_id;
         let resource_id = &self.resource_id;
@@ -697,7 +737,7 @@ impl IngestPlan {
         let row_count = source_row_count;
 
         // Step 5: mint ULID for this ingest.
-        let ingest_ulid = Ulid::new();
+        let ingest_ulid = snapshot_generation_after(generation_floor)?;
 
         // Step 6: write to cache atomically.
         let batch_stream = stream::iter(projected.into_iter().map(Ok::<RecordBatch, IngestError>));
@@ -724,7 +764,9 @@ impl IngestPlan {
                 .map_err(|_| IngestError::CacheWriteFailed)?
                 .len(),
         };
-        let digest = sha256_file(&final_path).await?;
+        let digest = sha256_file(&final_path)
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?;
 
         Ok(PreparedIngest {
             table_name,
@@ -1641,17 +1683,26 @@ fn offset_datetime_unix_ms(value: OffsetDateTime) -> Option<i64> {
     i64::try_from(value.unix_timestamp_nanos().checked_div(1_000_000)?).ok()
 }
 
-async fn sha256_file(path: &Path) -> Result<[u8; 32], IngestError> {
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|_| IngestError::MaterializationFailed)?;
+fn snapshot_generation_after(floor: Option<Ulid>) -> Result<Ulid, IngestError> {
+    let generated = Ulid::new();
+    let Some(floor) = floor else {
+        return Ok(generated);
+    };
+    if generated > floor {
+        return Ok(generated);
+    }
+    u128::from(floor)
+        .checked_add(1)
+        .map(Ulid::from)
+        .ok_or(IngestError::MaterializationFailed)
+}
+
+async fn sha256_file(path: &Path) -> io::Result<[u8; 32]> {
+    let mut file = tokio::fs::File::open(path).await?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .await
-            .map_err(|_| IngestError::MaterializationFailed)?;
+        let read = file.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
@@ -1772,11 +1823,13 @@ fn refresh_policy_from_config(cfg: &RefreshConfig) -> RefreshPolicy {
 mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
 
     use datafusion::execution::context::SessionConfig;
     use tempfile::TempDir;
     use tokio::sync::Notify;
     use tokio::time::{timeout, Duration};
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
     use crate::config::{FieldConfig, FieldType};
@@ -1822,6 +1875,30 @@ mod tests {
         open_count: AtomicUsize,
         fail_open: AtomicBool,
         fail_metadata: AtomicBool,
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLog(Arc<StdMutex<Vec<u8>>>);
+
+    struct SharedLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer lock").write_all(buffer)?;
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     impl ToggleSource {
@@ -2006,7 +2083,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_exact_reconciliation_rejects_missing_and_mismatched_active_bytes() {
+    async fn snapshot_exact_reconciliation_distinguishes_missing_from_mismatched_active_bytes() {
         let tmp = TempDir::new().expect("tempdir");
         let source = ToggleSource::new("resource");
         let plan = successful_plan(
@@ -2026,7 +2103,7 @@ mod tests {
         assert!(matches!(
             plan.verified_active_snapshot_path(generation, expected_digest)
                 .await,
-            Err(IngestError::MaterializationFailed)
+            Err(ActiveSnapshotPathError::Missing)
         ));
 
         tokio::fs::create_dir_all(path.parent().expect("cache path has parent"))
@@ -2038,13 +2115,60 @@ mod tests {
         assert!(matches!(
             plan.verified_active_snapshot_path(generation, expected_digest)
                 .await,
-            Err(IngestError::MaterializationFailed)
+            Err(ActiveSnapshotPathError::Invalid)
         ));
         assert_eq!(
             source.open_count.load(Ordering::SeqCst),
             0,
             "reconciliation failures must not fall back to connector access"
         );
+    }
+
+    #[test]
+    fn missing_active_snapshot_diagnostic_is_cause_specific_and_value_free() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            source,
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        );
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+
+        plan.log_missing_active_snapshot();
+
+        drop(guard);
+        let rendered =
+            String::from_utf8(logs.0.lock().expect("log buffer lock").as_slice().to_vec())
+                .expect("logs are utf-8");
+        assert!(rendered.contains("ingest.snapshot_exact_active_file_missing"));
+        assert!(rendered.contains("reacquiring a newer generation"));
+        assert!(
+            !rendered.contains(&tmp.path().display().to_string()),
+            "diagnostic must not expose the active cache path: {rendered}"
+        );
+    }
+
+    #[test]
+    fn snapshot_exact_successor_generation_is_strictly_newer_than_active() {
+        let active = Ulid::from(u128::MAX - 1);
+        assert_eq!(
+            snapshot_generation_after(Some(active)).expect("successor generation"),
+            Ulid::from(u128::MAX)
+        );
+        assert!(matches!(
+            snapshot_generation_after(Some(Ulid::from(u128::MAX))),
+            Err(IngestError::MaterializationFailed)
+        ));
     }
 
     #[tokio::test]
@@ -2062,7 +2186,7 @@ mod tests {
             Arc::new(session),
         );
         let prepared = plan
-            .prepare_snapshot_pipeline(None)
+            .prepare_snapshot_pipeline(None, None)
             .await
             .expect("candidate preparation succeeds before registration");
         let candidate_path = prepared

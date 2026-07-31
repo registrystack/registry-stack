@@ -558,6 +558,78 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
         if profile == JourneyProfile::SyntheticSnapshot && !ingest.snapshot().fully_ready() {
             return Err(LiveJourneyError::SnapshotIngest);
         }
+        if profile == JourneyProfile::SyntheticSnapshot {
+            let initial_snapshot = ingest.snapshot();
+            let initial_generation = initial_snapshot
+                .ready
+                .values()
+                .next()
+                .filter(|_| initial_snapshot.ready.len() == 1)
+                .map(|ready| ready.ingest_ulid)
+                .ok_or(LiveJourneyError::SnapshotIngest)?;
+
+            // Model a replacement Relay process: retain the PostgreSQL state
+            // plane and governed source, but start a fresh ingest registry
+            // after removing every local immutable cache generation.
+            tokio::fs::remove_dir_all(config.server.cache_dir.as_path())
+                .await
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+            let recovered_ingest = Arc::new(
+                IngestRegistry::from_config(
+                    config.as_ref(),
+                    Arc::new(FormatRegistry::with_v1_defaults()),
+                    Arc::from(config.server.cache_dir.as_path()),
+                    Arc::new(datafusion::execution::context::SessionContext::new()),
+                )
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?,
+            );
+            service
+                .bind_ingest_registry(recovered_ingest.as_ref())
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+            let (recovered_tx, _recovered_rx) = watch::channel(recovered_ingest.snapshot());
+            recovered_ingest.run_initial_ingest(recovered_tx).await;
+            let recovered_snapshot = recovered_ingest.snapshot();
+            let recovered_generation = recovered_snapshot
+                .ready
+                .values()
+                .next()
+                .filter(|_| recovered_snapshot.ready.len() == 1)
+                .map(|ready| ready.ingest_ulid)
+                .ok_or(LiveJourneyError::SnapshotIngest)?;
+            if !recovered_snapshot.fully_ready() || recovered_generation <= initial_generation {
+                return Err(LiveJourneyError::SnapshotIngest);
+            }
+
+            let publication = database
+                .admin
+                .query_one(
+                    r#"
+SELECT
+    (SELECT count(*)
+       FROM relay_state_private.materialization_publication_history) AS publication_count,
+    (SELECT history.generation_id
+       FROM relay_state_private.materialization_active_publication AS active
+       JOIN relay_state_private.materialization_publication_history AS history
+         ON history.binding_id = active.binding_id
+        AND history.publication_sequence = active.publication_sequence) AS active_generation
+"#,
+                    &[],
+                )
+                .await
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+            let publication_count = publication
+                .try_get::<_, i64>("publication_count")
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+            let active_generation = publication
+                .try_get::<_, Option<String>>("active_generation")
+                .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+            let recovered_generation = recovered_generation.to_string();
+            if publication_count != 2
+                || active_generation.as_deref() != Some(recovered_generation.as_str())
+            {
+                return Err(LiveJourneyError::SnapshotIngest);
+            }
+        }
         let service_execution = async {
             if service.readiness().await != ConsultationServiceReadiness::Ready {
                 return Err(LiveJourneyError::ConsultationNotReady);
