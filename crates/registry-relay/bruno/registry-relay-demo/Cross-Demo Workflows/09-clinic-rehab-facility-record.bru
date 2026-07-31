@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Step 2 of 3: Clinic rehabilitation follow-up workflow.
   Reads the clinic_capacity facility record for fac-4001 to confirm current

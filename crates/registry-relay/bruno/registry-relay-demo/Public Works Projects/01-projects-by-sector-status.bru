@@ -14,9 +14,14 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Filters public works projects by sector=schools and project_status=active.
-  Uses casework_system persona (rowsKey). No purpose header required; dataset has no PII.
+  Uses casework_system persona (rowsKey). Purpose header required because
+  the dataset is classified as confidential.
   Expected: 200 with list of active school projects, showing project_id, project_name,
   district, asset_type, asset_ref, implementing_agency, risk_rating.
   Sensitive internal_risk_notes is absent.

@@ -14,10 +14,14 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Reads clinic facilities as GeoJSON features inside the demo bbox.
-  Uses casework_system persona (rowsKey). No purpose header required;
-  clinic_capacity has no personal data.
+  Uses casework_system persona (rowsKey). Purpose header required because
+  the dataset is classified as personal.
   Expected: 200 application/geo+json FeatureCollection with Point geometry.
   The generalized map point is in geometry, not duplicated in properties.
 }

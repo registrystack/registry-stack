@@ -14,11 +14,15 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{studentPurpose}}
+}
+
 docs {
   Step 2 of 3: School construction follow-up workflow.
   Reads the education_registry school record for sch-3001 to confirm current
   operational status alongside the construction project from step 5.
-  Uses casework_system persona (rowsKey). School has no require_purpose_header.
+  Uses casework_system persona (rowsKey) with the education planning purpose.
   Expected: 200 with school fields: school_name, district, school_type,
   education_level, has_meal_program, has_accessibility_support.
 }

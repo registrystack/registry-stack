@@ -14,6 +14,10 @@ auth:bearer {
   token: {{linkageKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Attempts to read benefits_casework household rows using the linkage_service key (linkageKey).
   linkageKey holds only subject_registry scopes: subject_registry:metadata,

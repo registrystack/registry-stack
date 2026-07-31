@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{studentPurpose}}
+}
+
 docs {
   Step 3 of 3: School construction follow-up workflow.
   Runs enrollment aggregate to see current student counts at school sch-3001.

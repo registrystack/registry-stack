@@ -14,6 +14,10 @@ auth:bearer {
   token: {{evidenceVerificationKey}}
 }
 
+headers {
+  Data-Purpose: {{studentPurpose}}
+}
+
 docs {
   Attempts to run a student aggregate using evidenceVerificationKey.
   evidenceVerificationKey holds only education_registry:evidence_verification; aggregates require :aggregate.

@@ -14,6 +14,10 @@ auth:bearer {
   token: {{metadataKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Attempts to read project rows using the catalog_viewer key (metadataKey).
   metadataKey holds only public_works_projects:metadata; row reads require :rows.

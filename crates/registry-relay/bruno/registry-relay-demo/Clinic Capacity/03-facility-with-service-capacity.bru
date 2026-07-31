@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Reads facility fac-4001 with service_capacity relationship expanded inline.
   Uses casework_system persona (rowsKey).

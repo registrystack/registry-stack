@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Step 1 of 3: School construction follow-up workflow.
   Reads the public works project(s) with asset_ref=sch-3001.

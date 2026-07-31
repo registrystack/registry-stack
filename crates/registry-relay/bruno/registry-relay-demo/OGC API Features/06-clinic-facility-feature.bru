@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Reads one clinic facility as a GeoJSON Feature.
   Expected: 200 application/geo+json with a self link and collection link.

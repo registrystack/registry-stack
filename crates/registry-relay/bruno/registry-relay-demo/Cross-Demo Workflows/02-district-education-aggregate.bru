@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{studentPurpose}}
+}
+
 docs {
   Step 2 of 4: District planning workflow.
   Runs education enrollment aggregate. Uses planning_analyst persona (aggregateKey).

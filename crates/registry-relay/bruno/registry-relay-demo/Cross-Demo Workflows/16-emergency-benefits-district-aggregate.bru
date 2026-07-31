@@ -14,6 +14,10 @@ auth:bearer {
   token: {{aggregateKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Step 2 of 3: Emergency planning workflow.
   Reads benefits person aggregate (count of persons by household district and age band)

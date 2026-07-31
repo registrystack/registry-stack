@@ -14,6 +14,10 @@ auth:bearer {
   token: {{rowsKey}}
 }
 
+headers {
+  Data-Purpose: {{purpose}}
+}
+
 docs {
   Step 3 of 3: Emergency planning workflow.
   Reads public works projects filtered to the target district where status is delayed
