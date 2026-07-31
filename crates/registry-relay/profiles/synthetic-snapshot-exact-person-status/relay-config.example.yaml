@@ -43,12 +43,12 @@ consultation:
         sha256: sha256:2770b4cd442f7c332f3e1d4df261261a8a3f32c4c8a711a783188474ef2f8d5f
     integration_packs:
       - path: integration-pack.json
-        hash: sha256:c332a961e43cb1f758fd2341924f142a544b62bf569f22f475be8cae011692ee
+        hash: sha256:e9f550c4d262eb4ebc9c04218851573a5bb4e2893fad0c8f7520399b02be8cc5
         sha256: sha256:5193efbaf2dfe64d77e9c8800d1bf96b92f8f5d7e3dc5f8e0567fe9e16181bb8
     private_bindings:
       - path: private-binding.example.json
-        hash: sha256:85f4249d8fa5e6898b512ed144d6a9b787d93973fc873f2f4314651eac2ee8fd
-        sha256: sha256:2f7af83b945ac195decf2f1b19225ebbb0ce0b6fd3a03710aa7817ac5340b8a4
+        hash: sha256:a88d0c961f7c4827fa4d83a7ac40228a52e7f19a23a5288e16bc682d47497d79
+        sha256: sha256:bf55134290c082cfdf98ba17c45fd19cb622aaecef104cda7e1a9d9c0aacd773
     evidence:
       - class: conformance
         path: evidence/conformance.json
