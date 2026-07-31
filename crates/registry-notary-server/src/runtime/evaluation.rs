@@ -516,6 +516,7 @@ impl RegistryNotaryRuntime {
             None,
             &evaluation_capability,
         )?;
+        let evaluation_access_mode = evaluation_capability.access_mode();
         let now = OffsetDateTime::now_utc();
         #[cfg(feature = "registry-notary-cel")]
         let cel_concurrency = self
@@ -540,6 +541,16 @@ impl RegistryNotaryRuntime {
                 policy,
             )
             .await?;
+        if evaluation_access_mode == AccessMode::DelegatedSubjectAccess {
+            // Relay completion cannot extend the proof-authority window. Re-read
+            // the clock before any claim value is rendered or persisted.
+            let evaluation_expires_at = subject_access
+                .as_ref()
+                .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
+                .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+                .ok_or_else(delegated_proof_denied)?;
+            require_fresh_delegated_evaluation(evaluation_expires_at, OffsetDateTime::now_utc())?;
+        }
         let views = request
             .claims
             .iter()
@@ -1452,6 +1463,16 @@ fn stored_issuance_provenance(
 
 fn default_stored_evaluation_expires_at(stored_at: OffsetDateTime) -> OffsetDateTime {
     stored_at + time::Duration::minutes(15)
+}
+
+pub(super) fn require_fresh_delegated_evaluation(
+    evaluation_expires_at: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Result<(), EvidenceError> {
+    if now >= evaluation_expires_at {
+        return Err(delegated_proof_denied());
+    }
+    Ok(())
 }
 
 /// Derive the evaluation policy identity for provenance from stored

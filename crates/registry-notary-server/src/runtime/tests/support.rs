@@ -220,3 +220,24 @@ fn delegated_runtime_request() -> EvaluateRequest {
         purpose: Some("test".to_string()),
     }
 }
+
+fn delegated_subject_access_metadata(
+    evaluation_expires_at: OffsetDateTime,
+) -> StoredSubjectAccessMetadata {
+    serde_json::from_value(json!({
+        "access_mode": "delegated_subject_access",
+        "issuer": "https://issuer.example",
+        "principal_hash": "principal-hash",
+        "subject_id_type": "civil_registration_id",
+        "subject_binding_claim": "sub",
+        "subject_binding_hash": "requester-subject-hash",
+        "dependent_target_hash": "dependent-target-hash",
+        "relationship_type": "guardian",
+        "proof_claim_id": "guardian-link",
+        "requested_claims_hash": "requested-claims-hash",
+        "disclosure": "value",
+        "result_format": FORMAT_CLAIM_RESULT_JSON,
+        "evaluation_expires_at": format_time(evaluation_expires_at),
+    }))
+    .expect("delegated subject-access metadata parses")
+}
