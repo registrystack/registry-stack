@@ -274,6 +274,13 @@ For this combined project, that directory contains signing inputs for `relay-pub
 activate a product.
 The public Relay, consultation Relay, and Notary remain independently approved.
 
+The selected environment controls the two Relay inputs independently.
+A nonempty `relay.allowed_clients` list admits the intended public OpenID Connect clients.
+Registryctl rejects an empty list rather than generating a public Relay that accepts every client
+from the trusted issuer.
+The `notary_relay` workload binding enables the separate consultation Relay input and admits only
+the configured Notary workload client; do not copy that client into `relay.allowed_clients`.
+
 ## Bind the reviewed registry
 
 Keep the passing starter as a known-good baseline, then adapt only the authored files:
