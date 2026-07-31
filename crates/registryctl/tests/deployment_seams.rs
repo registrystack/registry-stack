@@ -35,7 +35,7 @@ use deployment::{
 use registry_platform_crypto::canonicalize_json;
 use release_lock::{
     LockedMountSourceV1, LockedOperatorFileFormatV1, LockedOperatorFileV1, LockedRuntimeActionV1,
-    LockedRuntimeMountV1, LockedSecretProjectionV1, LockedServiceHardeningV1,
+    LockedRuntimeMountV1, LockedSecretProjectionV1, LockedServiceHardeningV1, OciPlatformV1,
 };
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -72,9 +72,22 @@ fn image(repository: &str, digest_byte: char) -> ImageIdentityV1 {
 fn plan() -> DeploymentPlanV1 {
     DeploymentPlanV1::managed_single_node(&ManagedTopologyImagesV1 {
         relay: image("registry-relay", 'a'),
+        relay_platform: OciPlatformV1::LinuxAmd64,
         notary: image("registry-notary", 'b'),
+        notary_platform: OciPlatformV1::LinuxAmd64,
         postgresql_state_plane: image("postgresql", 'c'),
+        postgresql_state_plane_platform: OciPlatformV1::LinuxAmd64,
     })
+}
+
+fn published_port(host_ip: &str, published: u16, target: u16) -> Value {
+    json!([{
+        "target": target,
+        "published": published.to_string(),
+        "host_ip": host_ip,
+        "protocol": "tcp",
+        "mode": "ingress"
+    }])
 }
 
 fn mount(source: LockedMountSourceV1, target: &str, read_only: bool) -> LockedRuntimeMountV1 {
@@ -109,6 +122,18 @@ fn action(
     }
 }
 
+fn action_without_operator_inputs(
+    command: Vec<String>,
+    mounts: Vec<LockedRuntimeMountV1>,
+) -> LockedRuntimeActionV1 {
+    LockedRuntimeActionV1 {
+        command,
+        mounts,
+        environment_files: Vec::new(),
+        secret_files: Vec::new(),
+    }
+}
+
 fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
     let common = vec![
         mount(LockedMountSourceV1::Bundle, "/run/registry/bundle", true),
@@ -130,8 +155,9 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
         "/run/secrets/postgresql-ca.pem",
         "65532",
     );
-    let (prepare_secrets, serve_secrets) = match lane {
+    let (prepare_secrets, initialize_secrets, serve_secrets) = match lane {
         "relay-public" => (
+            vec![],
             vec![],
             vec![
                 secret(
@@ -147,6 +173,7 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
             ],
         ),
         "relay-consultation" => (
+            vec![database_ca.clone()],
             vec![database_ca.clone()],
             vec![
                 database_ca.clone(),
@@ -164,6 +191,7 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
         ),
         "notary" => (
             vec![database_ca.clone()],
+            vec![],
             vec![
                 database_ca,
                 secret(
@@ -214,25 +242,25 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
             command("initialize-state"),
             [common.clone(), vec![state.clone(), audit.clone()]].concat(),
             &environment,
-            prepare_secrets,
+            initialize_secrets,
         ),
-        preview_state: action(
+        preview_state: action_without_operator_inputs(
             command("preview-state"),
             [common.clone(), vec![state_read_only.clone()]].concat(),
-            &environment,
-            serve_secrets.clone(),
         ),
-        accept_state: action(
-            command("accept-state"),
-            [common.clone(), vec![state.clone(), audit.clone()]].concat(),
-            &environment,
-            serve_secrets.clone(),
-        ),
-        verify_state: action(
+        accept_state: LockedRuntimeActionV1 {
+            command: command("accept-state"),
+            mounts: [common.clone(), vec![state.clone(), audit.clone()]].concat(),
+            environment_files: vec![],
+            secret_files: vec![secret(
+                &format!("{lane}-product-action-audit-key"),
+                "/run/secrets/product-action-audit-key",
+                "65532",
+            )],
+        },
+        verify_state: action_without_operator_inputs(
             command("verify-state"),
-            [common, vec![state_read_only, audit]].concat(),
-            &environment,
-            serve_secrets,
+            [common, vec![state_read_only]].concat(),
         ),
         health_probe: vec![
             "CMD".to_string(),
@@ -684,7 +712,7 @@ fn changed_binding_is_managed_stale_and_safely_regenerable() {
     .unwrap();
     assert_eq!(
         regenerated.models.ordinary["services"]["registry-relay-public"]["ports"],
-        json!(["127.0.0.1:4343:4242"])
+        published_port("127.0.0.1", 4343, 8080)
     );
     let regenerated_report =
         verify_deployment_package_with_test_inputs(&DeploymentPackageVerificationRequestV1 {
@@ -907,41 +935,43 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         delta_services.keys().cloned().collect::<Vec<_>>(),
         vec![
             "registry-notary-accept-state",
+            "registry-notary-actions-stage-secrets",
             "registry-notary-initialize",
             "registry-notary-prepare-state",
             "registry-notary-preview-state",
+            "registry-notary-verify-state",
             "registry-postgres",
             "registry-postgres-bootstrap",
+            "registry-postgresql-actions-stage-secrets",
             "registry-relay-consultation-accept-state",
+            "registry-relay-consultation-actions-stage-secrets",
             "registry-relay-consultation-initialize",
             "registry-relay-consultation-prepare-state",
             "registry-relay-consultation-preview-state",
+            "registry-relay-consultation-verify-state",
             "registry-relay-public-accept-state",
             "registry-relay-public-initialize",
             "registry-relay-public-prepare-state",
             "registry-relay-public-preview-state",
+            "registry-relay-public-verify-state",
         ]
     );
     for (action_service, stage_service) in [
         (
             "registry-relay-consultation-prepare-state",
-            "registry-relay-consultation-stage-secrets",
+            "registry-relay-consultation-actions-stage-secrets",
         ),
         (
             "registry-relay-consultation-initialize",
-            "registry-relay-consultation-stage-secrets",
+            "registry-relay-consultation-actions-stage-secrets",
         ),
         (
             "registry-notary-prepare-state",
-            "registry-notary-stage-secrets",
-        ),
-        (
-            "registry-notary-initialize",
-            "registry-notary-stage-secrets",
+            "registry-notary-actions-stage-secrets",
         ),
         (
             "registry-postgres-bootstrap",
-            "registry-postgresql-stage-secrets",
+            "registry-postgresql-actions-stage-secrets",
         ),
     ] {
         assert_eq!(
@@ -955,8 +985,12 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
     for service_name in [
         "registry-relay-public-prepare-state",
         "registry-relay-public-initialize",
+        "registry-notary-initialize",
     ] {
-        assert_eq!(delta_services[service_name]["depends_on"], json!({}));
+        assert_eq!(
+            delta_services[service_name]["depends_on"]["registry-postgres"],
+            json!({"condition": "service_healthy", "required": true})
+        );
     }
     for service in [
         "registry-relay-public-prepare-state",
@@ -1005,6 +1039,24 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
             false,
         ),
         (
+            "registry-relay-public-verify-state",
+            &expected_runtime.relay_public.verify_state,
+            true,
+            false,
+        ),
+        (
+            "registry-relay-consultation-verify-state",
+            &expected_runtime.relay_consultation.verify_state,
+            true,
+            false,
+        ),
+        (
+            "registry-notary-verify-state",
+            &expected_runtime.notary.verify_state,
+            true,
+            false,
+        ),
+        (
             "registry-relay-public-accept-state",
             &expected_runtime.relay_public.accept_state,
             false,
@@ -1037,13 +1089,32 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
                 .any(|mount| mount["target"] == "/var/lib/registry/audit"),
             expected_audit
         );
-        assert_eq!(
-            mounts
-                .iter()
-                .find(|mount| mount["target"] == "/run/secrets")
-                .unwrap()["read_only"],
-            true
-        );
+        let secret_mount = mounts
+            .iter()
+            .find(|mount| mount["target"] == "/run/secrets");
+        if service_name.contains("accept") {
+            assert!(secret_mount.is_some());
+            let lane = service_name
+                .strip_prefix("registry-")
+                .unwrap()
+                .strip_suffix("-accept-state")
+                .unwrap();
+            assert_eq!(
+                secret_mount.unwrap()["source"],
+                format!("registry-operator-files-{lane}-accept")
+            );
+            assert_eq!(
+                service["depends_on"][format!("registry-{lane}-actions-stage-secrets")]
+                    ["condition"],
+                "service_completed_successfully"
+            );
+        } else {
+            assert!(secret_mount.is_none());
+            assert!(service["depends_on"].as_object().unwrap().is_empty());
+        }
+        assert_eq!(service["network_mode"], "none");
+        assert!(service.get("networks").is_none());
+        assert!(service.get("env_file").is_none());
     }
     let bootstrap = &delta_services["registry-postgres-bootstrap"];
     assert_eq!(bootstrap["networks"], json!({"registry-runtime": {}}));
@@ -1088,16 +1159,10 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
     let expected_stagers = [
         (
             "registry-postgresql-stage-secrets",
-            vec![
-                (
-                    "registry-operator-files-postgresql-serve",
-                    "/registryctl-stage/output/postgresql-serve",
-                ),
-                (
-                    "registry-operator-files-postgresql-bootstrap",
-                    "/registryctl-stage/output/postgresql-bootstrap",
-                ),
-            ],
+            vec![(
+                "registry-operator-files-postgresql-serve",
+                "/registryctl-stage/output/postgresql-serve",
+            )],
             vec![
                 "postgresql-admin-password",
                 "postgresql-tls-certificate",
@@ -1106,20 +1171,10 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         ),
         (
             "registry-relay-public-stage-secrets",
-            vec![
-                (
-                    "registry-operator-files-relay-public-serve",
-                    "/registryctl-stage/output/relay-public-serve",
-                ),
-                (
-                    "registry-operator-files-relay-public-preview",
-                    "/registryctl-stage/output/relay-public-preview",
-                ),
-                (
-                    "registry-operator-files-relay-public-accept",
-                    "/registryctl-stage/output/relay-public-accept",
-                ),
-            ],
+            vec![(
+                "registry-operator-files-relay-public-serve",
+                "/registryctl-stage/output/relay-public-serve",
+            )],
             vec![
                 "relay-public-tls-certificate",
                 "relay-public-tls-private-key",
@@ -1127,28 +1182,10 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         ),
         (
             "registry-relay-consultation-stage-secrets",
-            vec![
-                (
-                    "registry-operator-files-relay-consultation-serve",
-                    "/registryctl-stage/output/relay-consultation-serve",
-                ),
-                (
-                    "registry-operator-files-relay-consultation-prepare",
-                    "/registryctl-stage/output/relay-consultation-prepare",
-                ),
-                (
-                    "registry-operator-files-relay-consultation-initialize",
-                    "/registryctl-stage/output/relay-consultation-initialize",
-                ),
-                (
-                    "registry-operator-files-relay-consultation-preview",
-                    "/registryctl-stage/output/relay-consultation-preview",
-                ),
-                (
-                    "registry-operator-files-relay-consultation-accept",
-                    "/registryctl-stage/output/relay-consultation-accept",
-                ),
-            ],
+            vec![(
+                "registry-operator-files-relay-consultation-serve",
+                "/registryctl-stage/output/relay-consultation-serve",
+            )],
             vec![
                 "postgresql-tls-certificate",
                 "relay-consultation-tls-certificate",
@@ -1157,28 +1194,10 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         ),
         (
             "registry-notary-stage-secrets",
-            vec![
-                (
-                    "registry-operator-files-notary-serve",
-                    "/registryctl-stage/output/notary-serve",
-                ),
-                (
-                    "registry-operator-files-notary-prepare",
-                    "/registryctl-stage/output/notary-prepare",
-                ),
-                (
-                    "registry-operator-files-notary-initialize",
-                    "/registryctl-stage/output/notary-initialize",
-                ),
-                (
-                    "registry-operator-files-notary-preview",
-                    "/registryctl-stage/output/notary-preview",
-                ),
-                (
-                    "registry-operator-files-notary-accept",
-                    "/registryctl-stage/output/notary-accept",
-                ),
-            ],
+            vec![(
+                "registry-operator-files-notary-serve",
+                "/registryctl-stage/output/notary-serve",
+            )],
             vec![
                 "notary-relay-workload-credential",
                 "notary-signing-key",
@@ -1217,6 +1236,103 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         for (_, target) in expected_outputs {
             assert!(command.contains(&format!("find {target} -mindepth 1 -maxdepth 1 -delete")));
         }
+        assert_eq!(
+            stager["secrets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|secret| secret["target"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected_sources
+        );
+    }
+    let initialization = initialization_effective(&fixture);
+    let initialization_services = initialization["services"].as_object().unwrap();
+    let expected_action_stagers = [
+        (
+            "registry-postgresql-actions-stage-secrets",
+            vec![(
+                "registry-operator-files-postgresql-bootstrap",
+                "/registryctl-stage/output/postgresql-bootstrap",
+            )],
+            vec!["postgresql-admin-password", "postgresql-tls-certificate"],
+        ),
+        (
+            "registry-relay-public-actions-stage-secrets",
+            vec![(
+                "registry-operator-files-relay-public-accept",
+                "/registryctl-stage/output/relay-public-accept",
+            )],
+            vec!["relay-public-product-action-audit-key"],
+        ),
+        (
+            "registry-relay-consultation-actions-stage-secrets",
+            vec![
+                (
+                    "registry-operator-files-relay-consultation-prepare",
+                    "/registryctl-stage/output/relay-consultation-prepare",
+                ),
+                (
+                    "registry-operator-files-relay-consultation-initialize",
+                    "/registryctl-stage/output/relay-consultation-initialize",
+                ),
+                (
+                    "registry-operator-files-relay-consultation-accept",
+                    "/registryctl-stage/output/relay-consultation-accept",
+                ),
+            ],
+            vec![
+                "postgresql-tls-certificate",
+                "relay-consultation-product-action-audit-key",
+            ],
+        ),
+        (
+            "registry-notary-actions-stage-secrets",
+            vec![
+                (
+                    "registry-operator-files-notary-prepare",
+                    "/registryctl-stage/output/notary-prepare",
+                ),
+                (
+                    "registry-operator-files-notary-accept",
+                    "/registryctl-stage/output/notary-accept",
+                ),
+            ],
+            vec![
+                "notary-product-action-audit-key",
+                "postgresql-tls-certificate",
+            ],
+        ),
+    ];
+    for (service_name, expected_outputs, expected_sources) in expected_action_stagers {
+        assert!(
+            services.get(service_name).is_none(),
+            "ordinary startup must not expose {service_name}"
+        );
+        for (volume, _) in &expected_outputs {
+            assert!(
+                fixture.models.ordinary["volumes"].get(volume).is_none(),
+                "ordinary startup must not pre-stage action secret volume {volume}"
+            );
+        }
+        let stager = &initialization_services[service_name];
+        assert_eq!(stager["network_mode"], "none");
+        assert!(stager.get("env_file").is_none());
+        assert!(stager.get("networks").is_none());
+        assert_eq!(
+            stager["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|mount| {
+                    (
+                        mount["source"].as_str().unwrap(),
+                        mount["target"].as_str().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            expected_outputs
+        );
         assert_eq!(
             stager["secrets"]
                 .as_array()
@@ -1428,14 +1544,14 @@ fn ordinary_networking_publishes_only_public_applications_on_loopback() {
     assert!(services.get("registry-private-namespace").is_none());
     assert_eq!(
         services["registry-relay-public"]["ports"],
-        json!(["127.0.0.1:4242:4242"])
+        published_port("127.0.0.1", 4242, 8080)
     );
     assert!(services["registry-relay-consultation"]
         .get("ports")
         .is_none());
     assert_eq!(
         services["registry-notary"]["ports"],
-        json!(["127.0.0.1:4255:4255"])
+        published_port("127.0.0.1", 4255, 8081)
     );
     assert!(services["registry-postgres"].get("ports").is_none());
     for service_name in [
@@ -1463,8 +1579,11 @@ fn ordinary_networking_publishes_only_public_applications_on_loopback() {
     assert_eq!(
         published,
         vec![
-            ("registry-notary", json!(["127.0.0.1:4255:4255"])),
-            ("registry-relay-public", json!(["127.0.0.1:4242:4242"])),
+            ("registry-notary", published_port("127.0.0.1", 4255, 8081),),
+            (
+                "registry-relay-public",
+                published_port("127.0.0.1", 4242, 8080),
+            ),
         ]
     );
     for service in services.as_object().unwrap().values() {
@@ -1477,11 +1596,19 @@ fn ordinary_networking_publishes_only_public_applications_on_loopback() {
     let initialization = &fixture.models.initialization["services"];
     for service_name in [
         "registry-postgres-bootstrap",
-        "registry-relay-public-prepare-state",
-        "registry-relay-public-initialize",
         "registry-relay-consultation-prepare-state",
         "registry-relay-consultation-initialize",
         "registry-notary-prepare-state",
+    ] {
+        assert_eq!(
+            initialization[service_name]["networks"],
+            json!({"registry-runtime": {}})
+        );
+        assert!(initialization[service_name].get("network_mode").is_none());
+    }
+    for service_name in [
+        "registry-relay-public-prepare-state",
+        "registry-relay-public-initialize",
         "registry-notary-initialize",
         "registry-relay-public-preview-state",
         "registry-relay-consultation-preview-state",
@@ -1489,12 +1616,12 @@ fn ordinary_networking_publishes_only_public_applications_on_loopback() {
         "registry-relay-public-accept-state",
         "registry-relay-consultation-accept-state",
         "registry-notary-accept-state",
+        "registry-relay-public-verify-state",
+        "registry-relay-consultation-verify-state",
+        "registry-notary-verify-state",
     ] {
-        assert_eq!(
-            initialization[service_name]["networks"],
-            json!({"registry-runtime": {}})
-        );
-        assert!(initialization[service_name].get("network_mode").is_none());
+        assert!(initialization[service_name].get("networks").is_none());
+        assert_eq!(initialization[service_name]["network_mode"], "none");
     }
 }
 
@@ -1559,6 +1686,9 @@ fn generated_services_use_fixed_bounded_local_logging() {
         "registry-relay-public-accept-state",
         "registry-relay-consultation-accept-state",
         "registry-notary-accept-state",
+        "registry-relay-public-verify-state",
+        "registry-relay-consultation-verify-state",
+        "registry-notary-verify-state",
     ] {
         assert_eq!(
             fixture.models.initialization["services"][service_name]["logging"],
@@ -1574,6 +1704,22 @@ fn generated_services_use_fixed_bounded_local_logging() {
         assert!(fixture.models.ordinary["services"][service_name]
             .get("logging")
             .is_none());
+    }
+}
+
+#[test]
+fn every_managed_service_is_pinned_to_the_signed_linux_amd64_platform() {
+    let fixture = package_fixture();
+    for model in [&fixture.models.ordinary, &fixture.models.initialization] {
+        for (name, service) in model["services"].as_object().unwrap() {
+            if name == "registry-postgres" && service.get("image").is_none() {
+                continue;
+            }
+            assert_eq!(
+                service["platform"], "linux/amd64",
+                "{name} lost its signed platform binding"
+            );
+        }
     }
 }
 
@@ -1897,20 +2043,37 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         "Rollback is unsupported",
         "generated.previous/",
         "externally recorded values",
+        "## Compose project context",
+        "--project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\"",
     ] {
         assert!(
             runbook.contains(required),
             "missing runbook text: {required}"
         );
     }
-    assert!(runbook.contains("'verify-state'"));
-    let stages = [
+    for service in [
+        "registry-relay-public-verify-state",
+        "registry-relay-consultation-verify-state",
+        "registry-notary-verify-state",
+    ] {
+        assert!(runbook.contains(service));
+    }
+    for line in runbook
+        .lines()
+        .filter(|line| line.starts_with("docker compose "))
+    {
+        assert!(
+            line.contains("--project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\""),
+            "Compose lifecycle command lacks the explicit project context: {line}"
+        );
+    }
+    let serving_stages = [
         "registry-relay-public-stage-secrets",
         "registry-relay-consultation-stage-secrets",
         "registry-notary-stage-secrets",
         "registry-postgresql-stage-secrets",
     ];
-    for stage in stages {
+    for stage in serving_stages {
         let command = format!("generated/compose.yaml run --rm --no-deps {stage}");
         assert_eq!(
             runbook.matches(&command).count(),
@@ -1918,20 +2081,40 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
             "{stage} must run exactly once in each staging command block"
         );
     }
-    let staging_sequence = stages
-        .map(|stage| {
-            format!(
-                "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps {stage}"
-            )
-        })
+    let action_stages = [
+        "registry-relay-public-actions-stage-secrets",
+        "registry-relay-consultation-actions-stage-secrets",
+        "registry-notary-actions-stage-secrets",
+        "registry-postgresql-actions-stage-secrets",
+    ];
+    for stage in action_stages {
+        let command = format!("generated/compose.initialize.yaml run --rm --no-deps {stage}");
+        assert_eq!(
+            runbook.matches(&command).count(),
+            2,
+            "{stage} must run exactly once before first installation and update acceptance"
+        );
+    }
+    let ordinary_compose = "docker compose --project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\" --env-file generated/compose.empty.env -f generated/compose.yaml";
+    let action_compose = format!("{ordinary_compose} -f generated/compose.initialize.yaml");
+    let serving_staging_sequence = serving_stages
+        .map(|stage| format!("{ordinary_compose} run --rm --no-deps {stage}"))
         .join("\n");
-    let first_install_config = "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet";
+    let action_staging_sequence = action_stages
+        .map(|stage| format!("{action_compose} run --rm --no-deps {stage}"))
+        .join("\n");
+    let first_install_config =
+        format!("{action_compose} config --no-interpolate --no-env-resolution --quiet");
     assert!(runbook.contains(&format!(
-        "{first_install_config}\n{staging_sequence}\ndocker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap"
+        "{first_install_config}\n{action_staging_sequence}\n{action_compose} run --rm registry-postgres-bootstrap"
     )));
-    let ordinary_config = "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet";
     assert!(runbook.contains(&format!(
-        "{ordinary_config}\n{staging_sequence}\ndocker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public"
+        "{serving_staging_sequence}\n{ordinary_compose} up --detach --wait --wait-timeout 120"
+    )));
+    let ordinary_config =
+        format!("{ordinary_compose} config --no-interpolate --no-env-resolution --quiet");
+    assert!(runbook.contains(&format!(
+        "{ordinary_config}\n{action_compose} run --rm --no-deps registry-relay-public-verify-state"
     )));
     let preview_public = runbook.find("registry-relay-public-preview-state").unwrap();
     let preview_consultation = runbook
@@ -1942,6 +2125,10 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         .find("generated/compose.yaml stop")
         .map(|offset| preview_notary + offset)
         .unwrap();
+    let action_stage_after_stop = runbook[stop..]
+        .find("registry-relay-public-actions-stage-secrets")
+        .map(|offset| stop + offset)
+        .unwrap();
     let accept_public = runbook.find("registry-relay-public-accept-state").unwrap();
     let accept_consultation = runbook
         .find("registry-relay-consultation-accept-state")
@@ -1951,7 +2138,8 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         preview_public < preview_consultation
             && preview_consultation < preview_notary
             && preview_notary < stop
-            && stop < accept_public
+            && stop < action_stage_after_stop
+            && action_stage_after_stop < accept_public
             && accept_public < accept_consultation
             && accept_consultation < accept_notary
     );
@@ -2048,7 +2236,7 @@ fn generation_accepts_an_explicit_closed_binding_for_the_signed_identity() {
 
     assert_eq!(
         report.models.ordinary["services"]["registry-relay-public"]["ports"],
-        json!(["127.0.0.1:4343:4242"])
+        published_port("127.0.0.1", 4343, 8080)
     );
 }
 
@@ -2177,6 +2365,37 @@ fn regeneration_refuses_adapted_generator_owned_files() {
 }
 
 #[test]
+fn ipv6_loopback_uses_unambiguous_compose_port_syntax() {
+    let fixture = package_fixture();
+    let binding_file = fixture.package.parent().unwrap().join("ipv6-binding.yaml");
+    let mut explicit: DeploymentBindingV1 =
+        serde_norway::from_slice(&fs::read(fixture.package.join("binding.yaml")).unwrap()).unwrap();
+    explicit.loopback_address = "::1".to_string();
+    fs::write(&binding_file, serde_norway::to_string(&explicit).unwrap()).unwrap();
+    fs::remove_dir_all(&fixture.package).unwrap();
+
+    let report = generate_deployment_package_with_test_inputs(
+        DeploymentGenerateRequestV1 {
+            approved_set_file: fixture.approved_set_file.clone(),
+            output_dir: fixture.package.clone(),
+            binding_file: Some(binding_file),
+        },
+        fixture.verified_inputs.clone(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.models.ordinary["services"]["registry-relay-public"]["ports"],
+        published_port("::1", 4242, 8080)
+    );
+    assert_eq!(
+        report.models.ordinary["services"]["registry-notary"]["ports"],
+        published_port("::1", 4255, 8081)
+    );
+}
+
+#[test]
 fn regeneration_refuses_a_postgresql_major_transition_before_staging() {
     let fixture = package_fixture();
     let next = updated_inputs(&fixture, "1.1.0", 18);
@@ -2298,6 +2517,53 @@ fn python_release_lock_runtime_renders_compose_conformance() {
                 .err()
                 .unwrap_or_else(|| panic!("{label} must fail semantic admission"));
         assert!(error.to_string().contains(diagnostic), "{label}: {error:#}");
+    }
+    for (label, lane, action, field, value) in [
+        (
+            "preview environment",
+            "relay_public",
+            "preview_state",
+            "environment_files",
+            json!(["relay-public-environment"]),
+        ),
+        (
+            "verify serving credential",
+            "notary",
+            "verify_state",
+            "secret_files",
+            json!([{
+                "file_id": "notary-signing-key",
+                "target": "/run/secrets/notary-signing-key.jwk",
+                "mode": "0400",
+                "uid": "65532",
+                "gid": "65532"
+            }]),
+        ),
+        (
+            "accept serving credential",
+            "relay_consultation",
+            "accept_state",
+            "secret_files",
+            json!([{
+                "file_id": "relay-consultation-tls-private-key",
+                "target": "/run/secrets/relay-consultation-tls.key",
+                "mode": "0400",
+                "uid": "65532",
+                "gid": "65532"
+            }]),
+        ),
+    ] {
+        let mut drifted: Value = serde_json::from_slice(&payload_bytes).unwrap();
+        drifted["runtime"][lane][action][field] = value;
+        let error = release_lock::semantically_admit_release_lock_payload_for_test(
+            &serde_json::to_vec(&drifted).unwrap(),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{label} must fail semantic admission"));
+        assert!(
+            error.to_string().contains("input projection"),
+            "{label}: {error:#}"
+        );
     }
 
     let admitted =

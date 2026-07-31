@@ -136,6 +136,15 @@ pub enum OciPlatformV1 {
     LinuxArm64,
 }
 
+impl OciPlatformV1 {
+    pub fn compose_platform(self) -> &'static str {
+        match self {
+            Self::LinuxAmd64 => "linux/amd64",
+            Self::LinuxArm64 => "linux/arm64",
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedOciPlatformV1 {
@@ -307,8 +316,11 @@ impl RetainedVerifiedEnvelope {
 #[derive(Clone, Eq, PartialEq)]
 pub struct VerifiedManagedImagesV1 {
     relay: String,
+    relay_platform: OciPlatformV1,
     notary: String,
+    notary_platform: OciPlatformV1,
     postgresql_state_plane: String,
+    postgresql_state_plane_platform: OciPlatformV1,
 }
 
 impl VerifiedManagedImagesV1 {
@@ -316,12 +328,24 @@ impl VerifiedManagedImagesV1 {
         &self.relay
     }
 
+    pub fn relay_platform(&self) -> OciPlatformV1 {
+        self.relay_platform
+    }
+
     pub fn notary(&self) -> &str {
         &self.notary
     }
 
+    pub fn notary_platform(&self) -> OciPlatformV1 {
+        self.notary_platform
+    }
+
     pub fn postgresql_state_plane(&self) -> &str {
         &self.postgresql_state_plane
+    }
+
+    pub fn postgresql_state_plane_platform(&self) -> OciPlatformV1 {
+        self.postgresql_state_plane_platform
     }
 }
 
@@ -529,8 +553,12 @@ impl VerifiedReleaseLockV1 {
     pub fn managed_images(&self) -> VerifiedManagedImagesV1 {
         VerifiedManagedImagesV1 {
             relay: self.lock.images.relay.identity.clone(),
+            relay_platform: self.lock.images.relay.platforms[0].platform,
             notary: self.lock.images.notary.identity.clone(),
+            notary_platform: self.lock.images.notary.platforms[0].platform,
             postgresql_state_plane: self.lock.images.postgresql_state_plane.identity.clone(),
+            postgresql_state_plane_platform: self.lock.images.postgresql_state_plane.platforms[0]
+                .platform,
         }
     }
 
@@ -838,16 +866,13 @@ impl LockedOciImageV1 {
     fn validate(&self, label: &str) -> Result<()> {
         validate_image_identity(&self.identity)
             .with_context(|| format!("{label} image identity is invalid"))?;
-        if self.platforms.is_empty() {
-            bail!("{label} image has no approved platforms");
+        if self.platforms.len() != 1 || self.platforms[0].platform != OciPlatformV1::LinuxAmd64 {
+            bail!("{label} image must approve exactly linux-amd64");
         }
-        let mut platforms = BTreeSet::new();
-        for platform in &self.platforms {
-            if !platforms.insert(platform.platform) {
-                bail!("{label} image repeats an approved platform");
-            }
-            validate_digest(&platform.manifest_digest, "image platform manifest digest")?;
-        }
+        validate_digest(
+            &self.platforms[0].manifest_digest,
+            "image platform manifest digest",
+        )?;
         Ok(())
     }
 }
@@ -1020,6 +1045,11 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         _ => bail!("product runtime recipe label is unsupported"),
     };
     let environment = format!("{id}-environment");
+    let preparation_secrets = if id == "relay-public" {
+        &[][..]
+    } else {
+        &["postgresql-tls-certificate"][..]
+    };
     validate_action_shape(
         &recipe.prepare_state_store,
         &[
@@ -1028,13 +1058,14 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::Audit,
         ],
         &[environment.as_str()],
-        if id == "relay-public" {
-            &[]
-        } else {
-            &["postgresql-tls-certificate"]
-        },
+        preparation_secrets,
         &format!("{label} prepare_state_store"),
     )?;
+    let initialization_secrets = if id == "relay-consultation" {
+        &["postgresql-tls-certificate"][..]
+    } else {
+        &[][..]
+    };
     validate_action_shape(
         &recipe.initialize_state,
         &[
@@ -1044,11 +1075,7 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::Audit,
         ],
         &[environment.as_str()],
-        if id == "relay-public" {
-            &[]
-        } else {
-            &["postgresql-tls-certificate"]
-        },
+        initialization_secrets,
         &format!("{label} initialize_state"),
     )?;
     validate_mount_access(
@@ -1084,8 +1111,8 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::Anchor,
             LockedMountSourceV1::AntiRollbackState,
         ],
-        &[environment.as_str()],
-        serve_secrets,
+        &[],
+        &[],
         &format!("{label} preview_state"),
     )?;
     validate_mount_access(
@@ -1094,24 +1121,41 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         true,
         &format!("{label} preview_state"),
     )?;
-    for (name, action) in [
-        ("serve", &recipe.serve),
-        ("accept_state", &recipe.accept_state),
-        ("verify_state", &recipe.verify_state),
-    ] {
-        validate_action_shape(
-            action,
-            &[
-                LockedMountSourceV1::Bundle,
-                LockedMountSourceV1::Anchor,
-                LockedMountSourceV1::AntiRollbackState,
-                LockedMountSourceV1::Audit,
-            ],
-            &[environment.as_str()],
-            serve_secrets,
-            &format!("{label} {name}"),
-        )?;
-    }
+    validate_action_shape(
+        &recipe.accept_state,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+            LockedMountSourceV1::Audit,
+        ],
+        &[environment.as_str()],
+        &[],
+        &format!("{label} accept_state"),
+    )?;
+    validate_action_shape(
+        &recipe.verify_state,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+        ],
+        &[],
+        &[],
+        &format!("{label} verify_state"),
+    )?;
+    validate_action_shape(
+        &recipe.serve,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+            LockedMountSourceV1::Audit,
+        ],
+        &[environment.as_str()],
+        serve_secrets,
+        &format!("{label} serve"),
+    )?;
     for (name, action, read_only) in [
         ("serve", &recipe.serve, true),
         ("accept_state", &recipe.accept_state, false),
@@ -1245,6 +1289,11 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
         )?;
     }
     let health_binary = format!("/usr/local/bin/{product}");
+    let health_url = if product == "registry-notary" {
+        "http://127.0.0.1:8081/ready"
+    } else {
+        "http://127.0.0.1:8080/ready"
+    };
     validate_exact_command(
         &recipe.health_probe,
         &[
@@ -1252,7 +1301,7 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
             health_binary.as_str(),
             "healthcheck",
             "--url",
-            "http://127.0.0.1:8080/ready",
+            health_url,
         ],
         &format!("{label} health probe"),
     )
@@ -1919,14 +1968,30 @@ mod tests {
 
     #[test]
     fn image_identity_requires_digest_and_platform_closure() {
-        let mutable = LockedOciImageV1 {
+        let mut image = LockedOciImageV1 {
             identity: "ghcr.io/registrystack/registry-relay:latest".to_string(),
             platforms: vec![LockedOciPlatformV1 {
                 platform: OciPlatformV1::LinuxAmd64,
                 manifest_digest: format!("sha256:{}", "a".repeat(64)),
             }],
         };
-        assert!(mutable.validate("Relay").is_err());
+        assert!(image.validate("Relay").is_err());
+
+        image.identity = format!(
+            "ghcr.io/registrystack/registry-relay@sha256:{}",
+            "b".repeat(64)
+        );
+        image.platforms[0].platform = OciPlatformV1::LinuxArm64;
+        assert!(image.validate("Relay").is_err());
+
+        image.platforms[0].platform = OciPlatformV1::LinuxAmd64;
+        image.platforms.push(image.platforms[0].clone());
+        assert!(image.validate("Relay").is_err());
+
+        image.platforms.truncate(1);
+        image
+            .validate("Relay")
+            .expect("one exact linux-amd64 platform is accepted");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::approved_set::{ApprovedBaselineSetV1, ApprovedLaneV1, PortableArtifac
 use crate::release_lock::{
     verify_installed_release_lock, verify_release_lock_for_package, LockedOperatorFileFormatV1,
     LockedOperatorFileV1, LockedRuntimeActionV1, LockedRuntimeMountV1, LockedServiceHardeningV1,
-    VerifiedPostgresqlRuntimeV1, VerifiedProductRuntimeV1, VerifiedReleaseLockV1,
+    OciPlatformV1, VerifiedPostgresqlRuntimeV1, VerifiedProductRuntimeV1, VerifiedReleaseLockV1,
     VerifiedRuntimeMappingV1,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -36,6 +36,10 @@ const RELAY_PUBLIC: &str = "relay-public";
 const RELAY_CONSULTATION: &str = "relay-consultation";
 const NOTARY: &str = "notary";
 const POSTGRESQL: &str = "postgresql-state-plane";
+const RELAY_PUBLIC_ACTIONS: &str = "relay-public-actions";
+const RELAY_CONSULTATION_ACTIONS: &str = "relay-consultation-actions";
+const NOTARY_ACTIONS: &str = "notary-actions";
+const POSTGRESQL_ACTIONS: &str = "postgresql-actions";
 
 const SERVICE_RELAY_PUBLIC: &str = "registry-relay-public";
 const SERVICE_RELAY_CONSULTATION: &str = "registry-relay-consultation";
@@ -67,7 +71,7 @@ const BOUNDED_LOG_DRIVER: &str = "local";
 const BOUNDED_LOG_MAX_SIZE: &str = "10m";
 const BOUNDED_LOG_MAX_FILES: &str = "3";
 
-const INITIALIZATION_SERVICES: [&str; 13] = [
+const INITIALIZATION_SERVICES: [&str; 16] = [
     SERVICE_POSTGRESQL_BOOTSTRAP,
     "registry-relay-public-prepare-state",
     "registry-relay-consultation-prepare-state",
@@ -81,6 +85,9 @@ const INITIALIZATION_SERVICES: [&str; 13] = [
     "registry-relay-public-accept-state",
     "registry-relay-consultation-accept-state",
     "registry-notary-accept-state",
+    "registry-relay-public-verify-state",
+    "registry-relay-consultation-verify-state",
+    "registry-notary-verify-state",
 ];
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -123,8 +130,11 @@ impl<'de> Deserialize<'de> for ImageIdentityV1 {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ManagedTopologyImagesV1 {
     pub relay: ImageIdentityV1,
+    pub relay_platform: OciPlatformV1,
     pub notary: ImageIdentityV1,
+    pub notary_platform: OciPlatformV1,
     pub postgresql_state_plane: ImageIdentityV1,
+    pub postgresql_state_plane_platform: OciPlatformV1,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -232,6 +242,7 @@ pub struct ProductWorkloadV1 {
     pub product_lane: ProductLaneV1,
     pub action: RuntimeActionV1,
     pub image_identity: ImageIdentityV1,
+    pub image_platform: OciPlatformV1,
     pub immutable_inputs: Vec<String>,
     pub mount_roles: Vec<MountRoleV1>,
     pub secret_consumers: Vec<String>,
@@ -250,6 +261,7 @@ pub struct SupportingWorkloadV1 {
     pub id: String,
     pub recipe: SupportingWorkloadRecipeV1,
     pub image_identity: ImageIdentityV1,
+    pub image_platform: OciPlatformV1,
     pub secret_consumers: Vec<String>,
     pub state_roles: Vec<String>,
     pub endpoint_classes: Vec<EndpointClassV1>,
@@ -321,6 +333,7 @@ impl DeploymentPlanV1 {
     pub fn managed_single_node(images: &ManagedTopologyImagesV1) -> Self {
         let product = |lane: ProductLaneV1,
                        image_identity: ImageIdentityV1,
+                       image_platform: OciPlatformV1,
                        mount_roles: Vec<MountRoleV1>,
                        secret_consumers: Vec<&str>,
                        state_roles: Vec<&str>,
@@ -333,6 +346,7 @@ impl DeploymentPlanV1 {
                 product_lane: lane,
                 action: RuntimeActionV1::Serve,
                 image_identity,
+                image_platform,
                 immutable_inputs: vec![
                     format!("{}-bundle", lane.id()),
                     format!("{}-anchor", lane.id()),
@@ -363,6 +377,7 @@ impl DeploymentPlanV1 {
                 product(
                     ProductLaneV1::RelayPublic,
                     images.relay.clone(),
+                    images.relay_platform,
                     common_mounts.clone(),
                     vec!["relay-public-tls"],
                     vec!["relay-public-anti-rollback", "relay-public-audit"],
@@ -374,6 +389,7 @@ impl DeploymentPlanV1 {
                 product(
                     ProductLaneV1::RelayConsultation,
                     images.relay.clone(),
+                    images.relay_platform,
                     common_mounts,
                     vec!["relay-consultation-tls"],
                     vec![
@@ -391,6 +407,7 @@ impl DeploymentPlanV1 {
                 product(
                     ProductLaneV1::Notary,
                     images.notary.clone(),
+                    images.notary_platform,
                     vec![
                         MountRoleV1::Bundle,
                         MountRoleV1::Anchor,
@@ -414,6 +431,7 @@ impl DeploymentPlanV1 {
                     id: POSTGRESQL.to_string(),
                     recipe: SupportingWorkloadRecipeV1::PostgresqlStatePlane,
                     image_identity: images.postgresql_state_plane.clone(),
+                    image_platform: images.postgresql_state_plane_platform,
                     secret_consumers: strings(vec!["postgresql-tls", "postgresql-credentials"]),
                     state_roles: strings(vec!["postgresql-data"]),
                     endpoint_classes: vec![EndpointClassV1::PrivateApplication],
@@ -486,6 +504,17 @@ impl DeploymentPlanV1 {
                     RuntimeActionV1::AcceptState,
                 ),
                 initialization("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
+                initialization(
+                    "verify-relay-public-state",
+                    RELAY_PUBLIC,
+                    RuntimeActionV1::VerifyState,
+                ),
+                initialization(
+                    "verify-relay-consultation-state",
+                    RELAY_CONSULTATION,
+                    RuntimeActionV1::VerifyState,
+                ),
+                initialization("verify-notary-state", NOTARY, RuntimeActionV1::VerifyState),
             ],
             recovery_consistency_groups: vec![
                 WorkloadGroupV1 {
@@ -630,6 +659,17 @@ impl DeploymentPlanV1 {
                 RuntimeActionV1::AcceptState,
             ),
             ("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
+            (
+                "verify-relay-public-state",
+                RELAY_PUBLIC,
+                RuntimeActionV1::VerifyState,
+            ),
+            (
+                "verify-relay-consultation-state",
+                RELAY_CONSULTATION,
+                RuntimeActionV1::VerifyState,
+            ),
+            ("verify-notary-state", NOTARY, RuntimeActionV1::VerifyState),
         ];
         if self.initialization_actions.len() != expected_initialization.len()
             || !self
@@ -689,11 +729,16 @@ impl DeploymentPlanV1 {
         }
         let expected = Self::managed_single_node(&ManagedTopologyImagesV1 {
             relay: relay_public.image_identity.clone(),
+            relay_platform: relay_public.image_platform,
             notary: self.product(ProductLaneV1::Notary)?.image_identity.clone(),
+            notary_platform: self.product(ProductLaneV1::Notary)?.image_platform,
             postgresql_state_plane: self
                 .supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?
                 .image_identity
                 .clone(),
+            postgresql_state_plane_platform: self
+                .supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?
+                .image_platform,
         });
         if self != &expected {
             bail!("DeploymentPlanV1 differs from the closed managed single-node topology");
@@ -1459,8 +1504,11 @@ fn deployment_authority(
     let images = release_lock.managed_images();
     let plan = DeploymentPlanV1::managed_single_node(&ManagedTopologyImagesV1 {
         relay: ImageIdentityV1::parse(images.relay())?,
+        relay_platform: images.relay_platform(),
         notary: ImageIdentityV1::parse(images.notary())?,
+        notary_platform: images.notary_platform(),
         postgresql_state_plane: ImageIdentityV1::parse(images.postgresql_state_plane())?,
+        postgresql_state_plane_platform: images.postgresql_state_plane_platform(),
     });
     let runtime = LockedRuntimeMappingV1::from_verified(release_lock.runtime_mapping());
     let release_metadata = DeploymentReleaseMetadataV1 {
@@ -1900,12 +1948,7 @@ pub fn render_deployment_package(
     )?;
     write_bytes(
         root.join("generated/RUNBOOK.md"),
-        runbook(
-            &request.binding.package_id,
-            &inputs.runtime,
-            &operator_inventory,
-        )
-        .as_bytes(),
+        runbook(&request.binding.package_id, &operator_inventory).as_bytes(),
     )?;
     write_canonical_json(
         root.join("generated/inputs/approved-baseline-set.v1.json"),
@@ -2435,10 +2478,11 @@ fn render_ordinary_model(
     let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
 
     let mut services = Map::new();
-    for (owner_id, actions) in secret_stage_groups(runtime) {
+    for (owner_id, actions) in serving_secret_stage_groups(runtime) {
         insert_secret_staging_service(
             &mut services,
             &postgresql.image_identity,
+            postgresql.image_platform,
             &actions,
             binding,
             owner_id,
@@ -2446,6 +2490,7 @@ fn render_ordinary_model(
     }
     let mut postgres = hardened_service(
         &postgresql.image_identity,
+        postgresql.image_platform,
         &runtime.postgresql_state_plane.serve.command,
         &runtime.postgresql_state_plane.health_probe,
         json!({NETWORK_RUNTIME: {}}),
@@ -2523,7 +2568,10 @@ fn render_ordinary_model(
         durable_volume(binding, "notary-state"),
         durable_volume(binding, "notary-audit"),
     ]);
-    volumes.extend(secret_stage_volumes(secret_stage_groups(runtime), binding));
+    volumes.extend(secret_stage_volumes(
+        serving_secret_stage_groups(runtime),
+        binding,
+    ));
     Ok(json!({
         "name": binding.package_id,
         "services": services,
@@ -2549,27 +2597,42 @@ fn render_initialization_model(
 ) -> Result<Value> {
     // This file is deliberately a delta. Selecting it is an explicit operator
     // action; the ordinary model cannot discover any one-shot service.
-    let mut model = json!({"services": {}});
+    let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
+    let action_secret_groups = action_secret_stage_groups(runtime);
+    let mut model = json!({
+        "services": {},
+        "volumes": secret_stage_volumes(action_secret_stage_groups(runtime), binding)
+    });
     let services = model
         .get_mut("services")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| anyhow!("internal rendered Compose model has no services"))?;
+    for (owner_id, actions) in action_secret_groups {
+        insert_secret_staging_service(
+            services,
+            &postgresql.image_identity,
+            postgresql.image_platform,
+            &actions,
+            binding,
+            owner_id,
+        )?;
+    }
     for action in &plan.initialization_actions {
         if action.action == RuntimeActionV1::BootstrapStatePlane {
             if action.workload != POSTGRESQL {
                 bail!("state-plane bootstrap targets an unknown supporting workload");
             }
-            let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
             let recipe = &runtime.postgresql_state_plane;
             let mut service = hardened_service(
                 &postgresql.image_identity,
+                postgresql.image_platform,
                 &recipe.bootstrap.command,
                 &recipe.health_probe,
                 json!({NETWORK_RUNTIME: {}}),
                 action_dependency_map(
                     &[(SERVICE_POSTGRESQL, "service_healthy")],
                     &recipe.bootstrap,
-                    "postgresql",
+                    POSTGRESQL_ACTIONS,
                 ),
                 "no",
             );
@@ -2628,38 +2691,51 @@ fn render_initialization_model(
                 format!("{}-accept-state", lane.service()),
                 &runtime.accept_state,
             ),
+            RuntimeActionV1::VerifyState => (
+                format!("{}-verify-state", lane.service()),
+                &runtime.verify_state,
+            ),
             _ => bail!("initialization model contains a non-initialization action"),
         };
-        let (networks, dependencies) = match lane {
-            ProductLaneV1::RelayPublic => (
-                json!({NETWORK_RUNTIME: {}}),
-                action_dependency_map(&[], command, lane.id()),
-            ),
-            ProductLaneV1::RelayConsultation => (
-                json!({NETWORK_RUNTIME: {}}),
-                action_dependency_map(
-                    &[(SERVICE_POSTGRESQL, "service_healthy")],
-                    command,
-                    lane.id(),
-                ),
-            ),
-            ProductLaneV1::Notary => (
-                json!({NETWORK_RUNTIME: {}}),
-                action_dependency_map(
-                    &[(SERVICE_POSTGRESQL, "service_healthy")],
-                    command,
-                    lane.id(),
-                ),
-            ),
-        };
+        // Only the database-backed state preparation paths receive runtime
+        // network authority. Read-only state actions and local audit/state
+        // mutations remain networkless even though the serving workload is not.
+        let requires_postgresql = matches!(
+            (lane, action.action),
+            (
+                ProductLaneV1::RelayConsultation,
+                RuntimeActionV1::PrepareStateStore | RuntimeActionV1::InitializeState
+            ) | (ProductLaneV1::Notary, RuntimeActionV1::PrepareStateStore)
+        );
+        let dependencies = action_dependency_map(
+            if requires_postgresql {
+                &[(SERVICE_POSTGRESQL, "service_healthy")]
+            } else {
+                &[]
+            },
+            command,
+            action_secret_stage_owner(lane),
+        );
         let mut service = hardened_service(
             &product.image_identity,
+            product.image_platform,
             &command.command,
             &runtime.health_probe,
-            networks,
+            if requires_postgresql {
+                json!({NETWORK_RUNTIME: {}})
+            } else {
+                json!({})
+            },
             dependencies,
             "no",
         );
+        if !requires_postgresql {
+            service
+                .as_object_mut()
+                .expect("service object")
+                .remove("networks");
+            service["network_mode"] = json!("none");
+        }
         apply_runtime_action_inputs(
             &mut service,
             command,
@@ -2674,6 +2750,7 @@ fn render_initialization_model(
                     RuntimeActionV1::InitializeState => "initialize",
                     RuntimeActionV1::PreviewState => "preview",
                     RuntimeActionV1::AcceptState => "accept",
+                    RuntimeActionV1::VerifyState => "verify",
                     _ => unreachable!(),
                 }
             ),
@@ -2682,7 +2759,8 @@ fn render_initialization_model(
             RuntimeActionV1::PrepareStateStore
             | RuntimeActionV1::InitializeState
             | RuntimeActionV1::PreviewState
-            | RuntimeActionV1::AcceptState => {
+            | RuntimeActionV1::AcceptState
+            | RuntimeActionV1::VerifyState => {
                 service
                     .as_object_mut()
                     .expect("service object")
@@ -2706,6 +2784,7 @@ fn product_service(
     let lane = workload.product_lane;
     let mut service = hardened_service(
         &workload.image_identity,
+        workload.image_platform,
         &runtime.serve.command,
         &runtime.health_probe,
         networks,
@@ -2721,12 +2800,18 @@ fn product_service(
         &format!("{}-serve", lane.id()),
     )?;
     let published_port = match lane {
-        ProductLaneV1::RelayPublic => Some((binding.ports.relay_public, 4242)),
-        ProductLaneV1::Notary => Some((binding.ports.notary, 4255)),
+        ProductLaneV1::RelayPublic => Some((binding.ports.relay_public, 8080)),
+        ProductLaneV1::Notary => Some((binding.ports.notary, 8081)),
         ProductLaneV1::RelayConsultation => None,
     };
     if let Some((host, container)) = published_port {
-        service["ports"] = json!([format!("{}:{host}:{container}", binding.loopback_address)]);
+        service["ports"] = json!([{
+            "target": container,
+            "published": host.to_string(),
+            "host_ip": binding.loopback_address,
+            "protocol": "tcp",
+            "mode": "ingress"
+        }]);
     }
     Ok(service)
 }
@@ -2742,6 +2827,7 @@ fn apply_hardening(service: &mut Value, hardening: &LockedServiceHardeningV1) {
 fn insert_secret_staging_service(
     services: &mut Map<String, Value>,
     image: &ImageIdentityV1,
+    platform: OciPlatformV1,
     actions: &[(&str, &LockedRuntimeActionV1)],
     binding: &DeploymentBindingV1,
     owner_id: &str,
@@ -2754,13 +2840,14 @@ fn insert_secret_staging_service(
     }
     services.insert(
         secret_staging_service_name(owner_id),
-        secret_staging_service(image, actions, binding)?,
+        secret_staging_service(image, platform, actions, binding)?,
     );
     Ok(())
 }
 
 fn secret_staging_service(
     image: &ImageIdentityV1,
+    platform: OciPlatformV1,
     actions: &[(&str, &LockedRuntimeActionV1)],
     binding: &DeploymentBindingV1,
 ) -> Result<Value> {
@@ -2801,6 +2888,7 @@ fn secret_staging_service(
     // lane inputs; closed mounts and allowlisted output files bound that capability.
     Ok(json!({
         "image": image.as_str(),
+        "platform": platform.compose_platform(),
         "entrypoint": ["/bin/sh", "-ceu"],
         "command": [script],
         "user": "0:0",
@@ -2812,7 +2900,7 @@ fn secret_staging_service(
         "network_mode": "none",
         "volumes": mounts,
         "secrets": source_files
-            .into_iter()
+            .iter()
             .map(|file_id| json!({
                 "source": format!("registry-{file_id}"),
                 "target": file_id
@@ -2827,11 +2915,41 @@ type SecretStageAction<'a> = (&'static str, &'a LockedRuntimeActionV1);
 fn secret_stage_groups(
     runtime: &LockedRuntimeMappingV1,
 ) -> Vec<(&'static str, Vec<SecretStageAction<'_>>)> {
+    let mut groups = serving_secret_stage_groups(runtime);
+    groups.extend(action_secret_stage_groups(runtime));
+    groups
+}
+
+fn serving_secret_stage_groups(
+    runtime: &LockedRuntimeMappingV1,
+) -> Vec<(&'static str, Vec<SecretStageAction<'_>>)> {
     vec![
         (
             RELAY_PUBLIC,
+            vec![("relay-public-serve", &runtime.relay_public.serve)],
+        ),
+        (
+            RELAY_CONSULTATION,
+            vec![(
+                "relay-consultation-serve",
+                &runtime.relay_consultation.serve,
+            )],
+        ),
+        (NOTARY, vec![("notary-serve", &runtime.notary.serve)]),
+        (
+            "postgresql",
+            vec![("postgresql-serve", &runtime.postgresql_state_plane.serve)],
+        ),
+    ]
+}
+
+fn action_secret_stage_groups(
+    runtime: &LockedRuntimeMappingV1,
+) -> Vec<(&'static str, Vec<SecretStageAction<'_>>)> {
+    vec![
+        (
+            RELAY_PUBLIC_ACTIONS,
             vec![
-                ("relay-public-serve", &runtime.relay_public.serve),
                 (
                     "relay-public-prepare",
                     &runtime.relay_public.prepare_state_store,
@@ -2842,15 +2960,12 @@ fn secret_stage_groups(
                 ),
                 ("relay-public-preview", &runtime.relay_public.preview_state),
                 ("relay-public-accept", &runtime.relay_public.accept_state),
+                ("relay-public-verify", &runtime.relay_public.verify_state),
             ],
         ),
         (
-            RELAY_CONSULTATION,
+            RELAY_CONSULTATION_ACTIONS,
             vec![
-                (
-                    "relay-consultation-serve",
-                    &runtime.relay_consultation.serve,
-                ),
                 (
                     "relay-consultation-prepare",
                     &runtime.relay_consultation.prepare_state_store,
@@ -2867,29 +2982,38 @@ fn secret_stage_groups(
                     "relay-consultation-accept",
                     &runtime.relay_consultation.accept_state,
                 ),
+                (
+                    "relay-consultation-verify",
+                    &runtime.relay_consultation.verify_state,
+                ),
             ],
         ),
         (
-            NOTARY,
+            NOTARY_ACTIONS,
             vec![
-                ("notary-serve", &runtime.notary.serve),
                 ("notary-prepare", &runtime.notary.prepare_state_store),
                 ("notary-initialize", &runtime.notary.initialize_state),
                 ("notary-preview", &runtime.notary.preview_state),
                 ("notary-accept", &runtime.notary.accept_state),
+                ("notary-verify", &runtime.notary.verify_state),
             ],
         ),
         (
-            "postgresql",
-            vec![
-                ("postgresql-serve", &runtime.postgresql_state_plane.serve),
-                (
-                    "postgresql-bootstrap",
-                    &runtime.postgresql_state_plane.bootstrap,
-                ),
-            ],
+            POSTGRESQL_ACTIONS,
+            vec![(
+                "postgresql-bootstrap",
+                &runtime.postgresql_state_plane.bootstrap,
+            )],
         ),
     ]
+}
+
+fn action_secret_stage_owner(lane: ProductLaneV1) -> &'static str {
+    match lane {
+        ProductLaneV1::RelayPublic => RELAY_PUBLIC_ACTIONS,
+        ProductLaneV1::RelayConsultation => RELAY_CONSULTATION_ACTIONS,
+        ProductLaneV1::Notary => NOTARY_ACTIONS,
+    }
 }
 
 fn secret_staging_service_name(owner_id: &str) -> String {
@@ -3007,6 +3131,7 @@ fn operator_file_path(binding: &DeploymentBindingV1, id: &str) -> Result<String>
 
 fn hardened_service(
     image: &ImageIdentityV1,
+    platform: OciPlatformV1,
     command: &[String],
     health_probe: &[String],
     networks: Value,
@@ -3015,6 +3140,7 @@ fn hardened_service(
 ) -> Value {
     json!({
         "image": image.as_str(),
+        "platform": platform.compose_platform(),
         "command": command,
         "read_only": true,
         "user": "65532:65532",
@@ -3593,7 +3719,7 @@ fn expected_fixed_generated_files(
         ("operator-files.v1.json", inventory_bytes),
         (
             "RUNBOOK.md",
-            runbook(&binding.package_id, &inputs.runtime, &inventory).into_bytes(),
+            runbook(&binding.package_id, &inventory).into_bytes(),
         ),
         ("inputs/approved-baseline-set.v1.json", approved),
         (
@@ -4134,24 +4260,34 @@ fn ownership_report(
     }
 }
 
-fn runbook(
-    package_name: &str,
-    runtime: &LockedRuntimeMappingV1,
-    inventory: &DeploymentOperatorFileInventoryV1,
-) -> String {
-    let relay_public_verify = shell_command(&runtime.relay_public.verify_state.command);
-    let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state.command);
-    let notary_verify = shell_command(&runtime.notary.verify_state.command);
-    let secret_staging_commands = [RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, "postgresql"]
-    .into_iter()
-    .map(|owner_id| {
-        format!(
-            "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps {}",
-            secret_staging_service_name(owner_id)
-        )
-    })
-    .collect::<Vec<_>>()
-    .join("\n");
+fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) -> String {
+    let compose_ordinary = "docker compose --project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\" --env-file generated/compose.empty.env -f generated/compose.yaml";
+    let compose_actions = format!("{compose_ordinary} -f generated/compose.initialize.yaml");
+    let staging_commands = |compose: &str, owner_ids: &[&str]| {
+        owner_ids
+            .iter()
+            .map(|owner_id| {
+                format!(
+                    "{compose} run --rm --no-deps {}",
+                    secret_staging_service_name(owner_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let serving_secret_staging_commands = staging_commands(
+        compose_ordinary,
+        &[RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, "postgresql"],
+    );
+    let action_secret_staging_commands = staging_commands(
+        &compose_actions,
+        &[
+            RELAY_PUBLIC_ACTIONS,
+            RELAY_CONSULTATION_ACTIONS,
+            NOTARY_ACTIONS,
+            POSTGRESQL_ACTIONS,
+        ],
+    );
     let operator_files = inventory
         .files
         .iter()
@@ -4180,47 +4316,55 @@ The signed inventory is also recorded at `generated/operator-files.v1.json`. Bef
 | Path | Consumers and targets | Format | Mode | Allowed owners |\n\
 |---|---|---|---|---|\n\
 {operator_files}\n\n\
+## Compose project context\n\n\
+The generated package is standalone by default. Set `REGISTRY_STACK_COMPOSE_PROJECT` once and use the same value for every stage, preview, stop, accept, verify, and start command:\n\n\
+```sh\n\
+export REGISTRY_STACK_COMPOSE_PROJECT=\"${{REGISTRY_STACK_COMPOSE_PROJECT:-{package_name}}}\"\n\
+```\n\n\
+When a parent Compose application includes `generated/compose.yaml`, set this variable to the exact project name used to start that parent, either its effective top-level `name` or the value passed with `--project-name`/`-p`. Do not infer it from the current directory. The direct commands below then address only the generated Registry Stack services while sharing the parent's containers, network, and project-scoped action volumes. A different project name addresses different resources. Never accept state until the serving Registry Stack services have been stopped in that exact project.\n\n\
 ## First installation only\n\n\
-```text\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet\n\
-{secret_staging_commands}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-prepare-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-initialize\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-initialize\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-initialize\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps\n\
+```sh\n\
+{compose_actions} config --no-interpolate --no-env-resolution --quiet\n\
+{action_secret_staging_commands}\n\
+{compose_actions} run --rm registry-postgres-bootstrap\n\
+{compose_actions} run --rm registry-relay-public-prepare-state\n\
+{compose_actions} run --rm registry-relay-consultation-prepare-state\n\
+{compose_actions} run --rm registry-notary-prepare-state\n\
+{compose_actions} run --rm registry-relay-public-initialize\n\
+{compose_actions} run --rm registry-relay-consultation-initialize\n\
+{compose_actions} run --rm registry-notary-initialize\n\
+{serving_secret_staging_commands}\n\
+{compose_ordinary} up --detach --wait --wait-timeout 120\n\
+{compose_ordinary} ps\n\
 ```\n\n\
 Selecting `compose.initialize.yaml` is the only supported way to initialize an empty PostgreSQL data directory. Each initialization action depends on its lane-isolated secret stager, which receives only that lane's source files and writable output volumes; PostgreSQL has a separate stager. The ordinary PostgreSQL service fails closed when `PGDATA` has no `PG_VERSION`. Never run an initialize service for an existing instance. Ordinary product startup fails closed when anti-rollback state is missing.\n\n\
 ## Ordinary start and stop\n\n\
-```text\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet\n\
-{secret_staging_commands}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down\n\
+```sh\n\
+{compose_ordinary} config --no-interpolate --no-env-resolution --quiet\n\
+{compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
+{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
+{serving_secret_staging_commands}\n\
+{compose_ordinary} up --detach --wait --wait-timeout 120\n\
+{compose_ordinary} ps\n\
+{compose_ordinary} down\n\
 ```\n\n\
 ## Product or image update\n\n\
 Before shutdown, run `registryctl deploy verify --package .` against the current package and the candidate package, render and verify the candidate effective Compose model, verify every operator file against `generated/operator-files.v1.json`, verify each current and candidate bundle and anchor, and run all three current `verify_state` actions above. Preserve the intact current closure as `generated.previous/` before publishing the candidate. From the candidate package, stage its operator files and preview every affected lane while all current services remain up. Do not stop any service or accept any lane unless every preview succeeds.\n\n\
-```text\n\
-{secret_staging_commands}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml stop\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
+```sh\n\
+{compose_actions} run --rm --no-deps registry-relay-public-preview-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-preview-state\n\
+{compose_actions} run --rm --no-deps registry-notary-preview-state\n\
+{compose_ordinary} stop\n\
+{action_secret_staging_commands}\n\
+{compose_actions} run --rm --no-deps registry-relay-public-accept-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-accept-state\n\
+{compose_actions} run --rm --no-deps registry-notary-accept-state\n\
+{compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
+{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
+{serving_secret_staging_commands}\n\
+{compose_ordinary} up --detach --wait --wait-timeout 120\n\
 ```\n\n\
 Each `accept_state` action uses the locked audit-before-mutation path. The manual abort boundary is the first successful acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
 ## State recovery\n\n\
@@ -4241,12 +4385,4 @@ fn operator_file_format(format: LockedOperatorFileFormatV1) -> &'static str {
         LockedOperatorFileFormatV1::CompactJwt => "compact_jwt",
         LockedOperatorFileFormatV1::Opaque => "opaque",
     }
-}
-
-fn shell_command(parts: &[String]) -> String {
-    parts
-        .iter()
-        .map(|part| format!("'{}'", part.replace('\'', "'\"'\"'")))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
