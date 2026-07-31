@@ -841,6 +841,10 @@ class FirstCountryReleaseFormTest(TestCase):
             "update_generate",
             "failed_activation",
             "failed_activation_recovery",
+            "update_verify_current",
+            "update_verify_current_relay_public_state",
+            "update_verify_current_relay_consultation_state",
+            "update_verify_current_notary_state",
             "update_preview_relay_public",
             "update_preview_relay_consultation",
             "update_preview_notary",
@@ -875,6 +879,10 @@ class FirstCountryReleaseFormTest(TestCase):
                 "update_verify",
                 "failed_activation",
                 "failed_activation_recovery",
+                "update_verify_current",
+                "update_verify_current_relay_public_state",
+                "update_verify_current_relay_consultation_state",
+                "update_verify_current_notary_state",
                 "update_preview_relay_public",
                 "update_preview_relay_consultation",
                 "update_preview_notary",
@@ -894,6 +902,13 @@ class FirstCountryReleaseFormTest(TestCase):
         stable_source = SCRIPT.read_text(encoding="utf-8").split(
             "def run_stable_release_form", 1
         )[1].split("def run_release_form", 1)[0]
+        for command_name in (
+            "update_verify_current",
+            "update_verify_current_relay_public_state",
+            "update_verify_current_relay_consultation_state",
+            "update_verify_current_notary_state",
+        ):
+            self.assertIn(f'"{command_name}"', stable_source)
         self.assertIn('"--expected-closure-sha256"', stable_source)
         self.assertNotIn('"--parent-compose"', stable_source)
         self.assertIn(
@@ -905,14 +920,18 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertNotIn("git clone", stable_source)
         self.assertNotIn('"spreadsheet"', stable_source)
         self.assertIn(
-            '"--output-dir",\n                        str(candidate_package)',
+            "shutil.copytree(package, candidate_package)",
+            stable_source,
+        )
+        self.assertNotIn(
+            "copy_governed_operator_inputs(\n                candidate_package",
             stable_source,
         )
         self.assertIn(
             "compose_preview_state_commands(candidate_package)", stable_source
         )
         self.assertIn(
-            '"update_stop_current",\n                    [*compose_base(package), "down"]',
+            '"update_stop_current",\n                    [*compose_base(package), "stop"]',
             stable_source,
         )
         cleanup_source = stable_source.split("        finally:", 1)[1]
@@ -1007,30 +1026,61 @@ class FirstCountryReleaseFormTest(TestCase):
             )
         self.assertFalse((logs / "failed_activation.log").exists())
 
-    def test_secret_stage_commands_precede_each_consumer_sequence(self) -> None:
+    def test_governed_start_uses_exact_fail_closed_order(self) -> None:
         package = self.root / "package"
-        expected_stagers = tuple(self.module.SERVING_SECRET_STAGER_CONTRACT)
-        stage_commands = self.module.compose_serving_secret_stage_commands(package)
-        self.assertEqual(
-            tuple(command[-1] for command in stage_commands),
-            expected_stagers,
-        )
-        self.assertNotIn(
-            "registry-runtime-stage-secrets",
-            {argument for command in stage_commands for argument in command},
-        )
-
-        consumers = self.module.compose_verify_state_commands(package)
-        ordered = self.module.compose_staged_consumer_commands(
+        commands = self.module.compose_governed_start_commands(
             package,
-            consumers,
+            include_ps=True,
+        )
+
+        def operation(command: list[str]) -> str:
+            if "run" in command:
+                return command[-1]
+            if "up" in command:
+                return "up"
+            if "ps" in command:
+                return "ps"
+            self.fail(f"unexpected governed-start command: {command}")
+
+        self.assertEqual(
+            [operation(command) for command in commands],
+            [
+                "registry-relay-public-verify-state",
+                "registry-relay-consultation-verify-state",
+                "registry-notary-verify-state",
+                "registry-relay-public-stage-secrets",
+                "registry-relay-consultation-stage-secrets",
+                "registry-notary-stage-secrets",
+                "registry-postgresql-stage-secrets",
+                "up",
+                "registry-relay-public-verify-state",
+                "registry-relay-consultation-verify-state",
+                "registry-notary-verify-state",
+                "ps",
+            ],
         )
         self.assertEqual(
-            tuple(command[-1] for command in ordered[:4]),
-            expected_stagers,
+            commands[7][-5:],
+            ["up", "--detach", "--wait", "--wait-timeout", "120"],
         )
-        self.assertEqual(ordered[4:], consumers)
+        post_accept = self.module.compose_start_and_verify_commands(
+            package,
+            include_ps=True,
+        )
+        self.assertEqual(commands[7:], post_accept)
+        self.assertEqual(
+            [operation(command) for command in post_accept],
+            [
+                "up",
+                "registry-relay-public-verify-state",
+                "registry-relay-consultation-verify-state",
+                "registry-notary-verify-state",
+                "ps",
+            ],
+        )
 
+    def test_action_and_state_commands_use_the_initialization_model(self) -> None:
+        package = self.root / "package"
         action_stagers = (
             "registry-relay-consultation-actions-stage-secrets",
             "registry-notary-actions-stage-secrets",
@@ -1048,6 +1098,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 str(package / "generated/compose.initialize.yaml"), command
             )
 
+        consumers = self.module.compose_verify_state_commands(package)
         self.assertEqual(
             [command[-1] for command in consumers],
             [
@@ -1059,6 +1110,66 @@ class FirstCountryReleaseFormTest(TestCase):
         for command in consumers:
             self.assertIn(
                 str(package / "generated/compose.initialize.yaml"), command
+            )
+
+    def test_candidate_inputs_must_match_the_copied_current_package(self) -> None:
+        candidate = self.root / "candidate"
+        generated = candidate / "generated.previous"
+        operator = candidate / "operator"
+        generated.mkdir(parents=True)
+        operator.mkdir()
+        (generated / "compose.yaml").write_text(
+            "services: {}\n",
+            encoding="utf-8",
+        )
+        (operator / "notary-tls-private-key").write_text(
+            fixture_text("notary-tls-private-key"),
+            encoding="utf-8",
+        )
+        current_generated = {
+            "compose.yaml": hashlib.sha256(b"services: {}\n").hexdigest()
+        }
+        current_operator = {
+            "notary-tls-private-key": hashlib.sha256(
+                fixture_bytes("notary-tls-private-key")
+            ).hexdigest()
+        }
+
+        self.module.require_preserved_candidate_inputs(
+            candidate,
+            current_generated_digests=current_generated,
+            current_operator_digests=current_operator,
+        )
+
+        (operator / "notary-tls-private-key").write_text(
+            fixture_text("replacement-notary-key"),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "exact current operator files",
+        ):
+            self.module.require_preserved_candidate_inputs(
+                candidate,
+                current_generated_digests=current_generated,
+                current_operator_digests=current_operator,
+            )
+        (operator / "notary-tls-private-key").write_text(
+            fixture_text("notary-tls-private-key"),
+            encoding="utf-8",
+        )
+        (generated / "compose.yaml").write_text(
+            "services:\n  changed: {}\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "exact current generated closure",
+        ):
+            self.module.require_preserved_candidate_inputs(
+                candidate,
+                current_generated_digests=current_generated,
+                current_operator_digests=current_operator,
             )
 
     def test_secret_staging_models_enforce_exact_lane_authority(self) -> None:

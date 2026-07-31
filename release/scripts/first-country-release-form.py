@@ -92,6 +92,10 @@ STABLE_COMMAND_ORDER = (
     "update_verify",
     "failed_activation",
     "failed_activation_recovery",
+    "update_verify_current",
+    "update_verify_current_relay_public_state",
+    "update_verify_current_relay_consultation_state",
+    "update_verify_current_notary_state",
     "update_preview_relay_public",
     "update_preview_relay_consultation",
     "update_preview_notary",
@@ -1799,6 +1803,25 @@ def closed_tree_digests(directory: Path) -> dict[str, str]:
     return files
 
 
+def require_preserved_candidate_inputs(
+    candidate_package: Path,
+    *,
+    current_generated_digests: dict[str, str],
+    current_operator_digests: dict[str, str],
+) -> None:
+    if (
+        closed_tree_digests(candidate_package / "generated.previous")
+        != current_generated_digests
+    ):
+        raise ReleaseFormError(
+            "candidate did not retain the exact current generated closure"
+        )
+    if closed_tree_digests(candidate_package / "operator") != current_operator_digests:
+        raise ReleaseFormError(
+            "candidate did not preserve the exact current operator files"
+        )
+
+
 def write_private(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -2679,14 +2702,36 @@ def compose_action_secret_stage_commands(
     )
 
 
-def compose_staged_consumer_commands(
+def compose_start_and_verify_commands(
     package: Path,
-    consumers: Iterable[list[str]],
-    stagers: Iterable[str] = SERVING_SECRET_STAGER_CONTRACT,
+    *,
+    include_ps: bool = False,
+) -> list[list[str]]:
+    commands = [
+        [
+            *compose_base(package),
+            "up",
+            "--detach",
+            "--wait",
+            "--wait-timeout",
+            "120",
+        ],
+        *compose_verify_state_commands(package),
+    ]
+    if include_ps:
+        commands.append([*compose_base(package), "ps"])
+    return commands
+
+
+def compose_governed_start_commands(
+    package: Path,
+    *,
+    include_ps: bool = False,
 ) -> list[list[str]]:
     return [
-        *compose_serving_secret_stage_commands(package, stagers),
-        *list(consumers),
+        *compose_verify_state_commands(package),
+        *compose_serving_secret_stage_commands(package),
+        *compose_start_and_verify_commands(package, include_ps=include_ps),
     ]
 
 
@@ -3980,6 +4025,8 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             operator_file_count = copy_governed_operator_inputs(
                 package, operator_inputs
             )
+            current_generated_digests = closed_tree_digests(package / "generated")
+            current_operator_digests = closed_tree_digests(package / "operator")
             commands.append(
                 run_command(
                     "dev_down",
@@ -4004,10 +4051,13 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                 "dev_down",
                 {"outcome": "passed", "runtime_state": "absent"},
             )
+            shutil.copytree(package, candidate_package)
             shutil.copytree(package, rollback_package)
             secrets.extend(recursive_secret_values(governed_private))
             secrets.extend(recursive_secret_values(package / "operator"))
+            secrets.extend(recursive_secret_values(candidate_package / "operator"))
             protect_governed_operator_inputs(package)
+            protect_governed_operator_inputs(candidate_package)
             commands.append(
                 run_command(
                     "deploy_verify",
@@ -4217,21 +4267,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "governed_start",
-                    compose_staged_consumer_commands(
-                        package,
-                        [
-                        *compose_verify_state_commands(package),
-                        [
-                            *compose_base(package),
-                            "up",
-                            "--detach",
-                            "--wait",
-                            "--wait-timeout",
-                            "120",
-                        ],
-                        [*compose_base(package), "ps"],
-                    ],
-                    ),
+                    compose_governed_start_commands(package, include_ps=True),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4240,21 +4276,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "governed_restart",
-                    compose_staged_consumer_commands(
-                        package,
-                        [
-                        [*compose_base(package), "restart"],
-                        [
-                            *compose_base(package),
-                            "up",
-                            "--detach",
-                            "--wait",
-                            "--wait-timeout",
-                            "120",
-                        ],
-                        *compose_verify_state_commands(package),
+                    [
+                        [*compose_base(package), "stop"],
+                        *compose_governed_start_commands(package),
                     ],
-                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4282,20 +4307,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "restored_start",
-                    compose_staged_consumer_commands(
-                        package,
-                        [
-                        *compose_verify_state_commands(package),
-                        [
-                            *compose_base(package),
-                            "up",
-                            "--detach",
-                            "--wait",
-                            "--wait-timeout",
-                            "120",
-                        ],
-                    ],
-                    ),
+                    compose_governed_start_commands(package),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4492,17 +4504,11 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             ):
                 raise ReleaseFormError("compatible update did not change the governed closure")
             write_json_log(logs, "update_generate", updated_generation)
-            candidate_operator_file_count = copy_governed_operator_inputs(
-                candidate_package, operator_inputs
+            require_preserved_candidate_inputs(
+                candidate_package,
+                current_generated_digests=current_generated_digests,
+                current_operator_digests=current_operator_digests,
             )
-            if candidate_operator_file_count != operator_file_count:
-                raise ReleaseFormError(
-                    "candidate operator-file inventory differs from the current closure"
-                )
-            secrets.extend(
-                recursive_secret_values(candidate_package / "operator")
-            )
-            protect_governed_operator_inputs(candidate_package)
             commands.append(
                 run_command(
                     "update_verify",
@@ -4548,10 +4554,20 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             move_privileged(notary_key, held_notary_key)
             commands.append(
                 run_failed_activation(
-                    compose_serving_secret_stage_commands(
-                        candidate_package,
-                        ("registry-notary-stage-secrets",),
-                    )[0],
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "verify",
+                        "--package",
+                        str(candidate_package),
+                        "--approved-set",
+                        str(updated_set),
+                        "--expected-closure-sha256",
+                        updated_generation["externally_recorded_closure_sha256"],
+                        "--check-operator-files",
+                        "--format",
+                        "json",
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4589,6 +4605,55 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             write_json_log(
                 logs, "failed_activation_recovery", recovered_verification
             )
+            commands.append(
+                run_command(
+                    "update_verify_current",
+                    privileged_registryctl(
+                        registryctl,
+                        "deploy",
+                        "verify",
+                        "--package",
+                        str(package),
+                        "--approved-set",
+                        str(approved_set),
+                        "--expected-closure-sha256",
+                        initial_generation["externally_recorded_closure_sha256"],
+                        "--check-operator-files",
+                        "--format",
+                        "json",
+                    ),
+                    cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            current_update_verification = stable_deploy_verify_summary(
+                read_closed_json(
+                    logs / "update_verify_current.log",
+                    "fresh current deployment verification",
+                )
+            )
+            write_json_log(
+                logs, "update_verify_current", current_update_verification
+            )
+            for name, command in zip(
+                (
+                    "update_verify_current_relay_public_state",
+                    "update_verify_current_relay_consultation_state",
+                    "update_verify_current_notary_state",
+                ),
+                compose_verify_state_commands(package),
+                strict=True,
+            ):
+                commands.append(
+                    run_command(
+                        name,
+                        command,
+                        cwd=root,
+                        env=environment,
+                        logs=logs,
+                    )
+                )
             for name, command in zip(
                 (
                     "update_preview_relay_public",
@@ -4610,7 +4675,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_command(
                     "update_stop_current",
-                    [*compose_base(package), "down"],
+                    [*compose_base(package), "stop"],
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4675,17 +4740,10 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "updated_start",
-                    [
-                        [
-                            *compose_base(candidate_package),
-                            "up",
-                            "--detach",
-                            "--wait",
-                            "--wait-timeout",
-                            "120",
-                        ],
-                        [*compose_base(candidate_package), "ps"],
-                    ],
+                    compose_start_and_verify_commands(
+                        candidate_package,
+                        include_ps=True,
+                    ),
                     cwd=root,
                     env=environment,
                     logs=logs,
@@ -4721,20 +4779,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             commands.append(
                 run_compose_group(
                     "final_start",
-                    compose_staged_consumer_commands(
-                        candidate_package,
-                        [
-                            *compose_verify_state_commands(candidate_package),
-                            [
-                                *compose_base(candidate_package),
-                                "up",
-                                "--detach",
-                                "--wait",
-                                "--wait-timeout",
-                                "120",
-                            ],
-                        ],
-                    ),
+                    compose_governed_start_commands(candidate_package),
                     cwd=root,
                     env=environment,
                     logs=logs,
