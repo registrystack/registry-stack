@@ -42,6 +42,31 @@ use sha2::{Digest as _, Sha256};
 
 static PROCESS_PATH_LOCK: Mutex<()> = Mutex::new(());
 
+fn shell_fence_after_heading<'a>(markdown: &'a str, heading: &str, occurrence: usize) -> &'a str {
+    let section = markdown
+        .split_once(heading)
+        .unwrap_or_else(|| panic!("missing Markdown heading {heading}"))
+        .1;
+    let section = section
+        .split_once("\n## ")
+        .map_or(section, |(current, _next)| current);
+    let mut remainder = section;
+    for index in 1..=occurrence {
+        remainder = remainder
+            .split_once("```sh\n")
+            .unwrap_or_else(|| panic!("missing shell fence {occurrence} after {heading}"))
+            .1;
+        let (block, after) = remainder
+            .split_once("\n```")
+            .unwrap_or_else(|| panic!("unterminated shell fence after {heading}"));
+        if index == occurrence {
+            return block;
+        }
+        remainder = after;
+    }
+    unreachable!("shell fence occurrence is one-based")
+}
+
 struct ProcessPathGuard(Option<OsString>);
 
 impl ProcessPathGuard {
@@ -2030,6 +2055,10 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         "externally recorded values",
         "## Compose project context",
         "--project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\"",
+        "CURRENT_CLOSURE_SHA256=\"<externally-recorded-current-closure-sha256>\"",
+        "CANDIDATE_CLOSURE_SHA256=\"<externally-recorded-candidate-closure-sha256>\"",
+        "registryctl deploy verify --package \"$CURRENT_PACKAGE\"",
+        "registryctl deploy verify --package \"$CANDIDATE_PACKAGE\"",
     ] {
         assert!(
             runbook.contains(required),
@@ -2119,6 +2148,16 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         "{ordinary_config}\n{action_compose} run --rm --no-deps registry-relay-public-verify-state"
     )));
     let preview_public = runbook.find("registry-relay-public-preview-state").unwrap();
+    let current_package_verify = runbook
+        .find("registryctl deploy verify --package \"$CURRENT_PACKAGE\"")
+        .unwrap();
+    let candidate_package_verify = runbook
+        .find("registryctl deploy verify --package \"$CANDIDATE_PACKAGE\"")
+        .unwrap();
+    assert!(
+        current_package_verify < candidate_package_verify
+            && candidate_package_verify < preview_public
+    );
     let preview_consultation = runbook
         .find("registry-relay-consultation-preview-state")
         .unwrap();
@@ -2140,6 +2179,27 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
             && accept_public < accept_consultation
             && accept_consultation < accept_notary
     );
+    let update_start = runbook[accept_notary..]
+        .find("generated/compose.yaml up --detach --wait --wait-timeout 120")
+        .map(|offset| accept_notary + offset)
+        .unwrap();
+    let post_start_verify_public = runbook[update_start..]
+        .find("registry-relay-public-verify-state")
+        .map(|offset| update_start + offset)
+        .unwrap();
+    let post_start_verify_consultation = runbook[post_start_verify_public..]
+        .find("registry-relay-consultation-verify-state")
+        .map(|offset| post_start_verify_public + offset)
+        .unwrap();
+    let post_start_verify_notary = runbook[post_start_verify_consultation..]
+        .find("registry-notary-verify-state")
+        .map(|offset| post_start_verify_consultation + offset)
+        .unwrap();
+    assert!(
+        update_start < post_start_verify_public
+            && post_start_verify_public < post_start_verify_consultation
+            && post_start_verify_consultation < post_start_verify_notary
+    );
     assert!(runbook
         .contains("Do not stop any service or accept any lane unless every preview succeeds"));
     assert!(runbook.contains("audit-before-mutation"));
@@ -2149,6 +2209,34 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
     assert!(!runbook.contains("registry-notary-serve-stage-secrets"));
     assert!(!runbook.contains("registry-postgresql-serve-stage-secrets"));
     assert!(!runbook.contains("--force"));
+}
+
+#[test]
+fn public_operator_command_blocks_match_the_generated_runbook() {
+    let fixture = package_fixture();
+    let runbook = fs::read_to_string(fixture.package.join("generated/RUNBOOK.md")).unwrap();
+    let standalone = include_str!(
+        "../../../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx"
+    );
+    let update =
+        include_str!("../../../docs/site/src/content/docs/operate/upgrade-and-rollback.mdx");
+
+    assert_eq!(
+        shell_fence_after_heading(standalone, "## Initialize each product once", 2),
+        shell_fence_after_heading(&runbook, "## First installation only", 1),
+    );
+    assert_eq!(
+        shell_fence_after_heading(standalone, "## Run the package standalone", 1),
+        shell_fence_after_heading(&runbook, "## Ordinary start and stop", 1),
+    );
+    assert_eq!(
+        shell_fence_after_heading(
+            update,
+            "## Preview, accept, verify, and start the candidate",
+            1,
+        ),
+        shell_fence_after_heading(&runbook, "## Product or image update", 2),
+    );
 }
 
 #[test]

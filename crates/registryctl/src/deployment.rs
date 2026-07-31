@@ -31,6 +31,7 @@ pub const DEPLOYMENT_OPERATOR_FILES_SCHEMA_VERSION: &str = "1.0";
 
 const MAX_PORTABLE_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PACKAGE_FILE_BYTES: u64 = 256 * 1024 * 1024;
+const SECRET_CONSUMERS_SCHEMA: &str = "registry.project.secret-consumers.v1";
 
 const RELAY_PUBLIC: &str = "relay-public";
 const RELAY_CONSULTATION: &str = "relay-consultation";
@@ -1057,10 +1058,28 @@ pub struct DeploymentOperatorFileV1 {
     pub required_keys: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretConsumerDescriptorV1 {
+    schema: String,
+    product: String,
+    consumers: Vec<SecretConsumerV1>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretConsumerV1 {
+    kind: String,
+    locator: String,
+    config_pointer: String,
+}
+
 fn operator_file_inventory(
     runtime: &LockedRuntimeMappingV1,
     binding: &DeploymentBindingV1,
+    lanes: &[VerifiedLanePackageSourceV1],
 ) -> Result<DeploymentOperatorFileInventoryV1> {
+    let environment_keys = signed_environment_keys(lanes)?;
     let mut consumers = BTreeMap::<String, BTreeSet<String>>::new();
     for (lane, product) in [
         ("relay-public", &runtime.relay_public),
@@ -1113,6 +1132,10 @@ fn operator_file_inventory(
             let file_consumers = consumers
                 .remove(&id)
                 .ok_or_else(|| anyhow!("operator file {id} has no runtime consumer"))?;
+            let mut required_keys = first.required_keys.iter().cloned().collect::<BTreeSet<_>>();
+            if let Some(keys) = environment_keys.get(&id) {
+                required_keys.extend(keys.iter().cloned());
+            }
             Ok(DeploymentOperatorFileV1 {
                 id,
                 path: path.clone(),
@@ -1120,7 +1143,7 @@ fn operator_file_inventory(
                 format: first.format,
                 mode: first.mode.clone(),
                 allowed_owners: first.allowed_owners.clone(),
-                required_keys: first.required_keys.clone(),
+                required_keys: required_keys.into_iter().collect(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1132,6 +1155,67 @@ fn operator_file_inventory(
         schema_version: DEPLOYMENT_OPERATOR_FILES_SCHEMA_VERSION.to_string(),
         files,
     })
+}
+
+fn signed_environment_keys(
+    lanes: &[VerifiedLanePackageSourceV1],
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    if lanes.len() != 3 {
+        bail!("deployment requires exactly three signed product lanes");
+    }
+    let mut keys = BTreeMap::new();
+    for lane in lanes {
+        let descriptor_path = lane
+            .bundle_dir
+            .join("descriptors/secret-consumers.json");
+        let bytes = read_bounded_regular_file(&descriptor_path, MAX_PORTABLE_DOCUMENT_BYTES)
+            .context("failed to read signed secret-consumer descriptor")?;
+        let descriptor: SecretConsumerDescriptorV1 = serde_json::from_slice(&bytes)
+            .context("signed secret-consumer descriptor is not strict JSON")?;
+        let expected_product = match lane.lane {
+            ProductLaneV1::RelayPublic | ProductLaneV1::RelayConsultation => "registry-relay",
+            ProductLaneV1::Notary => "registry-notary",
+        };
+        if descriptor.schema != SECRET_CONSUMERS_SCHEMA
+            || descriptor.product != expected_product
+            || descriptor.consumers.len() > 256
+        {
+            bail!("signed secret-consumer descriptor has an invalid identity or size");
+        }
+        let mut lane_keys = BTreeSet::new();
+        for consumer in descriptor.consumers {
+            if consumer.config_pointer.is_empty()
+                || consumer.config_pointer.len() > 1024
+                || !consumer.config_pointer.starts_with('/')
+                || consumer.locator.is_empty()
+                || consumer.locator.len() > 4096
+                || !matches!(consumer.kind.as_str(), "environment" | "file")
+            {
+                bail!("signed secret-consumer descriptor contains an invalid consumer");
+            }
+            if consumer.kind == "environment" {
+                let mut bytes = consumer.locator.bytes();
+                if consumer.locator.len() > 128
+                    || !matches!(bytes.next(), Some(b'A'..=b'Z' | b'_'))
+                    || !bytes.all(|byte| {
+                        matches!(byte, b'A'..=b'Z' | b'0'..=b'9' | b'_')
+                    })
+                {
+                    bail!(
+                        "signed secret-consumer descriptor contains an invalid environment key"
+                    );
+                }
+                lane_keys.insert(consumer.locator);
+            }
+        }
+        if keys
+            .insert(format!("{}-environment", lane.lane.id()), lane_keys)
+            .is_some()
+        {
+            bail!("deployment contains a duplicate signed product lane");
+        }
+    }
+    Ok(keys)
 }
 
 fn add_action_consumers(
@@ -4352,7 +4436,23 @@ Selecting `compose.initialize.yaml` is the only supported way to initialize an e
 {compose_ordinary} down\n\
 ```\n\n\
 ## Product or image update\n\n\
-Before shutdown, run `registryctl deploy verify --package .` against the current package and the candidate package, render and verify the candidate effective Compose model, verify every operator file against `generated/operator-files.v1.json`, verify each current and candidate bundle and anchor, and run all three current `verify_state` actions above. Preserve the intact current closure as `generated.previous/` before publishing the candidate. From the candidate package, stage its operator files and preview every affected lane while all current services remain up. Do not stop any service or accept any lane unless every preview succeeds.\n\n\
+Copy the intact current package to the candidate path and regenerate that copy in place. The candidate must retain the exact current `generated/` closure as `generated.previous/` and preserve every operator-owned file. Before shutdown, verify both packages against their externally recorded closure digests and approved sets, validate both effective Compose models, and run all three current read-only state checks:\n\n\
+```sh\n\
+CURRENT_PACKAGE=\"<path-to-current-package>\"\n\
+CURRENT_APPROVED_SET=\"<path-to-current-approved-set.v1.json>\"\n\
+CURRENT_CLOSURE_SHA256=\"<externally-recorded-current-closure-sha256>\"\n\
+CANDIDATE_PACKAGE=\"<path-to-candidate-package>\"\n\
+CANDIDATE_APPROVED_SET=\"<path-to-candidate-approved-set.v1.json>\"\n\
+CANDIDATE_CLOSURE_SHA256=\"<externally-recorded-candidate-closure-sha256>\"\n\
+registryctl deploy verify --package \"$CURRENT_PACKAGE\" --approved-set \"$CURRENT_APPROVED_SET\" --expected-closure-sha256 \"$CURRENT_CLOSURE_SHA256\" --check-operator-files\n\
+registryctl deploy verify --package \"$CANDIDATE_PACKAGE\" --approved-set \"$CANDIDATE_APPROVED_SET\" --expected-closure-sha256 \"$CANDIDATE_CLOSURE_SHA256\" --check-operator-files\n\
+(cd \"$CURRENT_PACKAGE\" && {compose_ordinary} config --no-interpolate --no-env-resolution --quiet)\n\
+(cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-relay-public-verify-state)\n\
+(cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state)\n\
+(cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-notary-verify-state)\n\
+(cd \"$CANDIDATE_PACKAGE\" && {compose_actions} config --no-interpolate --no-env-resolution --quiet)\n\
+```\n\n\
+These package checks verify every locked bundle, anchor, deployment file, and operator-file boundary. Keep all current services running while previewing every candidate lane. Do not stop any service or accept any lane unless every preview succeeds. Run the following block from the candidate package root:\n\n\
 ```sh\n\
 {compose_actions} run --rm --no-deps registry-relay-public-preview-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-preview-state\n\
@@ -4366,6 +4466,10 @@ Before shutdown, run `registryctl deploy verify --package .` against the current
 {compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {serving_secret_staging_commands}\n\
 {compose_ordinary} up --detach --wait --wait-timeout 120\n\
+{compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
+{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
+{compose_ordinary} ps\n\
 ```\n\n\
 Each `accept_state` action uses the locked audit-before-mutation path. The manual abort boundary is the first successful acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
 ## State recovery\n\n\
