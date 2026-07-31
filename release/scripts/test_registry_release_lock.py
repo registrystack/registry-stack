@@ -209,6 +209,14 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 set(schema["$defs"]["starter"]["properties"]["id"]["enum"]),
                 expected_starter_ids,
             )
+            starter_constraints = {
+                constraint["contains"]["properties"]["id"]["const"]: constraint
+                for constraint in schema["properties"]["embedded_starters"]["allOf"]
+            }
+            self.assertEqual(set(starter_constraints), expected_starter_ids)
+            for constraint in starter_constraints.values():
+                self.assertEqual(constraint["minContains"], 1)
+                self.assertEqual(constraint["maxContains"], 1)
             self.assertEqual(
                 payload["runtime"]["relay_consultation"]["serve"]["command"],
                 ["product-action", "relay-consultation", "serve"],
@@ -493,6 +501,42 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     ]
                 )
             )
+
+    def test_embedded_starter_schema_rejects_two_distinct_http_entries(
+        self,
+    ) -> None:
+        schema = json.loads(
+            (
+                ROOT / "release/registry-release-lock-payload.v1.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        starter_schema = schema["properties"]["embedded_starters"]
+        starters = [
+            {
+                "id": "http",
+                "release": "1.0.0",
+                "content_digest": f"sha256:{'1' * 64}",
+            },
+            {
+                "id": "http",
+                "release": "1.0.0",
+                "content_digest": f"sha256:{'2' * 64}",
+            },
+        ]
+
+        self.assertEqual(len(starters), starter_schema["minItems"])
+        self.assertEqual(len(starters), starter_schema["maxItems"])
+        for constraint in starter_schema["allOf"]:
+            starter_id = constraint["contains"]["properties"]["id"]["const"]
+            matches = sum(starter["id"] == starter_id for starter in starters)
+            if not (
+                constraint["minContains"]
+                <= matches
+                <= constraint["maxContains"]
+            ):
+                break
+        else:
+            self.fail("duplicate HTTP starters satisfied the closed starter schema")
 
     def test_postgresql_bootstrap_marker_refuses_a_second_mutating_run(
         self,

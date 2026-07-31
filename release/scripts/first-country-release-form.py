@@ -142,22 +142,24 @@ STABLE_READER_EVIDENCE_FILES = {
     "spreadsheet/test.json",
     "spreadsheet/check.json",
     "spreadsheet/build.json",
+    "spreadsheet-evidence/before-trace.txt",
+    "spreadsheet-evidence/after-trace.txt",
+    "spreadsheet-evidence/test.txt",
+    "spreadsheet-evidence/test.json",
+    "spreadsheet-evidence/check.json",
+    "spreadsheet-evidence/build.json",
+    "spreadsheet-evidence/dev-start.txt",
+    "spreadsheet-evidence/records-denied.json",
+    "spreadsheet-evidence/records-request.json",
+    "spreadsheet-evidence/evidence-request.json",
+    "spreadsheet-evidence/dev-smoke.txt",
+    "spreadsheet-evidence/dev-down.txt",
     "opencrvs-init.txt",
     "opencrvs-overlay.txt",
     "opencrvs-check-explain.txt",
     "opencrvs/test.json",
     "opencrvs/check.json",
     "opencrvs/build.json",
-    "initial-approval/relay-public-anchor.txt",
-    "initial-approval/relay-public-sign.txt",
-    "initial-approval/relay-public-verify.txt",
-    "initial-approval/relay-consultation-anchor.txt",
-    "initial-approval/relay-consultation-sign.txt",
-    "initial-approval/relay-consultation-verify.txt",
-    "initial-approval/notary-anchor.txt",
-    "initial-approval/notary-sign.txt",
-    "initial-approval/notary-verify.txt",
-    "initial-approval/approved-set.txt",
     "public-source-init.txt",
     "public-source-overlay.txt",
     "public-source-test.txt",
@@ -1381,6 +1383,12 @@ def stable_reader_summary(
         {
             "id": "spreadsheet",
             "source": "embedded-spreadsheet-template",
+            "covers": [
+                "starter",
+                "evidence-rule-change",
+                "offline-fixtures",
+                "reviewed-build",
+            ],
             "reports": [
                 "spreadsheet/init.txt",
                 "spreadsheet/test.txt",
@@ -1389,6 +1397,18 @@ def stable_reader_summary(
                 "spreadsheet/test.json",
                 "spreadsheet/check.json",
                 "spreadsheet/build.json",
+                "spreadsheet-evidence/before-trace.txt",
+                "spreadsheet-evidence/after-trace.txt",
+                "spreadsheet-evidence/test.txt",
+                "spreadsheet-evidence/test.json",
+                "spreadsheet-evidence/check.json",
+                "spreadsheet-evidence/build.json",
+                "spreadsheet-evidence/dev-start.txt",
+                "spreadsheet-evidence/records-denied.json",
+                "spreadsheet-evidence/records-request.json",
+                "spreadsheet-evidence/evidence-request.json",
+                "spreadsheet-evidence/dev-smoke.txt",
+                "spreadsheet-evidence/dev-down.txt",
             ],
         },
         {
@@ -1404,17 +1424,6 @@ def stable_reader_summary(
                 "opencrvs/test.json",
                 "opencrvs/check.json",
                 "opencrvs/build.json",
-            ],
-        },
-        {
-            "id": "initial-local-approval",
-            "source": "maintained-spreadsheet-template",
-            "covers": ["independent-lane-keys", "anchors", "bundles", "approved-set"],
-            "reports": [
-                "initial-approval/relay-public-verify.txt",
-                "initial-approval/relay-consultation-verify.txt",
-                "initial-approval/notary-verify.txt",
-                "initial-approval/approved-set.txt",
             ],
         },
     ]
@@ -1448,7 +1457,7 @@ def stable_reader_summary(
         "status": "passed",
         "mode": "sealed",
         "registryctl_version": version,
-        "projects": ["http", "spreadsheet", "opencrvs-events-api", "initial-local-approval"],
+        "projects": ["http", "spreadsheet", "opencrvs-events-api"],
     }
 
 
@@ -3551,7 +3560,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         run_nonce = os.urandom(8).hex()
         proof_project_id = f"first-country-release-form-{run_nonce}"
         install_dir = root / "install"
-        project = root / "reader-spreadsheet-project"
+        project = root / "reader-http-project"
         oauth_project = root / "reader-opencrvs-project"
         reader_evidence = evidence_dir / "reader-journeys"
         public_source_evidence = evidence_dir / "public-source-live"
@@ -5242,7 +5251,7 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         or reader.get("mode") != "sealed"
         or reader.get("registryctl_version") != tag.removeprefix("v")
         or reader.get("projects")
-        != ["http", "spreadsheet", "opencrvs-events-api", "initial-local-approval"]
+        != ["http", "spreadsheet", "opencrvs-events-api"]
         or not isinstance(reader.get("evidence_sha256"), dict)
         or not all(
             isinstance(name, str)

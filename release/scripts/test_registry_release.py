@@ -551,7 +551,7 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("BUILDER_IMAGE=", tutorial)
         self.assertNotIn(module.RUST_BUILDER, tutorial)
         self.assertIn(
-            "exact runtime sequence is release-gated from the sealed candidate payload",
+            "disposable runtime runs only with an explicitly installed sealed binary",
             tutorial,
         )
 
