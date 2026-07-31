@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -16,7 +17,6 @@ const execFileAsync = promisify(execFile);
 const archiveExecutionEnvironmentKeys = Object.freeze([
   'COMSPEC',
   'ComSpec',
-  'HOME',
   'Path',
   'PATH',
   'PATHEXT',
@@ -25,7 +25,22 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
   'TEMP',
   'TMP',
   'TMPDIR',
-  'USERPROFILE',
+  // Transport-only settings let controlled builders reach pinned Git objects
+  // through their required proxy or trust store without admitting unrelated
+  // hosted-runner metadata into archive generation.
+  'ALL_PROXY',
+  'CURL_CA_BUNDLE',
+  'GIT_SSL_CAINFO',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'NODE_EXTRA_CA_CERTS',
+  'NO_PROXY',
+  'SSL_CERT_DIR',
+  'SSL_CERT_FILE',
+  'all_proxy',
+  'https_proxy',
+  'http_proxy',
+  'no_proxy',
 ]);
 export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/src/data/generated/project-authoring-journeys.json',
@@ -50,6 +65,7 @@ function compareEntryNames(left, right) {
 
 function archiveBuildEnvironment(inheritedEnvironment, docset, {
   base,
+  homeDirectory,
   indexable,
 }) {
   const environment = {};
@@ -65,6 +81,13 @@ function archiveBuildEnvironment(inheritedEnvironment, docset, {
     DOCS_BASE: base,
     DOCS_DOCSET: docset.id,
     DOCS_RELEASED_ARCHIVE: indexable ? 'true' : '',
+    GIT_ATTR_NOSYSTEM: '1',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_KEY_0: 'core.autocrlf',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_VALUE_0: 'false',
+    HOME: homeDirectory,
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
     NO_COLOR: '1',
@@ -73,6 +96,9 @@ function archiveBuildEnvironment(inheritedEnvironment, docset, {
     PUBLIC_UMAMI_WEBSITE_ID: '',
     SOURCE_DATE_EPOCH: '0',
     TZ: 'UTC',
+    USERPROFILE: homeDirectory,
+    XDG_CACHE_HOME: resolve(homeDirectory, '.cache'),
+    XDG_CONFIG_HOME: resolve(homeDirectory, '.config'),
   };
 }
 
@@ -256,30 +282,34 @@ export async function buildDocsetArchive(docset, {
     throw new Error(`Docset "${docset.id}" is not archived`);
   }
 
+  const versionOutDir = await validateArchiveOutputLocation(docsRoot, docset);
+  const rootOutDir = releaseRootOutputDirectory(docsRoot, docset);
+  await rm(rootOutDir, { recursive: true, force: true });
+  await rm(versionOutDir, { recursive: true, force: true });
+  const archiveHome = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-home-'));
   // Archives are immutable release files. Pass only the operating-system
   // variables needed to execute local tools, then bind every build input that
   // may affect their bytes. Hosted-runner metadata and mutable deployment
   // configuration must not enter the archive build.
   const rootEnv = archiveBuildEnvironment(environment, docset, {
     base: '/',
+    homeDirectory: archiveHome,
     indexable,
   });
   const versionEnv = archiveBuildEnvironment(environment, docset, {
     base: docset.path,
+    homeDirectory: archiveHome,
     indexable: false,
   });
-  const versionOutDir = await validateArchiveOutputLocation(docsRoot, docset);
-  const rootOutDir = releaseRootOutputDirectory(docsRoot, docset);
-  await rm(rootOutDir, { recursive: true, force: true });
-  await rm(versionOutDir, { recursive: true, force: true });
   // Current-source generators consume the checked-out registryctl contracts
   // and label their output as unreleased. Release archives instead stage those
   // generated artifacts from the docset's pinned source ref and refresh only
   // inputs whose generators honor DOCS_DOCSET. Released archives are built at
   // the canonical root so Pages can promote their bytes without rewriting
   // links or canonical metadata.
-  const restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
+  let restoreGeneratedArtifacts = async () => {};
   try {
+    restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
     await runCommand('npm', ['run', 'generate:archive'], rootEnv);
     await runCommand('npx', ['astro', 'check'], rootEnv);
     await runCommand(
@@ -297,7 +327,11 @@ export async function buildDocsetArchive(docset, {
     await applySeo(rootOutDir, { indexable });
     await applySeo(versionOutDir, { indexable: false });
   } finally {
-    await restoreGeneratedArtifacts();
+    try {
+      await restoreGeneratedArtifacts();
+    } finally {
+      await rm(archiveHome, { recursive: true, force: true });
+    }
   }
   console.log(
     `Built released docset ${docset.id} at ${rootOutDir} and ${versionOutDir}.`,
