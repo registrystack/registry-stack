@@ -126,24 +126,20 @@ export default defineConfig({
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
-    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/author-registry-project/'),
+    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
     '/journeys/bounded-http/': internalRedirect('/tutorials/author-registry-project/'),
     '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/configure-project-script-adapter/'),
     '/journeys/exact-snapshot/': internalRedirect('/configure/'),
-    '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/author-registry-project/'),
+    '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
-    '/start/your-first-call/': internalRedirect('/tutorials/author-registry-project/'),
+    '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
     // Retired hosted and Solmara Lab tutorials now land on a chooser that
     // distinguishes those flows from the supported local beginner path.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
     '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/quickstart/'),
-    // Retired spreadsheet and claim tutorials enter the supported HTTP project path.
-    '/tutorials/publish-spreadsheet-secured-registry-api/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/use-your-spreadsheet/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/verify-claim-registry-api/': internalRedirect('/tutorials/author-registry-project/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
@@ -296,15 +292,18 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Build an HTTP project', slug: 'tutorials/author-registry-project' },
+            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Expose spreadsheet evidence', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
             { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
           ],
         },
         {
-          label: 'Connect your data',
+          label: 'Connect an existing registry',
           items: [
             { label: 'Overview', slug: 'configure' },
+            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
             { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
             { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
             { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },

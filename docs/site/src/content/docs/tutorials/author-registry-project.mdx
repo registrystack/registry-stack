@@ -1,6 +1,6 @@
 ---
-title: Build and run an HTTP registry project
-description: Create the HTTP starter, test its fixtures, run the product path locally, and build unsigned product inputs.
+title: Connect an existing HTTP registry
+description: Author a bounded HTTP integration, test it with synthetic observations, run it locally, and build unsigned product inputs.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,12 +13,12 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Create a Registry Stack project from the released HTTP starter, test its synthetic source
-contract offline, and run the same authorization and minimization boundaries through Registry
-Relay and Registry Notary.
+Use the released HTTP starter to model one bounded lookup against a registry API.
+Test the contract with synthetic observations before binding an institution-owned endpoint, then
+run the authorization and minimization boundaries through Registry Relay and Registry Notary.
 
 <QuickstartMeta
-  outcome="A tested HTTP project, a disposable local runtime, and unsigned inputs for three independently approved product lanes."
+  outcome="A tested bounded HTTP integration, a disposable local runtime, and unsigned inputs for three independently approved product lanes."
   time="About 15 minutes after Registryctl and Docker are installed"
   level="Local development with synthetic records"
   prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell and a text editor'] }
@@ -64,7 +64,7 @@ Compose must report version 2.35.0 or later.
 Start in a directory that is not inside another Registry Stack project.
 Registryctl otherwise discovers the nearest parent containing `registry-stack.yaml`.
 
-## Create the HTTP project
+## Create the bounded HTTP integration
 
 Initialize the tested HTTP template and enter the project:
 
@@ -378,8 +378,9 @@ Registryctl reports plus the two public responses when
 
 ## What you built
 
-You tested a bounded HTTP integration, ran the real Relay and Notary path against a fixed
-synthetic source, and produced unsigned inputs for three product lanes.
+You modeled the boundary for an existing HTTP registry, tested it with synthetic observations,
+ran the real Relay and Notary path against a fixed synthetic source, and produced unsigned inputs
+for three product lanes.
 The denial path performed no source work.
 The authorized path released only the configured claim identifiers.
 

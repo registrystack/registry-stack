@@ -91,10 +91,13 @@ schema-only dump, or list of unrelated hashes is not a recovery point.
 
 ## Cut over pre-1.0 authored intent
 
-Keep the pre-1.0 source project unchanged. Create a separate 1.0 HTTP project:
+Keep the pre-1.0 source project unchanged. Create a separate 1.0 project from the public starter
+that matches the source shape:
 
 ```sh
 registryctl init <candidate-directory> --template http
+# or
+registryctl init <candidate-directory> --template spreadsheet
 ```
 
 Copy only reviewed authored intent into the candidate. Do not copy generated output,

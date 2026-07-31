@@ -99,10 +99,11 @@ file as adopter-owned input.
 Initialization MUST accept only an absent destination or an empty real directory and MUST NOT
 overwrite an existing project.
 
-REQ-PR-REGISTRYCTL-006: The only public 1.0 template selection MUST be
-`registryctl init <project-directory> --template http`.
-Initialization MUST be offline and MUST copy the tested HTTP template embedded in the installed
-release.
+REQ-PR-REGISTRYCTL-006: The public 1.0 template selections MUST be
+`registryctl init <project-directory> --template http` and
+`registryctl init <project-directory> --template spreadsheet`.
+Initialization MUST be offline and MUST copy the selected tested template embedded in the
+installed release.
 OAuth-backed Rhai and domain-specific integrations MUST be authored adaptations, not additional
 templates.
 
@@ -246,8 +247,7 @@ A command MUST NOT return `0` when its machine-readable report has a selected fa
 REQ-PR-REGISTRYCTL-028: The removed public roots `add`, `start`, `stop`, `restart`, `status`,
 `open`, `smoke`, `logs`, `preflight`, `capabilities`, `compare`, `promote`, `migrate`, `bundle`,
 `anchor`, `authoring`, `project`, `bruno`, and `update-check` MUST be usage failures.
-The removed `init relay`, `init --from`, spreadsheet template, and `test --live` forms MUST also be
-usage failures.
+The removed `init relay`, `init --from`, and `test --live` forms MUST also be usage failures.
 
 The following surfaces remain outside the 1.0 compatibility promise:
 

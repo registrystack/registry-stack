@@ -1,0 +1,261 @@
+---
+title: Start a registry from a spreadsheet
+description: Create a protected spreadsheet registry, test its evidence rules, and run Registry Relay and Registry Notary locally.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-31"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Start a registry from a maintained synthetic workbook, expose a protected
+records API through Registry Relay, and evaluate bounded evidence through
+Registry Notary.
+
+<QuickstartMeta
+  outcome="A tested spreadsheet registry, a disposable Relay and Notary runtime, and unsigned inputs ready for institutional review."
+  time="About 15 minutes after Registryctl and Docker are installed"
+  level="Local development with synthetic records"
+  prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell and a text editor'] }
+/>
+
+The workbook and records in this tutorial are synthetic.
+Do not replace them with personal data or production credentials during the
+first run.
+
+## Before you start
+
+Choose an exact published 1.x tag from the
+[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
+download its installer:
+
+```sh
+tag="v<major>.<minor>.<patch>"
+installer="registryctl-${tag}-install.sh"
+curl --proto '=https' --tlsv1.2 --fail --location \
+  --output "$installer" \
+  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
+```
+
+This quick installation path trusts GitHub and TLS.
+The installer verifies the downloaded Registryctl binary and matching signed
+release lock against the release checksums.
+When your acceptance process requires publisher authentication, follow
+`release/VERIFY.md` from the same tag before running the installer.
+
+```sh
+bash "$installer"
+```
+
+Confirm that Registryctl and Docker Compose are available:
+
+```sh
+registryctl --version
+docker compose version
+```
+
+Registryctl reports its installed version without contacting the network.
+Compose must report version 2.35.0 or later.
+
+Start in a directory that is not inside another Registry Stack project.
+Registryctl otherwise discovers the nearest parent containing
+`registry-stack.yaml`.
+
+## Create the spreadsheet registry
+
+Initialize the spreadsheet template and enter the project:
+
+```sh
+registryctl init my-first-registry --template spreadsheet
+cd my-first-registry
+```
+
+Initialization reports the created project and next action:
+
+```text
+Created Registry Stack project fictional-public-works-registry in my-first-registry.
+Next: cd my-first-registry && registryctl test
+```
+
+Registryctl copies the template and workbook from the installed release.
+It does not fetch a remote template.
+
+The authored files have separate responsibilities:
+
+| Path | Decision you own |
+| --- | --- |
+| `registry-stack.yaml` | Registry API, purpose, caller scopes, evidence claims, and disclosure |
+| `data/public_works_projects.xlsx` | The contained workbook source |
+| `entities/projects.yaml` | Workbook record schema, stable key, and materialization limits |
+| `integrations/project-record-snapshot/` | Bounded Relay-to-Notary lookup and synthetic fixtures |
+| `environments/local.yaml` | Worksheet mapping, development scenario, and secret references |
+
+Files under `.registry-stack/` are generated.
+Make changes in the authored files, not in generated product configuration.
+
+## Test the registry and evidence rules
+
+Run every fixture offline:
+
+```sh
+registryctl test
+```
+
+The maintained starter reports:
+
+```text
+Registry Stack test: passed for fictional-public-works-registry.
+Fixtures: 7.
+Next: registryctl dev
+```
+
+This command checks the synthetic match, policy non-match, missing-record,
+authorization-denial, and Relay-to-Notary binding cases.
+It does not start Docker, resolve a secret, or contact a source.
+
+Inspect the successful evidence path:
+
+```sh
+registryctl test \
+  --integration project-record-snapshot \
+  --fixture match \
+  --trace
+```
+
+The focused result is:
+
+```text
+Registry Stack test: passed for fictional-public-works-registry.
+Fixtures: 3.
+  PASS project-record-snapshot.match
+    inputs: project_id
+    calls: call=1 operation=snapshot method=GET path=/snapshot query=[] headers=[] body=none
+    outputs: status
+    claims: project-record-exists, project-status-accepted
+    outcome: match
+  PASS project-record-snapshot.match::derived/request_to_consultation_binding
+    inputs: project_id
+    calls: notary-relay-consultation
+    claims: project-record-exists, project-status-accepted
+    source access: true
+  PASS project-record-snapshot.match::derived/authorization_before_source
+    inputs: project_id
+    expected error: authorization.denied
+    source access: false
+Next: registryctl dev
+```
+
+The trace shows one bounded snapshot output and the two predicate claim
+identifiers.
+The denied case reaches no source.
+Do not use `--trace` with observations copied from a production source.
+
+## Run Registry Relay and Registry Notary
+
+Start the disposable development runtime in the background:
+
+```sh
+registryctl dev --detach
+```
+
+Registryctl validates the workbook and project, creates development-only trust
+and credentials, starts digest-locked Registry Relay and Registry Notary
+images, and prints loopback endpoints plus `Request`, `Smoke`, `Logs`, and
+`Down` actions.
+
+Run the maintained denial and authorized checks:
+
+```sh
+registryctl dev smoke
+```
+
+A passing report has this shape:
+
+```text
+Development smoke: passed.
+  unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0; minimized_claim_ids=none
+  authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1; minimized_claim_ids=project-record-exists,project-status-accepted
+```
+
+The first result proves authorization stopped source access.
+The second proves one bounded source access and returns only the claim
+identifiers, not the workbook row or its `status` value.
+Relay owns the workbook read.
+Notary owns claim evaluation and disclosure.
+
+## Stop the disposable runtime
+
+Stop the bound runtime and remove its development state:
+
+```sh
+registryctl dev down
+```
+
+Registryctl reports:
+
+```text
+Stopped and removed the bound disposable development runtime.
+```
+
+The authored workbook, project, and fixtures remain.
+Development trust and credentials do not become governed deployment inputs.
+
+## Build the review inputs
+
+Validate the complete authored project and build deterministic unsigned inputs:
+
+```sh
+registryctl check --explain
+registryctl build
+```
+
+The build ends with:
+
+```text
+Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Build output: .registry-stack/build/local
+Next: registryctl trust anchor create --help
+```
+
+The three lanes preserve separate ownership for the public Relay, the private
+consultation Relay used by Notary, and Notary itself.
+Building does not approve, sign, or deploy them.
+
+## What you built
+
+You started from a spreadsheet and ran the complete local Registry Stack path:
+
+- Registry Relay exposed a protected, read-only records surface.
+- Registry Notary evaluated bounded predicate evidence without returning the
+  workbook row.
+- Authorization denial happened before source access.
+- The successful path accessed the source once and minimized the result.
+- The build produced separate unsigned inputs for the three approval lanes.
+
+## Next
+
+- [Use your own spreadsheet](../use-your-spreadsheet/) after the synthetic
+  path works.
+- [Connect an existing HTTP registry](../author-registry-project/) when the
+  institution already operates an API.
+- [Prepare an operator handoff](../../operate/) when authored intent is ready
+  for independent approval.
+- [Review security boundaries](../../security/) before introducing real data,
+  callers, or credentials.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `registryctl init` reports a non-empty destination | Registryctl never merges a starter into an existing directory. | Choose an absent or empty directory. |
+| `registryctl test` reports workbook or fixture diagnostics | An authored file no longer matches the maintained project. | Restore the starter for the first run, or complete the spreadsheet adaptation before testing again. |
+| `registryctl dev` reports that Docker is unavailable | Docker Engine is not running or Compose is older than 2.35.0. | Start Docker and confirm `docker compose version`. |
+| A development port is already in use | Another process owns a required loopback port. | Stop that process, then run `registryctl dev` again. |
+| A generated artifact integrity check fails | A file under `.registry-stack/` was edited or replaced. | Remove the disposable generated state and rebuild from the authored project. |

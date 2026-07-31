@@ -59,6 +59,7 @@ Human prose is not a machine contract.
 
 ```text
 registryctl init <project-directory> --template http
+registryctl init <project-directory> --template spreadsheet
 ```
 
 `init` is offline and copies a template embedded in the installed release.
@@ -66,6 +67,8 @@ The destination may be absent or a pre-existing empty real directory.
 Registryctl validates the project and editor setup in private staging before publishing
 the complete project. A staging failure leaves an absent destination absent and a
 pre-existing empty destination empty.
+Use `http` for a bounded HTTP source.
+Use `spreadsheet` for a contained workbook source.
 OAuth-backed Rhai adapts the HTTP project; OpenCRVS, DHIS2, FHIR, and other systems are not init
 templates.
 

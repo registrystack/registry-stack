@@ -49,7 +49,7 @@ API-key auth has its own startup prerequisite: each `api_keys` entry needs a con
 fingerprint reference, and the referenced value must resolve to a canonical
 `sha256:<64 lowercase hex chars>` fingerprint.
 Relay fails closed at startup if the reference is missing or malformed; see the
-[deployment guide](../../tutorials/deploy-standalone-with-own-data/).
+[generated Compose guide](../../operate/single-node-compose-behind-proxy/).
 Bind runs once per process; the per-request path assumes the bound state is valid.
 
 ### Per request: four phases in sequence

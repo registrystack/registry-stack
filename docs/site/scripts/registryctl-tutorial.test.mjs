@@ -162,18 +162,59 @@ test('accepts matching test, check, and build reports with derived security evid
   );
 });
 
-test('evidence manifest records distinct retained HTTP and OAuth projects', (t) => {
+test('accepts snapshot reports with explicit minimized outputs and claims', () => {
+  const authorization = {
+    integration: 'project-record-snapshot',
+    fixture: 'match::derived/authorization_before_source',
+    expected_error: 'authorization.denied',
+    source_access: false,
+    passed: true,
+  };
+  const snapshot = {
+    integration: 'project-record-snapshot',
+    fixture: 'match',
+    outcome: 'match',
+    outputs: ['status'],
+    claims: ['project-record-exists', 'project-status-accepted'],
+    passed: true,
+  };
+  const common = {
+    schema_version: 'registryctl.project_command.v1',
+    project: 'fictional-public-works-registry',
+    environment: 'local',
+    fixtures: [snapshot, authorization],
+  };
+  const testReport = JSON.stringify({ ...common, status: 'passed' });
+  const checkReport = JSON.stringify({ ...common, status: 'valid' });
+  const buildReport = JSON.stringify({
+    schema_version: 'registryctl.reviewed_project_build_report.v1',
+    build: { ...common, status: 'built' },
+    affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+  });
+
+  assert.doesNotThrow(() =>
+    assertProjectReports(
+      testReport,
+      checkReport,
+      buildReport,
+      'fictional-public-works-registry',
+      'snapshot',
+    ),
+  );
+});
+
+test('evidence manifest records distinct retained spreadsheet and OAuth projects', (t) => {
   const root = mkdtempSync(resolve(tmpdir(), 'registryctl-tutorial-manifest-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const reports = resolve(root, 'reports');
-  const retainedHttp = resolve(root, 'reader-http-project');
+  const retainedSpreadsheet = resolve(root, 'reader-spreadsheet-project');
   const retainedOauth = resolve(root, 'reader-opencrvs-project');
 
-  writeEvidenceManifest(reports, 'sealed', '1.0.0', retainedHttp, retainedOauth);
+  writeEvidenceManifest(reports, 'sealed', '1.0.0', retainedSpreadsheet, retainedOauth);
   const manifest = JSON.parse(readFileSync(resolve(reports, 'manifest.json'), 'utf8'));
 
   assert.equal(manifest.mode, 'sealed');
-  assert.equal(manifest.retained_project, retainedHttp);
+  assert.equal(manifest.retained_project, retainedSpreadsheet);
   assert.equal(manifest.retained_oauth_project, retainedOauth);
 });
 
@@ -181,6 +222,7 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   const script = read('scripts/check-registryctl-tutorials.sh');
 
   assert.match(script, /init "\$HTTP_PROJECT" --template http >"\$REPORT_ROOT\/http\/init\.txt"/);
+  assert.match(script, /init "\$SPREADSHEET_PROJECT" --template spreadsheet/);
   assert.match(script, /init "\$OPENCRVS_PROJECT" --template http/);
   assert.match(script, /sh "\$OPENCRVS_OVERLAY"/);
   assert.match(script, /-C "\$project_directory" test --format json/);
@@ -207,11 +249,13 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.match(script, /REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR/);
   assert.match(script, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
   assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/author-registry-project\.md/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/publish-spreadsheet-secured-registry-api\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/operate\/approve-initial-baseline\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/configure\/oauth-client-credentials\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/opencrvs-events-api-overlay-v1\.sh/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/);
   assert.match(script, /OPENCRVS_PROJECT="\$\{RETAINED_OAUTH_PROJECT:-\$WORK_ROOT\/opencrvs-reader\}"/);
+  assert.match(script, /SPREADSHEET_PROJECT="\$\{RETAINED_PROJECT:-\$WORK_ROOT\/spreadsheet-reader\}"/);
   assert.match(script, /"\$RETAINED_OAUTH_PROJECT"/);
   assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
   assert.doesNotMatch(
@@ -221,9 +265,10 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.doesNotMatch(script, /registryctl 1\.0 reader journeys/);
 });
 
-test('current HTTP reader pages keep one starter and current command roots', () => {
+test('current reader pages keep public starters and current command roots', () => {
   const pages = [
     read('src/content/docs/tutorials/author-registry-project.mdx'),
+    read('src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
     read('src/content/docs/tutorials/configure-project-script-adapter.mdx'),
     read('src/content/docs/tutorials/verify-opencrvs-claims.mdx'),
   ];
@@ -234,10 +279,10 @@ test('current HTTP reader pages keep one starter and current command roots', () 
   assert.match(currentText, /release\/VERIFY\.md/);
   assert.match(currentText, /quick installation path trusts GitHub and TLS/);
   assert.match(currentText, /--template http/);
+  assert.match(currentText, /--template spreadsheet/);
   assert.match(currentText, /registryctl dev smoke/);
   assert.match(currentText, /registryctl check/);
   assert.match(currentText, /registryctl build/);
-  assert.doesNotMatch(currentText, /--template spreadsheet/);
   assert.doesNotMatch(
     currentText,
     /registryctl (?:preflight|start|stop|restart|smoke|add notary)|init --from|test --live|Bruno/,
@@ -277,8 +322,7 @@ test('OpenCRVS remains a synthetic case study, not a template or conformance cla
   assert.match(tutorial, /birth-event-found/);
   assert.match(tutorial, /birth-event-registered/);
   assert.doesNotMatch(tutorial, /--template opencrvs|init --from opencrvs/);
-  assert.match(cutover, /public 1\.0 starter is `http`/);
+  assert.match(cutover, /public 1\.0 starters are `http` and `spreadsheet`/);
   assert.match(cutover, /OAuth-backed Rhai is an adaptation of an HTTP project/);
   assert.match(cutover, /OpenCRVS material is a synthetic example.*not a template/);
-  assert.doesNotMatch(cutover, /both public templates/);
 });

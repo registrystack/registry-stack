@@ -102,6 +102,9 @@ class FirstCountryReleaseFormTest(TestCase):
             ),
             "operate/approve-initial-baseline.md": b"# Approval fixture\n",
             "tutorials/author-registry-project.md": b"# HTTP fixture\n",
+            "tutorials/publish-spreadsheet-secured-registry-api.md": (
+                b"# Spreadsheet fixture\n"
+            ),
             "tutorials/configure-project-script-adapter.md": (
                 b"# Script adapter fixture\n"
             ),
@@ -314,7 +317,9 @@ class FirstCountryReleaseFormTest(TestCase):
         logs.mkdir(parents=True)
         public_source.mkdir()
         (reader / "http").mkdir(parents=True)
+        (reader / "spreadsheet").mkdir()
         (reader / "opencrvs").mkdir()
+        (reader / "initial-approval").mkdir()
         reader_manifest = {
             "schema_version": "registryctl.tutorial_reader_journeys.v1",
             "status": "passed",
@@ -335,6 +340,19 @@ class FirstCountryReleaseFormTest(TestCase):
                     ],
                 },
                 {
+                    "id": "spreadsheet",
+                    "source": "embedded-spreadsheet-template",
+                    "reports": [
+                        "spreadsheet/init.txt",
+                        "spreadsheet/test.txt",
+                        "spreadsheet/trace.txt",
+                        "spreadsheet/build.txt",
+                        "spreadsheet/test.json",
+                        "spreadsheet/check.json",
+                        "spreadsheet/build.json",
+                    ],
+                },
+                {
                     "id": "opencrvs-events-api",
                     "source": "public-docs-overlay-v1",
                     "covers": [
@@ -347,6 +365,22 @@ class FirstCountryReleaseFormTest(TestCase):
                         "opencrvs/test.json",
                         "opencrvs/check.json",
                         "opencrvs/build.json",
+                    ],
+                },
+                {
+                    "id": "initial-local-approval",
+                    "source": "maintained-spreadsheet-template",
+                    "covers": [
+                        "independent-lane-keys",
+                        "anchors",
+                        "bundles",
+                        "approved-set",
+                    ],
+                    "reports": [
+                        "initial-approval/relay-public-verify.txt",
+                        "initial-approval/relay-consultation-verify.txt",
+                        "initial-approval/notary-verify.txt",
+                        "initial-approval/approved-set.txt",
                     ],
                 },
             ],
@@ -366,7 +400,12 @@ class FirstCountryReleaseFormTest(TestCase):
             "status": "passed",
             "mode": "sealed",
             "registryctl_version": "1.2.3",
-            "projects": ["http", "opencrvs-events-api"],
+            "projects": [
+                "http",
+                "spreadsheet",
+                "opencrvs-events-api",
+                "initial-local-approval",
+            ],
             "evidence_sha256": self.module.closed_tree_digests(reader),
         }
         for relative in self.module.PUBLIC_SOURCE_LIVE_EVIDENCE_FILES:
@@ -931,7 +970,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "check-registryctl-public-source-live.sh", stable_source
         )
         self.assertNotIn("git clone", stable_source)
-        self.assertNotIn('"spreadsheet"', stable_source)
+        self.assertIn("reader-spreadsheet-project", stable_source)
         self.assertIn(
             "shutil.copytree(package, candidate_package)",
             stable_source,

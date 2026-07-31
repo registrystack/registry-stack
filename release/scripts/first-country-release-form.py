@@ -135,12 +135,29 @@ STABLE_READER_EVIDENCE_FILES = {
     "http/test.json",
     "http/check.json",
     "http/build.json",
+    "spreadsheet/init.txt",
+    "spreadsheet/test.txt",
+    "spreadsheet/trace.txt",
+    "spreadsheet/build.txt",
+    "spreadsheet/test.json",
+    "spreadsheet/check.json",
+    "spreadsheet/build.json",
     "opencrvs-init.txt",
     "opencrvs-overlay.txt",
     "opencrvs-check-explain.txt",
     "opencrvs/test.json",
     "opencrvs/check.json",
     "opencrvs/build.json",
+    "initial-approval/relay-public-anchor.txt",
+    "initial-approval/relay-public-sign.txt",
+    "initial-approval/relay-public-verify.txt",
+    "initial-approval/relay-consultation-anchor.txt",
+    "initial-approval/relay-consultation-sign.txt",
+    "initial-approval/relay-consultation-verify.txt",
+    "initial-approval/notary-anchor.txt",
+    "initial-approval/notary-sign.txt",
+    "initial-approval/notary-verify.txt",
+    "initial-approval/approved-set.txt",
     "public-source-init.txt",
     "public-source-overlay.txt",
     "public-source-test.txt",
@@ -341,6 +358,7 @@ RELEASED_DOCS_REQUIRED_FILES = {
     "examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256",
     "operate/approve-initial-baseline.md",
     "tutorials/author-registry-project.md",
+    "tutorials/publish-spreadsheet-secured-registry-api.md",
     "tutorials/configure-project-script-adapter.md",
     "tutorials/verify-opencrvs-claims.md",
 }
@@ -1162,7 +1180,7 @@ def read_runtime_inspection(
     expected_topology = (
         "combined_notary" if expected_notary_image is not None else "relay_only"
     )
-    # registryctl start and smoke validate the internal runtime contract. Keep
+    # registryctl dev and dev smoke validate the internal runtime contract. Keep
     # this release-form check limited to the identity recorded as evidence.
     required_keys = {
         "schema_version",
@@ -1361,6 +1379,19 @@ def stable_reader_summary(
             ],
         },
         {
+            "id": "spreadsheet",
+            "source": "embedded-spreadsheet-template",
+            "reports": [
+                "spreadsheet/init.txt",
+                "spreadsheet/test.txt",
+                "spreadsheet/trace.txt",
+                "spreadsheet/build.txt",
+                "spreadsheet/test.json",
+                "spreadsheet/check.json",
+                "spreadsheet/build.json",
+            ],
+        },
+        {
             "id": "opencrvs-events-api",
             "source": "public-docs-overlay-v1",
             "covers": [
@@ -1373,6 +1404,17 @@ def stable_reader_summary(
                 "opencrvs/test.json",
                 "opencrvs/check.json",
                 "opencrvs/build.json",
+            ],
+        },
+        {
+            "id": "initial-local-approval",
+            "source": "maintained-spreadsheet-template",
+            "covers": ["independent-lane-keys", "anchors", "bundles", "approved-set"],
+            "reports": [
+                "initial-approval/relay-public-verify.txt",
+                "initial-approval/relay-consultation-verify.txt",
+                "initial-approval/notary-verify.txt",
+                "initial-approval/approved-set.txt",
             ],
         },
     ]
@@ -1406,7 +1448,7 @@ def stable_reader_summary(
         "status": "passed",
         "mode": "sealed",
         "registryctl_version": version,
-        "projects": ["http", "opencrvs-events-api"],
+        "projects": ["http", "spreadsheet", "opencrvs-events-api", "initial-local-approval"],
     }
 
 
@@ -3509,7 +3551,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         run_nonce = os.urandom(8).hex()
         proof_project_id = f"first-country-release-form-{run_nonce}"
         install_dir = root / "install"
-        project = root / "reader-http-project"
+        project = root / "reader-spreadsheet-project"
         oauth_project = root / "reader-opencrvs-project"
         reader_evidence = evidence_dir / "reader-journeys"
         public_source_evidence = evidence_dir / "public-source-live"
@@ -5199,7 +5241,8 @@ def verify_stable_report(path: Path, asset_dir: Path, tag: str) -> None:
         or reader.get("status") != "passed"
         or reader.get("mode") != "sealed"
         or reader.get("registryctl_version") != tag.removeprefix("v")
-        or reader.get("projects") != ["http", "opencrvs-events-api"]
+        or reader.get("projects")
+        != ["http", "spreadsheet", "opencrvs-events-api", "initial-local-approval"]
         or not isinstance(reader.get("evidence_sha256"), dict)
         or not all(
             isinstance(name, str)

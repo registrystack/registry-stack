@@ -166,6 +166,9 @@ done
 REGISTRYCTL_TUTORIALS=(
 	"author-registry-project:68"
 	"configure-project-script-adapter:49"
+	"publish-spreadsheet-secured-registry-api:20"
+	"use-your-spreadsheet:9"
+	"verify-claim-registry-api:15"
 	"verify-opencrvs-claims:45"
 )
 
@@ -215,6 +218,12 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.m
 	'registryctl init my-registry --template http'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
 	'registryctl dev smoke'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx" \
+	'registryctl init my-first-registry --template spreadsheet'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx" \
+	'registryctl dev smoke'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx" \
+	'project-status-accepted'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'file: adapter.rhai'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \

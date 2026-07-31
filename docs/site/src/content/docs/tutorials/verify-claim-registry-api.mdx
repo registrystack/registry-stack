@@ -1,0 +1,234 @@
+---
+title: Expose evidence from a spreadsheet registry
+description: Change one spreadsheet-backed evidence rule and verify that Relay and Notary preserve the source, authorization, and disclosure boundaries.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-31"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Continue from the spreadsheet project in `my-first-registry`.
+You will change one evidence rule and verify it without adding another runtime,
+source path, or trust model.
+
+<QuickstartMeta
+  outcome="A reviewed change to one spreadsheet-backed predicate claim, verified offline and through the disposable Relay and Notary runtime."
+  time="About 15 minutes after completing the spreadsheet first run"
+  level="Local development with synthetic records"
+  prerequisites={['The unmodified my-first-registry project', 'A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later'] }
+/>
+
+The workbook, identifiers, and credentials remain synthetic.
+
+## Enter the spreadsheet project
+
+Run every command from the project created in
+[Start a registry from a spreadsheet](../publish-spreadsheet-secured-registry-api/):
+
+```sh
+cd my-first-registry
+```
+
+The spreadsheet starter already contains a protected Registry Relay records
+service and a Registry Notary evidence service.
+You do not need a separate `add notary` command.
+
+## Inspect the evidence boundary
+
+Open `registry-stack.yaml`.
+The `public-works-verification` service has one Relay consultation:
+
+```yaml
+consultations:
+  project:
+    integration: project-record-snapshot
+    input:
+      project_id: request.target.identifiers.project_id
+claims:
+  project-record-exists:
+    cel: project.matched
+    disclosure: predicate
+  project-status-accepted:
+    cel: 'project.matched && project.status == "active"'
+    disclosure: predicate
+```
+
+Relay performs the exact workbook snapshot lookup and releases only `status`
+to Notary.
+Notary evaluates the two predicate claims.
+The caller cannot supply a fallback claim value or choose another source field.
+
+`project-status-accepted` is example project policy.
+It does not establish legal eligibility, fraud, or another wider conclusion.
+
+## Observe the current policy result
+
+Run the planned fixture with its synthetic trace:
+
+```sh
+registryctl test \
+  --integration project-record-snapshot \
+  --fixture planned \
+  --trace
+```
+
+The trace reports a matched synthetic project with `status: planned`.
+The initial expectation is:
+
+```yaml
+claims:
+  project-record-exists: true
+  project-status-accepted: false
+```
+
+This is a policy non-match.
+It is different from the `no-match` fixture, where the bounded lookup found no
+record for the synthetic key.
+
+## Change the authored evidence rule
+
+In `registry-stack.yaml`, replace:
+
+```yaml
+project-status-accepted:
+  cel: 'project.matched && project.status == "active"'
+  disclosure: predicate
+```
+
+with:
+
+```yaml
+project-status-accepted:
+  cel: 'project.matched && (project.status == "active" || project.status == "planned")'
+  disclosure: predicate
+```
+
+The expression remains rooted in the single `project` consultation.
+Do not replace it with a caller-supplied value or a source-free assertion.
+
+In `integrations/project-record-snapshot/fixtures/planned.yaml`, update the
+expected claim:
+
+```yaml
+claims:
+  project-record-exists: true
+  project-status-accepted: true
+```
+
+Keep the synthetic source observation `status: planned`.
+Only the authored rule and its expected result changed.
+
+## Verify the evidence rule offline
+
+Run the focused trace again:
+
+```sh
+registryctl test \
+  --integration project-record-snapshot \
+  --fixture planned \
+  --trace
+```
+
+The planned fixture now reports both claims as true.
+
+Run every fixture:
+
+```sh
+registryctl test
+```
+
+The match, planned, and no-match cases plus their security cases must pass.
+A false existence predicate means no match in this bounded source snapshot.
+It does not mean global nonexistence, fraud, ineligibility, or a legal negative.
+
+## Run the changed Relay and Notary path
+
+In `environments/local.yaml`, select the planned fixture:
+
+```yaml
+development:
+  source_mode: synthetic
+  default_integration: project-record-snapshot
+  default_fixture: planned
+```
+
+Each environment declares one development scenario.
+Registryctl does not use a command-line fixture selector for `dev`.
+
+Start the disposable runtime and run its maintained checks:
+
+```sh
+registryctl dev --detach
+registryctl dev smoke
+```
+
+The denial result must report zero source access.
+The authorized result must report one snapshot lookup and only
+`project-record-exists,project-status-accepted` as claim identifiers.
+It must not return a workbook row or the source `status` value.
+
+Stop the disposable runtime:
+
+```sh
+registryctl dev down
+```
+
+The authored rule and fixture change remain in the project.
+Development trust and credentials are removed.
+
+## Review and build the change
+
+Review the redacted plan:
+
+```sh
+registryctl check --explain
+```
+
+Confirm that the exact selector, single-field consultation output, one
+consultation, and predicate disclosures did not change.
+
+Build new unsigned product inputs:
+
+```sh
+registryctl build
+```
+
+Registryctl reports which product lanes changed.
+The build does not approve, sign, deploy, or activate the new rule.
+
+## What you changed
+
+You changed one bounded evidence rule while preserving:
+
+- Authorization before any workbook access
+- One exact Relay lookup
+- A single minimized `status` value from Relay to Notary
+- Predicate-only disclosure to the caller
+- Separate Relay and Notary approval lanes
+
+## Next
+
+- [Use your own spreadsheet](../use-your-spreadsheet/) to adapt the source and
+  policy together.
+- [Connect an existing HTTP registry](../author-registry-project/) when the
+  evidence comes from an institution-owned API.
+- [Approve an evidence change](../../operate/advanced/compare-and-reapprove-source-change/)
+  before moving a changed rule into a governed deployment.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| The planned fixture remains false | The rule or expected fixture result was not updated. | Keep the observation unchanged and update both authored policy surfaces. |
+| Another fixture fails | The rule changed a broader contract. | Review every reported fixture before building. |
+| `dev smoke` still uses `match` | The local default fixture was not changed. | Update `development.default_fixture` and start the runtime again. |
+| Denial performs source work | Authorization did not stop the lookup. | Stop the runtime and report the failure through the security process. |
+| A generated artifact differs | A file under `.registry-stack/` was edited. | Remove disposable generated state and rebuild from authored files. |

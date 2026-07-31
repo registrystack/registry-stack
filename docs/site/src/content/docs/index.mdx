@@ -1,55 +1,70 @@
 ---
 title: Registry Stack documentation
-description: Build protected registry APIs and bounded evidence services over data your institution already holds.
+description: Start a registry from a spreadsheet, expose bounded evidence, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps an institution expose protected, read-only registry APIs
-and return bounded evidence without giving callers direct access to the source
-system.
+Registry Stack helps an institution expose selected registry data through
+Registry Relay and bounded evidence through Registry Notary without giving
+callers direct access to the source.
 
-## Start with the HTTP project
+## Start a registry from a spreadsheet
 
-The Registry Stack 1.0 beginner path creates the maintained HTTP project,
-executes its fixtures offline, and runs the real Registry Relay and Registry
-Notary path in a disposable development environment.
+Use the maintained spreadsheet path when the institution has a workbook or
+can prepare a reviewed workbook derivative.
+The first run starts Registry Relay and Registry Notary over synthetic records,
+then proves authorization denial before source access and a minimized evidence
+result.
 
-[Build and run an HTTP registry project](tutorials/author-registry-project/)
-is the one current first-success path.
-It uses released artifacts and does not require a source checkout.
+[Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
+takes about 15 minutes and uses released artifacts without a source checkout.
+After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
 
-## Start from the maintained project
+## Expose bounded evidence
 
-Registryctl's public 1.0 starter is `http`.
-It provides a bounded HTTP source and a reviewed response projection.
+The spreadsheet starter already includes one evidence service.
+Registry Relay performs the exact source lookup and sends only the field needed
+by the rule to Registry Notary.
+Notary returns predicate claims rather than the workbook row.
 
-OAuth-backed Rhai is an adaptation of the HTTP project, not another template
-or runtime.
-The [Connect your data overview](configure/) routes each adaptation to its
-current guidance.
+[Expose evidence from a spreadsheet registry](tutorials/verify-claim-registry-api/)
+shows how to change that rule while preserving authorization, source, and
+disclosure boundaries.
 
-## Keep the workflow boundaries visible
+## Connect an existing registry
 
-`test` is always offline.
-`dev` owns disposable local runtime actions.
-`review`, `trust`, and `deploy` prepare independently approved product lanes
-for an operator, but they do not activate a deployment.
+Use the HTTP path when the institution already operates a registry API.
+Start with a fixed bounded request and synthetic observations, then bind the
+reviewed source endpoint and its credentials.
 
-The [validation guide](verify/) separates those checks.
-The [generated files guide](generated-artifacts/) identifies which outputs
-Registryctl may replace.
+[Connect an existing HTTP registry](tutorials/author-registry-project/) covers
+the base integration.
+Continue with [OAuth client credentials](configure/oauth-client-credentials/)
+and a [reviewed Rhai adapter](tutorials/configure-project-script-adapter/) when
+the source requires authentication or response normalization.
+
+## Keep the product boundaries clear
+
+Registry Relay owns source access and protected record surfaces.
+Registry Notary owns evidence evaluation and disclosure.
+The caller receives only the output authorized for that service.
+
+Both paths use the same authoring, offline test, disposable development, build,
+approval, and deployment commands.
+The source shape changes, not the product ownership boundaries.
 
 ## Move beyond the first run
 
+- [Choose a source path](configure/)
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)

@@ -4,9 +4,10 @@
 #
 # This gate builds Registryctl from the checked-out source unless
 # REGISTRYCTL_BIN selects exact candidate or released bytes. It proves the
-# offline init, test, check, and build contract. The tag-triggered release
-# workflow separately exercises the exact installer, signed release lock,
-# doctor, disposable development runtime, and governed deployment.
+# init, test, check, build, and disposable development smoke contract. The
+# tag-triggered release workflow separately exercises the exact installer,
+# signed release lock, doctor, release-bound runtime sequence, and governed
+# deployment.
 
 set -euo pipefail
 
@@ -21,6 +22,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 		exit 1
 	fi
 	HTTP_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/author-registry-project.md"
+	SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/publish-spreadsheet-secured-registry-api.md"
 	APPROVAL_TUTORIAL="$RELEASED_DOCS_ROOT/operate/approve-initial-baseline.md"
 	OAUTH_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/configure-project-script-adapter.md"
 	OAUTH_HOWTO="$RELEASED_DOCS_ROOT/configure/oauth-client-credentials.md"
@@ -29,6 +31,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 	PUBLIC_SOURCE_OVERLAY="$RELEASED_DOCS_ROOT/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
 else
 	HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
+	SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
 	APPROVAL_TUTORIAL="$SITE_ROOT/src/content/docs/operate/approve-initial-baseline.mdx"
 	OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
 	OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
@@ -123,13 +126,20 @@ if [[ -n "$RETAINED_OAUTH_PROJECT" ]]; then
 		exit 1
 	fi
 	if [[ "$RETAINED_OAUTH_PROJECT" == "$RETAINED_PROJECT" ]]; then
-		printf 'retained HTTP and OAuth tutorial projects must be distinct\n' >&2
+		printf 'retained spreadsheet and OAuth tutorial projects must be distinct\n' >&2
 		exit 1
 	fi
 fi
 
 node "$HELPER" assert-contains "$HTTP_TUTORIAL" \
 	'registryctl init my-registry --template http' \
+	'registryctl test' \
+	'registryctl dev smoke' \
+	'registryctl check --explain' \
+	'registryctl build'
+node "$HELPER" assert-contains "$SPREADSHEET_TUTORIAL" \
+	'registryctl init my-first-registry --template spreadsheet' \
+	'project-record-snapshot' \
 	'registryctl test' \
 	'registryctl dev smoke' \
 	'registryctl check --explain' \
@@ -223,16 +233,27 @@ verify_overlay_asset "$PUBLIC_SOURCE_OVERLAY"
 run_reports() {
 	local project_directory=$1
 	local label=$2
+	local project_id="${3:-}"
+	local minimization_mode="${4:-derived}"
 	local report_directory="$REPORT_ROOT/$label"
 	mkdir -p "$report_directory"
 
 	"$REGISTRYCTL_BIN" -C "$project_directory" test --format json >"$report_directory/test.json"
 	"$REGISTRYCTL_BIN" -C "$project_directory" check --format json >"$report_directory/check.json"
 	"$REGISTRYCTL_BIN" -C "$project_directory" build --format json >"$report_directory/build.json"
-	node "$HELPER" assert-project-reports \
-		"$report_directory/test.json" \
-		"$report_directory/check.json" \
-		"$report_directory/build.json"
+	if [[ -n "$project_id" ]]; then
+		node "$HELPER" assert-project-reports \
+			"$report_directory/test.json" \
+			"$report_directory/check.json" \
+			"$report_directory/build.json" \
+			"$project_id" \
+			"$minimization_mode"
+	else
+		node "$HELPER" assert-project-reports \
+			"$report_directory/test.json" \
+			"$report_directory/check.json" \
+			"$report_directory/build.json"
+	fi
 
 	for lane in relay-public relay-consultation notary; do
 		test -f \
@@ -249,13 +270,13 @@ run_reports() {
 	fi
 }
 
-HTTP_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/http-reader}"
+HTTP_PROJECT="$WORK_ROOT/http-reader"
 mkdir -p "$REPORT_ROOT/http"
 "$REGISTRYCTL_BIN" init "$HTTP_PROJECT" --template http >"$REPORT_ROOT/http/init.txt"
 node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/init.txt" \
 	"$HTTP_TUTORIAL" \
-	'Create the HTTP project' \
+	'Create the bounded HTTP integration' \
 	text \
 	1 \
 	"$HTTP_PROJECT" \
@@ -284,6 +305,58 @@ node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/build.txt" "$HTTP_TUTORIAL" 'Review and build the project' text 1
 printf 'HTTP reader journey: PASS\n'
 
+SPREADSHEET_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/spreadsheet-reader}"
+mkdir -p "$REPORT_ROOT/spreadsheet"
+"$REGISTRYCTL_BIN" init "$SPREADSHEET_PROJECT" --template spreadsheet \
+	>"$REPORT_ROOT/spreadsheet/init.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/spreadsheet/init.txt" \
+	"$SPREADSHEET_TUTORIAL" \
+	'Create the spreadsheet registry' \
+	text \
+	1 \
+	"$SPREADSHEET_PROJECT" \
+	my-first-registry
+run_reports \
+	"$SPREADSHEET_PROJECT" \
+	spreadsheet \
+	fictional-public-works-registry \
+	snapshot
+(
+	cd "$SPREADSHEET_PROJECT"
+	"$REGISTRYCTL_BIN" test
+) >"$REPORT_ROOT/spreadsheet/test.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/spreadsheet/test.txt" \
+	"$SPREADSHEET_TUTORIAL" \
+	'Test the registry and evidence rules' \
+	text \
+	1
+(
+	cd "$SPREADSHEET_PROJECT"
+	"$REGISTRYCTL_BIN" test \
+		--integration project-record-snapshot \
+		--fixture match \
+		--trace
+) >"$REPORT_ROOT/spreadsheet/trace.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/spreadsheet/trace.txt" \
+	"$SPREADSHEET_TUTORIAL" \
+	'Test the registry and evidence rules' \
+	text \
+	2
+(
+	cd "$SPREADSHEET_PROJECT"
+	"$REGISTRYCTL_BIN" build
+) >"$REPORT_ROOT/spreadsheet/build.txt"
+node "$HELPER" assert-fence-equals \
+	"$REPORT_ROOT/spreadsheet/build.txt" \
+	"$SPREADSHEET_TUTORIAL" \
+	'Build the review inputs' \
+	text \
+	1
+printf 'Spreadsheet reader journey: PASS\n'
+
 APPROVAL_REPORT="$REPORT_ROOT/initial-approval"
 KEY_PROCEDURE="$WORK_ROOT/generate-evaluation-lane-keys.sh"
 mkdir -p "$APPROVAL_REPORT"
@@ -294,7 +367,7 @@ node "$HELPER" extract-fence \
 	1 \
 	"$KEY_PROCEDURE"
 (
-	cd "$HTTP_PROJECT"
+	cd "$SPREADSHEET_PROJECT"
 	sh "$KEY_PROCEDURE"
 	mkdir operator-handoff
 	for lane in relay-public relay-consultation notary; do
@@ -325,7 +398,7 @@ node "$HELPER" extract-fence \
 		--output-file operator-handoff/approved-set.v1.json \
 		>"$APPROVAL_REPORT/approved-set.txt"
 )
-test -f "$HTTP_PROJECT/operator-handoff/approved-set.v1.json"
+test -f "$SPREADSHEET_PROJECT/operator-handoff/approved-set.v1.json"
 printf 'Initial local approval journey: PASS\n'
 
 PUBLIC_SOURCE_PROJECT="$WORK_ROOT/public-source-reader"
@@ -437,7 +510,7 @@ if [[ -n "$EVIDENCE_DIR" ]]; then
 	printf 'reader-journey evidence: %s\n' "$EVIDENCE_DIR"
 fi
 if [[ -n "$RETAINED_PROJECT" ]]; then
-	printf 'retained HTTP project: %s\n' "$RETAINED_PROJECT"
+	printf 'retained spreadsheet project: %s\n' "$RETAINED_PROJECT"
 fi
 if [[ -n "$RETAINED_OAUTH_PROJECT" ]]; then
 	printf 'retained OAuth and Rhai project: %s\n' "$RETAINED_OAUTH_PROJECT"

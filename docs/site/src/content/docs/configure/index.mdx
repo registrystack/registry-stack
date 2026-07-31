@@ -1,28 +1,28 @@
 ---
-title: Connect your data
-description: Adapt a tested Registry Stack project to one reviewed source without changing product boundaries.
+title: Connect an existing registry
+description: Adapt a bounded HTTP integration to an institution-owned registry without changing product boundaries.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start from a working Registry Stack project, then replace its synthetic source
-with one reviewed integration.
+Start from the tested HTTP project, prove its synthetic contract, then
+introduce one reviewed institution-owned registry source.
 Registry Stack does not infer access policy, safe fields, or evidence claims
 from source data.
 
 ## Start from the HTTP project
 
-Registryctl 1.0 publishes the `http` initialization template.
-It contains one bounded synthetic HTTP interaction that you can replace with a reviewed HTTP or
-Rhai integration.
+Use the `http` template when the source already exposes an HTTP API.
+It contains one bounded synthetic interaction that you can replace with a
+reviewed HTTP or Rhai integration.
 
 Domain systems such as OpenCRVS, DHIS2, and Fast Healthcare Interoperability
 Resources (FHIR) remain authored integrations.
@@ -39,6 +39,8 @@ They never authorize a live network request.
 
 ## Choose the adaptation
 
+- [Connect an existing HTTP registry](../tutorials/author-registry-project/)
+  for the base bounded request and minimized response path
 - [Configure OAuth client credentials](./oauth-client-credentials/) when a
   bounded HTTP source requires a reviewed token exchange
 - [Add an OAuth-backed Rhai adapter](../tutorials/configure-project-script-adapter/)
@@ -48,6 +50,8 @@ They never authorize a live network request.
 
 ## Next
 
-- [Validate your project](../verify/)
+- [Start from a spreadsheet](../tutorials/publish-spreadsheet-secured-registry-api/)
+  when the institution does not already expose an HTTP registry
+- [Validate a project](../verify/)
 - [Understand generated files](../generated-artifacts/)
 - [Review project configuration](../reference/project-configuration/)

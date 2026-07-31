@@ -31,8 +31,8 @@ anchors, approved sets, deployment packages, and anti-rollback state.
 
 | Pre-1.0 concept | Registry Stack 1.0 |
 | --- | --- |
-| `registryctl init --from <starter>` or `registryctl init relay` | `registryctl init <directory> --template http` |
-| `registryctl add notary` | Declare the complete 1.0 project; the `http` public template contains the combined product path |
+| `registryctl init --from <starter>` or `registryctl init relay` | `registryctl init <directory> --template http` or `registryctl init <directory> --template spreadsheet` |
+| `registryctl add notary` | Declare the complete 1.0 project; both public templates contain the combined product path |
 | `registryctl start` | `registryctl dev` or `registryctl dev --detach` |
 | `registryctl stop` | `registryctl dev down` |
 | `registryctl restart` | Run `registryctl dev down`, then `registryctl dev` |
@@ -52,10 +52,11 @@ anchors, approved sets, deployment packages, and anti-rollback state.
 | `registryctl test --live` and `REGISTRY_STACK_LIVE_*` | No live test mode; keep `registryctl test` offline and use `registryctl dev smoke` or an operator-owned HTTP client |
 | Bruno generation | No replacement; Registryctl does not own an HTTP-client collection |
 
-The public 1.0 starter is `http`.
+The public 1.0 starters are `http` and `spreadsheet`.
+Use `http` for an existing registry API and `spreadsheet` for a workbook source.
 OAuth-backed Rhai is an adaptation of an HTTP project.
 The OpenCRVS material is a synthetic example of that adaptation, not a template.
-Adapt the HTTP project separately for DHIS2, FHIR, or another domain system.
+Adapt a public starter separately for DHIS2, FHIR, or another domain system.
 
 ## Recreate governed material
 

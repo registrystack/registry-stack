@@ -233,7 +233,13 @@ function fixtureIds(report) {
   return report.fixtures.map((fixture) => fixture.fixture);
 }
 
-export function assertProjectReports(testOutput, checkOutput, buildOutput, expectedProject = null) {
+export function assertProjectReports(
+  testOutput,
+  checkOutput,
+  buildOutput,
+  expectedProject = null,
+  minimizationMode = 'derived',
+) {
   const testReport = parseJsonOutput(testOutput);
   const checkReport = parseJsonOutput(checkOutput);
   const buildEnvelope = parseJsonOutput(buildOutput);
@@ -278,10 +284,22 @@ export function assertProjectReports(testOutput, checkOutput, buildOutput, expec
     'authorization-before-source fixture does not prove zero source access',
   );
 
-  const minimizationCheck = testReport.fixtures.find((fixture) =>
-    fixture.fixture.endsWith('::derived/output_minimization'),
-  );
-  invariant(minimizationCheck?.passed === true, 'output-minimization fixture is missing or failed');
+  if (minimizationMode === 'derived') {
+    const minimizationCheck = testReport.fixtures.find((fixture) =>
+      fixture.fixture.endsWith('::derived/output_minimization'),
+    );
+    invariant(minimizationCheck?.passed === true, 'output-minimization fixture is missing or failed');
+  } else {
+    invariant(minimizationMode === 'snapshot', 'unexpected minimization mode');
+    const snapshotResult = testReport.fixtures.find(
+      (fixture) =>
+        !fixture.fixture.includes('::derived/') &&
+        fixture.outcome === 'match' &&
+        fixture.outputs.length > 0 &&
+        fixture.claims.length > 0,
+    );
+    invariant(snapshotResult, 'snapshot fixture has no minimized output and claim projection');
+  }
 
   const affectedLanes = buildEnvelope.affected_lanes;
   invariant(Array.isArray(affectedLanes), 'build affected_lanes must be an array');
@@ -318,6 +336,19 @@ export function writeEvidenceManifest(
         ],
       },
       {
+        id: 'spreadsheet',
+        source: 'embedded-spreadsheet-template',
+        reports: [
+          'spreadsheet/init.txt',
+          'spreadsheet/test.txt',
+          'spreadsheet/trace.txt',
+          'spreadsheet/build.txt',
+          'spreadsheet/test.json',
+          'spreadsheet/check.json',
+          'spreadsheet/build.json',
+        ],
+      },
+      {
         id: 'opencrvs-events-api',
         source: 'public-docs-overlay-v1',
         covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
@@ -325,7 +356,7 @@ export function writeEvidenceManifest(
       },
       {
         id: 'initial-local-approval',
-        source: 'maintained-http-template',
+        source: 'maintained-spreadsheet-template',
         covers: ['independent-lane-keys', 'anchors', 'bundles', 'approved-set'],
         reports: [
           'initial-approval/relay-public-verify.txt',
@@ -420,10 +451,16 @@ async function main([command, ...args]) {
     }
     case 'assert-project-reports': {
       invariant(
-        args.length === 3 || args.length === 4,
-        'usage: assert-project-reports <test-json> <check-json> <build-json> [project-id]',
+        args.length >= 3 && args.length <= 5,
+        'usage: assert-project-reports <test-json> <check-json> <build-json> [project-id] [derived|snapshot]',
       );
-      assertProjectReports(read(args[0]), read(args[1]), read(args[2]), args[3] ?? null);
+      assertProjectReports(
+        read(args[0]),
+        read(args[1]),
+        read(args[2]),
+        args[3] ?? null,
+        args[4] ?? 'derived',
+      );
       return;
     }
     case 'write-evidence-manifest': {

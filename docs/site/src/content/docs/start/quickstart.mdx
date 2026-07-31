@@ -1,43 +1,58 @@
 ---
 title: Start with Registry Stack 1.0
-description: Choose the maintained Registry Stack 1.0 first run and the next source adaptation.
+description: Run Registry Relay and Registry Notary from a spreadsheet, then adapt the source or evidence rule.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-07-31"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start with the maintained HTTP project.
-It provides the shortest complete path from authored fixtures to the real
-Registry Relay and Registry Notary development runtime.
+Start with the maintained spreadsheet registry.
+It is the shortest complete path through Registry Relay, Registry Notary,
+authorization, source access, evidence evaluation, and minimized disclosure.
 
-## Complete the first run
+## Start from a spreadsheet
 
-[Build and run an HTTP registry project](../../tutorials/author-registry-project/)
-creates a project from the released `http` template, executes its fixtures
-offline, runs a disposable local environment, and builds unsigned inputs for
-review.
+[Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
+creates the released `spreadsheet` project, checks its evidence rules offline,
+and runs Relay and Notary locally over maintained synthetic records.
+
+Take this path first when evaluating Registry Stack.
+Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
+after the sample works.
+
+## Expose evidence
+
+The starter already exposes selected records and evaluates two predicate
+claims.
+[Change one spreadsheet-backed evidence rule](../../tutorials/verify-claim-registry-api/)
+to learn which decisions belong to Relay, Notary, fixtures, and the operator
+handoff.
+
+## Connect an existing registry
+
+[Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+creates the released `http` project and tests one bounded source request before
+an institution-owned endpoint is introduced.
+
+Continue with:
+
+- [OAuth client credentials](../../configure/oauth-client-credentials/) when
+  the source requires a bearer token
+- [OAuth-backed Rhai](../../tutorials/configure-project-script-adapter/) when a
+  reviewed mapping needs several bounded same-origin requests or response
+  normalization
+- [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
+  for a synthetic example of that generic integration path
 
 The first run uses one terminal and synthetic data.
 You do not need a source checkout, production keys, or a deployment package.
-
-## Adapt the working project
-
-After the first run:
-
-- [Add an OAuth-backed Rhai adapter](../../tutorials/configure-project-script-adapter/)
-  when one bounded consultation needs several same-origin HTTP calls
-- [Connect your data](../../configure/) when you are ready to replace the
-  synthetic source with reviewed institution-owned input
-- [Validate your project](../../verify/) after each authored change
-
-Source adaptation starts from that same HTTP project.
 
 ## Move an older project
 

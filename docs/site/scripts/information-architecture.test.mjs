@@ -1,4 +1,4 @@
-// Guards the single Registry Stack 1.0 adopter path and its stable entry points.
+// Guards the Registry Stack 1.0 product outcomes and their stable entry points.
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
@@ -56,7 +56,7 @@ function assertOrdered(source, expectations, label) {
 test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Connect your data',
+    'Connect an existing registry',
     'Operate',
     'Security',
     'Reference',
@@ -66,7 +66,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
 test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Connect your data', "slug: 'configure'"],
+    ['Connect an existing registry', "slug: 'configure'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
@@ -77,23 +77,44 @@ test('publishes one overview route for every task-flow section', () => {
   }
 });
 
-test('publishes one HTTP first run and one pre-1.0 cutover route', () => {
+test('starts with the spreadsheet registry and keeps HTTP under existing registries', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.match(
     start,
-    /label: 'Build an HTTP project', slug: 'tutorials\/author-registry-project'/,
+    /label: 'Start a spreadsheet registry', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
+  );
+  assert.match(
+    start,
+    /label: 'Use your own spreadsheet', slug: 'tutorials\/use-your-spreadsheet'/,
+  );
+  assert.match(
+    start,
+    /label: 'Expose spreadsheet evidence', slug: 'tutorials\/verify-claim-registry-api'/,
   );
   assert.match(
     start,
     /label: 'Pre-1.0 cutover', slug: 'start\/pre-1\.0-cutover'/,
   );
+  assert.doesNotMatch(start, /author-registry-project/);
+  const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
+  assert.match(
+    connect,
+    /label: 'Connect an HTTP registry', slug: 'tutorials\/author-registry-project'/,
+  );
   assert.match(
     homepageSource,
-    /\]\(tutorials\/author-registry-project\/\)/,
+    /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
   );
   assert.match(
     quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/,
+    /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
+  );
+  assert.match(homepageSource, /\]\(tutorials\/author-registry-project\/\)/);
+  assert.match(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/);
+  assert.match(
+    quickstartSource,
+    /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/,
   );
   assert.match(homepageSource, /\]\(start\/pre-1\.0-cutover\/\)/);
 });
@@ -128,8 +149,8 @@ test('keeps removed command mappings on the cutover page only', () => {
   assert.match(cutoverSource, /`registryctl start`/);
   assert.match(cutoverSource, /`registryctl dev`/);
   assert.match(cutoverSource, /Bruno generation/);
-  assert.match(cutoverSource, /The public 1\.0 starter is `http`/);
-  assert.doesNotMatch(cutoverSource, /--template spreadsheet/);
+  assert.match(cutoverSource, /The public 1\.0 starters are `http` and `spreadsheet`/);
+  assert.match(cutoverSource, /--template spreadsheet/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -139,7 +160,7 @@ test('every hand-authored sidebar slug resolves to a published documentation pag
   assert.deepEqual(missing, []);
 });
 
-test('legacy first-run entry points redirect to the 1.0 HTTP path', () => {
+test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
@@ -147,25 +168,16 @@ test('legacy first-run entry points redirect to the 1.0 HTTP path', () => {
   );
   assert.match(
     configSource,
-    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/author-registry-project\/'\)/,
+    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
   );
   assert.match(
     configSource,
     /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/quickstart\/'\)/,
   );
-  for (const route of [
-    'publish-spreadsheet-secured-registry-api',
-    'use-your-spreadsheet',
-    'verify-claim-registry-api',
-  ]) {
-    assert.match(
-      configSource,
-      new RegExp(
-        `'\\/tutorials\\/${route}\\/'` +
-          `: internalRedirect\\('\\/tutorials\\/author-registry-project\\/'\\)`,
-      ),
-    );
-  }
+  assert.doesNotMatch(
+    configSource,
+    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet|verify-claim-registry-api)\/':/,
+  );
 });
 
 test('keeps source-assurance artifacts out of the adopter navigation', () => {
