@@ -322,7 +322,10 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:4242` | Server bind in every config |
-| `purpose` | a short identifier | `Data-Purpose` value used by personal-data reads |
+| `purpose` | social-protection eligibility URI | Default `Data-Purpose` value for governed demo reads |
+| `studentPurpose` | student-support planning URI | `Data-Purpose` value for education journeys |
+| `disabilityPurpose` | disability-benefit eligibility URI | `Data-Purpose` value for disability journeys |
+| `farmerPurpose` | agricultural-subsidy eligibility URI | `Data-Purpose` value for farmer journeys |
 | `district` | `riverbend` | Shared district id used by district-planning flow |
 | `clinicBbox` | `38.5,10.5,39.5,11.5` | CRS84 bbox around the demo riverbend clinic map points |
 | `schoolId` | `sch-3001` | School id used by school-construction flow |
