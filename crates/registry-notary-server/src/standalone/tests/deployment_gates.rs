@@ -489,6 +489,7 @@ fn registry_backed_config(tmp: &tempfile::TempDir) -> StandaloneRegistryNotaryCo
         root_certificate_path: None,
         allowed_private_cidrs: Vec::new(),
         allow_insecure_localhost: true,
+        allow_insecure_private_network: false,
         max_in_flight: 8,
     });
     config.evidence.claims = vec![serde_norway::from_str(

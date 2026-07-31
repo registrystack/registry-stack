@@ -48,22 +48,16 @@ const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
 const SECRET_STAGER_SUFFIX: &str = "-stage-secrets";
 const NETWORK_RUNTIME: &str = "registry-runtime";
-pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
+pub(crate) const OPERATOR_FILE_IDS: [&str; 9] = [
     "notary-environment",
     "notary-relay-workload-credential",
     "notary-signing-key",
-    "notary-tls-certificate",
-    "notary-tls-private-key",
     "postgresql-admin-password",
     "postgresql-bootstrap-environment",
     "postgresql-tls-certificate",
     "postgresql-tls-private-key",
     "relay-consultation-environment",
-    "relay-consultation-tls-certificate",
-    "relay-consultation-tls-private-key",
     "relay-public-environment",
-    "relay-public-tls-certificate",
-    "relay-public-tls-private-key",
 ];
 
 const SERVICE_POSTGRESQL_BOOTSTRAP: &str = "registry-postgres-bootstrap";
@@ -367,7 +361,6 @@ impl DeploymentPlanV1 {
             MountRoleV1::Bundle,
             MountRoleV1::Anchor,
             MountRoleV1::AntiRollbackState,
-            MountRoleV1::Certificate,
             MountRoleV1::Audit,
         ];
         Self {
@@ -380,7 +373,7 @@ impl DeploymentPlanV1 {
                     images.relay.clone(),
                     images.relay_platform,
                     common_mounts.clone(),
-                    vec!["relay-public-tls"],
+                    vec![],
                     vec!["relay-public-anti-rollback", "relay-public-audit"],
                     vec![EndpointClassV1::PublicApplication, EndpointClassV1::Posture],
                     vec!["runtime"],
@@ -392,7 +385,7 @@ impl DeploymentPlanV1 {
                     images.relay.clone(),
                     images.relay_platform,
                     common_mounts,
-                    vec!["relay-consultation-tls"],
+                    vec![],
                     vec![
                         "relay-consultation-anti-rollback",
                         "relay-consultation-audit",
@@ -414,10 +407,9 @@ impl DeploymentPlanV1 {
                         MountRoleV1::Anchor,
                         MountRoleV1::AntiRollbackState,
                         MountRoleV1::Secret,
-                        MountRoleV1::Certificate,
                         MountRoleV1::Audit,
                     ],
-                    vec!["notary-tls", "notary-signing-key"],
+                    vec!["notary-relay-workload-credential", "notary-signing-key"],
                     vec!["notary-anti-rollback", "notary-audit"],
                     vec![
                         EndpointClassV1::PublicApplication,
@@ -1244,6 +1236,7 @@ pub fn render_compose_package(
     plan.validate()?;
     binding.validate()?;
     runtime.validate()?;
+    validate_managed_bundle_compatibility(&verified_inputs.lanes)?;
 
     let ordinary = render_ordinary_model(plan, binding, runtime, &verified_inputs.lanes)?;
     let initialization =
@@ -1262,6 +1255,68 @@ pub fn render_compose_package(
             initialization,
         },
     })
+}
+
+fn validate_managed_bundle_compatibility(lanes: &[VerifiedLanePackageSourceV1]) -> Result<()> {
+    for lane in lanes {
+        match lane.lane {
+            ProductLaneV1::RelayPublic | ProductLaneV1::RelayConsultation => {
+                let path = lane.bundle_dir.join("config/relay.yaml");
+                let config: Value =
+                    serde_norway::from_slice(&read_bounded(&path, MAX_PORTABLE_DOCUMENT_BYTES)?)
+                        .with_context(|| {
+                            format!(
+                                "failed to parse managed Relay config for {}",
+                                lane.lane.id()
+                            )
+                        })?;
+                let has_file_dataset = config
+                    .get("datasets")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|dataset| {
+                        dataset
+                            .get("tables")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                    })
+                    .any(|table| table.pointer("/source/type") == Some(&json!("file")));
+                if has_file_dataset {
+                    bail!(
+                        "managed deployment cannot package a project-local file dataset; bind an operator-managed source before signing"
+                    );
+                }
+            }
+            ProductLaneV1::Notary => {
+                let path = lane.bundle_dir.join("config/notary.yaml");
+                let config: Value =
+                    serde_norway::from_slice(&read_bounded(&path, MAX_PORTABLE_DOCUMENT_BYTES)?)
+                        .context("failed to parse managed Notary config")?;
+                let Some(base_url) = config
+                    .pointer("/evidence/relay/base_url")
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let origin = url::Url::parse(base_url)
+                    .context("managed Notary Relay base URL is invalid")?;
+                if origin.scheme() == "http"
+                    && (!matches!(origin.host(), Some(url::Host::Domain(_)))
+                        || config
+                            .pointer("/evidence/relay/allow_insecure_private_network")
+                            .and_then(Value::as_bool)
+                            != Some(true))
+                {
+                    bail!(
+                        "managed deployment requires HTTPS or an explicitly enabled private-service HTTP Notary-to-Relay origin; loopback is not shared across workloads"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -2594,7 +2649,7 @@ fn render_ordinary_model(
     postgres["entrypoint"] = json!([
         "/bin/bash",
         "-ceu",
-        "test -s \"$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION\" || { echo 'PostgreSQL data directory is empty; run the explicit initialization workflow first' >&2; exit 1; }\nexec /usr/local/bin/docker-entrypoint.sh \"$@\"",
+        "test -s \"$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION\" || { echo 'PostgreSQL data directory is empty; run the explicit initialization workflow first' >&2; exit 1; }\nexec \"$@\"",
         "--"
     ]);
     apply_runtime_action_inputs(
@@ -4178,10 +4233,18 @@ fn require_schema(actual_id: &str, actual_version: &str, id: &str, version: &str
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    let file =
-        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut file = open_read_only_no_follow(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect open file {}", path.display()))?;
+    if !metadata.is_file() || metadata.len() > max_bytes {
+        bail!("deployment package input must be a bounded regular non-symlink file");
+    }
     let mut bytes = Vec::new();
-    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max_bytes {
         bail!("deployment package file exceeds its size limit");
     }
@@ -4189,12 +4252,42 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
 }
 
 fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
-        bail!("deployment package input must be a bounded regular non-symlink file");
-    }
     read_bounded(path, max_bytes)
+}
+
+#[cfg(unix)]
+fn open_read_only_no_follow(path: &Path) -> Result<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .context("failed to open deployment package input without following symlinks")?;
+    Ok(fs::File::from(descriptor))
+}
+
+#[cfg(windows)]
+fn open_read_only_no_follow(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .context("failed to open deployment package input without following reparse points")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_read_only_no_follow(path: &Path) -> Result<fs::File> {
+    let metadata =
+        fs::symlink_metadata(path).context("failed to inspect deployment package input")?;
+    if metadata.file_type().is_symlink() {
+        bail!("deployment package input must not be a symbolic link");
+    }
+    fs::File::open(path).context("failed to open deployment package input")
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -4381,7 +4474,7 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
     };
     let serving_secret_staging_commands = staging_commands(
         compose_ordinary,
-        &[RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, "postgresql"],
+        &[RELAY_CONSULTATION, NOTARY, "postgresql"],
     );
     let initialization_secret_staging_commands = staging_commands(
         &compose_actions,

@@ -16,7 +16,7 @@ use crate::runtime::{
     ActivatedRelayClientSet, ActivatedRelayConsultations, RelayClientSelectionV1,
     RuntimeRelayConsultationResult, RuntimeRelayExpectedResult,
 };
-use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
+use registry_notary_core::{ClaimEvidenceMode, DeploymentProfile, StandaloneRegistryNotaryConfig};
 use registry_platform_httputil::destination::{
     DestinationProfile, DestinationTlsMaterial, ServiceHopDataDestinationPolicy,
     MAX_DESTINATION_CA_BUNDLE_BYTES,
@@ -42,8 +42,12 @@ pub(super) async fn activate_relay_from_config(
     for plan in plans.clients {
         let credential = RelayWorkloadCredentialFile::new(plans.connection.token_file.clone())
             .map_err(map_relay_client_error)?;
-        let destination = relay_destination(plans.connection, root_certificate.as_deref())
-            .map_err(|_| StandaloneServerError::InvalidRelayDestination)?;
+        let destination = relay_destination(
+            plans.connection,
+            root_certificate.as_deref(),
+            config.deployment.profile,
+        )
+        .map_err(|_| StandaloneServerError::InvalidRelayDestination)?;
         let expected_result = plan.expected_result.relay()?;
         let selection = RelayClientSelectionV1::new(
             plan.profile.id.as_str(),
@@ -56,6 +60,7 @@ pub(super) async fn activate_relay_from_config(
         let retry_plan = RelayRetryPlan {
             connection: plans.connection.clone(),
             root_certificate: root_certificate.clone(),
+            deployment_profile: config.deployment.profile,
             pin: RelayProfilePin::new(
                 plan.profile.id.as_str(),
                 plan.profile.contract_hash.as_str(),
@@ -104,6 +109,7 @@ fn retain_profile_activation(
 struct RelayRetryPlan {
     connection: registry_notary_core::RelayConnectionConfig,
     root_certificate: Option<Arc<[u8]>>,
+    deployment_profile: Option<DeploymentProfile>,
     pin: RelayProfilePin,
     purpose: Box<str>,
     input_names: Vec<String>,
@@ -112,8 +118,12 @@ struct RelayRetryPlan {
 
 impl RelayRetryPlan {
     fn client(&self) -> Result<RelayConsultationClient, RelayClientError> {
-        let destination = relay_destination(&self.connection, self.root_certificate.as_deref())
-            .map_err(|_| RelayClientError::InvalidConfiguration)?;
+        let destination = relay_destination(
+            &self.connection,
+            self.root_certificate.as_deref(),
+            self.deployment_profile,
+        )
+        .map_err(|_| RelayClientError::InvalidConfiguration)?;
         RelayConsultationClient::new(
             destination,
             RelayWorkloadCredentialFile::new(self.connection.token_file.clone())?,
@@ -130,11 +140,18 @@ impl RelayRetryPlan {
 fn relay_destination(
     connection: &registry_notary_core::RelayConnectionConfig,
     root_certificate: Option<&[u8]>,
+    deployment_profile: Option<DeploymentProfile>,
 ) -> Result<ServiceHopDataDestinationPolicy, ()> {
-    let destination_profile = if connection.uses_insecure_url() {
-        DestinationProfile::LoopbackDevelopmentHttp
-    } else {
+    let destination_profile = if !connection.uses_insecure_url() {
         DestinationProfile::ProductionHttps
+    } else if connection.uses_insecure_loopback_url() {
+        DestinationProfile::LoopbackDevelopmentHttp
+    } else if connection.uses_insecure_private_network_url() {
+        DestinationProfile::PrivateServiceHttp
+    } else if deployment_profile == Some(DeploymentProfile::Local) {
+        DestinationProfile::LocalPrivateDevelopmentHttp
+    } else {
+        return Err(());
     };
     let mut destination = ServiceHopDataDestinationPolicy::new(
         "registry-notary-relay",
@@ -425,6 +442,70 @@ fn activation_plans(
 mod tests {
     use super::*;
 
+    fn local_private_connection(
+        base_url: &str,
+        allowed_private_cidrs: &[&str],
+    ) -> registry_notary_core::RelayConnectionConfig {
+        let mut connection: registry_notary_core::RelayConnectionConfig =
+            serde_norway::from_str(&format!(
+                "base_url: {base_url}\nworkload_client_id: registry-notary\ntoken_file: /run/secrets/relay.jwt\n"
+            ))
+            .expect("test Relay connection parses");
+        connection.allowed_private_cidrs = allowed_private_cidrs
+            .iter()
+            .map(|cidr| cidr.parse().expect("test CIDR parses"))
+            .collect();
+        connection
+    }
+
+    #[test]
+    fn local_private_relay_destination_is_exact_and_profile_bound() {
+        let connection = local_private_connection("http://10.89.0.4:8080", &["10.89.0.4/32"]);
+        relay_destination(&connection, None, Some(DeploymentProfile::Local))
+            .expect("local exact private HTTP destination activates");
+
+        for profile in [
+            None,
+            Some(DeploymentProfile::HostedLab),
+            Some(DeploymentProfile::Production),
+            Some(DeploymentProfile::EvidenceGrade),
+        ] {
+            assert!(relay_destination(&connection, None, profile).is_err());
+        }
+
+        for (base_url, cidrs) in [
+            ("http://10.89.0.4:8080", vec![]),
+            ("http://10.89.0.4:8080", vec!["10.89.0.0/24"]),
+            ("http://10.89.0.4:8080", vec!["10.89.0.5/32"]),
+            ("http://relay.internal.example:8080", vec!["10.89.0.4/32"]),
+            ("http://169.254.169.254:8080", vec!["169.254.169.254/32"]),
+            ("http://100.100.100.200:8080", vec!["100.100.100.200/32"]),
+            ("http://0.0.0.0:8080", vec!["0.0.0.0/32"]),
+        ] {
+            let connection = local_private_connection(base_url, &cidrs);
+            assert!(
+                relay_destination(&connection, None, Some(DeploymentProfile::Local)).is_err(),
+                "unexpectedly activated {base_url} with {cidrs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_service_relay_destination_activates_without_transport_ceremony() {
+        let mut connection =
+            local_private_connection("http://registry-relay-consultation:8080", &[]);
+        connection.allow_insecure_private_network = true;
+        for profile in [
+            DeploymentProfile::Local,
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            relay_destination(&connection, None, Some(profile))
+                .expect("signed private service HTTP destination activates");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn relay_root_certificate_loader_requires_owner_only_regular_file() {
@@ -545,6 +626,7 @@ evidence:
         let retry_plan = RelayRetryPlan {
             connection,
             root_certificate: None,
+            deployment_profile: Some(DeploymentProfile::Local),
             pin: RelayProfilePin::new(
                 "example.snapshot-status.exact",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

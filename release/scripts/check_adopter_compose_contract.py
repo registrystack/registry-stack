@@ -39,7 +39,6 @@ WORKLOAD_SERVICES = frozenset(
 STAGER_SERVICES = frozenset(
     {
         "registry-postgresql-stage-secrets",
-        "registry-relay-public-stage-secrets",
         "registry-relay-consultation-stage-secrets",
         "registry-notary-stage-secrets",
     }
@@ -85,15 +84,9 @@ OPERATOR_SECRET_FILES = frozenset(
     {
         "notary-relay-workload-credential",
         "notary-signing-key",
-        "notary-tls-certificate",
-        "notary-tls-private-key",
         "postgresql-admin-password",
         "postgresql-tls-certificate",
         "postgresql-tls-private-key",
-        "relay-consultation-tls-certificate",
-        "relay-consultation-tls-private-key",
-        "relay-public-tls-certificate",
-        "relay-public-tls-private-key",
     }
 )
 EXPECTED_OPERATOR_FILES = OPERATOR_ENVIRONMENT_FILES | OPERATOR_SECRET_FILES
@@ -129,9 +122,7 @@ ORDINARY_DEPENDENCIES = {
     "registry-postgres": {
         "registry-postgresql-stage-secrets": "service_completed_successfully"
     },
-    "registry-relay-public": {
-        "registry-relay-public-stage-secrets": "service_completed_successfully"
-    },
+    "registry-relay-public": {},
     "registry-relay-consultation": {
         "registry-postgres": "service_healthy",
         "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
@@ -323,15 +314,6 @@ STAGER_SPECS = {
             "registry-postgresql-tls-private-key",
         },
     },
-    "registry-relay-public-stage-secrets": {
-        "outputs": {
-            "relay-public-serve": ("registry-operator-files-relay-public-serve"),
-        },
-        "secrets": {
-            "registry-relay-public-tls-certificate",
-            "registry-relay-public-tls-private-key",
-        },
-    },
     "registry-relay-consultation-stage-secrets": {
         "outputs": {
             "relay-consultation-serve": (
@@ -340,8 +322,6 @@ STAGER_SPECS = {
         },
         "secrets": {
             "registry-postgresql-tls-certificate",
-            "registry-relay-consultation-tls-certificate",
-            "registry-relay-consultation-tls-private-key",
         },
     },
     "registry-notary-stage-secrets": {
@@ -351,10 +331,7 @@ STAGER_SPECS = {
         "secrets": {
             "registry-notary-relay-workload-credential",
             "registry-notary-signing-key",
-            "registry-notary-tls-certificate",
-            "registry-notary-tls-private-key",
             "registry-postgresql-tls-certificate",
-            "registry-relay-consultation-tls-certificate",
         },
     },
 }
@@ -391,9 +368,6 @@ ACTION_STAGER_SPECS = {
 ORDINARY_STAGER_RUNTIME_ACTIONS = {
     "registry-postgresql-stage-secrets": [
         ("postgresql-serve", "postgresql_state_plane", "serve"),
-    ],
-    "registry-relay-public-stage-secrets": [
-        ("relay-public-serve", "relay_public", "serve"),
     ],
     "registry-relay-consultation-stage-secrets": [
         ("relay-consultation-serve", "relay_consultation", "serve"),
@@ -462,10 +436,9 @@ EXPECTED_PLAN_WORKLOADS = {
             "bundle",
             "anchor",
             "anti-rollback-state",
-            "certificate",
             "audit",
         ],
-        "secret_consumers": ["relay-public-tls"],
+        "secret_consumers": [],
         "state_roles": [
             "relay-public-anti-rollback",
             "relay-public-audit",
@@ -489,10 +462,9 @@ EXPECTED_PLAN_WORKLOADS = {
             "bundle",
             "anchor",
             "anti-rollback-state",
-            "certificate",
             "audit",
         ],
-        "secret_consumers": ["relay-consultation-tls"],
+        "secret_consumers": [],
         "state_roles": [
             "relay-consultation-anti-rollback",
             "relay-consultation-audit",
@@ -514,10 +486,12 @@ EXPECTED_PLAN_WORKLOADS = {
             "anchor",
             "anti-rollback-state",
             "secret",
-            "certificate",
             "audit",
         ],
-        "secret_consumers": ["notary-tls", "notary-signing-key"],
+        "secret_consumers": [
+            "notary-relay-workload-credential",
+            "notary-signing-key",
+        ],
         "state_roles": ["notary-anti-rollback", "notary-audit"],
         "endpoint_classes": [
             "public-application",
@@ -1308,7 +1282,7 @@ def assert_ordinary_model(
     services = _services(model)
     if set(services) != ORDINARY_SERVICES:
         raise ContractError(
-            "ordinary model must contain four workloads and four lane stagers"
+            "ordinary model must contain four workloads and three secret stagers"
         )
     if INITIALIZATION_SERVICES.intersection(services):
         raise ContractError("ordinary model exposes initialization services")

@@ -327,7 +327,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         model["services"]["registry-private-namespace"] = {}
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "four workloads and four lane stagers",
+            "four workloads and three secret stagers",
         ):
             assert_ordinary(model)
 
@@ -342,7 +342,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         model["services"][action_stager] = stager(action_stager, action=True)
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "four workloads and four lane stagers",
+            "four workloads and three secret stagers",
         ):
             assert_ordinary(model)
 
@@ -565,7 +565,9 @@ class AdopterComposeContractTests(unittest.TestCase):
         self,
     ) -> None:
         def add_cross_lane_input(model: dict) -> None:
-            model["services"]["registry-relay-public-stage-secrets"]["secrets"].append(
+            model["services"]["registry-relay-consultation-stage-secrets"][
+                "secrets"
+            ].append(
                 {
                     "source": "registry-notary-signing-key",
                     "target": "/run/secrets/notary-signing-key",
@@ -573,7 +575,9 @@ class AdopterComposeContractTests(unittest.TestCase):
             )
 
         def add_cross_lane_output(model: dict) -> None:
-            model["services"]["registry-relay-public-stage-secrets"]["volumes"].append(
+            model["services"]["registry-relay-consultation-stage-secrets"][
+                "volumes"
+            ].append(
                 volume(
                     "registry-operator-files-notary-serve",
                     "/registryctl-stage/cross-lane",
@@ -584,19 +588,19 @@ class AdopterComposeContractTests(unittest.TestCase):
             "cross-lane-input": add_cross_lane_input,
             "cross-lane-output": add_cross_lane_output,
             "image": lambda model: model["services"][
-                "registry-relay-public-stage-secrets"
+                "registry-relay-consultation-stage-secrets"
             ].pop("image"),
             "command": lambda model: model["services"][
-                "registry-relay-public-stage-secrets"
+                "registry-relay-consultation-stage-secrets"
             ].pop("command"),
             "network": lambda model: model["services"][
-                "registry-relay-public-stage-secrets"
+                "registry-relay-consultation-stage-secrets"
             ].update({"network_mode": "service:registry-postgres"}),
             "capability": lambda model: model["services"][
-                "registry-relay-public-stage-secrets"
+                "registry-relay-consultation-stage-secrets"
             ].update({"cap_add": ["CHOWN", "DAC_OVERRIDE"]}),
             "secret-target": lambda model: model["services"][
-                "registry-relay-public-stage-secrets"
+                "registry-relay-consultation-stage-secrets"
             ]["secrets"][0].update({"target": "/tmp/escaped"}),
         }
         for name, mutate in mutations.items():
@@ -688,12 +692,12 @@ class AdopterComposeContractTests(unittest.TestCase):
             self.assertEqual(initialized["services"][name], ordinary["services"][name])
 
         changed = initialization_model(ordinary)
-        changed["services"]["registry-relay-public-stage-secrets"]["command"] = [
-            "changed"
-        ]
+        changed["services"]["registry-relay-consultation-stage-secrets"][
+            "command"
+        ] = ["changed"]
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "changed ordinary service registry-relay-public-stage-secrets",
+            "changed ordinary service registry-relay-consultation-stage-secrets",
         ):
             assert_initialization(changed, ordinary)
 
@@ -1116,10 +1120,7 @@ class AdopterComposeContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(
-            baseline["workloads"][0]["mount_roles"].count("certificate"),
-            1,
-        )
+        self.assertNotIn("certificate", baseline["workloads"][0]["mount_roles"])
         mutations = {
             "duplicate-workload": lambda plan: plan["workloads"].append(
                 copy.deepcopy(plan["workloads"][0])
@@ -1127,7 +1128,7 @@ class AdopterComposeContractTests(unittest.TestCase):
             "unknown-workload": lambda plan: plan["workloads"][0].update(
                 {"id": "unknown"}
             ),
-            "duplicate-certificate-role": lambda plan: plan["workloads"][0][
+            "unexpected-certificate-role": lambda plan: plan["workloads"][0][
                 "mount_roles"
             ].append("certificate"),
             "unknown-mount-role": lambda plan: plan["workloads"][0][

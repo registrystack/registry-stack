@@ -375,6 +375,7 @@ evidence.machine_quota.subjects_per_minute
 evidence.max_credential_validity_seconds
 evidence.relay
 evidence.relay.allow_insecure_localhost
+evidence.relay.allow_insecure_private_network
 evidence.relay.allowed_private_cidrs
 evidence.relay.allowed_private_cidrs[]
 evidence.relay.base_url

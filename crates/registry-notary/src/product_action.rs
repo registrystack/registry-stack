@@ -53,12 +53,34 @@ pub(crate) fn ensure_closed_product_action_arguments(
         || args.state_path.is_some()
         || args.env_file.is_some()
         || args.env_file_override
-        || args.bind.is_some()
+        || has_disallowed_product_action_bind(args.bind)
         || args.initialize_state
     {
         return Err("product-action accepts no runtime flags".into());
     }
     Ok(())
+}
+
+fn has_disallowed_product_action_bind(bind: Option<SocketAddr>) -> bool {
+    let ambient = std::env::var("REGISTRY_NOTARY_BIND").ok();
+    has_disallowed_product_action_bind_with_ambient(bind, ambient.as_deref())
+}
+
+fn has_disallowed_product_action_bind_with_ambient(
+    bind: Option<SocketAddr>,
+    ambient: Option<&str>,
+) -> bool {
+    let Some(bind) = bind else {
+        return false;
+    };
+
+    // The released image sets this legacy server default globally. Closed
+    // actions load their listener from the verified bundle and never apply the
+    // parsed override, so an identical ambient value is inactive. A distinct
+    // CLI override still rejects. Clap no longer exposes the value source once
+    // `Args` has been constructed, but an explicit duplicate remains harmless
+    // because this path ignores `Args::bind` completely.
+    ambient.and_then(|value| value.parse::<SocketAddr>().ok()) != Some(bind)
 }
 
 pub(crate) async fn run_product_action(
@@ -413,6 +435,29 @@ mod tests {
                 .expect_err("product action rejects legacy runtime argument");
             assert_eq!(error.to_string(), "product-action accepts no runtime flags");
         }
+    }
+
+    #[test]
+    fn released_image_bind_is_inactive_but_distinct_overrides_reject() {
+        let image_bind = "0.0.0.0:8080".parse().expect("image bind parses");
+        let distinct_bind = "127.0.0.1:8080".parse().expect("CLI bind parses");
+
+        assert!(!has_disallowed_product_action_bind_with_ambient(
+            Some(image_bind),
+            Some("0.0.0.0:8080")
+        ));
+        assert!(has_disallowed_product_action_bind_with_ambient(
+            Some(distinct_bind),
+            Some("0.0.0.0:8080")
+        ));
+        assert!(has_disallowed_product_action_bind_with_ambient(
+            Some(image_bind),
+            None
+        ));
+        assert!(has_disallowed_product_action_bind_with_ambient(
+            Some(image_bind),
+            Some("not-a-socket")
+        ));
     }
 
     #[test]

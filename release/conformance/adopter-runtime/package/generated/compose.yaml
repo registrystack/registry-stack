@@ -45,16 +45,6 @@ services:
       - source: registry-postgresql-tls-private-key
         target: postgresql-tls-private-key
 
-  registry-relay-public-stage-secrets:
-    <<: *stager-hardening
-    volumes:
-      - registry-operator-files-relay-public-serve:/registryctl-stage/output/relay-public-serve
-    secrets:
-      - source: registry-relay-public-tls-certificate
-        target: relay-public-tls-certificate
-      - source: registry-relay-public-tls-private-key
-        target: relay-public-tls-private-key
-
   registry-relay-consultation-stage-secrets:
     <<: *stager-hardening
     volumes:
@@ -62,10 +52,6 @@ services:
     secrets:
       - source: registry-postgresql-tls-certificate
         target: postgresql-tls-certificate
-      - source: registry-relay-consultation-tls-certificate
-        target: relay-consultation-tls-certificate
-      - source: registry-relay-consultation-tls-private-key
-        target: relay-consultation-tls-private-key
 
   registry-notary-stage-secrets:
     <<: *stager-hardening
@@ -76,14 +62,8 @@ services:
         target: notary-relay-workload-credential
       - source: registry-notary-signing-key
         target: notary-signing-key
-      - source: registry-notary-tls-certificate
-        target: notary-tls-certificate
-      - source: registry-notary-tls-private-key
-        target: notary-tls-private-key
       - source: registry-postgresql-tls-certificate
         target: postgresql-tls-certificate
-      - source: registry-relay-consultation-tls-certificate
-        target: relay-consultation-tls-certificate
 
   registry-postgres:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -136,9 +116,6 @@ services:
         host_ip: 127.0.0.1
         protocol: tcp
         mode: ingress
-    depends_on:
-      registry-relay-public-stage-secrets:
-        condition: service_completed_successfully
     env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
@@ -155,7 +132,6 @@ services:
           create_host_path: false
       - registry-relay-public-state:/var/lib/registry/state:ro
       - registry-relay-public-audit:/var/lib/registry/audit
-      - registry-operator-files-relay-public-serve:/run/secrets:ro
 
   registry-relay-consultation:
     <<: *product-hardening
@@ -242,23 +218,10 @@ volumes:
   registry-notary-audit:
     name: registry-adopter-probe_registry-notary-audit
   registry-operator-files-postgresql-serve:
-  registry-operator-files-relay-public-serve:
   registry-operator-files-relay-consultation-serve:
   registry-operator-files-notary-serve:
 
 secrets:
-  registry-relay-public-tls-certificate:
-    file: ../operator/secrets/relay-public-tls-certificate
-  registry-relay-public-tls-private-key:
-    file: ../operator/secrets/relay-public-tls-private-key
-  registry-relay-consultation-tls-certificate:
-    file: ../operator/secrets/relay-consultation-tls-certificate
-  registry-relay-consultation-tls-private-key:
-    file: ../operator/secrets/relay-consultation-tls-private-key
-  registry-notary-tls-certificate:
-    file: ../operator/secrets/notary-tls-certificate
-  registry-notary-tls-private-key:
-    file: ../operator/secrets/notary-tls-private-key
   registry-notary-signing-key:
     file: ../operator/secrets/notary-signing-key
   registry-notary-relay-workload-credential:

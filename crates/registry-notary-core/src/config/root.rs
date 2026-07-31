@@ -156,7 +156,7 @@ impl StandaloneRegistryNotaryConfig {
         self.evidence.machine_quota.validate()?;
         self.evidence.validate_batch_limits()?;
         if let Some(relay) = &self.evidence.relay {
-            relay.validate()?;
+            relay.validate(self.deployment.profile)?;
             if self.evidence.claims.is_empty() {
                 return Err(EvidenceConfigError::InvalidRelayConfig {
                     reason: "evidence.relay requires at least one registry_backed claim"

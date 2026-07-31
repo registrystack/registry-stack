@@ -1085,22 +1085,12 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         &format!("{label} initialize_state"),
     )?;
     let serve_secrets: &[&str] = match id {
-        "relay-public" => &[
-            "relay-public-tls-certificate",
-            "relay-public-tls-private-key",
-        ],
-        "relay-consultation" => &[
-            "postgresql-tls-certificate",
-            "relay-consultation-tls-certificate",
-            "relay-consultation-tls-private-key",
-        ],
+        "relay-public" => &[],
+        "relay-consultation" => &["postgresql-tls-certificate"],
         "notary" => &[
             "postgresql-tls-certificate",
-            "relay-consultation-tls-certificate",
             "notary-relay-workload-credential",
             "notary-signing-key",
-            "notary-tls-certificate",
-            "notary-tls-private-key",
         ],
         _ => unreachable!(),
     };
@@ -1455,20 +1445,6 @@ fn validate_operator_file_contract(file: &LockedOperatorFileV1) -> Result<()> {
             | "relay-consultation-environment"
             | "notary-environment" => (
                 LockedOperatorFileFormatV1::Dotenv,
-                &["root:root", "65532:65532"],
-                &[],
-            ),
-            "relay-public-tls-certificate"
-            | "relay-consultation-tls-certificate"
-            | "notary-tls-certificate" => (
-                LockedOperatorFileFormatV1::PemCertificate,
-                &["root:root", "65532:65532"],
-                &[],
-            ),
-            "relay-public-tls-private-key"
-            | "relay-consultation-tls-private-key"
-            | "notary-tls-private-key" => (
-                LockedOperatorFileFormatV1::PemPrivateKey,
                 &["root:root", "65532:65532"],
                 &[],
             ),
@@ -1969,6 +1945,15 @@ mod tests {
             .allowed_owners
             .push("999:999".to_string());
         assert!(validate_operator_file_contract(&notary_signing_key).is_err());
+
+        let listener_certificate = LockedOperatorFileV1 {
+            id: "notary-tls-certificate".to_string(),
+            format: LockedOperatorFileFormatV1::PemCertificate,
+            mode: "0600".to_string(),
+            allowed_owners: vec!["root:root".to_string(), "65532:65532".to_string()],
+            required_keys: Vec::new(),
+        };
+        assert!(validate_operator_file_contract(&listener_certificate).is_err());
     }
 
     #[test]

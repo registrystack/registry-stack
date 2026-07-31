@@ -36,6 +36,10 @@ pub struct RelayConnectionConfig {
     pub allowed_private_cidrs: Vec<IpNet>,
     #[serde(default)]
     pub allow_insecure_localhost: bool,
+    /// Permit this signed Notary-to-Relay service hop to use application HTTP.
+    /// Runtime resolution remains confined to eligible private addresses.
+    #[serde(default)]
+    pub allow_insecure_private_network: bool,
     #[serde(default = "default_relay_max_in_flight")]
     pub max_in_flight: usize,
 }
@@ -55,13 +59,20 @@ impl std::fmt::Debug for RelayConnectionConfig {
                 &self.allowed_private_cidrs.len(),
             )
             .field("allow_insecure_localhost", &self.allow_insecure_localhost)
+            .field(
+                "allow_insecure_private_network",
+                &self.allow_insecure_private_network,
+            )
             .field("max_in_flight", &self.max_in_flight)
             .finish()
     }
 }
 
 impl RelayConnectionConfig {
-    pub(in crate::config) fn validate(&self) -> Result<(), EvidenceConfigError> {
+    pub(in crate::config) fn validate(
+        &self,
+        deployment_profile: Option<crate::deployment::DeploymentProfile>,
+    ) -> Result<(), EvidenceConfigError> {
         if self.base_url.is_empty()
             || self.base_url.len() > MAX_RELAY_BASE_URL_BYTES
             || self.base_url.trim() != self.base_url
@@ -78,12 +89,30 @@ impl RelayConnectionConfig {
                 "base_url must be an absolute HTTP(S) origin with path exactly / and no credentials, query, or fragment",
             );
         };
+        validate_private_cidrs(&self.allowed_private_cidrs)?;
+        if self.allow_insecure_localhost && self.allow_insecure_private_network {
+            return invalid_relay(
+                "allow_insecure_localhost and allow_insecure_private_network are mutually exclusive",
+            );
+        }
+        if self.allow_insecure_private_network && origin.scheme() != "http" {
+            return invalid_relay("allow_insecure_private_network requires an HTTP base_url");
+        }
         match origin.scheme() {
             "https" => {}
             "http" if self.allow_insecure_localhost && is_loopback_origin(&origin) => {}
+            "http"
+                if self.allow_insecure_private_network
+                    && matches!(origin.host(), Some(url::Host::Domain(_))) => {}
+            "http"
+                if deployment_profile == Some(crate::deployment::DeploymentProfile::Local)
+                    && private_origin_has_exact_allowlist_entry(
+                        &origin,
+                        &self.allowed_private_cidrs,
+                    ) => {}
             "http" => {
                 return invalid_relay(
-                    "base_url must use https unless allow_insecure_localhost permits an HTTP loopback URL",
+                    "base_url must use https unless an explicit loopback, private service, or local exact-private-IP HTTP profile applies",
                 );
             }
             _ => return invalid_relay("base_url must use the http or https scheme"),
@@ -103,7 +132,6 @@ impl RelayConnectionConfig {
         if self.root_certificate_path.is_some() && origin.scheme() != "https" {
             return invalid_relay("root_certificate_path requires an https base_url");
         }
-        validate_private_cidrs(&self.allowed_private_cidrs)?;
         if !(1..=MAX_RELAY_IN_FLIGHT).contains(&self.max_in_flight) {
             return invalid_relay("max_in_flight must be between 1 and 64");
         }
@@ -113,6 +141,32 @@ impl RelayConnectionConfig {
     #[must_use]
     pub fn uses_insecure_url(&self) -> bool {
         self.base_url.starts_with("http://")
+    }
+
+    #[must_use]
+    pub fn uses_insecure_loopback_url(&self) -> bool {
+        parse_relay_origin(&self.base_url)
+            .is_some_and(|origin| origin.scheme() == "http" && is_loopback_origin(&origin))
+    }
+
+    #[must_use]
+    pub fn uses_insecure_private_network_url(&self) -> bool {
+        self.allow_insecure_private_network
+            && parse_relay_origin(&self.base_url).is_some_and(|origin| {
+                origin.scheme() == "http" && matches!(origin.host(), Some(url::Host::Domain(_)))
+            })
+    }
+}
+
+fn private_origin_has_exact_allowlist_entry(origin: &url::Url, cidrs: &[IpNet]) -> bool {
+    match origin.host() {
+        Some(url::Host::Ipv4(address)) => cidrs.iter().any(|cidr| {
+            matches!(cidr, IpNet::V4(cidr) if cidr.prefix_len() == 32 && cidr.network() == address)
+        }),
+        Some(url::Host::Ipv6(address)) => cidrs.iter().any(|cidr| {
+            matches!(cidr, IpNet::V6(cidr) if cidr.prefix_len() == 128 && cidr.network() == address)
+        }),
+        Some(url::Host::Domain(_)) | None => false,
     }
 }
 

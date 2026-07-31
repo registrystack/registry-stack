@@ -191,8 +191,12 @@ impl DestinationSlot for CredentialDestination {
 pub enum DestinationProfile {
     /// HTTPS with production address controls.
     ProductionHttps,
+    /// Plain HTTP for one signed service hop confined to private addresses.
+    PrivateServiceHttp,
     /// Plain HTTP to an explicitly configured loopback host for development.
     LoopbackDevelopmentHttp,
+    /// Plain HTTP to one exact, explicitly allowed private IP for local development.
+    LocalPrivateDevelopmentHttp,
     /// Test-only HTTPS profile that remains confined to loopback addresses.
     #[cfg(test)]
     PinnedLoopbackHttpsTest,
@@ -538,6 +542,9 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::ProductionHttps if origin.scheme() != "https" => {
                 return Err(DestinationPolicyError::ProductionRequiresHttps);
             }
+            DestinationProfile::PrivateServiceHttp if origin.scheme() != "http" => {
+                return Err(DestinationPolicyError::PrivateServiceRequiresHttp);
+            }
             DestinationProfile::LoopbackDevelopmentHttp => {
                 if origin.scheme() != "http" {
                     return Err(DestinationPolicyError::DevelopmentRequiresHttp);
@@ -546,11 +553,37 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                     return Err(DestinationPolicyError::DevelopmentRequiresLoopbackHost);
                 }
             }
+            DestinationProfile::LocalPrivateDevelopmentHttp => {
+                if origin.scheme() != "http" {
+                    return Err(DestinationPolicyError::LocalPrivateDevelopmentRequiresHttp);
+                }
+                let Some(address) = origin_explicit_private_ip(&origin) else {
+                    return Err(
+                        DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+                    );
+                };
+                if is_cloud_metadata_ip(address)
+                    || is_always_denied_in_production(address)
+                    || !is_eligible_private_address(address)
+                {
+                    return Err(
+                        DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+                    );
+                }
+                if !allowed_private_cidrs
+                    .iter()
+                    .any(|cidr| private_cidr_is_exact_host(*cidr, address))
+                {
+                    return Err(
+                        DestinationPolicyError::LocalPrivateDevelopmentRequiresExactPrivateCidr,
+                    );
+                }
+            }
             #[cfg(test)]
             DestinationProfile::PinnedLoopbackHttpsTest if origin.scheme() != "https" => {
                 return Err(DestinationPolicyError::ProductionRequiresHttps);
             }
-            DestinationProfile::ProductionHttps => {}
+            DestinationProfile::ProductionHttps | DestinationProfile::PrivateServiceHttp => {}
             #[cfg(test)]
             DestinationProfile::PinnedLoopbackHttpsTest => {}
         }
@@ -899,12 +932,50 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
 
     fn classify_address(&self, ip: IpAddr) -> Result<(), DestinationSendError> {
         match self.profile {
+            DestinationProfile::PrivateServiceHttp => {
+                if is_cloud_metadata_ip(ip) {
+                    return Err(DestinationSendError::CloudMetadataDenied);
+                }
+                if is_always_denied_in_production(ip) {
+                    return Err(DestinationSendError::AlwaysDeniedAddress);
+                }
+                if !is_eligible_private_address(ip) {
+                    return Err(DestinationSendError::PrivateAddressNotAllowed);
+                }
+                if self.allowed_private_cidrs.is_empty()
+                    || self
+                        .allowed_private_cidrs
+                        .iter()
+                        .any(|cidr| cidr.contains(&ip))
+                {
+                    Ok(())
+                } else {
+                    Err(DestinationSendError::PrivateAddressNotAllowed)
+                }
+            }
             DestinationProfile::LoopbackDevelopmentHttp => {
                 if is_loopback(ip) {
                     Ok(())
                 } else {
                     Err(DestinationSendError::DevelopmentAddressDenied)
                 }
+            }
+            DestinationProfile::LocalPrivateDevelopmentHttp => {
+                if is_cloud_metadata_ip(ip) {
+                    return Err(DestinationSendError::CloudMetadataDenied);
+                }
+                if is_always_denied_in_production(ip) {
+                    return Err(DestinationSendError::AlwaysDeniedAddress);
+                }
+                if is_eligible_private_address(ip)
+                    && self
+                        .allowed_private_cidrs
+                        .iter()
+                        .any(|cidr| private_cidr_is_exact_host(*cidr, ip))
+                {
+                    return Ok(());
+                }
+                Err(DestinationSendError::PrivateAddressNotAllowed)
             }
             #[cfg(test)]
             DestinationProfile::PinnedLoopbackHttpsTest => {
@@ -1027,10 +1098,18 @@ pub enum DestinationPolicyError {
     OriginHasResourceComponents,
     #[error("production destination requires HTTPS")]
     ProductionRequiresHttps,
+    #[error("private service destination requires HTTP")]
+    PrivateServiceRequiresHttp,
     #[error("loopback development destination requires HTTP")]
     DevelopmentRequiresHttp,
     #[error("loopback development destination requires an explicit loopback host")]
     DevelopmentRequiresLoopbackHost,
+    #[error("local private development destination requires HTTP")]
+    LocalPrivateDevelopmentRequiresHttp,
+    #[error("local private development destination requires an eligible private IP literal")]
+    LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+    #[error("local private development destination requires an exact private host CIDR")]
+    LocalPrivateDevelopmentRequiresExactPrivateCidr,
     #[error("private CIDR is outside eligible private address space")]
     PrivateCidrDenied,
     #[error("private CIDR contains host bits instead of an exact network")]
@@ -3582,6 +3661,26 @@ fn origin_explicitly_denotes_loopback(origin: &Url) -> bool {
     }
 }
 
+fn origin_explicit_private_ip(origin: &Url) -> Option<IpAddr> {
+    match origin.host() {
+        Some(::url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
+        Some(::url::Host::Ipv6(ip)) => Some(IpAddr::V6(ip)),
+        Some(::url::Host::Domain(_)) | None => None,
+    }
+}
+
+fn private_cidr_is_exact_host(cidr: IpNet, address: IpAddr) -> bool {
+    match (cidr, address) {
+        (IpNet::V4(cidr), IpAddr::V4(address)) => {
+            cidr.prefix_len() == 32 && cidr.network() == address
+        }
+        (IpNet::V6(cidr), IpAddr::V6(address)) => {
+            cidr.prefix_len() == 128 && cidr.network() == address
+        }
+        (IpNet::V4(_), IpAddr::V6(_)) | (IpNet::V6(_), IpAddr::V4(_)) => false,
+    }
+}
+
 fn is_loopback(ip: IpAddr) -> bool {
     match normalize_ipv4_mapped(ip) {
         IpAddr::V4(ip) => ip.is_loopback(),
@@ -4222,6 +4321,135 @@ mod tests {
             )
             .unwrap_err(),
             DestinationPolicyError::DevelopmentRequiresLoopbackHost
+        );
+    }
+
+    #[test]
+    fn local_private_http_requires_an_exact_ip_literal_and_host_cidr() {
+        let policy = DataDestinationPolicy::new(
+            "local-relay",
+            "http://10.89.0.4:8080/",
+            DestinationProfile::LocalPrivateDevelopmentHttp,
+            &[cidr("10.89.0.4/32")],
+        )
+        .expect("exact local private destination validates");
+        assert_eq!(classify(&policy, &["10.89.0.4"]), Ok(()));
+        assert_eq!(
+            classify(&policy, &["10.89.0.5"]),
+            Err(DestinationSendError::LiteralOriginMismatch)
+        );
+
+        for (origin, allowed, expected) in [
+            (
+                "https://10.89.0.4:8080/",
+                "10.89.0.4/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresHttp,
+            ),
+            (
+                "http://relay.internal.example:8080/",
+                "10.89.0.4/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+            ),
+            (
+                "http://10.89.0.4:8080/",
+                "10.89.0.0/24",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresExactPrivateCidr,
+            ),
+            (
+                "http://10.89.0.4:8080/",
+                "10.89.0.5/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresExactPrivateCidr,
+            ),
+            (
+                "http://169.254.169.254:8080/",
+                "169.254.169.254/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+            ),
+            (
+                "http://100.100.100.200:8080/",
+                "100.100.100.200/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+            ),
+            (
+                "http://0.0.0.0:8080/",
+                "0.0.0.0/32",
+                DestinationPolicyError::LocalPrivateDevelopmentRequiresPrivateIpLiteral,
+            ),
+        ] {
+            assert_eq!(
+                DataDestinationPolicy::new(
+                    "local-relay",
+                    origin,
+                    DestinationProfile::LocalPrivateDevelopmentHttp,
+                    &[cidr(allowed)],
+                )
+                .unwrap_err(),
+                expected,
+                "unexpected result for {origin} with {allowed}"
+            );
+        }
+
+        assert_eq!(
+            DataDestinationPolicy::new(
+                "local-relay",
+                "http://10.89.0.4:8080/",
+                DestinationProfile::LocalPrivateDevelopmentHttp,
+                &[],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::LocalPrivateDevelopmentRequiresExactPrivateCidr
+        );
+        assert_eq!(
+            DataDestinationPolicy::new(
+                "production-relay",
+                "http://10.89.0.4:8080/",
+                DestinationProfile::ProductionHttps,
+                &[cidr("10.89.0.4/32")],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::ProductionRequiresHttps
+        );
+    }
+
+    #[test]
+    fn private_service_http_is_dns_pinned_to_private_address_space() {
+        let policy = DataDestinationPolicy::new(
+            "notary-relay",
+            "http://registry-relay-consultation:8080/",
+            DestinationProfile::PrivateServiceHttp,
+            &[],
+        )
+        .expect("private service destination validates");
+        assert_eq!(classify(&policy, &["10.89.0.4"]), Ok(()));
+        assert_eq!(classify(&policy, &["fd42::4"]), Ok(()));
+        for address in ["127.0.0.1", "169.254.169.254", "8.8.8.8", "::1"] {
+            assert!(
+                classify(&policy, &[address]).is_err(),
+                "private service accepted {address}"
+            );
+        }
+
+        let narrowed = DataDestinationPolicy::new(
+            "notary-relay",
+            "http://registry-relay-consultation:8080/",
+            DestinationProfile::PrivateServiceHttp,
+            &[cidr("10.89.0.0/24")],
+        )
+        .expect("narrowed private service destination validates");
+        assert_eq!(classify(&narrowed, &["10.89.0.4"]), Ok(()));
+        assert_eq!(
+            classify(&narrowed, &["10.90.0.4"]),
+            Err(DestinationSendError::PrivateAddressNotAllowed)
+        );
+        assert_eq!(
+            DataDestinationPolicy::new(
+                "notary-relay",
+                "https://registry-relay-consultation:8080/",
+                DestinationProfile::PrivateServiceHttp,
+                &[],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::PrivateServiceRequiresHttp
         );
     }
 

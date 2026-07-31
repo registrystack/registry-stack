@@ -200,51 +200,22 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     if lane == "relay-public":
         preparation_secrets = []
         initialization_secrets = []
-        serve_secrets = [
-            secret_projection(
-                "relay-public-tls-certificate",
-                "/run/secrets/relay-public-tls.crt",
-            ),
-            secret_projection(
-                "relay-public-tls-private-key",
-                "/run/secrets/relay-public-tls.key",
-            ),
-        ]
+        serve_secrets = []
     elif lane == "relay-consultation":
         preparation_secrets = [database_ca]
         initialization_secrets = [database_ca]
-        serve_secrets = [
-            database_ca,
-            secret_projection(
-                "relay-consultation-tls-certificate",
-                "/run/secrets/relay-consultation-tls.crt",
-            ),
-            secret_projection(
-                "relay-consultation-tls-private-key",
-                "/run/secrets/relay-consultation-tls.key",
-            ),
-        ]
+        serve_secrets = [database_ca]
     else:
         preparation_secrets = [database_ca]
         initialization_secrets = []
         serve_secrets = [
             database_ca,
             secret_projection(
-                "relay-consultation-tls-certificate",
-                "/run/secrets/relay-consultation-ca.pem",
-            ),
-            secret_projection(
                 "notary-relay-workload-credential",
                 "/run/secrets/relay-workload-token",
             ),
             secret_projection(
                 "notary-signing-key", "/run/secrets/notary-signing-key.jwk"
-            ),
-            secret_projection(
-                "notary-tls-certificate", "/run/secrets/notary-tls.crt"
-            ),
-            secret_projection(
-                "notary-tls-private-key", "/run/secrets/notary-tls.key"
             ),
         ]
     def action(
@@ -508,24 +479,6 @@ def operator_files() -> list[dict[str, Any]]:
             }
         )
     for file_id, file_format, owners in [
-        (
-            "relay-public-tls-certificate",
-            "pem_certificate",
-            product_owners,
-        ),
-        ("relay-public-tls-private-key", "pem_private_key", product_owners),
-        (
-            "relay-consultation-tls-certificate",
-            "pem_certificate",
-            product_owners,
-        ),
-        (
-            "relay-consultation-tls-private-key",
-            "pem_private_key",
-            product_owners,
-        ),
-        ("notary-tls-certificate", "pem_certificate", product_owners),
-        ("notary-tls-private-key", "pem_private_key", product_owners),
         ("notary-signing-key", "json_web_key", product_owners),
         ("notary-relay-workload-credential", "compact_jwt", product_owners),
         (

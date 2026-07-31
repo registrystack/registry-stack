@@ -2286,6 +2286,11 @@
           "default": false,
           "type": "boolean"
         },
+        "allow_insecure_private_network": {
+          "default": false,
+          "description": "Permit this signed Notary-to-Relay service hop to use application HTTP.\nRuntime resolution remains confined to eligible private addresses.",
+          "type": "boolean"
+        },
         "allowed_private_cidrs": {
           "default": [],
           "items": {

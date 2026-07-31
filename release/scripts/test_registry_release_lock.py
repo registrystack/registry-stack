@@ -256,28 +256,18 @@ class RegistryReleaseLockTests(unittest.TestCase):
             lane_secrets = {
                 "relay-public": {
                     "preparation": [],
-                    "serve": [
-                        "relay-public-tls-certificate",
-                        "relay-public-tls-private-key",
-                    ],
+                    "serve": [],
                 },
                 "relay-consultation": {
                     "preparation": ["postgresql-tls-certificate"],
-                    "serve": [
-                        "postgresql-tls-certificate",
-                        "relay-consultation-tls-certificate",
-                        "relay-consultation-tls-private-key",
-                    ],
+                    "serve": ["postgresql-tls-certificate"],
                 },
                 "notary": {
                     "preparation": ["postgresql-tls-certificate"],
                     "serve": [
                         "postgresql-tls-certificate",
-                        "relay-consultation-tls-certificate",
                         "notary-relay-workload-credential",
                         "notary-signing-key",
-                        "notary-tls-certificate",
-                        "notary-tls-private-key",
                     ],
                 },
             }
@@ -452,12 +442,6 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 {file["id"] for file in operator_files},
                 product_environment_ids
                 | {
-                    "relay-public-tls-certificate",
-                    "relay-public-tls-private-key",
-                    "relay-consultation-tls-certificate",
-                    "relay-consultation-tls-private-key",
-                    "notary-tls-certificate",
-                    "notary-tls-private-key",
                     "notary-signing-key",
                     "notary-relay-workload-credential",
                     "postgresql-tls-certificate",
