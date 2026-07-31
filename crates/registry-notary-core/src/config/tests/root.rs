@@ -972,6 +972,19 @@ token_file: /run/secrets/registry-notary-relay.jwt
     dependent.purpose = Some("dependent_attestation".to_string());
     dependent.depends_on = vec!["guardian-link".to_string()];
     dependent.credential_profiles.clear();
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut dependent.evidence_mode else {
+        panic!("delegated claim is registry-backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("civil status consultation exists")
+        .inputs
+        .insert(
+            "national_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.civil_registration_id".to_string(),
+            ),
+        );
 
     config.evidence.claims.push(proof);
     config.evidence.claims.push(dependent);

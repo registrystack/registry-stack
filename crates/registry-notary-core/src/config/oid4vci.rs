@@ -913,6 +913,7 @@ fn validate_representative_credential_closure_inputs(
             ));
         };
         for (consultation_name, consultation) in consultations {
+            let mut consumes_target = false;
             for (input_name, input) in &consultation.inputs {
                 let path = input.request_context_path();
                 if path != requester_path && path != target_path {
@@ -921,6 +922,21 @@ fn validate_representative_credential_closure_inputs(
                         claim.id
                     ));
                 }
+                consumes_target |= path == target_path;
+            }
+            if !consumes_target {
+                let actual_inputs = consultation
+                    .inputs
+                    .iter()
+                    .map(|(input_name, input)| {
+                        format!("'{input_name}' maps '{}'", input.request_context_path())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return invalid_oid4vci(format!(
+                    "credential configuration '{configuration_id}' representative_issuance claim '{}' consultation '{consultation_name}' does not consume the selected target; {actual_inputs}; required target path is '{target_path}' and the only additional allowed canonical path is '{requester_path}'",
+                    claim.id
+                ));
             }
         }
         for dependency_id in &claim.depends_on {

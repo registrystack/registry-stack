@@ -73,7 +73,8 @@ impl SubjectAccessConfig {
             );
         }
         self.allowed_operations.validate()?;
-        self.delegation.validate(evidence)?;
+        self.delegation
+            .validate(evidence, &self.subject_binding.id_type)?;
         if self.allowed_claims.is_empty() {
             if !self.delegation.enabled {
                 return self.invalid(
@@ -261,7 +262,11 @@ pub struct SubjectAccessDelegationConfig {
 }
 
 impl SubjectAccessDelegationConfig {
-    fn validate(&self, evidence: &EvidenceConfig) -> Result<(), EvidenceConfigError> {
+    fn validate(
+        &self,
+        evidence: &EvidenceConfig,
+        requester_id_type: &str,
+    ) -> Result<(), EvidenceConfigError> {
         if !self.enabled {
             if !self.allowed_relationships.is_empty() {
                 return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
@@ -285,7 +290,7 @@ impl SubjectAccessDelegationConfig {
             .collect();
         let mut relationship_types = HashSet::new();
         for relationship in &self.allowed_relationships {
-            relationship.validate(evidence, &claim_ids)?;
+            relationship.validate(evidence, &claim_ids, requester_id_type)?;
             if !relationship_types.insert(relationship.relationship_type.as_str()) {
                 return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
@@ -338,6 +343,7 @@ impl SubjectAccessDelegatedRelationshipConfig {
         &self,
         evidence: &EvidenceConfig,
         claim_ids: &HashSet<&str>,
+        requester_id_type: &str,
     ) -> Result<(), EvidenceConfigError> {
         if self.relationship_type.trim().is_empty() {
             return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
@@ -440,10 +446,65 @@ impl SubjectAccessDelegatedRelationshipConfig {
                 &allowed_formats,
                 &allowed_disclosures,
             )?;
+            validate_delegated_registry_closure_inputs(
+                &self.relationship_type,
+                claim,
+                &self.proof_claim,
+                evidence,
+                requester_id_type,
+                self.target_id_type.as_deref().unwrap_or(requester_id_type),
+            )?;
         }
         validate_delegated_subject_access_allow_lists_are_supported(self, evidence)?;
         Ok(())
     }
+}
+
+fn validate_delegated_registry_closure_inputs(
+    relationship_type: &str,
+    root: &ClaimDefinition,
+    proof_claim_id: &str,
+    evidence: &EvidenceConfig,
+    requester_id_type: &str,
+    target_id_type: &str,
+) -> Result<(), EvidenceConfigError> {
+    let requester_path = format!("requester.identifiers.{requester_id_type}");
+    let target_path = format!("target.identifiers.{target_id_type}");
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+
+    while let Some(claim) = pending.pop() {
+        if !visited.insert(claim.id.as_str()) || claim.id == proof_claim_id {
+            continue;
+        }
+        if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
+            for (consultation_name, consultation) in consultations {
+                for (input_name, input) in &consultation.inputs {
+                    let path = input.request_context_path();
+                    if path != requester_path && path != target_path {
+                        return invalid_subject_access(format!(
+                            "delegated relationship '{relationship_type}' allowed claim '{}' closure claim '{}' consultation '{consultation_name}' input '{input_name}' maps non-canonical path '{path}'; allowed canonical paths are '{requester_path}' and '{target_path}'",
+                            root.id, claim.id
+                        ));
+                    }
+                }
+            }
+        }
+        for dependency_id in &claim.depends_on {
+            let dependency = evidence
+                .claims
+                .iter()
+                .find(|candidate| candidate.id == *dependency_id)
+                .ok_or_else(|| EvidenceConfigError::InvalidSubjectAccessConfig {
+                    reason: format!(
+                        "delegated relationship '{relationship_type}' allowed claim '{}' dependency closure references unknown claim '{dependency_id}'",
+                        root.id
+                    ),
+                })?;
+            pending.push(dependency);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
