@@ -589,6 +589,33 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn('event: "repository_dispatch"', text)
         self.assertIn('path: ".github/workflows/release-candidate.yml"', text)
 
+    def test_canary_seals_complete_security_evidence(self) -> None:
+        _, document = workflow("release-canary.yml")
+        exercise = next(
+            step["run"]
+            for step in document["jobs"]["control-plane"]["steps"]
+            if step.get("name")
+            == "Exercise dispatch, candidate, advisory, draft, and docs contracts"
+        )
+        for required_member_pattern in (
+            "images/postgresql.digest",
+            "image-sbom/${name}.spdx.json",
+            "image-sbom/postgresql.spdx.json",
+            "syft/${name}.syft.json",
+            "grype/${name}.grype.json",
+            "grype/grype-db-status.json",
+            "advisory-verdict.json",
+        ):
+            self.assertIn(required_member_pattern, exercise)
+        for image in ("registry-notary", "registry-relay", "postgresql"):
+            self.assertIn(f"write_image_reports {image}", exercise)
+        self.assertIn("registry-stack-${tag}-security-evidence.tar.gz", exercise)
+        self.assertIn('kind: "security-evidence"', exercise)
+        self.assertLess(
+            exercise.index("registry-stack-${tag}-security-evidence.tar.gz"),
+            exercise.index("release_candidate.py seal-candidate"),
+        )
+
     def test_scorecard_is_schedule_or_manual_only(self) -> None:
         text, _ = workflow("scorecard.yml")
         trigger = text.split("permissions:", 1)[0]
