@@ -7,10 +7,13 @@ use approved_set_support::approved_set::{
     assemble_initial_approved_set, assemble_updated_approved_set,
     load_approved_baseline_set_structure, AffectedLaneReplacements, ApprovedLaneV1,
     LaneVerificationSourceV1, PortableArtifactLocator, ReviewedBuildUpdateV1,
+    VerifiedApprovedLaneV1,
 };
 use approved_set_support::{
-    initial_lane, path_set, replacement_lane, reviewed_binding, verified, verifier_for_initial,
+    digest, entry, identity, initial_lane, path_set, replacement_lane, reviewed_binding, verified,
+    verifier_for_initial,
 };
+use registry_platform_config::ProductTrustDomainV1;
 
 fn initial_set(
     temporary: &tempfile::TempDir,
@@ -51,6 +54,25 @@ fn initial_assembly_rejects_mixed_project_identity_before_output_creation() {
 
     assert!(format!("{error:#}").contains("one project and environment"));
     assert!(!output.exists());
+}
+
+#[test]
+fn independent_verification_rejects_development_trust_for_an_approved_lane() {
+    let lane = ApprovedLaneV1::RelayPublic;
+    let mut acceptance_identity = identity(lane, "example-project");
+    acceptance_identity.trust_domain = ProductTrustDomainV1::Development;
+
+    let error = VerifiedApprovedLaneV1::from_independent_verification(
+        lane,
+        acceptance_identity,
+        1,
+        digest('a'),
+        None,
+        entry(lane, "approved", 'a', 'd', None),
+    )
+    .expect_err("development trust must not enter a governed approved set");
+
+    assert!(format!("{error:#}").contains("governed trust domain"));
 }
 
 #[test]
