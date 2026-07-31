@@ -172,10 +172,11 @@ fn representative_oid4vci_rejects_a_requester_only_credential_root() {
         ),
     );
 
-    let reason = expect_oid4vci_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
-        reason.contains("credential configuration 'date_of_birth_sd_jwt'")
-            && reason.contains("claim 'dependent-date-of-birth'")
+        reason.contains("delegated relationship 'guardian'")
+            && reason.contains("allowed claim 'dependent-date-of-birth'")
+            && reason.contains("closure claim 'dependent-date-of-birth'")
             && reason.contains("consultation 'civil_status'")
             && reason.contains("does not consume the selected target")
             && reason.contains("'requester_id' maps 'requester.identifiers.national_id'")
@@ -222,10 +223,11 @@ fn representative_oid4vci_rejects_a_requester_only_credential_dependency() {
         .depends_on
         .push("dependent-source-record".to_string());
 
-    let reason = expect_oid4vci_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
-        reason.contains("credential configuration 'date_of_birth_sd_jwt'")
-            && reason.contains("claim 'dependent-source-record'")
+        reason.contains("delegated relationship 'guardian'")
+            && reason.contains("allowed claim 'dependent-date-of-birth'")
+            && reason.contains("closure claim 'dependent-source-record'")
             && reason.contains("consultation 'civil_status'")
             && reason.contains("does not consume the selected target")
             && reason.contains("'requester_id' maps 'requester.identifiers.national_id'")
