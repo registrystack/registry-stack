@@ -603,92 +603,6 @@ class FirstCountryReleaseFormTest(TestCase):
         self.module.protect_evidence_tree(evidence)
         return path, report, logs
 
-
-    def write_smoke_report(self, topology: str) -> Path:
-        outcomes = dict(self.module.RELAY_SMOKE_OUTCOMES)
-        if topology == "combined_notary":
-            outcomes.update(self.module.NOTARY_SMOKE_OUTCOMES)
-        runtime = self.root / ".registry-stack/runtime/local"
-        runtime.mkdir(parents=True, exist_ok=True)
-        report = {
-            "schema_version": "registryctl.smoke.v1",
-            "base_url": "http://127.0.0.1:4242",
-            "passed": True,
-            "checks": [
-                {
-                    "name": name,
-                    "method": "GET",
-                    "path": "/bounded",
-                    "expected_status": status,
-                    "actual_status": status,
-                    "passed": True,
-                    "error": None,
-                }
-                for name, status in outcomes.items()
-            ],
-        }
-        path = runtime / "smoke-results.json"
-        write_report_fixture(path, report)
-        return path
-
-    def write_combined_runtime(self) -> Path:
-        files = {
-            ".registry-stack/build/local/private/relay/config/relay.yaml": "relay\n",
-            ".registry-stack/build/local/private/notary/config/notary.yaml": (
-                "notary\n"
-            ),
-            ".registry-stack/build/local/artifact-manifest.json": "artifacts\n",
-            "data/public_works_projects.xlsx": "workbook\n",
-            ".registry-stack/runtime/local/compose.yaml": "services: {}\n",
-            ".registry-stack/runtime/local/secrets/local.env": (
-                fixture_text("runtime-local-env") + "\n"
-            ),
-        }
-        for relative, contents in files.items():
-            path = self.root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents, encoding="utf-8")
-        manifest = {
-            "schema_version": "registryctl.local_runtime.v2",
-            "environment": "local",
-            "relay_image": self.relay,
-            "compose_digest": self.module.digest_uri(
-                self.root / ".registry-stack/runtime/local/compose.yaml"
-            ),
-            "artifact_manifest_digest": self.module.digest_uri(
-                self.root / ".registry-stack/build/local/artifact-manifest.json"
-            ),
-            "relay_config_digest": self.module.digest_uri(
-                self.root
-                / ".registry-stack/build/local/private/relay/config/relay.yaml"
-            ),
-            "workbook_digest": self.module.digest_uri(
-                self.root / "data/public_works_projects.xlsx"
-            ),
-            "workbook_classification": "operator_owned_source_data",
-            "workbook_project_file": "data/public_works_projects.xlsx",
-            "workbook_runtime_path": "/data/public_works_projects.xlsx",
-            "match_principal": "district-7",
-            "runtime_uid": "1000",
-            "runtime_gid": "1000",
-            "runtime_files": {
-                "compose.yaml": self.module.digest_uri(
-                    self.root / ".registry-stack/runtime/local/compose.yaml"
-                )
-            },
-            "topology": "combined_notary",
-            "notary": {
-                "notary_image": self.notary,
-                "postgresql_image": self.postgresql,
-            },
-        }
-        path = self.root / ".registry-stack/runtime/local/manifest.json"
-        path.write_text(json.dumps(manifest), encoding="utf-8")
-        runtime = self.root / ".registry-stack/runtime/local"
-        (runtime / "secrets").chmod(0o700)
-        (runtime / "secrets/local.env").chmod(0o600)
-        return path
-
     def test_closed_assets_bind_installer_binary_and_lock(self) -> None:
         verified = self.verify_assets()
         self.assertEqual(verified["installer_name"], self.installer)
@@ -999,6 +913,21 @@ class FirstCountryReleaseFormTest(TestCase):
             cleanup_source.index("available_secret_values"),
             cleanup_source.index("for governed_package in"),
         )
+
+    def test_retired_pre_1_0_live_contract_markers_are_absent(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        retired_markers = (
+            ".registry-stack/runtime/local",
+            "registryctl.local_runtime.v2",
+            "registryctl.smoke.v1",
+            "/v1/datasets/projects/entities/projects/records",
+            "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW",
+            "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_RAW",
+            '"notary-network", "8081"',
+        )
+        for marker in retired_markers:
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, source)
 
     def test_expected_failure_requires_its_value_free_classification(self) -> None:
         logs = self.root / "logs"
@@ -1729,86 +1658,6 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.beginner_runtime_asset(self.tag)
 
-    def test_authenticated_evidence_rejects_duplicate_match_rows(self) -> None:
-        body = json.dumps(
-            {
-                "data": [
-                    {
-                        "project_id": "project-1",
-                        "district_code": "D-01",
-                        "sector": "transport",
-                        "status": "active",
-                    },
-                    {
-                        "project_id": "project-2",
-                        "district_code": "D-02",
-                        "sector": "water",
-                        "status": "planned",
-                    },
-                ]
-            }
-        )
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "unexpected row count"
-        ):
-            self.module.summarize_records_response(
-                "match",
-                200,
-                body,
-                expected_rows=1,
-                expected_fields=self.module.MATCH_FIELDS,
-            )
-
-    def test_authenticated_evidence_rejects_extra_match_field(self) -> None:
-        body = json.dumps(
-            {
-                "data": [
-                    {
-                        "project_id": "project-1",
-                        "district_code": "D-01",
-                        "sector": "transport",
-                        "status": "active",
-                        "unexpected": "value",
-                    }
-                ]
-            }
-        )
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "unexpected disclosed fields"
-        ):
-            self.module.summarize_records_response(
-                "match",
-                200,
-                body,
-                expected_rows=1,
-                expected_fields=self.module.MATCH_FIELDS,
-            )
-
-    def test_authenticated_evidence_rejects_nonempty_no_match(self) -> None:
-        body = json.dumps({"data": [{"project_id": "unexpected"}]})
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "unexpected row count"
-        ):
-            self.module.summarize_records_response(
-                "no-match",
-                200,
-                body,
-                expected_rows=0,
-                expected_fields=None,
-            )
-
-    def test_authenticated_evidence_rejects_non_success_status(self) -> None:
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "did not return HTTP 200"
-        ):
-            self.module.summarize_records_response(
-                "match",
-                403,
-                json.dumps({"data": []}),
-                expected_rows=1,
-                expected_fields=self.module.MATCH_FIELDS,
-            )
-
     def test_governed_evidence_uses_stdin_for_token_and_records_minimized_summary(
         self,
     ) -> None:
@@ -1939,222 +1788,6 @@ class FirstCountryReleaseFormTest(TestCase):
                 logs=logs,
             )
 
-    def test_smoke_requires_all_notary_negative_and_positive_outcomes(self) -> None:
-        path = self.write_smoke_report("combined_notary")
-        report = json.loads(path.read_text(encoding="utf-8"))
-        report["checks"] = [
-            check
-            for check in report["checks"]
-            if check["name"]
-            != "matching evaluation returns the accepted predicate"
-        ]
-        write_report_fixture(path, report)
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "exact required outcomes"
-        ):
-            self.module.smoke_outcomes(self.root, "combined_notary")
-
-    def test_smoke_rejects_failed_notary_denial(self) -> None:
-        path = self.write_smoke_report("combined_notary")
-        report = json.loads(path.read_text(encoding="utf-8"))
-        denial = next(
-            check
-            for check in report["checks"]
-            if check["name"] == "denied under-scoped Notary caller"
-        )
-        denial["actual_status"] = 200
-        denial["passed"] = False
-        denial["error"] = "bounded failure"
-        report["passed"] = False
-        write_report_fixture(path, report)
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "check is invalid"
-        ):
-            self.module.smoke_outcomes(self.root, "combined_notary")
-
-    def test_runtime_inspection_accepts_current_combined_manifest(self) -> None:
-        self.write_combined_runtime()
-
-        inspected = self.module.read_runtime_inspection(
-            self.root,
-            expected_relay_image=self.relay,
-            expected_notary_image=self.notary,
-            expected_postgresql_image=self.postgresql,
-        )
-
-        self.assertEqual(inspected["topology"], "combined_notary")
-        self.assertEqual(
-            inspected["workbook_classification"],
-            "operator_owned_source_data",
-        )
-        self.assertRegex(inspected["notary_config_sha256"], r"^[0-9a-f]{64}$")
-
-    def test_runtime_inspection_accepts_current_relay_only_manifest(self) -> None:
-        path = self.write_combined_runtime()
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["topology"] = "relay_only"
-        del manifest["notary"]
-        path.write_text(json.dumps(manifest), encoding="utf-8")
-
-        inspected = self.module.read_runtime_inspection(
-            self.root,
-            expected_relay_image=self.relay,
-            expected_notary_image=None,
-            expected_postgresql_image=None,
-        )
-
-        self.assertEqual(inspected["topology"], "relay_only")
-        self.assertEqual(inspected["notary_config_sha256"], "")
-
-    def test_runtime_inspection_rejects_wrong_workbook_classification(self) -> None:
-        path = self.write_combined_runtime()
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["workbook_classification"] = "authored_project_input"
-        path.write_text(json.dumps(manifest), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "workbook classification is invalid"
-        ):
-            self.module.read_runtime_inspection(
-                self.root,
-                expected_relay_image=self.relay,
-                expected_notary_image=self.notary,
-                expected_postgresql_image=self.postgresql,
-            )
-
-    def test_runtime_inspection_rejects_missing_notary_manifest(self) -> None:
-        path = self.write_combined_runtime()
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["notary"] = None
-        path.write_text(json.dumps(manifest), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError, "Notary manifest is incomplete"
-        ):
-            self.module.read_runtime_inspection(
-                self.root,
-                expected_relay_image=self.relay,
-                expected_notary_image=self.notary,
-                expected_postgresql_image=self.postgresql,
-            )
-
-    def test_runtime_inspection_rejects_wrong_notary_image(self) -> None:
-        path = self.write_combined_runtime()
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["notary"]["notary_image"] = (
-            "ghcr.io/registrystack/registry-notary@sha256:" + "0" * 64
-        )
-        path.write_text(json.dumps(manifest), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            self.module.ReleaseFormError,
-            "Notary manifest is incomplete",
-        ):
-            self.module.read_runtime_inspection(
-                self.root,
-                expected_relay_image=self.relay,
-                expected_notary_image=self.notary,
-                expected_postgresql_image=self.postgresql,
-            )
-
-    def test_listener_verification_requires_notary_loopback(self) -> None:
-        logs = self.root / "logs"
-        logs.mkdir()
-        responses = [
-            subprocess.CompletedProcess([], 0, self.module.RELAY_LISTENER),
-            subprocess.CompletedProcess([], 0, "0.0.0.0:4255"),
-        ]
-        with (
-            mock.patch.object(
-                self.module.subprocess, "run", side_effect=responses
-            ) as run,
-            self.assertRaisesRegex(
-                self.module.ReleaseFormError,
-                "Notary is not published on the exact IPv4 loopback",
-            ),
-        ):
-            self.module.verify_loopback_listeners(self.root, {}, logs)
-
-        self.assertEqual(run.call_args_list[1].args[0][-2:], ["notary-network", "8081"])
-
-    def test_authenticated_evidence_uses_distinct_credentials_and_redacted_log(
-        self,
-    ) -> None:
-        logs = self.root / "logs"
-        logs.mkdir()
-        matching_bearer = fixture_text("records-matching-bearer")
-        nonmatching_bearer = fixture_text("records-nonmatching-bearer")
-        match_row = {
-            "project_id": fixture_text("records-project"),
-            "district_code": fixture_text("records-district"),
-            "sector": fixture_text("records-sector"),
-            "status": fixture_text("records-status"),
-        }
-        responses = [
-            subprocess.CompletedProcess(
-                [],
-                0,
-                json.dumps({"data": [match_row]}) + "\nREGISTRYCTL_HTTP_STATUS:200",
-            ),
-            subprocess.CompletedProcess(
-                [],
-                0,
-                json.dumps({"data": []}) + "\nREGISTRYCTL_HTTP_STATUS:200",
-            ),
-        ]
-        with mock.patch.object(
-            self.module.subprocess, "run", side_effect=responses
-        ) as run:
-            self.module.run_authenticated_records_evidence(
-                project=self.root,
-                env={},
-                logs=logs,
-                match_key=matching_bearer,
-                no_match_key=nonmatching_bearer,
-            )
-
-        self.assertEqual(run.call_count, 2)
-        match_command = run.call_args_list[0].args[0]
-        no_match_command = run.call_args_list[1].args[0]
-        match_headers = run.call_args_list[0].kwargs["input"]
-        no_match_headers = run.call_args_list[1].kwargs["input"]
-        self.assertIn(f"Authorization: Bearer {matching_bearer}", match_headers)
-        self.assertIn(f"Authorization: Bearer {nonmatching_bearer}", no_match_headers)
-        self.assertIn(f"Data-Purpose: {self.module.RECORDS_PURPOSE}", match_headers)
-        self.assertIn(f"Data-Purpose: {self.module.RECORDS_PURPOSE}", no_match_headers)
-        self.assertNotIn(matching_bearer, " ".join(match_command))
-        self.assertNotIn(nonmatching_bearer, " ".join(no_match_command))
-        self.assertEqual(match_command[-1], self.module.RECORDS_URL)
-        self.assertEqual(no_match_command[-1], self.module.RECORDS_URL)
-        self.assertNotIn("?", self.module.RECORDS_URL)
-        retained = (logs / "allowed.log").read_text(encoding="utf-8")
-        for sensitive_text in [matching_bearer, nonmatching_bearer, *match_row.values()]:
-            self.assertNotIn(sensitive_text, retained)
-        self.assertEqual(
-            json.loads(retained),
-            [
-                {
-                    "field_names": [
-                        "district_code",
-                        "project_id",
-                        "sector",
-                        "status",
-                    ],
-                    "http_status": 200,
-                    "request": "match",
-                    "row_count": 1,
-                },
-                {
-                    "field_names": [],
-                    "http_status": 200,
-                    "request": "no-match",
-                    "row_count": 0,
-                },
-            ],
-        )
-
     def test_log_redaction_removes_credentials_and_private_paths(self) -> None:
         logs = self.root / "logs"
         logs.mkdir()
@@ -2209,11 +1842,11 @@ class FirstCountryReleaseFormTest(TestCase):
         secrets.mkdir()
         relay_material = fixture_text("relay-raw-material")
         workload_material = fixture_text("relay-workload-material")
-        (secrets / "local.env").write_text(
-            f"REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW={relay_material}\n",
+        (secrets / "relay-consultation-serve.env").write_text(
+            f"REGISTRY_RELAY_AUDIT_HASH_SECRET={relay_material}\n",
             encoding="utf-8",
         )
-        (secrets / "relay-workload-token").write_text(
+        (secrets / "notary.private.jwk").write_text(
             workload_material + "\n",
             encoding="utf-8",
         )
@@ -2222,22 +1855,6 @@ class FirstCountryReleaseFormTest(TestCase):
 
         self.assertIn(relay_material.encode(), values)
         self.assertIn(workload_material.encode(), values)
-
-    def test_local_evidence_credentials_must_be_distinct(self) -> None:
-        local_env = self.root / "local.env"
-        shared_value = fixture_text("shared-local-env")
-        local_env.write_text(
-            "\n".join(
-                [
-                    f"{self.module.MATCH_KEY_ENV}={shared_value}",
-                    f"{self.module.NO_MATCH_KEY_ENV}={shared_value}",
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        with self.assertRaisesRegex(self.module.ReleaseFormError, "must be distinct"):
-            self.module.required_local_credentials(local_env)
 
     def test_recursive_secret_collection_uses_explicit_public_allowlist(
         self,
