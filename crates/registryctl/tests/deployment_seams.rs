@@ -251,12 +251,8 @@ fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
         accept_state: LockedRuntimeActionV1 {
             command: command("accept-state"),
             mounts: [common.clone(), vec![state.clone(), audit.clone()]].concat(),
-            environment_files: vec![],
-            secret_files: vec![secret(
-                &format!("{lane}-product-action-audit-key"),
-                "/run/secrets/product-action-audit-key",
-                "65532",
-            )],
+            environment_files: vec![environment],
+            secret_files: vec![],
         },
         verify_state: action_without_operator_inputs(
             command("verify-state"),
@@ -980,17 +976,34 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         );
         assert!(fixture.models.ordinary["services"]
             .get(stage_service)
-            .is_some());
+            .is_none());
+    }
+    for service_name in [
+        "registry-relay-consultation-prepare-state",
+        "registry-relay-consultation-initialize",
+        "registry-notary-prepare-state",
+    ] {
+        assert_eq!(
+            delta_services[service_name]["depends_on"]["registry-postgres"],
+            json!({"condition": "service_healthy", "required": true})
+        );
+        assert_eq!(
+            delta_services[service_name]["networks"],
+            json!({"registry-runtime": {}})
+        );
+        assert!(delta_services[service_name].get("network_mode").is_none());
     }
     for service_name in [
         "registry-relay-public-prepare-state",
         "registry-relay-public-initialize",
         "registry-notary-initialize",
     ] {
-        assert_eq!(
-            delta_services[service_name]["depends_on"]["registry-postgres"],
-            json!({"condition": "service_healthy", "required": true})
-        );
+        assert!(delta_services[service_name]["depends_on"]
+            .as_object()
+            .unwrap()
+            .is_empty());
+        assert_eq!(delta_services[service_name]["network_mode"], "none");
+        assert!(delta_services[service_name].get("networks").is_none());
     }
     for service in [
         "registry-relay-public-prepare-state",
@@ -1093,28 +1106,16 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
             .iter()
             .find(|mount| mount["target"] == "/run/secrets");
         if service_name.contains("accept") {
-            assert!(secret_mount.is_some());
-            let lane = service_name
-                .strip_prefix("registry-")
-                .unwrap()
-                .strip_suffix("-accept-state")
-                .unwrap();
-            assert_eq!(
-                secret_mount.unwrap()["source"],
-                format!("registry-operator-files-{lane}-accept")
-            );
-            assert_eq!(
-                service["depends_on"][format!("registry-{lane}-actions-stage-secrets")]
-                    ["condition"],
-                "service_completed_successfully"
-            );
+            assert!(secret_mount.is_none());
+            assert!(service["depends_on"].as_object().unwrap().is_empty());
+            assert!(service.get("env_file").is_some());
         } else {
             assert!(secret_mount.is_none());
             assert!(service["depends_on"].as_object().unwrap().is_empty());
+            assert!(service.get("env_file").is_none());
         }
         assert_eq!(service["network_mode"], "none");
         assert!(service.get("networks").is_none());
-        assert!(service.get("env_file").is_none());
     }
     let bootstrap = &delta_services["registry-postgres-bootstrap"];
     assert_eq!(bootstrap["networks"], json!({"registry-runtime": {}}));
@@ -1258,14 +1259,6 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
             vec!["postgresql-admin-password", "postgresql-tls-certificate"],
         ),
         (
-            "registry-relay-public-actions-stage-secrets",
-            vec![(
-                "registry-operator-files-relay-public-accept",
-                "/registryctl-stage/output/relay-public-accept",
-            )],
-            vec!["relay-public-product-action-audit-key"],
-        ),
-        (
             "registry-relay-consultation-actions-stage-secrets",
             vec![
                 (
@@ -1276,32 +1269,16 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
                     "registry-operator-files-relay-consultation-initialize",
                     "/registryctl-stage/output/relay-consultation-initialize",
                 ),
-                (
-                    "registry-operator-files-relay-consultation-accept",
-                    "/registryctl-stage/output/relay-consultation-accept",
-                ),
             ],
-            vec![
-                "postgresql-tls-certificate",
-                "relay-consultation-product-action-audit-key",
-            ],
+            vec!["postgresql-tls-certificate"],
         ),
         (
             "registry-notary-actions-stage-secrets",
-            vec![
-                (
-                    "registry-operator-files-notary-prepare",
-                    "/registryctl-stage/output/notary-prepare",
-                ),
-                (
-                    "registry-operator-files-notary-accept",
-                    "/registryctl-stage/output/notary-accept",
-                ),
-            ],
-            vec![
-                "notary-product-action-audit-key",
-                "postgresql-tls-certificate",
-            ],
+            vec![(
+                "registry-operator-files-notary-prepare",
+                "/registryctl-stage/output/notary-prepare",
+            )],
+            vec!["postgresql-tls-certificate"],
         ),
     ];
     for (service_name, expected_outputs, expected_sources) in expected_action_stagers {
@@ -2082,7 +2059,6 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         );
     }
     let action_stages = [
-        "registry-relay-public-actions-stage-secrets",
         "registry-relay-consultation-actions-stage-secrets",
         "registry-notary-actions-stage-secrets",
         "registry-postgresql-actions-stage-secrets",
@@ -2091,10 +2067,11 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         let command = format!("generated/compose.initialize.yaml run --rm --no-deps {stage}");
         assert_eq!(
             runbook.matches(&command).count(),
-            2,
-            "{stage} must run exactly once before first installation and update acceptance"
+            1,
+            "{stage} must run only before first installation"
         );
     }
+    assert!(!runbook.contains("registry-relay-public-actions-stage-secrets"));
     let ordinary_compose = "docker compose --project-name \"$REGISTRY_STACK_COMPOSE_PROJECT\" --env-file generated/compose.empty.env -f generated/compose.yaml";
     let action_compose = format!("{ordinary_compose} -f generated/compose.initialize.yaml");
     let serving_staging_sequence = serving_stages
@@ -2108,6 +2085,24 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
     assert!(runbook.contains(&format!(
         "{first_install_config}\n{action_staging_sequence}\n{action_compose} run --rm registry-postgres-bootstrap"
     )));
+    let initialize_notary = runbook.find("registry-notary-initialize").unwrap();
+    let first_verify_public = runbook[initialize_notary..]
+        .find("registry-relay-public-verify-state")
+        .map(|offset| initialize_notary + offset)
+        .unwrap();
+    let first_verify_consultation = runbook[first_verify_public..]
+        .find("registry-relay-consultation-verify-state")
+        .map(|offset| first_verify_public + offset)
+        .unwrap();
+    let first_verify_notary = runbook[first_verify_consultation..]
+        .find("registry-notary-verify-state")
+        .map(|offset| first_verify_consultation + offset)
+        .unwrap();
+    assert!(
+        initialize_notary < first_verify_public
+            && first_verify_public < first_verify_consultation
+            && first_verify_consultation < first_verify_notary
+    );
     assert!(runbook.contains(&format!(
         "{serving_staging_sequence}\n{ordinary_compose} up --detach --wait --wait-timeout 120"
     )));
@@ -2125,10 +2120,6 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         .find("generated/compose.yaml stop")
         .map(|offset| preview_notary + offset)
         .unwrap();
-    let action_stage_after_stop = runbook[stop..]
-        .find("registry-relay-public-actions-stage-secrets")
-        .map(|offset| stop + offset)
-        .unwrap();
     let accept_public = runbook.find("registry-relay-public-accept-state").unwrap();
     let accept_consultation = runbook
         .find("registry-relay-consultation-accept-state")
@@ -2138,8 +2129,7 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         preview_public < preview_consultation
             && preview_consultation < preview_notary
             && preview_notary < stop
-            && stop < action_stage_after_stop
-            && action_stage_after_stop < accept_public
+            && stop < accept_public
             && accept_public < accept_consultation
             && accept_consultation < accept_notary
     );

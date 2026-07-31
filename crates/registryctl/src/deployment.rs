@@ -4279,10 +4279,9 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
         compose_ordinary,
         &[RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, "postgresql"],
     );
-    let action_secret_staging_commands = staging_commands(
+    let initialization_secret_staging_commands = staging_commands(
         &compose_actions,
         &[
-            RELAY_PUBLIC_ACTIONS,
             RELAY_CONSULTATION_ACTIONS,
             NOTARY_ACTIONS,
             POSTGRESQL_ACTIONS,
@@ -4325,7 +4324,7 @@ When a parent Compose application includes `generated/compose.yaml`, set this va
 ## First installation only\n\n\
 ```sh\n\
 {compose_actions} config --no-interpolate --no-env-resolution --quiet\n\
-{action_secret_staging_commands}\n\
+{initialization_secret_staging_commands}\n\
 {compose_actions} run --rm registry-postgres-bootstrap\n\
 {compose_actions} run --rm registry-relay-public-prepare-state\n\
 {compose_actions} run --rm registry-relay-consultation-prepare-state\n\
@@ -4333,11 +4332,14 @@ When a parent Compose application includes `generated/compose.yaml`, set this va
 {compose_actions} run --rm registry-relay-public-initialize\n\
 {compose_actions} run --rm registry-relay-consultation-initialize\n\
 {compose_actions} run --rm registry-notary-initialize\n\
+{compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
+{compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
+{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {serving_secret_staging_commands}\n\
 {compose_ordinary} up --detach --wait --wait-timeout 120\n\
 {compose_ordinary} ps\n\
 ```\n\n\
-Selecting `compose.initialize.yaml` is the only supported way to initialize an empty PostgreSQL data directory. Each initialization action depends on its lane-isolated secret stager, which receives only that lane's source files and writable output volumes; PostgreSQL has a separate stager. The ordinary PostgreSQL service fails closed when `PGDATA` has no `PG_VERSION`. Never run an initialize service for an existing instance. Ordinary product startup fails closed when anti-rollback state is missing.\n\n\
+Selecting `compose.initialize.yaml` is the only supported way to initialize an empty PostgreSQL data directory. Each initialization action that needs operator secrets depends on its lane-isolated secret stager, which receives only that lane's source files and writable output volumes; PostgreSQL has a separate stager. Actions without operator secrets have no stager. The ordinary PostgreSQL service fails closed when `PGDATA` has no `PG_VERSION`. Never run an initialize service for an existing instance. Ordinary product startup fails closed when anti-rollback state is missing.\n\n\
 ## Ordinary start and stop\n\n\
 ```sh\n\
 {compose_ordinary} config --no-interpolate --no-env-resolution --quiet\n\
@@ -4356,7 +4358,6 @@ Before shutdown, run `registryctl deploy verify --package .` against the current
 {compose_actions} run --rm --no-deps registry-relay-consultation-preview-state\n\
 {compose_actions} run --rm --no-deps registry-notary-preview-state\n\
 {compose_ordinary} stop\n\
-{action_secret_staging_commands}\n\
 {compose_actions} run --rm --no-deps registry-relay-public-accept-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-accept-state\n\
 {compose_actions} run --rm --no-deps registry-notary-accept-state\n\

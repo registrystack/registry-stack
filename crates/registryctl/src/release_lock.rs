@@ -1736,6 +1736,11 @@ mod tests {
     }
 
     fn command_recipe(product: &str, lane: Option<&str>) -> LockedProductRecipeV1 {
+        let health_url = if product == "registry-notary" {
+            "http://127.0.0.1:8081/ready"
+        } else {
+            "http://127.0.0.1:8080/ready"
+        };
         let action = |name: &str| {
             let mut command = vec!["product-action"];
             if let Some(lane) = lane {
@@ -1767,7 +1772,7 @@ mod tests {
                 format!("/usr/local/bin/{product}"),
                 "healthcheck".to_string(),
                 "--url".to_string(),
-                "http://127.0.0.1:8080/ready".to_string(),
+                health_url.to_string(),
             ],
         }
     }
@@ -1791,7 +1796,11 @@ mod tests {
                     format!("/usr/local/bin/{product}"),
                     "healthcheck".to_string(),
                     "--url".to_string(),
-                    "http://127.0.0.1:8080/ready".to_string(),
+                    if product == "registry-notary" {
+                        "http://127.0.0.1:8081/ready".to_string()
+                    } else {
+                        "http://127.0.0.1:8080/ready".to_string()
+                    },
                 ]
             );
             validate_product_recipe_commands(&recipe, label)
