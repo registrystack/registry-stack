@@ -2033,6 +2033,67 @@ class RegistryReleaseTest(TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("product registry-stack ref", result.stderr)
 
+    def test_validate_docsets_accepts_active_candidate_tag_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            manifest_path = manifest_dir / "registry-stack-beta-6.yaml"
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            del manifest["stack"]["source_ref"]
+            del manifest["stack"]["status"]
+            manifest_path.write_text(
+                yaml.safe_dump(manifest, sort_keys=False),
+                encoding="utf-8",
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["availability"] = "candidate"
+            data["docsets"][0]["products"]["registry-stack"]["ref"] = "v0.8.0"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_rejects_active_candidate_tag_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            manifest_path = manifest_dir / "registry-stack-beta-6.yaml"
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            del manifest["stack"]["source_ref"]
+            del manifest["stack"]["status"]
+            manifest_path.write_text(
+                yaml.safe_dump(manifest, sort_keys=False),
+                encoding="utf-8",
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["availability"] = "candidate"
+            data["docsets"][0]["products"]["registry-stack"]["ref"] = "v0.8.1"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("product registry-stack ref", result.stderr)
+
     def test_validate_docsets_rejects_source_marker_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

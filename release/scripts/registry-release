@@ -658,8 +658,11 @@ def validate_docsets(
         if not isinstance(external, dict):
             errors.append(f"release manifest {docset_id} external must be an object")
             continue
-        expected_source_ref = stack.get("source_ref")
         expected_version = f"v{stack.get('version')}"
+        expected_source_ref = stack.get(
+            "source_ref",
+            stack.get("source_tag", expected_version),
+        )
         for name, product in sorted(products.items()):
             if name in external:
                 continue
