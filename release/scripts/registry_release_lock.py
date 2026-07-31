@@ -30,6 +30,8 @@ PLATFORMS = {
     "linux-arm64": "linux-arm64",
     "macos-arm64": "macos-arm64",
 }
+OCI_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+MAX_OCI_INDEX_BYTES = 4 * 1024 * 1024
 
 
 def reject_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -81,6 +83,60 @@ def image(value: Any, label: str) -> tuple[str, str]:
     if match is None:
         raise ValueError(f"{label} image identity must be immutable")
     return value, match.group("digest")
+
+
+def read_platform_manifest_from_index(
+    path: Path,
+    label: str,
+    expected_index_digest: str,
+) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} index must be a regular non-symlink file")
+    if path.stat().st_size > MAX_OCI_INDEX_BYTES:
+        raise ValueError(f"{label} index exceeds the 4 MiB limit")
+    body = path.read_bytes()
+    actual_index_digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+    if actual_index_digest != expected_index_digest:
+        raise ValueError(f"{label} index bytes do not match the locked image identity")
+    index = json.loads(
+        body.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_object,
+    )
+    return select_platform_manifest(index, "linux/amd64")
+
+
+def select_platform_manifest(index: Any, platform: str) -> str:
+    if platform != "linux/amd64":
+        raise ValueError("release lock supports only the linux/amd64 image platform")
+    if not isinstance(index, dict) or not isinstance(index.get("manifests"), list):
+        raise ValueError("OCI image index must contain a manifests array")
+    matches = []
+    for descriptor in index["manifests"]:
+        if not isinstance(descriptor, dict):
+            raise ValueError("OCI image index manifest descriptors must be objects")
+        descriptor_platform = descriptor.get("platform")
+        if not isinstance(descriptor_platform, dict):
+            continue
+        if (
+            descriptor_platform.get("os") == "linux"
+            and descriptor_platform.get("architecture") == "amd64"
+            and descriptor_platform.get("variant") in {None, ""}
+        ):
+            if descriptor.get("mediaType") != OCI_IMAGE_MANIFEST_MEDIA_TYPE:
+                raise ValueError(
+                    "linux/amd64 application descriptor has an unsupported media type"
+                )
+            digest = descriptor.get("digest")
+            if not isinstance(digest, str) or DIGEST.fullmatch(digest) is None:
+                raise ValueError(
+                    "linux/amd64 application descriptor has an invalid digest"
+                )
+            matches.append(digest)
+    if len(matches) != 1:
+        raise ValueError(
+            "OCI image index must contain exactly one linux/amd64 application manifest"
+        )
+    return matches[0]
 
 
 def starter_binding(starter_id: str, path: Path, version: str) -> dict[str, str]:
@@ -489,9 +545,26 @@ def create_payload(args: argparse.Namespace) -> int:
     }:
         raise ValueError("legacy image lock image roster is not closed")
 
-    relay, relay_digest = image(images["registry-relay"], "Relay")
-    notary, notary_digest = image(images["registry-notary"], "Notary")
-    postgresql, postgresql_digest = image(images["postgresql"], "PostgreSQL")
+    relay, relay_index_digest = image(images["registry-relay"], "Relay")
+    notary, notary_index_digest = image(images["registry-notary"], "Notary")
+    postgresql, postgresql_index_digest = image(
+        images["postgresql"], "PostgreSQL"
+    )
+    relay_manifest_digest = read_platform_manifest_from_index(
+        args.relay_image_index,
+        "Relay",
+        relay_index_digest,
+    )
+    notary_manifest_digest = read_platform_manifest_from_index(
+        args.notary_image_index,
+        "Notary",
+        notary_index_digest,
+    )
+    postgresql_manifest_digest = read_platform_manifest_from_index(
+        args.postgresql_image_index,
+        "PostgreSQL",
+        postgresql_index_digest,
+    )
 
     registryctl_artifacts = []
     for platform, suffix in PLATFORMS.items():
@@ -507,11 +580,14 @@ def create_payload(args: argparse.Namespace) -> int:
             }
         )
 
-    def locked_image(identity: str, digest: str) -> dict[str, Any]:
+    def locked_image(identity: str, manifest_digest: str) -> dict[str, Any]:
         return {
             "identity": identity,
             "platforms": [
-                {"platform": "linux-amd64", "manifest_digest": digest}
+                {
+                    "platform": "linux-amd64",
+                    "manifest_digest": manifest_digest,
+                }
             ],
         }
 
@@ -529,9 +605,11 @@ def create_payload(args: argparse.Namespace) -> int:
         },
         "registryctl_artifacts": registryctl_artifacts,
         "images": {
-            "relay": locked_image(relay, relay_digest),
-            "notary": locked_image(notary, notary_digest),
-            "postgresql_state_plane": locked_image(postgresql, postgresql_digest),
+            "relay": locked_image(relay, relay_manifest_digest),
+            "notary": locked_image(notary, notary_manifest_digest),
+            "postgresql_state_plane": locked_image(
+                postgresql, postgresql_manifest_digest
+            ),
         },
         "runtime": {
             "relay_public": product_recipe("registry-relay", "relay-public"),
@@ -621,6 +699,9 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--tag-target", required=True)
     create.add_argument("--asset-dir", required=True, type=Path)
     create.add_argument("--image-lock", required=True, type=Path)
+    create.add_argument("--relay-image-index", required=True, type=Path)
+    create.add_argument("--notary-image-index", required=True, type=Path)
+    create.add_argument("--postgresql-image-index", required=True, type=Path)
     create.add_argument("--output", required=True, type=Path)
     create.set_defaults(handler=create_payload)
     assemble_parser = subparsers.add_parser("assemble")

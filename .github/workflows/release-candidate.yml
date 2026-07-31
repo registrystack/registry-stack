@@ -595,6 +595,8 @@ jobs:
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
+            crane manifest "${candidate_ref}" \
+              > "${RUNNER_TEMP}/${name}.index.json"
             python3 release/scripts/check-release-image-oci-labels.py \
               "${candidate_ref}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
@@ -616,6 +618,8 @@ jobs:
           fi
           printf '%s\n' "${postgresql_ref}" \
             > candidate/security/images/postgresql.digest
+          crane manifest "${postgresql_ref}" \
+            > "${RUNNER_TEMP}/postgresql.index.json"
           syft "${postgresql_ref}" \
             -o "spdx-json=candidate/security/image-sbom/postgresql.spdx.json" \
             -o "syft-json=candidate/security/syft/postgresql.syft.json"
@@ -723,6 +727,12 @@ jobs:
               --asset-dir candidate/bundle-root \
               --image-lock \
                 "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
+              --relay-image-index \
+                "${RUNNER_TEMP}/registry-relay.index.json" \
+              --notary-image-index \
+                "${RUNNER_TEMP}/registry-notary.index.json" \
+              --postgresql-image-index \
+                "${RUNNER_TEMP}/postgresql.index.json" \
               --output "${RUNNER_TEMP}/registry-release-lock.payload.json"
             test -s "${RUNNER_TEMP}/registry-release-lock.payload.json"
             rm "${RUNNER_TEMP}/registry-release-lock.payload.json"

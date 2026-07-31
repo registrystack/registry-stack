@@ -47,6 +47,41 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 test_starters[starter_id] = path
+            image_indexes = {}
+            image_identities = {}
+            application_digests = {}
+            for name, repository, value in [
+                ("relay", "ghcr.io/registrystack/registry-relay", "d"),
+                ("notary", "ghcr.io/registrystack/registry-notary", "e"),
+                ("postgresql", "docker.io/library/postgres", "f"),
+            ]:
+                application_digest = f"sha256:{value * 64}"
+                path = root / f"{name}.index.json"
+                path.write_bytes(
+                    release_lock.canonical_json(
+                        {
+                            "schemaVersion": 2,
+                            "mediaType": "application/vnd.oci.image.index.v1+json",
+                            "manifests": [
+                                {
+                                    "mediaType": (
+                                        release_lock.OCI_IMAGE_MANIFEST_MEDIA_TYPE
+                                    ),
+                                    "digest": application_digest,
+                                    "platform": {
+                                        "os": "linux",
+                                        "architecture": "amd64",
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                )
+                image_indexes[name] = path
+                image_identities[name] = (
+                    f"{repository}@{release_lock.sha256_file(path)}"
+                )
+                application_digests[name] = application_digest
             image_lock = root / "image-lock.json"
             image_lock.write_text(
                 json.dumps(
@@ -55,15 +90,9 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         "manifest_source_ref": manifest_source_ref,
                         "tag_target": tag_target,
                         "images": {
-                            "registry-relay": (
-                                f"ghcr.io/registrystack/registry-relay@sha256:{'a' * 64}"
-                            ),
-                            "registry-notary": (
-                                f"ghcr.io/registrystack/registry-notary@sha256:{'b' * 64}"
-                            ),
-                            "postgresql": (
-                                f"docker.io/library/postgres@sha256:{'c' * 64}"
-                            ),
+                            "registry-relay": image_identities["relay"],
+                            "registry-notary": image_identities["notary"],
+                            "postgresql": image_identities["postgresql"],
                         },
                     }
                 ),
@@ -81,6 +110,9 @@ class RegistryReleaseLockTests(unittest.TestCase):
                             tag_target=tag_target,
                             asset_dir=assets,
                             image_lock=image_lock,
+                            relay_image_index=image_indexes["relay"],
+                            notary_image_index=image_indexes["notary"],
+                            postgresql_image_index=image_indexes["postgresql"],
                             output=output,
                         )
                     ),
@@ -114,6 +146,28 @@ class RegistryReleaseLockTests(unittest.TestCase):
             self.assertEqual(
                 set(payload["images"]),
                 set(schema["properties"]["images"]["required"]),
+            )
+            self.assertEqual(
+                payload["images"]["relay"],
+                {
+                    "identity": image_identities["relay"],
+                    "platforms": [
+                        {
+                            "platform": "linux-amd64",
+                            "manifest_digest": application_digests["relay"],
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(
+                payload["images"]["notary"]["platforms"][0]["manifest_digest"],
+                application_digests["notary"],
+            )
+            self.assertEqual(
+                payload["images"]["postgresql_state_plane"]["platforms"][0][
+                    "manifest_digest"
+                ],
+                application_digests["postgresql"],
             )
             self.assertEqual(
                 set(schema["properties"]["runtime"]["required"]),
@@ -381,6 +435,64 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 )
             )
 
+    def test_platform_manifest_resolution_selects_only_the_application_image(
+        self,
+    ) -> None:
+        application_digest = f"sha256:{'a' * 64}"
+        index = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": release_lock.OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+                    "digest": application_digest,
+                    "platform": {"os": "linux", "architecture": "amd64"},
+                },
+                {
+                    "mediaType": release_lock.OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+                    "digest": f"sha256:{'b' * 64}",
+                    "platform": {"os": "unknown", "architecture": "unknown"},
+                    "annotations": {
+                        "vnd.docker.reference.type": "attestation-manifest"
+                    },
+                },
+                {
+                    "mediaType": release_lock.OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+                    "digest": f"sha256:{'c' * 64}",
+                    "platform": {"os": "linux", "architecture": "arm64"},
+                },
+            ],
+        }
+
+        self.assertEqual(
+            release_lock.select_platform_manifest(index, "linux/amd64"),
+            application_digest,
+        )
+
+        duplicate = copy.deepcopy(index)
+        duplicate["manifests"].append(copy.deepcopy(index["manifests"][0]))
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            release_lock.select_platform_manifest(duplicate, "linux/amd64")
+
+        wrong_media_type = copy.deepcopy(index)
+        wrong_media_type["manifests"][0]["mediaType"] = (
+            "application/vnd.oci.image.index.v1+json"
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported media type"):
+            release_lock.select_platform_manifest(
+                wrong_media_type,
+                "linux/amd64",
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "index.json"
+            path.write_bytes(release_lock.canonical_json(index))
+            with self.assertRaisesRegex(ValueError, "locked image identity"):
+                release_lock.read_platform_manifest_from_index(
+                    path,
+                    "Relay",
+                    f"sha256:{'9' * 64}",
+                )
+
     def test_assemble_carries_exact_payload_and_cosign_v3_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -447,6 +559,67 @@ class RegistryReleaseLockTests(unittest.TestCase):
         self.assertLess(lock_sign, assemble)
         self.assertLess(assemble, checksum)
         self.assertLess(checksum, checksum_sign)
+
+    def test_release_workflow_resolves_platform_manifests_and_retries_finalization(
+        self,
+    ) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+        for artifact in [
+            "release-promotion-input-${{ github.run_id }}",
+            "release-draft-contract-${{ github.run_id }}",
+            "release-final-contract-${{ github.run_id }}",
+        ]:
+            self.assertIn(artifact, workflow)
+            self.assertNotIn(f"{artifact}-${{{{ github.run_attempt }}}}", workflow)
+        self.assertGreaterEqual(workflow.count("overwrite: true"), 3)
+
+        cleanup = workflow.index(
+            "Clean retryable final additions and reverify exact staged assets"
+        )
+        delete = workflow.index(
+            '"repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"',
+            cleanup,
+        )
+        staged_diff = workflow.index(
+            "diff -u contract/expected-assets contract/actual-assets",
+            delete,
+        )
+        final_upload = workflow.index(
+            'gh release upload "${tag}" "${additions[@]}"',
+            staged_diff,
+        )
+        self.assertLess(cleanup, delete)
+        self.assertLess(delete, staged_diff)
+        self.assertLess(staged_diff, final_upload)
+        self.assertIn("contract/retryable-final-assets", workflow[cleanup:delete])
+        self.assertIn(
+            "registry-stack-release-candidate-v2 manifest_sha256:",
+            workflow[cleanup:delete],
+        )
+
+        render = workflow.index("Render the final P to T image lock")
+        inspect = workflow.index('crane manifest "${image_ref}"', render)
+        create = workflow.index("registry_release_lock.py create-payload", inspect)
+        self.assertLess(render, inspect)
+        self.assertLess(inspect, create)
+        for argument in [
+            "--relay-image-index",
+            "--notary-image-index",
+            "--postgresql-image-index",
+        ]:
+            self.assertIn(argument, workflow[create:])
+        publish = workflow.index("- name: Publish immutable release")
+        dispatch = workflow.index("\n  dispatch-docs:", publish)
+        self.assertIn(
+            'if [[ "${is_draft}" == true ]]',
+            workflow[publish:dispatch],
+        )
+        self.assertIn(
+            ".id == $release_id and\n             .draft == false",
+            workflow[publish:dispatch],
+        )
 
 
 if __name__ == "__main__":

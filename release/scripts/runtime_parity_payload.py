@@ -36,6 +36,38 @@ def create_payload(output: Path) -> None:
             f"  content_digest: sha256:{'3' * 64}\n",
             encoding="utf-8",
         )
+        image_indexes = {}
+        image_identities = {}
+        for name, repository, digest_character in [
+            ("relay", "example.invalid/registrystack/registry-relay", "d"),
+            ("notary", "example.invalid/registrystack/registry-notary", "e"),
+            ("postgresql", "example.invalid/registrystack/postgresql", "f"),
+        ]:
+            index_path = root / f"{name}.index.json"
+            index_path.write_bytes(
+                registry_release_lock.canonical_json(
+                    {
+                        "schemaVersion": 2,
+                        "mediaType": "application/vnd.oci.image.index.v1+json",
+                        "manifests": [
+                            {
+                                "mediaType": (
+                                    registry_release_lock.OCI_IMAGE_MANIFEST_MEDIA_TYPE
+                                ),
+                                "digest": f"sha256:{digest_character * 64}",
+                                "platform": {
+                                    "os": "linux",
+                                    "architecture": "amd64",
+                                },
+                            }
+                        ],
+                    }
+                )
+            )
+            image_indexes[name] = index_path
+            image_identities[name] = (
+                f"{repository}@{registry_release_lock.sha256_file(index_path)}"
+            )
         image_lock = root / "image-lock.json"
         image_lock.write_text(
             json.dumps(
@@ -44,18 +76,9 @@ def create_payload(output: Path) -> None:
                     "manifest_source_ref": MANIFEST_SOURCE_REF,
                     "tag_target": TAG_TARGET,
                     "images": {
-                        "registry-relay": (
-                            "example.invalid/registrystack/registry-relay@sha256:"
-                            + "a" * 64
-                        ),
-                        "registry-notary": (
-                            "example.invalid/registrystack/registry-notary@sha256:"
-                            + "b" * 64
-                        ),
-                        "postgresql": (
-                            "example.invalid/registrystack/postgresql@sha256:"
-                            + "c" * 64
-                        ),
+                        "registry-relay": image_identities["relay"],
+                        "registry-notary": image_identities["notary"],
+                        "postgresql": image_identities["postgresql"],
                     },
                 },
                 sort_keys=True,
@@ -73,6 +96,9 @@ def create_payload(output: Path) -> None:
                     tag_target=TAG_TARGET,
                     asset_dir=assets,
                     image_lock=image_lock,
+                    relay_image_index=image_indexes["relay"],
+                    notary_image_index=image_indexes["notary"],
+                    postgresql_image_index=image_indexes["postgresql"],
                     output=output,
                 )
             )

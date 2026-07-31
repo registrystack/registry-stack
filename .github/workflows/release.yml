@@ -264,9 +264,10 @@ jobs:
       - name: Upload verified promotion input
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-promotion-input-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-promotion-input-${{ github.run_id }}
           path: promotion/candidate
           if-no-files-found: error
+          overwrite: true
           retention-days: 2
 
   stage-draft:
@@ -289,7 +290,7 @@ jobs:
       - name: Download verified promotion input
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-promotion-input-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-promotion-input-${{ github.run_id }}
           path: promotion
 
       - name: Reverify and stage exact candidate payloads
@@ -389,9 +390,10 @@ jobs:
       - name: Upload draft reconciliation contract
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-draft-contract-${{ github.run_id }}
           path: contract
           if-no-files-found: error
+          overwrite: true
           retention-days: 2
 
   promote-images:
@@ -409,13 +411,13 @@ jobs:
       - name: Download verified candidate and draft contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: release-*-input-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: release-*-input-${{ github.run_id }}
           path: inputs
 
       - name: Download exact draft contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-draft-contract-${{ github.run_id }}
           path: contract
 
       - name: Install pinned image inspector
@@ -468,7 +470,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}"
           manifest="${promotion}/release-candidate-manifest.json"
           bundle="${promotion}/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
           mkdir -p candidate-extracted
@@ -497,7 +499,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          manifest="inputs/release-promotion-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/release-candidate-manifest.json"
+          manifest="inputs/release-promotion-input-${GITHUB_RUN_ID}/release-candidate-manifest.json"
           while IFS= read -r final_ref; do
             if crane digest "${final_ref}" >/dev/null 2>&1; then
               echo "Final image destination ${final_ref} is no longer absent" >&2
@@ -540,34 +542,101 @@ jobs:
       - name: Download exact candidate and staged draft contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: release-*-input-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: release-*-input-${{ github.run_id }}
           path: inputs
 
       - name: Download exact staged draft contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-draft-contract-${{ github.run_id }}
           path: contract
+
+      - name: Install pinned image inspector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${RUNNER_TEMP}/crane.tar.gz"
+          echo "${CRANE_LINUX_AMD64_SHA256}  ${RUNNER_TEMP}/crane.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/crane.tar.gz" \
+            -C "${HOME}/.local/bin" crane
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Install tag-bound signer
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
         with:
           cosign-release: v3.0.4
 
-      - name: Download and reverify the exact draft assets
+      - name: Clean retryable final additions and reverify exact staged assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
+          version="${{ needs.verify.outputs.version }}"
+          major="${version%%.*}"
           mkdir -p release-assets
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > contract/draft-release.json
           jq -e \
             --arg tag "${tag}" \
-            '.draft == true and .tag_name == $tag' \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '.draft == true and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
             contract/draft-release.json >/dev/null
+          {
+            printf '%s\n' \
+              "registryctl-${tag}-image-lock.json" \
+              SHA256SUMS \
+              "registry-stack-${tag}-SHA256SUMS.sigstore.json"
+            if ((major >= 1)); then
+              evidence="registry-stack-${tag}-first-country-release-form.tar.gz"
+              printf '%s\n' \
+                registry-release-lock.v1.json \
+                "${evidence}" \
+                "${evidence%.tar.gz}.sigstore.json"
+            fi
+          } | sort -u > contract/retryable-final-assets
+          {
+            jq -r '.[].name' contract/staged-assets.json
+            cat contract/retryable-final-assets
+          } | sort -u > contract/allowed-assets
+          jq -r '.assets[].name' contract/draft-release.json \
+            | sort -u > contract/actual-assets
+          if ! comm -23 contract/actual-assets contract/allowed-assets \
+              > contract/unexpected-assets; then
+            exit 1
+          fi
+          if [[ -s contract/unexpected-assets ]]; then
+            echo "Draft contains assets outside the staged and retryable rosters" >&2
+            cat contract/unexpected-assets >&2
+            exit 1
+          fi
+          # Sigstore bundles are intentionally nondeterministic. On a failed
+          # finalizer retry, remove only the closed final-addition roster from
+          # this exact candidate draft, then regenerate the closure together.
+          while IFS= read -r name; do
+            asset_id="$(
+              jq -er --arg name "${name}" \
+                '.assets[] | select(.name == $name) | .id' \
+                contract/draft-release.json 2>/dev/null || true
+            )"
+            if [[ -n "${asset_id}" ]]; then
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            fi
+          done < contract/retryable-final-assets
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > contract/draft-release.json
           jq -r '.[].name' contract/staged-assets.json \
             | sort > contract/expected-assets
           jq -r '.assets[].name' contract/draft-release.json \
@@ -590,7 +659,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}"
           candidate="${promotion}/release-candidate-manifest.json"
           release_manifest="$(
             python3 - "${{ needs.verify.outputs.version }}" <<'PY'
@@ -610,13 +679,26 @@ jobs:
           print(matches[0])
           PY
           )"
+          mkdir -p "${RUNNER_TEMP}/release-image-indexes"
           for name in registry-notary registry-relay; do
-            digest="$(jq -er --arg name "${name}" \
+            index_digest="$(jq -er --arg name "${name}" \
               '.images[] | select(.name == $name) | .digest
                | select(test("^sha256:[0-9a-f]{64}$"))' "${candidate}")"
-            printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
+            image_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${index_digest}"
+            test "$(crane digest "${image_ref}")" = "${index_digest}"
+            crane manifest "${image_ref}" \
+              > "${RUNNER_TEMP}/release-image-indexes/${name}.json"
+            printf '%s\n' "${image_ref}" \
               > "${RUNNER_TEMP}/${name}.release.digest"
           done
+          postgresql_ref="$(
+            tr -d '\n' < release/registryctl-postgresql-image.ref
+          )"
+          postgresql_index_digest="${postgresql_ref##*@}"
+          test "$(crane digest "${postgresql_ref}")" = \
+            "${postgresql_index_digest}"
+          crane manifest "${postgresql_ref}" \
+            > "${RUNNER_TEMP}/release-image-indexes/postgresql.json"
           release/scripts/registry-release render-registryctl-image-lock \
             "${release_manifest}" \
             --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
@@ -643,6 +725,12 @@ jobs:
               --asset-dir release-assets \
               --image-lock \
                 "release-assets/registryctl-${tag}-image-lock.json" \
+              --relay-image-index \
+                "${RUNNER_TEMP}/release-image-indexes/registry-relay.json" \
+              --notary-image-index \
+                "${RUNNER_TEMP}/release-image-indexes/registry-notary.json" \
+              --postgresql-image-index \
+                "${RUNNER_TEMP}/release-image-indexes/postgresql.json" \
               --output contract/registry-release-lock.payload.json
             cosign sign-blob --yes \
               --bundle contract/registry-release-lock.sigstore.json \
@@ -740,9 +828,10 @@ jobs:
       - name: Upload final reconciliation contract
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-final-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-final-contract-${{ github.run_id }}
           path: contract
           if-no-files-found: error
+          overwrite: true
           retention-days: 2
 
   release-provenance:
@@ -778,13 +867,13 @@ jobs:
       - name: Download exact candidate manifest
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-promotion-input-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-promotion-input-${{ github.run_id }}
           path: promotion
 
       - name: Download exact final contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-final-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-final-contract-${{ github.run_id }}
           path: contract
 
       - name: Install pinned release verifiers
@@ -821,17 +910,24 @@ jobs:
           tag="${{ needs.verify.outputs.tag }}"
           manifest=promotion/release-candidate-manifest.json
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            > draft-release.json
+            > release-state.json
           jq -e \
             --arg tag "${tag}" \
-            '.draft == true and .tag_name == $tag' \
-            draft-release.json >/dev/null
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '((.draft | type) == "boolean") and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
+            release-state.json >/dev/null
           provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
           {
             jq -r '.[].name' contract/pre-provenance-assets.json
             printf '%s\n' "${provenance}"
           } | sort > expected-assets
-          jq -r '.assets[].name' draft-release.json | sort > actual-assets
+          jq -r '.assets[].name' release-state.json | sort > actual-assets
           diff -u expected-assets actual-assets
           mkdir -p draft
           gh release download "${tag}" \
@@ -841,7 +937,7 @@ jobs:
             test "$(sha256sum "draft/${name}" | awk '{print $1}')" = "${sha256}"
             test "$(jq -er --arg name "${name}" \
               '.assets[] | select(.name == $name) | .digest' \
-              draft-release.json)" = "sha256:${sha256}"
+              release-state.json)" = "sha256:${sha256}"
           done < <(
             jq -r '.[] | [.name,.sha256,.size] | @tsv' \
               contract/pre-provenance-assets.json
@@ -891,7 +987,7 @@ jobs:
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \
               '.assets[] | select(.name == $name)' \
-              draft-release.json >/dev/null
+              release-state.json >/dev/null
           done
 
       - name: Publish immutable release
@@ -900,15 +996,46 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > publish-state.json
           release_id="$(
-            jq -er .id draft-release.json
+            jq -er \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
+              --arg marker \
+                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+              'select(
+                ((.draft | type) == "boolean") and
+                .prerelease == false and
+                .tag_name == $tag and
+                .name == $title and
+                ((.body // "") | contains($marker))
+              ) | .id' \
+              publish-state.json
           )"
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-            -F draft=false \
-            -F prerelease=false >/dev/null
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${{ needs.verify.outputs.tag }}" \
-            --jq 'select(.draft == false and .prerelease == false)' >/dev/null
+          is_draft="$(jq -er '.draft | tostring' publish-state.json)"
+          if [[ "${is_draft}" == true ]]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft=false \
+              -F prerelease=false >/dev/null
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > published-release.json
+          jq -e \
+            --argjson release_id "${release_id}" \
+            --arg tag "${tag}" \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '.id == $release_id and
+             .draft == false and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
+            published-release.json >/dev/null
 
   dispatch-docs:
     name: Dispatch exact docs promotion
