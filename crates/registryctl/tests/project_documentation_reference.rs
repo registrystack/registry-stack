@@ -312,7 +312,7 @@ fn human_intent_sidecar_and_documentation_contracts_are_strict_schemas() {
     let intent_schema = compile_schema(&intent_schema_document);
     let intent = read_json(schema_root.join("project-authoring/documentation-intent.json"));
     assert_valid(&intent_schema, &intent, "documentation intent sidecar");
-    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 204);
+    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 205);
 
     for file in [
         "registry.project.configuration_reference.v1.schema.json",
@@ -437,17 +437,17 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID
     );
     assert_eq!(coverage.coverage.schema_count, 7);
-    assert_eq!(coverage.coverage.path_count, 1826);
+    assert_eq!(coverage.coverage.path_count, 1829);
     assert_eq!(
         coverage.coverage.by_schema,
         [
             (ConfigurationSchemaKind::Project, 220),
-            (ConfigurationSchemaKind::Environment, 212),
+            (ConfigurationSchemaKind::Environment, 213),
             (ConfigurationSchemaKind::Integration, 171),
             (ConfigurationSchemaKind::Fixture, 63),
             (ConfigurationSchemaKind::Entity, 35),
-            (ConfigurationSchemaKind::Relay, 592),
-            (ConfigurationSchemaKind::Notary, 533),
+            (ConfigurationSchemaKind::Relay, 593),
+            (ConfigurationSchemaKind::Notary, 534),
         ]
         .into_iter()
         .collect()
@@ -456,22 +456,22 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         coverage.coverage.by_path_kind,
         [
             (FieldPathKind::Root, 7),
-            (FieldPathKind::Property, 1_456),
+            (FieldPathKind::Property, 1_458),
             (FieldPathKind::MapKey, 26),
             (FieldPathKind::MapValue, 48),
             (FieldPathKind::ArrayItem, 178),
-            (FieldPathKind::Branch, 111),
+            (FieldPathKind::Branch, 112),
         ]
         .into_iter()
         .collect(),
         "the exact reviewed structural taxonomy remains release-gated"
     );
-    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1826);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1829);
     assert_eq!(
         coverage.reviewed_intent_assignment_covered_count + coverage.missing_intent.len(),
         coverage.reviewed_intent_assignment_required_count
     );
-    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1826);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1829);
     assert!(
         coverage.distinct_reviewed_intent_count < coverage.reviewed_intent_assignment_covered_count,
         "assignment coverage must not imply one unique explanation per path"
@@ -488,12 +488,12 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             coverage.distinct_reviewed_intents_reused_count,
             coverage.reviewed_intent_assignments_using_reused_intent_count,
         ),
-        (626, 86, 1_286),
+        (629, 86, 1_286),
         "the exact intent-text reuse baseline must change intentionally with reviewed documentation"
     );
     assert_eq!(
         coverage.coverage.by_intent_profile.values().sum::<usize>(),
-        1125,
+        1127,
         "every Relay and Notary path, including both roots, records its exact reviewed profile"
     );
     assert_eq!(
@@ -636,7 +636,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
                 })
                 .count(),
         ),
-        (527, 315, 0, 984),
+        (528, 315, 0, 986),
         "the exact empty-string semantic coverage prevents constrained strings from regressing to allowed"
     );
     assert_eq!(
