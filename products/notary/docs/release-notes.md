@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0
+
 - BREAKING: The `self_attested` evidence mode is removed. Every configured
   claim must derive from exactly one compiler-pinned Relay consultation.
   OIDC subject binding and delegated subject access remain authorization
@@ -31,6 +33,10 @@
   one committed proof-bounded transaction, and representative credentials
   require live status. Wallet-visible tokens carry HMAC handles instead of the
   representative's raw identifiers.
+- Delegated registry-backed consultations must consume the compiler-pinned
+  target. Requester-only policy dependencies are rejected.
+- Delegated Relay results are checked for expiry again after the Relay call
+  returns, before evaluation continues.
 
 ## 0.15.2
 

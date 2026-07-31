@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0
+
 - Operators can start Relay directly from a verified Config Bundle using
   `--bundle-dir`, `--anchor-path`, and `--state-path`. Direct bundle startup
   has no local-config or break-glass fallback, requires explicit
@@ -24,6 +26,10 @@
   complete worker exchange remain capped by the existing absolute durable
   consultation deadline. Process, memory, instruction, call, IPC, and output
   limits are unchanged.
+- Sensitive dataset reads require their release gates even when source
+  metadata is omitted.
+- Active datasets recover a missing local snapshot through the governed
+  refresh path.
 
 ## 0.15.2
 
