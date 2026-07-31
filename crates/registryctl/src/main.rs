@@ -782,7 +782,13 @@ fn run(cli: Cli) -> CliResult {
             }
             let project = discover_project(project_dir.as_deref())?;
             let environment = resolve_environment(&project, environment)?;
-            run_dev(&project, &environment, detach, command)
+            run_dev(
+                &project,
+                project_dir.as_deref(),
+                &environment,
+                detach,
+                command,
+            )
         }
         Commands::Deploy { command } => match command {
             None => {
@@ -861,14 +867,26 @@ fn build_next_action(is_update: bool, affected_lanes: &[ApprovedLaneV1]) -> &'st
 
 fn run_dev(
     project: &Path,
+    selected_project_dir: Option<&Path>,
     environment: &str,
     detach: bool,
     command: Option<DevCommand>,
 ) -> CliResult {
-    if command.is_some() && dev_runtime_is_absent(project, environment) {
-        return Err(CliFailure::domain(anyhow!(
-            "[registryctl.dev.no_runtime] no development runtime is bound to this project and environment; remediation: run registryctl dev"
-        )));
+    if dev_runtime_is_absent(project, environment) {
+        match command.as_ref() {
+            Some(DevCommand::Down) => {
+                println!("No development runtime is bound; nothing to remove.");
+                return Ok(ExitCode::SUCCESS);
+            }
+            Some(_) => {
+                let remediation =
+                    selected_project_command(selected_project_dir, "dev", Some(environment));
+                return Err(CliFailure::domain(anyhow!(
+                    "[registryctl.dev.no_runtime] no development runtime is bound to this project and environment; remediation: run {remediation}"
+                )));
+            }
+            None => {}
+        }
     }
     let plan = if command.is_none() {
         registryctl::prepare_dev_runtime_plan(project, environment).map_err(dev_failure)?

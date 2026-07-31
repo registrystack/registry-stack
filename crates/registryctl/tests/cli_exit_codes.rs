@@ -92,8 +92,15 @@ fn dev_lifecycle_queries_do_not_create_a_runtime() {
         String::from_utf8_lossy(&initialized.stderr)
     );
 
-    for command in ["status", "logs", "smoke", "down"] {
-        let output = run(&["-C", project_argument, "dev", command]);
+    for command in ["status", "logs", "smoke"] {
+        let output = run(&[
+            "-C",
+            project_argument,
+            "dev",
+            "--environment",
+            "local",
+            command,
+        ]);
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -104,10 +111,32 @@ fn dev_lifecycle_queries_do_not_create_a_runtime() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("[registryctl.dev.no_runtime]"), "{stderr}");
         assert!(
-            stderr.contains("remediation: run registryctl dev"),
+            stderr.contains(&format!(
+                "remediation: run registryctl -C '{project_argument}' dev --environment 'local'"
+            )),
             "{stderr}"
         );
     }
+    let down = run(&[
+        "-C",
+        project_argument,
+        "dev",
+        "--environment",
+        "local",
+        "down",
+    ]);
+    assert_eq!(
+        down.status.code(),
+        Some(0),
+        "dev down: stdout={} stderr={}",
+        String::from_utf8_lossy(&down.stdout),
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&down.stdout).trim(),
+        "No development runtime is bound; nothing to remove."
+    );
+    assert!(down.stderr.is_empty());
     assert!(
         !project.join(".registry-stack/dev").exists(),
         "dev status generated runtime state"
