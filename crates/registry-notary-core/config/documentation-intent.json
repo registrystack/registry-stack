@@ -701,7 +701,7 @@
         "operator_preflight"
       ],
       "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "introduced_in": "0.15.3",
+      "introduced_in": "0.16.0",
       "migration": "coordinate_deployment",
       "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
       "example_guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
