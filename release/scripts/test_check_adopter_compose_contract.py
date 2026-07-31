@@ -65,6 +65,7 @@ def product_hardening() -> dict:
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges:true"],
         "tmpfs": ["/tmp"],
+        "logging": copy.deepcopy(CHECKER.BOUNDED_LOCAL_LOGGING),
     }
 
 
@@ -78,6 +79,7 @@ def postgresql_hardening() -> dict:
             "/tmp",
             "/var/run/postgresql:uid=999,gid=999,mode=0750",
         ],
+        "logging": copy.deepcopy(CHECKER.BOUNDED_LOCAL_LOGGING),
     }
 
 
@@ -96,8 +98,15 @@ def product_mounts(lane: str, action: str) -> list[dict]:
         bind("anchors", lane, "/run/registry/anchor"),
     ]
     if action != "prepare":
-        result.append(volume(f"registry-{lane}-state", "/var/lib/registry/state"))
-    result.append(volume(f"registry-{lane}-audit", "/var/lib/registry/audit"))
+        result.append(
+            volume(
+                f"registry-{lane}-state",
+                "/var/lib/registry/state",
+                read_only=action in {"serve", "preview", "verify"},
+            )
+        )
+    if action != "preview":
+        result.append(volume(f"registry-{lane}-audit", "/var/lib/registry/audit"))
     secret_volume = f"registry-operator-files-{lane}-{action}"
     if secret_volume in CHECKER.STAGED_SECRET_VOLUMES:
         result.append(volume(secret_volume, "/run/secrets", read_only=True))
@@ -201,16 +210,21 @@ def ordinary_model() -> dict:
         }
     ]
     return {
+        "name": CHECKER.PROJECT_NAME,
         "services": services,
         "networks": {
             CHECKER.NETWORK_RUNTIME: {
                 "name": f"{CHECKER.PROJECT_NAME}_{CHECKER.NETWORK_RUNTIME}"
             }
         },
-        "volumes": {name: {} for name in CHECKER.EXPECTED_VOLUMES},
+        "volumes": {
+            name: {"name": f"{CHECKER.PROJECT_NAME}_{name}"}
+            for name in CHECKER.EXPECTED_VOLUMES
+        },
         "secrets": {
             f"registry-{name}": {
                 "file": f"/fixture/package/operator/secrets/{name}",
+                "name": f"{CHECKER.PROJECT_NAME}_registry-{name}",
             }
             for name in CHECKER.OPERATOR_SECRET_FILES
         },
@@ -377,6 +391,7 @@ class AdopterComposeContractTests(unittest.TestCase):
             "security_opt",
             "tmpfs",
             "healthcheck",
+            "logging",
         )
         for service_name in CHECKER.WORKLOAD_SERVICES:
             fields = hardening_fields + (
@@ -943,6 +958,15 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_parent_include_keeps_package_and_adds_one_service(self) -> None:
         ordinary = ordinary_model()
         parent = copy.deepcopy(ordinary)
+        parent_name = "parent-adopter"
+        parent["name"] = parent_name
+        parent["networks"][CHECKER.NETWORK_RUNTIME] = {
+            "name": f"{parent_name}_{CHECKER.NETWORK_RUNTIME}"
+        }
+        for name in CHECKER.STAGED_SECRET_VOLUMES:
+            parent["volumes"][name] = {"name": f"{parent_name}_{name}"}
+        for name in parent["secrets"]:
+            parent["secrets"][name]["name"] = f"{parent_name}_{name}"
         parent["services"]["parent-runtime-client"] = {
             "image": (
                 "example.invalid/registrystack/conformance-probe@sha256:" + "d" * 64
@@ -950,6 +974,33 @@ class AdopterComposeContractTests(unittest.TestCase):
             "networks": {CHECKER.NETWORK_RUNTIME: {}},
         }
         CHECKER.assert_parent_include(parent, ordinary)
+
+    def test_parent_include_rejects_renamed_durable_volume(self) -> None:
+        ordinary = ordinary_model()
+        parent = copy.deepcopy(ordinary)
+        parent_name = "parent-adopter"
+        parent["name"] = parent_name
+        parent["networks"][CHECKER.NETWORK_RUNTIME] = {
+            "name": f"{parent_name}_{CHECKER.NETWORK_RUNTIME}"
+        }
+        for name in CHECKER.STAGED_SECRET_VOLUMES:
+            parent["volumes"][name] = {"name": f"{parent_name}_{name}"}
+        for name in parent["secrets"]:
+            parent["secrets"][name]["name"] = f"{parent_name}_{name}"
+        parent["volumes"]["registry-notary-state"] = {
+            "name": f"{parent_name}_registry-notary-state"
+        }
+        parent["services"]["parent-runtime-client"] = {
+            "image": (
+                "example.invalid/registrystack/conformance-probe@sha256:" + "d" * 64
+            ),
+            "networks": {CHECKER.NETWORK_RUNTIME: {}},
+        }
+        with self.assertRaisesRegex(
+            CHECKER.ContractError,
+            "renamed durable volume registry-notary-state",
+        ):
+            CHECKER.assert_parent_include(parent, ordinary)
 
     def test_minimum_compose_download_is_checksum_pinned(self) -> None:
         wrapper = SCRIPT.with_suffix(".sh").read_text(encoding="utf-8")

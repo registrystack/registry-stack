@@ -76,7 +76,13 @@
     {"id": "prepare-notary-state", "workload": "notary", "action": "prepare_state_store"},
     {"id": "initialize-relay-public", "workload": "relay-public", "action": "initialize_state"},
     {"id": "initialize-relay-consultation", "workload": "relay-consultation", "action": "initialize_state"},
-    {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"}
+    {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"},
+    {"id": "preview-relay-public-state", "workload": "relay-public", "action": "preview_state"},
+    {"id": "preview-relay-consultation-state", "workload": "relay-consultation", "action": "preview_state"},
+    {"id": "preview-notary-state", "workload": "notary", "action": "preview_state"},
+    {"id": "accept-relay-public-state", "workload": "relay-public", "action": "accept_state"},
+    {"id": "accept-relay-consultation-state", "workload": "relay-consultation", "action": "accept_state"},
+    {"id": "accept-notary-state", "workload": "notary", "action": "accept_state"}
   ],
   "recovery_consistency_groups": [
     {

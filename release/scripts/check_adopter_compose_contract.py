@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -19,6 +20,13 @@ PROJECT_NAME = "registry-adopter-probe"
 NETWORK_RUNTIME = "registry-runtime"
 IMAGE_IDENTITY = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 SENTINEL_FRAGMENT = "value-must-not-enter-compose"
+BOUNDED_LOCAL_LOGGING = {
+    "driver": "local",
+    "options": {
+        "max-size": "10m",
+        "max-file": "3",
+    },
+}
 
 WORKLOAD_SERVICES = frozenset(
     {
@@ -46,6 +54,12 @@ INITIALIZATION_SERVICES = frozenset(
         "registry-relay-public-initialize",
         "registry-relay-consultation-initialize",
         "registry-notary-initialize",
+        "registry-relay-public-preview-state",
+        "registry-relay-consultation-preview-state",
+        "registry-notary-preview-state",
+        "registry-relay-public-accept-state",
+        "registry-relay-consultation-accept-state",
+        "registry-notary-accept-state",
     }
 )
 
@@ -145,6 +159,28 @@ INITIALIZATION_COMMANDS = {
         "initialize_state",
     ],
     "registry-notary-initialize": ["product-action", "initialize_state"],
+    "registry-relay-public-preview-state": [
+        "product-action",
+        "relay-public",
+        "preview_state",
+    ],
+    "registry-relay-consultation-preview-state": [
+        "product-action",
+        "relay-consultation",
+        "preview_state",
+    ],
+    "registry-notary-preview-state": ["product-action", "preview_state"],
+    "registry-relay-public-accept-state": [
+        "product-action",
+        "relay-public",
+        "accept_state",
+    ],
+    "registry-relay-consultation-accept-state": [
+        "product-action",
+        "relay-consultation",
+        "accept_state",
+    ],
+    "registry-notary-accept-state": ["product-action", "accept_state"],
 }
 INITIALIZATION_METADATA = {
     "registry-relay-public-prepare-state": (
@@ -177,6 +213,36 @@ INITIALIZATION_METADATA = {
         "notary",
         "initialize",
     ),
+    "registry-relay-public-preview-state": (
+        "registry-relay-public",
+        "relay-public",
+        "preview",
+    ),
+    "registry-relay-consultation-preview-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "preview",
+    ),
+    "registry-notary-preview-state": (
+        "registry-notary",
+        "notary",
+        "preview",
+    ),
+    "registry-relay-public-accept-state": (
+        "registry-relay-public",
+        "relay-public",
+        "accept",
+    ),
+    "registry-relay-consultation-accept-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "accept",
+    ),
+    "registry-notary-accept-state": (
+        "registry-notary",
+        "notary",
+        "accept",
+    ),
 }
 INITIALIZATION_DEPENDENCIES = {
     "registry-relay-public-prepare-state": {},
@@ -194,6 +260,28 @@ INITIALIZATION_DEPENDENCIES = {
         "registry-notary-stage-secrets": "service_completed_successfully",
     },
     "registry-notary-initialize": {
+        "registry-postgres": "service_healthy",
+        "registry-notary-stage-secrets": "service_completed_successfully",
+    },
+    "registry-relay-public-preview-state": {
+        "registry-relay-public-stage-secrets": "service_completed_successfully"
+    },
+    "registry-relay-public-accept-state": {
+        "registry-relay-public-stage-secrets": "service_completed_successfully"
+    },
+    "registry-relay-consultation-preview-state": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+    },
+    "registry-relay-consultation-accept-state": {
+        "registry-postgres": "service_healthy",
+        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+    },
+    "registry-notary-preview-state": {
+        "registry-postgres": "service_healthy",
+        "registry-notary-stage-secrets": "service_completed_successfully",
+    },
+    "registry-notary-accept-state": {
         "registry-postgres": "service_healthy",
         "registry-notary-stage-secrets": "service_completed_successfully",
     },
@@ -215,6 +303,12 @@ STAGER_SPECS = {
     "registry-relay-public-stage-secrets": {
         "outputs": {
             "relay-public-serve": ("registry-operator-files-relay-public-serve"),
+            "relay-public-preview": (
+                "registry-operator-files-relay-public-preview"
+            ),
+            "relay-public-accept": (
+                "registry-operator-files-relay-public-accept"
+            ),
         },
         "secrets": {
             "registry-relay-public-tls-certificate",
@@ -232,6 +326,12 @@ STAGER_SPECS = {
             "relay-consultation-initialize": (
                 "registry-operator-files-relay-consultation-initialize"
             ),
+            "relay-consultation-preview": (
+                "registry-operator-files-relay-consultation-preview"
+            ),
+            "relay-consultation-accept": (
+                "registry-operator-files-relay-consultation-accept"
+            ),
         },
         "secrets": {
             "registry-postgresql-tls-certificate",
@@ -244,6 +344,8 @@ STAGER_SPECS = {
             "notary-serve": "registry-operator-files-notary-serve",
             "notary-prepare": "registry-operator-files-notary-prepare",
             "notary-initialize": "registry-operator-files-notary-initialize",
+            "notary-preview": "registry-operator-files-notary-preview",
+            "notary-accept": "registry-operator-files-notary-accept",
         },
         "secrets": {
             "registry-notary-relay-workload-credential",
@@ -265,6 +367,8 @@ STAGER_RUNTIME_ACTIONS = {
         ("relay-public-serve", "relay_public", "serve"),
         ("relay-public-prepare", "relay_public", "prepare_state_store"),
         ("relay-public-initialize", "relay_public", "initialize_state"),
+        ("relay-public-preview", "relay_public", "preview_state"),
+        ("relay-public-accept", "relay_public", "accept_state"),
     ],
     "registry-relay-consultation-stage-secrets": [
         ("relay-consultation-serve", "relay_consultation", "serve"),
@@ -278,11 +382,23 @@ STAGER_RUNTIME_ACTIONS = {
             "relay_consultation",
             "initialize_state",
         ),
+        (
+            "relay-consultation-preview",
+            "relay_consultation",
+            "preview_state",
+        ),
+        (
+            "relay-consultation-accept",
+            "relay_consultation",
+            "accept_state",
+        ),
     ],
     "registry-notary-stage-secrets": [
         ("notary-serve", "notary", "serve"),
         ("notary-prepare", "notary", "prepare_state_store"),
         ("notary-initialize", "notary", "initialize_state"),
+        ("notary-preview", "notary", "preview_state"),
+        ("notary-accept", "notary", "accept_state"),
     ],
 }
 
@@ -438,6 +554,36 @@ EXPECTED_INITIALIZATION_ACTIONS = [
         "workload": "notary",
         "action": "initialize_state",
     },
+    {
+        "id": "preview-relay-public-state",
+        "workload": "relay-public",
+        "action": "preview_state",
+    },
+    {
+        "id": "preview-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "preview_state",
+    },
+    {
+        "id": "preview-notary-state",
+        "workload": "notary",
+        "action": "preview_state",
+    },
+    {
+        "id": "accept-relay-public-state",
+        "workload": "relay-public",
+        "action": "accept_state",
+    },
+    {
+        "id": "accept-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "accept_state",
+    },
+    {
+        "id": "accept-notary-state",
+        "workload": "notary",
+        "action": "accept_state",
+    },
 ]
 EXPECTED_RECOVERY_GROUPS = [
     {
@@ -541,6 +687,24 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
         "registry-notary-initialize": (
             products["registry-notary"]["initialize_state"]["command"]
         ),
+        "registry-relay-public-preview-state": (
+            products["registry-relay-public"]["preview_state"]["command"]
+        ),
+        "registry-relay-consultation-preview-state": (
+            products["registry-relay-consultation"]["preview_state"]["command"]
+        ),
+        "registry-notary-preview-state": (
+            products["registry-notary"]["preview_state"]["command"]
+        ),
+        "registry-relay-public-accept-state": (
+            products["registry-relay-public"]["accept_state"]["command"]
+        ),
+        "registry-relay-consultation-accept-state": (
+            products["registry-relay-consultation"]["accept_state"]["command"]
+        ),
+        "registry-notary-accept-state": (
+            products["registry-notary"]["accept_state"]["command"]
+        ),
     }
     health_probes = {
         name: recipe["health_probe"] for name, recipe in products.items()
@@ -548,12 +712,16 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
     health_probes["registry-postgres"] = postgresql["health_probe"]
 
     stager_commands = {}
+    declared_compose_files = set()
     for service, actions in STAGER_RUNTIME_ACTIONS.items():
         script = "umask 077\n"
         for stage_id, recipe_id, action_id in actions:
             projections = runtime[recipe_id][action_id]["secret_files"]
             if not projections:
                 continue
+            declared_compose_files.update(
+                projection["file_id"] for projection in projections
+            )
             output = f"/registryctl-stage/output/{stage_id}"
             script += (
                 f"/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
@@ -573,9 +741,7 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
         "initialization_commands": initialization_commands,
         "health_probes": health_probes,
         "stager_commands": stager_commands,
-        "declared_compose_files": {
-            item["id"] for item in runtime["operator_files"]
-        },
+        "declared_compose_files": declared_compose_files,
     }
 
 
@@ -584,15 +750,18 @@ def _compose_config(
     fixture_root: Path,
     *files: str,
     package_root: Path | None = None,
+    project_name: str | None = PROJECT_NAME,
 ) -> dict[str, Any]:
     package_root = package_root or fixture_root / "package"
-    command = [
-        *compose_command,
-        "--project-name",
-        PROJECT_NAME,
-        "--env-file",
-        str(package_root / "generated/compose.empty.env"),
-    ]
+    command = [*compose_command]
+    if project_name is not None:
+        command.extend(("--project-name", project_name))
+    command.extend(
+        (
+            "--env-file",
+            str(package_root / "generated/compose.empty.env"),
+        )
+    )
     for relative_file in files:
         command.extend(("-f", str(fixture_root / relative_file)))
     command.extend(
@@ -705,6 +874,7 @@ def _assert_product_hardening(
         or service.get("cap_drop") != ["ALL"]
         or service.get("security_opt") != ["no-new-privileges:true"]
         or service.get("tmpfs") != ["/tmp"]
+        or service.get("logging") != BOUNDED_LOCAL_LOGGING
         or "cap_add" in service
         or service.get("privileged", False) is not False
     ):
@@ -736,6 +906,7 @@ def _assert_postgresql_hardening(
         or service.get("security_opt") != ["no-new-privileges:true"]
         or service.get("tmpfs")
         != ["/tmp", "/var/run/postgresql:uid=999,gid=999,mode=0750"]
+        or service.get("logging") != BOUNDED_LOCAL_LOGGING
         or "cap_add" in service
         or service.get("privileged", False) is not False
     ):
@@ -762,7 +933,13 @@ def _assert_volume_mount(
         or mount.get("source") != source
         or bool(mount.get("read_only", False)) is not read_only
     ):
-        raise ContractError("managed volume mount contract changed")
+        raise ContractError(
+            "managed volume mount contract changed "
+            f"(expected source={source}, read_only={read_only}; "
+            f"observed type={mount.get('type')}, "
+            f"source={mount.get('source')}, "
+            f"read_only={bool(mount.get('read_only', False))})"
+        )
 
 
 def _assert_product_mounts(
@@ -777,10 +954,11 @@ def _assert_product_mounts(
     expected_targets = {
         "/run/registry/bundle",
         "/run/registry/anchor",
-        "/var/lib/registry/audit",
     }
     if action != "prepare":
         expected_targets.add("/var/lib/registry/state")
+    if action != "preview":
+        expected_targets.add("/var/lib/registry/audit")
     secret_volume = f"registry-operator-files-{lane}-{action}"
     if secret_volume in STAGED_SECRET_VOLUMES:
         expected_targets.add("/run/secrets")
@@ -813,13 +991,14 @@ def _assert_product_mounts(
         _assert_volume_mount(
             mounts["/var/lib/registry/state"],
             f"registry-{lane}-state",
+            read_only=action in {"serve", "preview", "verify"},
+        )
+    if "/var/lib/registry/audit" in mounts:
+        _assert_volume_mount(
+            mounts["/var/lib/registry/audit"],
+            f"registry-{lane}-audit",
             read_only=False,
         )
-    _assert_volume_mount(
-        mounts["/var/lib/registry/audit"],
-        f"registry-{lane}-audit",
-        read_only=False,
-    )
     if "/run/secrets" in mounts:
         _assert_volume_mount(
             mounts["/run/secrets"],
@@ -922,6 +1101,9 @@ def _assert_operator_file_inventory(
 
 
 def _assert_top_level_resources(model: dict[str, Any]) -> None:
+    project_name = model.get("name")
+    if not isinstance(project_name, str) or not project_name:
+        raise ContractError("package lost its Compose project identity")
     networks = model.get("networks")
     if not isinstance(networks, dict) or set(networks) != {NETWORK_RUNTIME}:
         raise ContractError("package must use exactly one ordinary runtime network")
@@ -931,12 +1113,18 @@ def _assert_top_level_resources(model: dict[str, Any]) -> None:
         or network.get("internal") is True
         or network.get("external") is True
         or set(network) - {"name"}
-        or network.get("name") != f"{PROJECT_NAME}_{NETWORK_RUNTIME}"
+        or network.get("name") != f"{project_name}_{NETWORK_RUNTIME}"
     ):
         raise ContractError("runtime network gained managed isolation")
     volumes = model.get("volumes")
     if not isinstance(volumes, dict) or set(volumes) != EXPECTED_VOLUMES:
         raise ContractError("package has the wrong closed volume inventory")
+    for name in DURABLE_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"durable volume {name} lost its stable physical name")
+    for name in STAGED_SECRET_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"scratch volume {name} lost its project scope")
 
 
 def assert_value_free(model: dict[str, Any]) -> None:
@@ -1259,9 +1447,65 @@ def assert_parent_include(model: dict[str, Any], ordinary: dict[str, Any]) -> No
         "example.invalid/registrystack/conformance-probe@sha256:" + "d" * 64
     ):
         raise ContractError("operator parent service lost its runtime model")
-    for field in ("networks", "volumes", "secrets"):
-        if model.get(field) != ordinary.get(field):
-            raise ContractError(f"parent include changed package {field}")
+    parent_name = model.get("name")
+    ordinary_name = ordinary.get("name")
+    if (
+        not isinstance(parent_name, str)
+        or not isinstance(ordinary_name, str)
+        or parent_name == ordinary_name
+    ):
+        raise ContractError("parent include did not exercise a distinct Compose project")
+    parent_secrets = model.get("secrets")
+    ordinary_secrets = ordinary.get("secrets")
+    if (
+        not isinstance(parent_secrets, dict)
+        or not isinstance(ordinary_secrets, dict)
+        or set(parent_secrets) != set(ordinary_secrets)
+    ):
+        raise ContractError("parent include changed package secret inventory")
+    for name, parent_secret in parent_secrets.items():
+        ordinary_secret = ordinary_secrets[name]
+        if (
+            not isinstance(parent_secret, dict)
+            or not isinstance(ordinary_secret, dict)
+            or parent_secret.get("file") != ordinary_secret.get("file")
+            or parent_secret.get("name") != f"{parent_name}_{name}"
+            or ordinary_secret.get("name") != f"{ordinary_name}_{name}"
+        ):
+            raise ContractError(
+                f"parent include changed operator secret projection {name}"
+            )
+    parent_networks = model.get("networks")
+    ordinary_networks = ordinary.get("networks")
+    if (
+        not isinstance(parent_networks, dict)
+        or not isinstance(ordinary_networks, dict)
+        or set(parent_networks) != {NETWORK_RUNTIME}
+        or set(ordinary_networks) != {NETWORK_RUNTIME}
+        or parent_networks[NETWORK_RUNTIME]
+        != {"name": f"{parent_name}_{NETWORK_RUNTIME}"}
+        or ordinary_networks[NETWORK_RUNTIME]
+        != {"name": f"{ordinary_name}_{NETWORK_RUNTIME}"}
+    ):
+        raise ContractError("parent include lost project-scoped networking")
+    parent_volumes = model.get("volumes")
+    ordinary_volumes = ordinary.get("volumes")
+    if (
+        not isinstance(parent_volumes, dict)
+        or not isinstance(ordinary_volumes, dict)
+        or set(parent_volumes) != EXPECTED_VOLUMES
+        or set(ordinary_volumes) != EXPECTED_VOLUMES
+    ):
+        raise ContractError("parent include changed package volume inventory")
+    for name in DURABLE_VOLUMES:
+        if parent_volumes[name] != ordinary_volumes[name]:
+            raise ContractError(f"parent include renamed durable volume {name}")
+    for name in STAGED_SECRET_VOLUMES:
+        if (
+            parent_volumes[name] != {"name": f"{parent_name}_{name}"}
+            or ordinary_volumes[name] != {"name": f"{ordinary_name}_{name}"}
+        ):
+            raise ContractError(f"parent include lost project-scoped scratch volume {name}")
 
 
 def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
@@ -1270,6 +1514,7 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         compose_command,
         fixture_root,
         "package/generated/compose.yaml",
+        project_name=None,
     )
     assert_ordinary_model(ordinary, expected_images, fixture_root)
     initialized = _compose_config(
@@ -1277,6 +1522,7 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         fixture_root,
         "package/generated/compose.yaml",
         "package/generated/compose.initialize.yaml",
+        project_name=None,
     )
     assert_initialization_model(
         initialized,
@@ -1288,6 +1534,7 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         compose_command,
         fixture_root,
         "parent-short/compose.yaml",
+        project_name=None,
     )
     assert_parent_include(parent, ordinary)
 
@@ -1306,6 +1553,7 @@ def run_rendered_package_contract(
         package_root.parent,
         str(package_root / "generated/compose.yaml"),
         package_root=package_root,
+        project_name=None,
     )
     assert_ordinary_model(
         ordinary,
@@ -1320,6 +1568,7 @@ def run_rendered_package_contract(
         str(package_root / "generated/compose.yaml"),
         str(package_root / "generated/compose.initialize.yaml"),
         package_root=package_root,
+        project_name=None,
     )
     assert_initialization_model(
         initialized,
@@ -1328,6 +1577,42 @@ def run_rendered_package_contract(
         runtime_contract,
         package_root=package_root,
     )
+    with tempfile.TemporaryDirectory(
+        prefix="registry-parent-include-",
+        dir=package_root.parent,
+    ) as parent_directory:
+        parent_file = Path(parent_directory) / "compose.json"
+        parent_file.write_text(
+            json.dumps(
+                {
+                    "include": [
+                        {
+                            "path": str(
+                                package_root / "generated/compose.yaml"
+                            )
+                        }
+                    ],
+                    "services": {
+                        "parent-runtime-client": {
+                            "image": (
+                                "example.invalid/registrystack/"
+                                "conformance-probe@sha256:" + "d" * 64
+                            ),
+                            "networks": [NETWORK_RUNTIME],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        parent = _compose_config(
+            compose_command,
+            package_root.parent,
+            str(parent_file),
+            package_root=package_root,
+            project_name=None,
+        )
+        assert_parent_include(parent, ordinary)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:

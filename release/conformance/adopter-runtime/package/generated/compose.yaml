@@ -11,6 +11,11 @@ x-product-hardening: &product-hardening
     interval: 30s
     timeout: 5s
     retries: 3
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
 
 x-stager-hardening: &stager-hardening
   image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -43,6 +48,8 @@ services:
     <<: *stager-hardening
     volumes:
       - registry-operator-files-relay-public-serve:/registryctl-stage/output/relay-public-serve
+      - registry-operator-files-relay-public-preview:/registryctl-stage/output/relay-public-preview
+      - registry-operator-files-relay-public-accept:/registryctl-stage/output/relay-public-accept
     secrets:
       - source: registry-relay-public-tls-certificate
         target: relay-public-tls-certificate
@@ -55,6 +62,8 @@ services:
       - registry-operator-files-relay-consultation-serve:/registryctl-stage/output/relay-consultation-serve
       - registry-operator-files-relay-consultation-prepare:/registryctl-stage/output/relay-consultation-prepare
       - registry-operator-files-relay-consultation-initialize:/registryctl-stage/output/relay-consultation-initialize
+      - registry-operator-files-relay-consultation-preview:/registryctl-stage/output/relay-consultation-preview
+      - registry-operator-files-relay-consultation-accept:/registryctl-stage/output/relay-consultation-accept
     secrets:
       - source: registry-postgresql-tls-certificate
         target: postgresql-tls-certificate
@@ -69,6 +78,8 @@ services:
       - registry-operator-files-notary-serve:/registryctl-stage/output/notary-serve
       - registry-operator-files-notary-prepare:/registryctl-stage/output/notary-prepare
       - registry-operator-files-notary-initialize:/registryctl-stage/output/notary-initialize
+      - registry-operator-files-notary-preview:/registryctl-stage/output/notary-preview
+      - registry-operator-files-notary-accept:/registryctl-stage/output/notary-accept
     secrets:
       - source: registry-notary-relay-workload-credential
         target: notary-relay-workload-credential
@@ -107,6 +118,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
     networks: [registry-runtime]
     depends_on:
       registry-postgresql-stage-secrets:
@@ -140,7 +156,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - registry-relay-public-state:/var/lib/registry/state
+      - registry-relay-public-state:/var/lib/registry/state:ro
       - registry-relay-public-audit:/var/lib/registry/audit
       - registry-operator-files-relay-public-serve:/run/secrets:ro
 
@@ -169,7 +185,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - registry-relay-consultation-state:/var/lib/registry/state
+      - registry-relay-consultation-state:/var/lib/registry/state:ro
       - registry-relay-consultation-audit:/var/lib/registry/audit
       - registry-operator-files-relay-consultation-serve:/run/secrets:ro
 
@@ -201,7 +217,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - registry-notary-state:/var/lib/registry/state
+      - registry-notary-state:/var/lib/registry/state:ro
       - registry-notary-audit:/var/lib/registry/audit
       - registry-operator-files-notary-serve:/run/secrets:ro
 
@@ -210,21 +226,34 @@ networks:
 
 volumes:
   registry-postgresql-data:
+    name: registry-adopter-probe_registry-postgresql-data
   registry-relay-public-state:
+    name: registry-adopter-probe_registry-relay-public-state
   registry-relay-public-audit:
+    name: registry-adopter-probe_registry-relay-public-audit
   registry-relay-consultation-state:
+    name: registry-adopter-probe_registry-relay-consultation-state
   registry-relay-consultation-audit:
+    name: registry-adopter-probe_registry-relay-consultation-audit
   registry-notary-state:
+    name: registry-adopter-probe_registry-notary-state
   registry-notary-audit:
+    name: registry-adopter-probe_registry-notary-audit
   registry-operator-files-postgresql-serve:
   registry-operator-files-postgresql-bootstrap:
   registry-operator-files-relay-public-serve:
+  registry-operator-files-relay-public-preview:
+  registry-operator-files-relay-public-accept:
   registry-operator-files-relay-consultation-serve:
   registry-operator-files-relay-consultation-prepare:
   registry-operator-files-relay-consultation-initialize:
+  registry-operator-files-relay-consultation-preview:
+  registry-operator-files-relay-consultation-accept:
   registry-operator-files-notary-serve:
   registry-operator-files-notary-prepare:
   registry-operator-files-notary-initialize:
+  registry-operator-files-notary-preview:
+  registry-operator-files-notary-accept:
 
 secrets:
   registry-relay-public-tls-certificate:
