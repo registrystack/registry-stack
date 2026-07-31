@@ -328,6 +328,14 @@ impl Drop for BatchIdempotencyOwner<'_> {
 }
 
 impl EvidenceStore {
+    #[cfg(test)]
+    pub(super) fn in_memory_evaluation_count(&self) -> usize {
+        self.evaluations
+            .lock()
+            .expect("evidence store mutex is not poisoned")
+            .len()
+    }
+
     #[must_use]
     pub(crate) fn with_state_plane(state_plane: Arc<NotaryStatePlaneHandle>) -> Self {
         Self {

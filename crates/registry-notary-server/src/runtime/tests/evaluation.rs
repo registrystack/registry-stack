@@ -581,6 +581,31 @@ fn delegated_runtime_with_relay(
     )
 }
 
+#[test]
+fn delegated_evaluation_freshness_denies_at_and_after_expiry() {
+    let evaluation_expires_at = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(10);
+
+    require_fresh_delegated_evaluation(
+        evaluation_expires_at,
+        evaluation_expires_at - time::Duration::nanoseconds(1),
+    )
+    .expect("a delegated evaluation inside its committed window remains fresh");
+
+    for now in [
+        evaluation_expires_at,
+        evaluation_expires_at + time::Duration::nanoseconds(1),
+    ] {
+        let error = require_fresh_delegated_evaluation(evaluation_expires_at, now)
+            .expect_err("a delegated evaluation at or after expiry must fail closed");
+        assert!(matches!(
+            error,
+            EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::DelegatedProofDenied
+            }
+        ));
+    }
+}
+
 fn subject_bound_capability(
     keys: &SubjectAccessRateLimitKeys,
     claim_id: &str,
@@ -724,7 +749,9 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
             delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
             delegated_runtime_request(),
             None,
-            None,
+            Some(delegated_subject_access_metadata(
+                OffsetDateTime::now_utc() + time::Duration::hours(1),
+            )),
             None,
         )
         .await
@@ -811,7 +838,9 @@ async fn delegated_capability_allows_the_exact_committed_registry_dependency_clo
             ),
             delegated_runtime_request(),
             None,
-            None,
+            Some(delegated_subject_access_metadata(
+                OffsetDateTime::now_utc() + time::Duration::hours(1),
+            )),
             None,
         )
         .await
@@ -822,6 +851,64 @@ async fn delegated_capability_allows_the_exact_committed_registry_dependency_clo
     // The proof and dependent fact share one compiler-identical Relay group,
     // so the exact two-claim closure is intentionally coalesced to one call.
     assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn delegated_post_relay_expiry_denies_values_and_skips_storage() {
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        delegated_selected_claim(vec!["guardian-link"]),
+    ]);
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        None,
+    );
+    let store = EvidenceStore::default();
+
+    let (result, audit) = runtime
+        .evaluate_with_capability_for_api(
+            evidence,
+            &store,
+            &delegated_relay_principal(),
+            delegated_subject_access_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            Some(delegated_subject_access_metadata(
+                OffsetDateTime::UNIX_EPOCH,
+            )),
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("an expired delegated result must not disclose claim values");
+    assert_eq!(error.audit_code(), "delegated.proof_denied");
+    assert!(matches!(
+        &error,
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedProofDenied
+        }
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+    let (evaluation_id, relay_consultation_ids) = audit.into_parts();
+    assert!(evaluation_id.is_some());
+    let denial_audit = json!({
+        "error_code": error.audit_code(),
+        "verification_id": evaluation_id,
+        "relay_consultation_ids": relay_consultation_ids,
+    });
+    let denial_audit_wire = denial_audit.to_string();
+    assert!(denial_audit.get("results").is_none());
+    assert!(denial_audit.get("value").is_none());
+    for undisclosed in ["NAT-123", "CHILD-123", "\"value\":true"] {
+        assert!(!denial_audit_wire.contains(undisclosed));
+    }
+    assert_eq!(store.in_memory_evaluation_count(), 0);
 }
 
 #[tokio::test]
