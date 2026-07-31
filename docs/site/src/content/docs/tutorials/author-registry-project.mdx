@@ -129,6 +129,52 @@ The focused result is:
 ```text
 Registry Stack test: passed for fictional-citizen-registry.
 Fixtures: 9.
+  PASS person-record.active-person
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    outputs: active
+    claims: person-active, person-record-exists
+    outcome: match
+  PASS person-record.active-person::derived/request_to_consultation_binding
+    inputs: person_id
+    calls: notary-relay-consultation
+    claims: person-record-exists
+    source access: true
+  PASS person-record.active-person::derived/request_authority
+    inputs: person_id
+    expected error: fixture.request_mismatch
+    source access: false
+  PASS person-record.active-person::derived/status_rejection
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.status_rejected
+    source access: true
+  PASS person-record.active-person::derived/malformed_decode
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.response_malformed
+    source access: true
+  PASS person-record.active-person::derived/byte_ceiling
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.response_too_large
+    source access: true
+  PASS person-record.active-person::derived/timeout
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.deadline_exceeded
+    source access: true
+  PASS person-record.active-person::derived/authorization_before_source
+    inputs: person_id
+    expected error: authorization.denied
+    source access: false
+  PASS person-record.active-person::derived/output_minimization
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    outputs: active
+    claims: person-active, person-record-exists
+    outcome: match
+    source access: true
 Next: registryctl dev
 ```
 
