@@ -64,11 +64,12 @@ function runScriptFile(scriptPath, cwd) {
   });
 }
 
-function runShellSnippet(script, cwd) {
+function runShellSnippet(script, cwd, env = {}) {
   return spawnSync('/bin/sh', ['-eu'], {
     cwd,
     encoding: 'utf8',
     input: script,
+    env: { ...process.env, ...env },
   });
 }
 
@@ -135,6 +136,24 @@ const ordinaryStartAndStop = [
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120',
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps',
   'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down',
+].join('\n');
+
+const productUpdate = [
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml stop',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state',
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state',
+  "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public 'product-action' 'relay-public' 'verify_state'",
+  "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation 'product-action' 'relay-consultation' 'verify_state'",
+  "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary 'product-action' 'verify_state'",
+  'docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120',
 ].join('\n');
 
 test('public OAuth and Rhai journey applies a generated docs asset to a fresh HTTP starter', (t) => {
@@ -267,6 +286,96 @@ test('Compose command blocks exactly reproduce the generated runbook sequence', 
   assert.doesNotMatch(page, /registry-runtime-stage-secrets/);
 });
 
+test('product update executes preview, stop, accept, exact verify, then start', (t) => {
+  const page = read('src/content/docs/operate/upgrade-and-rollback.mdx');
+  const commands = fence(
+    page,
+    'Preview, accept, verify, and start the candidate',
+    'sh',
+  );
+  assert.equal(commands, productUpdate);
+
+  const root = mkdtempSync(join(tmpdir(), 'registryctl-update-order-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const docker = resolve(root, 'docker');
+  const state = resolve(root, 'state');
+  const events = resolve(root, 'events');
+  writeFileSync(state, 'running\n');
+  writeFileSync(
+    docker,
+    [
+      '#!/bin/sh',
+      'set -eu',
+      'last=',
+      'for argument do last=$argument; done',
+      'case "$*" in',
+      '  *-stage-secrets) exit 0 ;;',
+      '  *-preview-state)',
+      '    test "$(cat "$DX_UPDATE_STATE")" = running',
+      '    printf "preview:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
+      '    ;;',
+      '  *" stop")',
+      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    printf "stopped\\n" >"$DX_UPDATE_STATE"',
+      '    printf "stop\\n" >>"$DX_UPDATE_EVENTS"',
+      '    ;;',
+      '  *-accept-state)',
+      '    test "$(cat "$DX_UPDATE_STATE")" = stopped',
+      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    printf "accept:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
+      '    ;;',
+      '  *" product-action "*verify_state)',
+      '    test "$(cat "$DX_UPDATE_STATE")" = stopped',
+      '    test "$(grep -c "^accept:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    case "$*" in',
+      '      *" registry-relay-public product-action "*) service=registry-relay-public ;;',
+      '      *" registry-relay-consultation product-action "*) service=registry-relay-consultation ;;',
+      '      *" registry-notary product-action "*) service=registry-notary ;;',
+      '      *) exit 31 ;;',
+      '    esac',
+      '    printf "verify:%s\\n" "$service" >>"$DX_UPDATE_EVENTS"',
+      '    ;;',
+      '  *" up --detach --wait --wait-timeout 120")',
+      '    test "$(grep -c "^verify:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    printf "start\\n" >>"$DX_UPDATE_EVENTS"',
+      '    printf "running\\n" >"$DX_UPDATE_STATE"',
+      '    ;;',
+      '  *)',
+      '    printf "unexpected docker command: %s\\n" "$*" >&2',
+      '    exit 32',
+      '    ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+
+  const result = runShellSnippet(commands, root, {
+    DX_UPDATE_EVENTS: events,
+    DX_UPDATE_STATE: state,
+    PATH: `${root}:${process.env.PATH}`,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    readFileSync(events, 'utf8'),
+    [
+      'preview:registry-relay-public-preview-state',
+      'preview:registry-relay-consultation-preview-state',
+      'preview:registry-notary-preview-state',
+      'stop',
+      'accept:registry-relay-public-accept-state',
+      'accept:registry-relay-consultation-accept-state',
+      'accept:registry-notary-accept-state',
+      'verify:registry-relay-public',
+      'verify:registry-relay-consultation',
+      'verify:registry-notary',
+      'start',
+      '',
+    ].join('\n'),
+  );
+  assert.equal(readFileSync(state, 'utf8'), 'running\n');
+});
+
 test('transferred package acceptance uses external closure and operator-file checks', () => {
   const page = read('src/content/docs/operate/single-node-compose-behind-proxy.mdx');
   const verifyBlock = fence(page, 'Verify the generated package', 'sh');
@@ -325,11 +434,27 @@ test('initial approval bridge covers every lane before approved-set assembly', (
   assert.match(page, /does not accept it for\s+initialization/);
   assert.match(page, /registryctl trust anchor rotate/);
   assert.match(page, /--current-anchor "\$CURRENT_ANCHOR"/);
+  assert.match(page, /--rotate-anchor relay-consultation/);
+  assert.match(
+    page,
+    /--next-public-key evaluation-keys\/relay-consultation\.public\.jwk[\s\S]*--next-public-key operator-inputs\/relay-consultation-next\.public\.jwk/,
+  );
   assert.match(page, /--against "\$CURRENT_APPROVED_SET"/);
   assert.match(page, /registryctl trust bundle verify/);
   assert.match(page, /registryctl trust approved-set assemble \\\n  --from "\$CURRENT_APPROVED_SET"/);
   assert.match(page, /--approved-set operator-handoff\/approved-set\.v2\.json/);
   assert.match(page, /registryctl deploy verify --package operator-handoff\/registry-stack\.v2/);
+  assert.match(page, /required preview, stop, audited acceptance, exact\s+verification/);
+});
+
+test('HTTP tutorial hands initial builds to baseline approval before deployment', () => {
+  const page = read('src/content/docs/tutorials/author-registry-project.mdx');
+  const approval = '../../operate/approve-initial-baseline/';
+  const deployment = '../../operate/single-node-compose-behind-proxy/';
+  assert.match(page, /Next: registryctl trust anchor create --help/);
+  assert.ok(page.includes(`](${approval})`));
+  assert.ok(page.includes(`](${deployment})`));
+  assert.ok(page.indexOf(`](${approval})`) < page.indexOf(`](${deployment})`));
 });
 
 test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK pairs', (t) => {

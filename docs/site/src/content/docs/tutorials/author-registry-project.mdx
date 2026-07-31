@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-07-31"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -260,7 +260,7 @@ The human result identifies the build path and governed handoff:
 ```text
 Built unsigned signing inputs for relay-public, relay-consultation, notary.
 Build output: .registry-stack/build/local
-Next: sign each emitted affected lane, then assemble the approved set
+Next: registryctl trust anchor create --help
 ```
 
 For this combined project, that directory contains signing inputs for `relay-public`,
@@ -389,8 +389,10 @@ The authorized path released only the configured claim identifiers.
   client credentials or response normalization.
 - [Review the Registryctl command reference](../../reference/registryctl/) before automating
   machine-readable output.
-- [Run the generated Compose package](../../operate/single-node-compose-behind-proxy/) after the
-  three product lanes have independent approval.
+- [Approve the initial product baseline](../../operate/approve-initial-baseline/) before generating
+  a deployment package.
+- [Run the generated Compose package](../../operate/single-node-compose-behind-proxy/) after
+  baseline approval.
 
 ## Troubleshooting
 

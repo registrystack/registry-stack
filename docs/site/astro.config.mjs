@@ -140,6 +140,10 @@ export default defineConfig({
     // distinguishes those flows from the supported local beginner path.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
     '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/quickstart/'),
+    // Retired spreadsheet and claim tutorials enter the supported HTTP project path.
+    '/tutorials/publish-spreadsheet-secured-registry-api/': internalRedirect('/tutorials/author-registry-project/'),
+    '/tutorials/use-your-spreadsheet/': internalRedirect('/tutorials/author-registry-project/'),
+    '/tutorials/verify-claim-registry-api/': internalRedirect('/tutorials/author-registry-project/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),

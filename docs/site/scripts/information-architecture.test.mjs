@@ -153,6 +153,19 @@ test('legacy first-run entry points redirect to the 1.0 HTTP path', () => {
     configSource,
     /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/quickstart\/'\)/,
   );
+  for (const route of [
+    'publish-spreadsheet-secured-registry-api',
+    'use-your-spreadsheet',
+    'verify-claim-registry-api',
+  ]) {
+    assert.match(
+      configSource,
+      new RegExp(
+        `'\\/tutorials\\/${route}\\/'` +
+          `: internalRedirect\\('\\/tutorials\\/author-registry-project\\/'\\)`,
+      ),
+    );
+  }
 });
 
 test('keeps source-assurance artifacts out of the adopter navigation', () => {

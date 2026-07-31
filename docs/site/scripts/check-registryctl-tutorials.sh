@@ -261,16 +261,25 @@ node "$HELPER" assert-fence-equals \
 	"$HTTP_PROJECT" \
 	my-registry
 run_reports "$HTTP_PROJECT" http
-"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" test >"$REPORT_ROOT/http/test.txt"
+(
+	cd "$HTTP_PROJECT"
+	"$REGISTRYCTL_BIN" test
+) >"$REPORT_ROOT/http/test.txt"
 node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/test.txt" "$HTTP_TUTORIAL" 'Test the authored contract' text 1
-"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" test \
-	--integration person-record \
-	--fixture active-person \
-	--trace >"$REPORT_ROOT/http/trace.txt"
+(
+	cd "$HTTP_PROJECT"
+	"$REGISTRYCTL_BIN" test \
+		--integration person-record \
+		--fixture active-person \
+		--trace
+) >"$REPORT_ROOT/http/trace.txt"
 node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/trace.txt" "$HTTP_TUTORIAL" 'Test the authored contract' text 2
-"$REGISTRYCTL_BIN" -C "$HTTP_PROJECT" build >"$REPORT_ROOT/http/build.txt"
+(
+	cd "$HTTP_PROJECT"
+	"$REGISTRYCTL_BIN" build
+) >"$REPORT_ROOT/http/build.txt"
 node "$HELPER" assert-fence-equals \
 	"$REPORT_ROOT/http/build.txt" "$HTTP_TUTORIAL" 'Review and build the project' text 1
 printf 'HTTP reader journey: PASS\n'
@@ -304,7 +313,7 @@ node "$HELPER" extract-fence \
 			--output-dir "operator-handoff/$lane-bundle" \
 			>"$APPROVAL_REPORT/$lane-sign.txt"
 		"$REGISTRYCTL_BIN" trust bundle verify \
-			--bundle-dir "operator-handoff/$lane-bundle/bundle" \
+			--bundle-dir "operator-handoff/$lane-bundle" \
 			--anchor "operator-handoff/$lane-bundle/anchor.json" \
 			>"$APPROVAL_REPORT/$lane-verify.txt"
 	done

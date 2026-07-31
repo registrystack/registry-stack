@@ -152,91 +152,45 @@ Abort before shutdown if package, operator-file, bundle, anchor, Compose, or sta
 verification fails. Resolve a coherent current-state failure before attempting the
 update.
 
-## Stop the current package
+## Preview, accept, verify, and start the candidate
 
-Remove externally reachable dependent traffic first. Keep the source and write freeze
-required by the pre-update recovery groups.
+Keep all current services running while you stage candidate operator files and preview every
+affected product lane.
+The preview actions verify the later candidate without changing durable anti-rollback state.
+Do not stop any service unless every preview succeeds.
 
-From the current package root:
-
-```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  down
-```
-
-Do not start the candidate until the current services are stopped and the complete
-pre-update recovery record is closed.
-
-## Verify and start the candidate
-
-From the candidate package root, run the four owner-isolated stagers and all three read-only
-state checks before ordinary startup:
+In the literal generated order below, keep current services running through all three preview
+commands.
+After those previews succeed, remove externally reachable traffic before the `stop` command and
+keep the source and write freeze required by the pre-update recovery groups.
+Run the sequence from the candidate package root:
 
 ```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-public-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-consultation-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-notary-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-postgresql-stage-secrets
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-public \
-  'product-action' 'relay-public' 'verify_state'
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-relay-consultation \
-  'product-action' 'relay-consultation' 'verify_state'
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  run --rm --no-deps registry-notary \
-  'product-action' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml stop
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public 'product-action' 'relay-public' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation 'product-action' 'relay-consultation' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary 'product-action' 'verify_state'
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
 ```
 
-If a private-lane contract changed, start PostgreSQL and consultation Relay before
-Notary or any externally reachable dependant:
-
-```sh
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  up --detach --wait --wait-timeout 120 \
-  registry-postgres registry-relay-consultation
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  ps registry-postgres registry-relay-consultation
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  up --detach --wait --wait-timeout 120
-docker compose \
-  --env-file generated/compose.empty.env \
-  -f generated/compose.yaml \
-  ps
-```
-
-When the private lane did not change, use the ordinary complete `up` and `ps` commands
-from the generated runbook.
-
-The first successful product acceptance that advances durable anti-rollback state is
-the manual abort boundary. Keep traffic blocked while the staged services and product
-canaries are evaluated. Do not configure an automated rollback across this boundary.
+Each `accept_state` action uses the locked audit-before-mutation path.
+The first successful acceptance that advances durable anti-rollback state is the manual abort
+boundary.
+Before that boundary, restart the intact current package if the services were stopped.
+After that boundary, only complete the forward update, restore a coherent snapshot at the same or
+newer accepted sequence, or replace the affected instance identity.
+Keep traffic blocked while the updated services and product canaries are evaluated.
+Do not configure an automated rollback across this boundary.
 
 ## Verify the updated deployment
 
@@ -260,10 +214,11 @@ freshness, canary coverage, or safe rollback after product acceptance.
 
 ## Abort or recover
 
-Before the manual abort boundary, stop the candidate with its generated Compose `down`
-command and restart the still-intact current package with the current package's
-`generated/RUNBOOK.md`. Verify the current closure and run all three current
-`verify_state` actions before its ordinary `up`.
+Before the manual abort boundary, leave the current package running when a preview fails.
+If the current services were stopped after successful previews but no acceptance completed,
+restart the still-intact current package with its `generated/RUNBOOK.md`.
+Verify the current closure and run all three current `verify_state` actions before its ordinary
+`up`.
 
 After the boundary, never start the older closure or restore a pre-update accepted
 sequence. Choose one of these manual recovery paths:

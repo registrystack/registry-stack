@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-07-31"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -241,16 +241,21 @@ For example, rotate the consultation Relay anchor and replace only that lane:
 
 ```sh
 CURRENT_APPROVED_SET=operator-inputs/current-approved-set.v1.json
-CURRENT_ANCHOR=operator-inputs/relay-consultation-anchor.v1.json
+CURRENT_ANCHOR=operator-handoff/relay-consultation-bundle/anchor.json
 ROTATED_TRUST=operator-handoff/relay-consultation-anchor.v2
 NEXT_SIGNING_INPUT=.registry-stack/build/local/signing-inputs/relay-consultation
 NEXT_BUNDLE=operator-handoff/relay-consultation-bundle.v2
 
+registryctl build \
+  --environment local \
+  --against "$CURRENT_APPROVED_SET" \
+  --rotate-anchor relay-consultation
 registryctl trust anchor rotate \
   --current-anchor "$CURRENT_ANCHOR" \
+  --next-public-key evaluation-keys/relay-consultation.public.jwk \
   --next-public-key operator-inputs/relay-consultation-next.public.jwk \
   --next-threshold 1 \
-  --key file:operator-inputs/relay-consultation-current.private.jwk \
+  --key file:evaluation-keys/relay-consultation.private.jwk \
   --output-dir "$ROTATED_TRUST"
 registryctl trust bundle sign \
   --lane relay-consultation \
@@ -272,11 +277,15 @@ registryctl deploy generate \
 registryctl deploy verify --package operator-handoff/registry-stack.v2
 ```
 
-`trust anchor rotate` verifies that the transition is authorized by the pinned preceding anchor.
+The explicit build selector emits the unchanged consultation input and binds the reviewed update
+to that lane's anchor rotation.
+`trust anchor rotate` verifies that the transition is authorized by the pinned preceding anchor;
+the repeated public-key options keep the current signer during the overlap.
 `trust bundle sign --against` advances from the pinned preceding approved set, and assembly keeps
 the unchanged public Relay and Notary lanes from that set.
-The final two commands verify the assembled result through a fresh deployment package.
-For thresholds, overlap windows, and product-state checks, follow
+Deployment verification does not accept the rotated anchor into an existing product state.
+For thresholds, overlap windows, and the required preview, stop, audited acceptance, exact
+verification, and startup order, follow
 [Rotate credentials and trust](../advanced/rotate-credentials-and-trust/).
 
 ## Verify the handoff
