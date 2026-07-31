@@ -45,26 +45,94 @@ jobs:
           tag="v${version}"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d "${created_at} + 24 hours" +%Y-%m-%dT%H:%M:%SZ)"
-          mkdir -p canary/bundle-root/security
+          evidence_root=canary/security-evidence
+          mkdir -p \
+            canary/bundle-root/security \
+            "${evidence_root}"/images \
+            "${evidence_root}"/image-sbom \
+            "${evidence_root}"/syft \
+            "${evidence_root}"/grype
           printf 'canary payload\n' > canary/bundle-root/registryctl-${tag}-linux-amd64
           printf 'canary docs\n' > canary/bundle-root/registry-docs-${tag}.tar.gz
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          printf '{"matches":[],"descriptor":{"db":{"built":"2026-07-29T00:00:00Z","checksum":"sha256:%064d"}}}\n' 0 \
-            > canary/bundle-root/security/registry-relay.grype.json
-          cp canary/bundle-root/security/registry-relay.grype.json \
+          notary_ref="ghcr.io/registrystack/registry-notary-candidate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          relay_ref="ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
+          printf '%s\n' "${postgresql_ref}" \
+            > "${evidence_root}/images/postgresql.digest"
+
+          write_image_reports() {
+            local name="$1"
+            local image_ref="$2"
+            jq -n '{spdxVersion:"SPDX-2.3",packages:[]}' \
+              > "${evidence_root}/image-sbom/${name}.spdx.json"
+            jq -n \
+              --arg image_ref "${image_ref}" \
+              '{artifacts:[],source:{type:"image",target:{userInput:$image_ref}}}' \
+              > "${evidence_root}/syft/${name}.syft.json"
+            jq -n \
+              --arg image_ref "${image_ref}" \
+              '{
+                matches: [],
+                source: {type:"image",target:{userInput:$image_ref}},
+                descriptor: {
+                  db: {
+                    built:"2026-07-29T00:00:00Z",
+                    checksum:("sha256:" + ("0" * 64))
+                  }
+                }
+              }' > "${evidence_root}/grype/${name}.grype.json"
+          }
+          write_image_reports registry-notary "${notary_ref}"
+          write_image_reports registry-relay "${relay_ref}"
+          write_image_reports postgresql "${postgresql_ref}"
+          postgresql_digest="${postgresql_ref##*@}"
+          jq -n \
+            --arg image_ref "${postgresql_ref}" \
+            --arg locator "pkg:oci/postgresql@${postgresql_digest}" \
+            '{
+              spdxVersion:"SPDX-2.3",
+              documentDescribes:["SPDXRef-RegistryStack-postgresql-digest-subject"],
+              packages:[{
+                SPDXID:"SPDXRef-RegistryStack-postgresql-digest-subject",
+                name:$image_ref,
+                externalRefs:[{referenceLocator:$locator}]
+              }]
+            }' > "${evidence_root}/image-sbom/postgresql.spdx.json"
+          jq -n '{status:"valid"}' \
+            > "${evidence_root}/grype/grype-db-status.json"
+          jq -n '{
+            schema_version:"registry-stack.advisory-verdict.v2",
+            verdict:"passed",
+            subjects:[
+              "registry-notary-image",
+              "registry-relay-image",
+              "postgresql-runtime"
+            ]
+          }' > "${evidence_root}/advisory-verdict.json"
+          cp "${evidence_root}/grype/registry-relay.grype.json" \
+            canary/bundle-root/security/registry-relay.grype.json
+          cp "${evidence_root}/grype/registry-notary.grype.json" \
             canary/bundle-root/security/registry-notary.grype.json
-          printf '{"schema_version":"registry-stack.advisory-verdict.v2","verdict":"passed"}\n' \
-            > canary/bundle-root/security/advisory-verdict.json
+          cp "${evidence_root}/advisory-verdict.json" \
+            canary/bundle-root/security/advisory-verdict.json
+          evidence_name="registry-stack-${tag}-security-evidence.tar.gz"
+          tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
+            --numeric-owner -czf "canary/bundle-root/${evidence_name}" \
+            -C "${evidence_root}" \
+              images image-sbom syft grype advisory-verdict.json
           payload_sha="$(sha256sum canary/bundle-root/registryctl-${tag}-linux-amd64 | awk '{print $1}')"
           docs_sha="$(sha256sum canary/bundle-root/registry-docs-${tag}.tar.gz | awk '{print $1}')"
           sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
+          evidence_sha="$(sha256sum "canary/bundle-root/${evidence_name}" | awk '{print $1}')"
           relay_scan_sha="$(sha256sum canary/bundle-root/security/registry-relay.grype.json | awk '{print $1}')"
           notary_scan_sha="$(sha256sum canary/bundle-root/security/registry-notary.grype.json | awk '{print $1}')"
           advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
           payload_size="$(stat -c %s canary/bundle-root/registryctl-${tag}-linux-amd64)"
           docs_size="$(stat -c %s canary/bundle-root/registry-docs-${tag}.tar.gz)"
           sbom_size="$(stat -c %s canary/bundle-root/registry-stack-${tag}.sbom.spdx.json)"
+          evidence_size="$(stat -c %s "canary/bundle-root/${evidence_name}")"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf canary/registry-stack-${tag}-candidate.tar.gz \
             -C canary/bundle-root .
@@ -87,6 +155,9 @@ jobs:
             --argjson docs_size "${docs_size}" \
             --arg sbom_sha "${sbom_sha}" \
             --argjson sbom_size "${sbom_size}" \
+            --arg evidence_name "${evidence_name}" \
+            --arg evidence_sha "${evidence_sha}" \
+            --argjson evidence_size "${evidence_size}" \
             --arg relay_scan_sha "${relay_scan_sha}" \
             --arg notary_scan_sha "${notary_scan_sha}" \
             --arg advisory_sha "${advisory_sha}" \
@@ -129,6 +200,12 @@ jobs:
                   kind: "sbom",
                   size: $sbom_size,
                   sha256: $sbom_sha
+                },
+                {
+                  name: $evidence_name,
+                  kind: "security-evidence",
+                  size: $evidence_size,
+                  sha256: $evidence_sha
                 }
               ],
               images: [
