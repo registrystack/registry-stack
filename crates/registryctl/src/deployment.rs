@@ -2453,7 +2453,14 @@ fn verify_deployment_package_core(
     }
     stale |= manifest.registry_release_lock_sha256 != installed_inputs.registry_release_lock_sha256;
     if let Some(expected) = &request.expected_inputs.source_approved_baseline_set_sha256 {
-        stale |= expected != &manifest.source_approved_baseline_set_sha256;
+        // An explicit operator expectation is a hard verification constraint. Ordinary installed
+        // release-lock drift only makes an otherwise intact package stale.
+        if expected != &manifest.source_approved_baseline_set_sha256 {
+            violations.push(
+                "package source approved baseline set does not match the explicitly expected approved set"
+                    .to_string(),
+            );
+        }
     }
     if let Some(expected) = &request.expected_inputs.registry_release_lock_sha256 {
         stale |= expected != &manifest.registry_release_lock_sha256;

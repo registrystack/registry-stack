@@ -720,6 +720,39 @@ fn managed_package_is_current_for_its_generated_models() {
 }
 
 #[test]
+fn explicit_expected_approved_set_mismatch_is_invalid() {
+    let fixture = package_fixture();
+    let effective = EffectiveComposeModelsV1 {
+        standalone_ordinary: fixture.models.ordinary.clone(),
+        initialization: initialization_effective(&fixture),
+    };
+    let report = verify_deployment_package_with_models(
+        &DeploymentPackageVerificationRequestV1 {
+            package_dir: &fixture.package,
+            verified_inputs: &fixture.verified_inputs,
+            check_operator_files: false,
+            expected_inputs: ExpectedGenerationInputsV1 {
+                source_approved_baseline_set_sha256: Some(format!("sha256:{}", "f".repeat(64))),
+                ..ExpectedGenerationInputsV1::default()
+            },
+        },
+        &effective,
+    )
+    .unwrap();
+
+    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Invalid);
+    assert_eq!(report.package_freshness, PackageFreshnessV1::NotApplicable);
+    assert!(!report.in_place_regeneration_safe);
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation
+                .contains("does not match the explicitly expected approved set"))
+    );
+}
+
+#[test]
 fn changed_binding_is_managed_stale_and_safely_regenerable() {
     let fixture = package_fixture();
     let mut binding: DeploymentBindingV1 =
