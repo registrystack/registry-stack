@@ -1775,7 +1775,7 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
 }
 
 #[test]
-fn healthy_unchanged_start_keeps_owned_runtime_and_discards_fresh_candidate() {
+fn healthy_unchanged_start_rebinds_candidate_attach_to_retained_runtime() {
     let temp = tempfile::tempdir().unwrap();
     let plan = DevRuntimePlan::derive(plan_input(
         temp.path(),
@@ -1821,8 +1821,11 @@ fn healthy_unchanged_start_keeps_owned_runtime_and_discards_fresh_candidate() {
     assert!(plan.paths.root.exists());
     assert!(old_artifacts.exists());
     assert!(!candidate_artifacts.exists());
+    controller.attach(&candidate).unwrap();
+    assert!(!plan.paths.root.exists());
+    assert!(!old_artifacts.exists());
     let backend = controller.into_backend();
-    assert_eq!(backend.down_calls, 0);
+    assert_eq!(backend.down_calls, 1);
     assert_eq!(
         backend
             .calls
@@ -1831,6 +1834,7 @@ fn healthy_unchanged_start_keeps_owned_runtime_and_discards_fresh_candidate() {
             .count(),
         1
     );
+    assert!(backend.calls.iter().any(|call| call == "attach"));
 }
 
 #[test]

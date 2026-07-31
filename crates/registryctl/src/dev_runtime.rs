@@ -3930,11 +3930,13 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
     /// [`DevStartupReport`]. Normal Ctrl-C performs bounded Compose shutdown
     /// and removes only the validated bound disposable runtime.
     pub fn attach(&mut self, plan: &DevRuntimePlan) -> DevRuntimeResult<()> {
-        let state = load_bound_state(plan)?;
-        let attached = self.backend.attach(plan, &state);
+        let bound_plan =
+            load_bound_dev_runtime_plan(&bound_project_root(plan)?, &plan.binding.environment)?;
+        let state = load_bound_state(&bound_plan)?;
+        let attached = self.backend.attach(&bound_plan, &state);
         self.backend
-            .down(&state, plan.lifecycle.shutdown_timeout_seconds)?;
-        let remove = remove_bound_runtime_by_identity(plan, &state);
+            .down(&state, bound_plan.lifecycle.shutdown_timeout_seconds)?;
+        let remove = remove_bound_runtime_by_identity(&bound_plan, &state);
         attached?;
         remove
     }
