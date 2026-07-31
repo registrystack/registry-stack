@@ -396,7 +396,9 @@ class GateInventoryTest(unittest.TestCase):
             "contract/final-upload-release.json",
             "upload-assets: false",
             "name: Upload provenance to the exact bound draft",
-            "name: Recheck complete signed draft and exact public images",
+            "if: steps.release_state.outputs.release_state == 'draft'",
+            "name: Classify exact bound draft or published release",
+            "name: Recheck complete signed release and exact public images",
             "name: Publish immutable release",
         ):
             with self.subTest(marker=marker):
@@ -411,7 +413,8 @@ class GateInventoryTest(unittest.TestCase):
             "Clean retryable final additions and reverify exact staged assets",
             "Sign and upload the complete pre-provenance asset closure",
             "Upload provenance to the exact bound draft",
-            "Recheck complete signed draft and exact public images",
+            "Classify exact bound draft or published release",
+            "Recheck complete signed release and exact public images",
             "Publish immutable release",
         ):
             with self.subTest(early_publication=step_name):

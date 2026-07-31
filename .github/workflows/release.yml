@@ -989,6 +989,45 @@ jobs:
           name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
           path: provenance
 
+      - name: Classify exact bound draft or published release
+        id: release_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          # Only this failed-job retry may observe the prior PATCH. A new
+          # workflow run still rejects every pre-existing public release.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > classified-release.json
+          classification="$(
+            jq -er \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
+              --arg marker \
+                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+              'select(
+                 .prerelease == false and
+                 .tag_name == $tag and
+                 .name == $title and
+                 ((.body // "") | contains($marker)) and
+                 (.id | type == "number")
+               ) |
+               if .draft == true and .published_at == null then
+                 ["draft", (.id | tostring)] | @tsv
+               elif .draft == false and
+                    (.published_at | type == "string" and length > 0) then
+                 ["published", (.id | tostring)] | @tsv
+               else empty end' \
+              classified-release.json
+          )"
+          IFS=$'\t' read -r release_state release_id <<<"${classification}"
+          {
+            echo "release_id=${release_id}"
+            echo "release_state=${release_state}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Install pinned release verifiers
         shell: bash
         run: |
@@ -1015,6 +1054,7 @@ jobs:
           cosign-release: v3.0.4
 
       - name: Upload provenance to the exact bound draft
+        if: steps.release_state.outputs.release_state == 'draft'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -1062,9 +1102,11 @@ jobs:
           gh release upload "${tag}" "provenance/${provenance}" \
             --repo "${GITHUB_REPOSITORY}"
 
-      - name: Recheck complete signed draft and exact public images
+      - name: Recheck complete signed release and exact public images
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_ID: ${{ steps.release_state.outputs.release_id }}
+          EXPECTED_RELEASE_STATE: ${{ steps.release_state.outputs.release_state }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1073,11 +1115,19 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > release-state.json
           jq -e \
+            --argjson release_id "${EXPECTED_RELEASE_ID}" \
+            --arg release_state "${EXPECTED_RELEASE_STATE}" \
             --arg tag "${tag}" \
             --arg title "RegistryStack ${tag}" \
             --arg marker \
               "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
-            '.draft == true and
+            '.id == $release_id and
+             (($release_state == "draft" and
+               .draft == true and
+               .published_at == null) or
+              ($release_state == "published" and
+               .draft == false and
+               (.published_at | type == "string" and length > 0))) and
              .prerelease == false and
              .tag_name == $tag and
              .name == $title and
@@ -1107,6 +1157,9 @@ jobs:
             cd draft
             sha256sum --check --strict SHA256SUMS
           )
+          test "$(
+            sha256sum "draft/registry-docs-${tag}.tar.gz" | awk '{print $1}'
+          )" = "${{ needs.verify.outputs.docs_sha256 }}"
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}"
           cosign verify-blob draft/SHA256SUMS \
             --bundle \
@@ -1154,31 +1207,40 @@ jobs:
       - name: Publish immutable release
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_ID: ${{ steps.release_state.outputs.release_id }}
+          EXPECTED_RELEASE_STATE: ${{ steps.release_state.outputs.release_state }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > publish-state.json
-          release_id="$(
-            jq -er \
-              --arg tag "${tag}" \
-              --arg title "RegistryStack ${tag}" \
-              --arg marker \
-                "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
-              'select(
-                .draft == true and
-                .prerelease == false and
-                .tag_name == $tag and
-                .name == $title and
-                ((.body // "") | contains($marker))
-              ) | .id' \
-              publish-state.json
-          )"
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-            -F draft=false \
-            -F prerelease=false >/dev/null
+          release_id="${EXPECTED_RELEASE_ID}"
+          jq -e \
+            --argjson release_id "${release_id}" \
+            --arg release_state "${EXPECTED_RELEASE_STATE}" \
+            --arg tag "${tag}" \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '.id == $release_id and
+             (($release_state == "draft" and
+               .draft == true and
+               .published_at == null) or
+              ($release_state == "published" and
+               .draft == false and
+               (.published_at | type == "string" and length > 0))) and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
+            publish-state.json >/dev/null
+          if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft=false \
+              -F prerelease=false >/dev/null
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > published-release.json
           jq -e \
@@ -1190,6 +1252,7 @@ jobs:
             '.id == $release_id and
              .draft == false and
              .prerelease == false and
+             (.published_at | type == "string" and length > 0) and
              .tag_name == $tag and
              .name == $title and
              ((.body // "") | contains($marker))' \

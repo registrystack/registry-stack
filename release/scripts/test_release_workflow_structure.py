@@ -320,11 +320,16 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             )
         )
         provenance_upload = next(
-            step["run"]
+            step
             for step in publish_steps
             if step.get("name")
             == "Upload provenance to the exact bound draft"
         )
+        self.assertEqual(
+            provenance_upload["if"],
+            "steps.release_state.outputs.release_state == 'draft'",
+        )
+        provenance_upload = provenance_upload["run"]
         guard_invocations = [
             index
             for index, line in enumerate(provenance_upload.splitlines())
@@ -351,9 +356,13 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             step["run"]
             for step in publish_steps
             if step.get("name")
-            == "Recheck complete signed draft and exact public images"
+            == "Recheck complete signed release and exact public images"
         )
+        self.assertIn('$release_state == "draft"', signed_recheck)
+        self.assertIn('$release_state == "published"', signed_recheck)
         self.assertIn(".draft == true", signed_recheck)
+        self.assertIn(".draft == false", signed_recheck)
+        self.assertIn("needs.verify.outputs.docs_sha256", signed_recheck)
         self.assertNotIn('(.draft | type) == "boolean"', signed_recheck)
 
         publication = next(
@@ -366,8 +375,87 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         patch = publication.index("gh api --method PATCH", draft)
         self.assertLess(state, draft)
         self.assertLess(draft, patch)
-        self.assertNotIn("is_draft", publication)
+        self.assertIn(
+            'if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then',
+            publication,
+        )
+        self.assertIn('$release_state == "published"', publication)
         self.assertNotIn('(.draft | type) == "boolean"', publication)
+
+    def test_published_retry_is_exact_and_read_only(self) -> None:
+        _, document = workflow("release.yml")
+        publish_steps = document["jobs"]["publish"]["steps"]
+        classification_index, classification = next(
+            (index, step)
+            for index, step in enumerate(publish_steps)
+            if step.get("name")
+            == "Classify exact bound draft or published release"
+        )
+        provenance_index = next(
+            index
+            for index, step in enumerate(publish_steps)
+            if step.get("name")
+            == "Upload provenance to the exact bound draft"
+        )
+        self.assertLess(classification_index, provenance_index)
+        self.assertEqual(classification["id"], "release_state")
+        classifier = classification["run"]
+        self.assertIn('["draft", (.id | tostring)]', classifier)
+        self.assertIn('["published", (.id | tostring)]', classifier)
+        self.assertIn(".published_at == null", classifier)
+        self.assertIn('.published_at | type == "string"', classifier)
+        self.assertIn(".name == $title", classifier)
+        self.assertIn("contains($marker)", classifier)
+
+        publication = next(
+            step["run"]
+            for step in publish_steps
+            if step.get("name")
+            == "Publish immutable release"
+        )
+        state_validation, remainder = publication.split(
+            'if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then',
+            1,
+        )
+        draft_branch, final_validation = remainder.split(
+            "\nfi\n",
+            1,
+        )
+        self.assertIn('$release_state == "draft"', state_validation)
+        self.assertIn('$release_state == "published"', state_validation)
+        self.assertIn(".draft == false", state_validation)
+        self.assertIn("contains($marker)", state_validation)
+        self.assertIn("gh api --method PATCH", draft_branch)
+        self.assertNotIn("gh release upload", draft_branch)
+        self.assertNotIn("gh api --method DELETE", draft_branch)
+        self.assertNotIn('crane copy "${candidate_ref}" "${final_ref}"', draft_branch)
+        self.assertIn("published-release.json", final_validation)
+        for mutation in (
+            "gh release upload",
+            "gh api --method DELETE",
+            "gh api --method PATCH",
+            'crane copy "${candidate_ref}" "${final_ref}"',
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertNotIn(mutation, state_validation)
+                self.assertNotIn(mutation, final_validation)
+
+        for step in publish_steps:
+            if step.get("name") == "Publish immutable release":
+                continue
+            if step.get("if") == (
+                "steps.release_state.outputs.release_state == 'draft'"
+            ):
+                continue
+            run = step.get("run", "")
+            for mutation in (
+                "gh release upload",
+                "gh api --method DELETE",
+                "gh api --method PATCH",
+                'crane copy "${candidate_ref}" "${final_ref}"',
+            ):
+                with self.subTest(step=step.get("name"), mutation=mutation):
+                    self.assertNotIn(mutation, run)
 
     def test_canary_selection_uses_the_complete_shared_schema(self) -> None:
         candidate, _ = workflow("release-candidate.yml")

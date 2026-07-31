@@ -1002,8 +1002,9 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Release publication and authenticated docs dispatch",
         ".github/workflows/release.yml",
         (
-            "name: Recheck complete signed draft and exact public images",
-            ".draft == true",
+            "name: Classify exact bound draft or published release",
+            "name: Recheck complete signed release and exact public images",
+            "if: steps.release_state.outputs.release_state == 'draft'",
             "name: Publish immutable release",
             "-F draft=false",
             "-F prerelease=false",
@@ -1541,9 +1542,13 @@ def release_draft_mutation_barrier_violations(
         publish,
         "name: Upload provenance to the exact bound draft",
     )
+    classification = step_with(
+        publish,
+        "name: Classify exact bound draft or published release",
+    )
     signed_recheck = step_with(
         publish,
-        "name: Recheck complete signed draft and exact public images",
+        "name: Recheck complete signed release and exact public images",
     )
     publication = step_with(publish, "name: Publish immutable release")
     if any(
@@ -1552,6 +1557,7 @@ def release_draft_mutation_barrier_violations(
             cleanup,
             final_upload,
             provenance_upload,
+            classification,
             signed_recheck,
             publication,
         )
@@ -1560,6 +1566,7 @@ def release_draft_mutation_barrier_violations(
     assert cleanup is not None
     assert final_upload is not None
     assert provenance_upload is not None
+    assert classification is not None
     assert signed_recheck is not None
     assert publication is not None
 
@@ -1582,9 +1589,18 @@ def release_draft_mutation_barrier_violations(
         offset += len(line)
     publication_state = publication.find("publish-state.json")
     publication_draft = publication.find(".draft == true", publication_state)
+    publication_draft_branch = publication.find(
+        'if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then',
+        publication_draft,
+    )
     publication_patch = publication.find(
         "gh api --method PATCH",
-        publication_draft,
+        publication_draft_branch,
+    )
+    mutations = (
+        "gh release upload",
+        "gh api --method DELETE",
+        'crane copy "${candidate_ref}" "${final_ref}"',
     )
     if (
         "contents: read" not in provenance
@@ -1616,11 +1632,31 @@ def release_draft_mutation_barrier_violations(
             and provenance_guard_offsets[1] >= provenance_write
         )
         or ".draft == true" not in provenance_upload
+        or (
+            "if: steps.release_state.outputs.release_state == 'draft'"
+            not in provenance_upload
+        )
+        or "id: release_state" not in classification
+        or '["draft", (.id | tostring)]' not in classification
+        or '["published", (.id | tostring)]' not in classification
+        or ".draft == true" not in classification
+        or ".draft == false" not in classification
+        or ".published_at == null" not in classification
+        or '(.published_at | type == "string"' not in classification
+        or any(mutation in classification for mutation in mutations)
         or ".draft == true" not in signed_recheck
+        or ".draft == false" not in signed_recheck
+        or '$release_state == "draft"' not in signed_recheck
+        or '$release_state == "published"' not in signed_recheck
         or '(.draft | type) == "boolean"' in signed_recheck
+        or any(mutation in signed_recheck for mutation in mutations)
         or publication_state < 0
         or publication_draft < publication_state
-        or publication_patch < publication_draft
+        or publication_draft_branch < publication_draft
+        or publication_patch < publication_draft_branch
+        or publication.count("gh api --method PATCH") != 1
+        or '$release_state == "published"' not in publication
+        or any(mutation in publication for mutation in mutations)
         or "is_draft" in publication
         or '(.draft | type) == "boolean"' in publication
     ):
