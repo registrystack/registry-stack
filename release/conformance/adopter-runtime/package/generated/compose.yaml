@@ -69,12 +69,11 @@ services:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     platform: linux/amd64
     entrypoint:
-      - /bin/sh
+      - /bin/bash
       - -ceu
-      - >-
-        test -s /var/lib/postgresql/data/PG_VERSION ||
-        { echo 'data directory is empty; run explicit initialization' >&2; exit 1; };
-        exec docker-entrypoint.sh "$@"
+      - |-
+        test -s "$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION" || { echo 'PostgreSQL data directory is empty; run the explicit initialization workflow first' >&2; exit 1; }
+        exec "$@"
       - --
     command: [postgres]
     user: "999:999"

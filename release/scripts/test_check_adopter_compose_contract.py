@@ -160,7 +160,7 @@ def ordinary_model() -> dict:
         "depends_on": dependency_model(
             CHECKER.ORDINARY_DEPENDENCIES["registry-postgres"]
         ),
-        "entrypoint": ["/bin/sh", "data directory is empty"],
+        "entrypoint": list(CHECKER.POSTGRESQL_ORDINARY_ENTRYPOINT),
         "env_file": [
             "/fixture/package/generated/postgresql-server.env",
         ],
@@ -437,6 +437,17 @@ class AdopterComposeContractTests(unittest.TestCase):
                     model["services"][service_name].pop(field)
                     with self.assertRaises(CHECKER.ContractError):
                         assert_ordinary(model)
+
+    def test_ordinary_requires_exact_postgresql_entrypoint(self) -> None:
+        model = ordinary_model()
+        model["services"]["registry-postgres"]["entrypoint"][-2] = (
+            'exec docker-entrypoint.sh "$@"'
+        )
+        with self.assertRaisesRegex(
+            CHECKER.ContractError,
+            "wrong fail-closed entrypoint",
+        ):
+            assert_ordinary(model)
 
     def test_ordinary_requires_every_command_restart_and_dependency(self) -> None:
         for service_name in CHECKER.WORKLOAD_SERVICES:

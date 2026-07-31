@@ -195,6 +195,7 @@ HTTP_MINIMIZED_CLAIMS = ["person-active", "person-record-exists"]
 OPENCRVS_MINIMIZED_CLAIM_IDS = ["birth-event-found", "birth-event-registered"]
 GOVERNED_EVIDENCE_SUMMARY = {
     "http_status": 200,
+    "relay_consultation_count": 1,
     "claims": [
         {
             "claim_id": "todo-record-exists",
@@ -1047,6 +1048,13 @@ def governed_evidence_request(
         raise ReleaseFormError("governed evidence response is not exactly minimized")
     result_claim = results[0]
     expected_claim = GOVERNED_EVIDENCE_SUMMARY["claims"][0]
+    provenance = (
+        result_claim.get("provenance") if isinstance(result_claim, dict) else None
+    )
+    used = provenance.get("used") if isinstance(provenance, dict) else None
+    relay_consultation_count = (
+        used.get("relay_consultation_count") if isinstance(used, dict) else None
+    )
     if (
         not isinstance(result_claim, dict)
         or result_claim.get("claim_id") != expected_claim["claim_id"]
@@ -1055,6 +1063,14 @@ def governed_evidence_request(
         or result_claim.get("disclosure") != expected_claim["disclosure"]
     ):
         raise ReleaseFormError("governed evidence response has an unexpected claim")
+    if (
+        isinstance(relay_consultation_count, bool)
+        or not isinstance(relay_consultation_count, int)
+        or relay_consultation_count != 1
+    ):
+        raise ReleaseFormError(
+            "governed evidence response did not prove exactly one Relay consultation"
+        )
 
     write_json_log(logs, "governed_evidence", GOVERNED_EVIDENCE_SUMMARY)
     return {

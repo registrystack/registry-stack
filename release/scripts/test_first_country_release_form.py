@@ -1849,10 +1849,11 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertNotIn(token, " ".join(command))
         self.assertIn(token, run.call_args.kwargs["input"])
         self.assertEqual(record["name"], "governed_evidence")
-        self.assertEqual(
-            json.loads((logs / "governed_evidence.log").read_text(encoding="utf-8")),
-            self.module.GOVERNED_EVIDENCE_SUMMARY,
+        summary = json.loads(
+            (logs / "governed_evidence.log").read_text(encoding="utf-8")
         )
+        self.assertEqual(summary, self.module.GOVERNED_EVIDENCE_SUMMARY)
+        self.assertEqual(summary["relay_consultation_count"], 1)
 
     def test_governed_evidence_rejects_an_unexpected_claim(self) -> None:
         token_file = self.root / "caller-token"
@@ -1884,6 +1885,50 @@ class FirstCountryReleaseFormTest(TestCase):
             ),
             self.assertRaisesRegex(
                 self.module.ReleaseFormError, "unexpected claim"
+            ),
+        ):
+            self.module.governed_evidence_request(
+                notary_port=43422,
+                caller_token_file=token_file,
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+
+    def test_governed_evidence_requires_one_relay_consultation(self) -> None:
+        token_file = self.root / "caller-token"
+        token_file.write_text("governed-caller-secret", encoding="ascii")
+        logs = self.root / "governed-logs"
+        logs.mkdir()
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "claim_id": "todo-record-exists",
+                            "value": True,
+                            "satisfied": True,
+                            "disclosure": "predicate",
+                            "provenance": {
+                                "used": {"relay_consultation_count": 0}
+                            },
+                        }
+                    ]
+                }
+            )
+            + "\nREGISTRYCTL_HTTP_STATUS:200",
+            "",
+        )
+
+        with (
+            mock.patch.object(
+                self.module.subprocess, "run", return_value=completed
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "exactly one Relay consultation",
             ),
         ):
             self.module.governed_evidence_request(

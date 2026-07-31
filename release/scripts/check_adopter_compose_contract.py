@@ -106,6 +106,17 @@ ORDINARY_COMMANDS = {
     ],
     "registry-notary": ["product-action", "serve"],
 }
+POSTGRESQL_ORDINARY_ENTRYPOINT = [
+    "/bin/bash",
+    "-ceu",
+    (
+        'test -s "$${PGDATA:-/var/lib/postgresql/data}/PG_VERSION" '
+        "|| { echo 'PostgreSQL data directory is empty; run the explicit "
+        "initialization workflow first' >&2; exit 1; }\n"
+        'exec "$@"'
+    ),
+    "--",
+]
 POSTGRESQL_INITIALIZATION_ENTRYPOINT = [
     "/bin/bash",
     "-ceu",
@@ -1332,11 +1343,11 @@ def assert_ordinary_model(
         package_root / "generated/postgresql-server.env"
     ]:
         raise ContractError("PostgreSQL does not use its package server environment")
-    postgres_entrypoint = services["registry-postgres"].get("entrypoint")
-    if not isinstance(
-        postgres_entrypoint, list
-    ) or "data directory is empty" not in " ".join(postgres_entrypoint):
-        raise ContractError("ordinary PostgreSQL no longer fails closed before init")
+    if (
+        services["registry-postgres"].get("entrypoint")
+        != POSTGRESQL_ORDINARY_ENTRYPOINT
+    ):
+        raise ContractError("ordinary PostgreSQL has the wrong fail-closed entrypoint")
     postgres_mounts = _mounts(services["registry-postgres"])
     if set(postgres_mounts) != {"/var/lib/postgresql/data", "/run/secrets"}:
         raise ContractError("PostgreSQL has the wrong protected mount inventory")
