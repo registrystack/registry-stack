@@ -106,8 +106,11 @@ Treat these states differently:
   Inspect ingest health and the stable error reference before changing traffic.
 - Execution-time SnapshotExact freshness is checked during each request. A stale publication returns
   `consultation.unavailable` for that execution while global `/ready` can remain `200`.
-  A digest-inconsistent or incomplete publication slot also stays unavailable. Do not enable a
-  live connector as an automatic fallback.
+  A digest-inconsistent publication slot also stays unavailable. Do not enable request-time source
+  access as a fallback.
+- `ingest.snapshot_exact_active_file_missing` means the PostgreSQL active publication outlived its
+  local immutable cache file. Registry Relay keeps that publication unavailable while it reacquires
+  the governed source through the normal audited materialization path.
 
 Use the [error and status code reference](../../../reference/errors/) and
 [operator diagnostic reference](../../../reference/diagnostics/operator/) for stable
@@ -167,9 +170,30 @@ It does not provide an atomic rollback boundary across several materializations.
 Current docs do not define an admin operation that selects an arbitrary older cache generation.
 Do not edit cache files or publication rows to simulate rollback.
 
-For recovery, keep traffic blocked and restore the complete matching recovery set, or republish a
-reviewed source export with a new environment generation and repeat the offline, reload, posture,
-and canary gates.
+When PostgreSQL retains the active SnapshotExact publication but its local immutable cache file is
+missing, keep dependent traffic blocked and restart Registry Relay with the same governed source,
+configuration, consultation database, and writable cache location. Registry Relay:
+
+1. Rejects the missing active file for consultation use.
+2. Emits `ingest.snapshot_exact_active_file_missing` without the cache path, generation, digest, or
+   source-returned values.
+3. Runs the existing audited acquisition against the governed source.
+4. Publishes and installs a generation that is strictly newer than the retained active generation.
+
+Wait for resource and dependent consultation readiness, confirm that the active publication
+advanced, then run the posture and exact synthetic canary gates before admitting traffic. This
+recovery does not require a new state epoch, manual publication-row changes, or an operator-selected
+cache generation.
+
+A digest mismatch or another cache read error is not treated as recoverable cache absence. Registry
+Relay remains fail closed. Restore the complete matching recovery set or escalate rather than
+deleting another file to force reacquisition.
+
+{/* Evidence: crates/registry-relay/src/ingest/mod.rs and
+    crates/registry-relay/tests/live_consultation_journeys.rs. */}
+
+For other recovery cases, keep traffic blocked and restore the complete matching recovery set, or
+republish a reviewed source export and repeat the offline, reload, posture, and canary gates.
 When consultation state may be stale, recover forward to the last acknowledged write and external
 audit watermark before resuming the same workload.
 
