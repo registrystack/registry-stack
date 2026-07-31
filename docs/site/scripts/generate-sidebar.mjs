@@ -55,7 +55,7 @@ function slugFromDest(dest) {
 
 function byNavOrder(a, b) {
   const order = (a.nav_order ?? 0) - (b.nav_order ?? 0);
-  return order !== 0 ? order : a.label.localeCompare(b.label);
+  return order !== 0 ? order : a.label.localeCompare(b.label, 'en-US');
 }
 
 function leaf(entry) {

@@ -152,8 +152,19 @@ async function bootstrapArchive({
         result.version_tree_sha256 === lockEntry.version_tree_sha256
       : result.tree_sha256 === lockEntry.tree_sha256);
   if (!matches) {
+    const expected = result.root_tree_sha256
+      ? `bundle_sha256=${lockEntry.bundle_sha256} ` +
+        `root_tree_sha256=${lockEntry.root_tree_sha256} ` +
+        `version_tree_sha256=${lockEntry.version_tree_sha256}`
+      : `bundle_sha256=${lockEntry.bundle_sha256} tree_sha256=${lockEntry.tree_sha256}`;
+    const actual = result.root_tree_sha256
+      ? `bundle_sha256=${result.bundle_sha256} ` +
+        `root_tree_sha256=${result.root_tree_sha256} ` +
+        `version_tree_sha256=${result.version_tree_sha256}`
+      : `bundle_sha256=${result.bundle_sha256} tree_sha256=${result.tree_sha256}`;
     throw new Error(
-      `bootstrapped archive ${docset.id} does not match its immutable lock entry`,
+      `bootstrapped archive ${docset.id} does not match its immutable lock entry\n` +
+        `expected: ${expected}\nactual: ${actual}`,
     );
   }
   await restoreArchiveBundle({

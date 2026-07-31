@@ -36,7 +36,9 @@ const overlays = [
 async function filesUnder(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const paths = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort(
+    (left, right) => left.name.localeCompare(right.name, 'en-US'),
+  )) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) {
       paths.push(...(await filesUnder(path)));

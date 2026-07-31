@@ -27,6 +27,13 @@ const maximumArchiveBundleBytes = 256 * 1024 * 1024;
 const maximumExtractedBytes = 1024 * 1024 * 1024;
 const maximumArchiveEntries = 100_000;
 
+function compareNames(left, right) {
+  // v1-v3 archive tree digests were locked with Node's English collation.
+  // Pin that locale so verification is independent of the host locale while
+  // preserving every published immutable digest.
+  return left.name.localeCompare(right.name, 'en-US');
+}
+
 export function canonicalValue(value) {
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (value && typeof value === 'object') {
@@ -184,7 +191,7 @@ async function collectTree(root, current = root) {
   const entries = await readdir(current, { withFileTypes: true });
   const directories = [];
   const files = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort(compareNames)) {
     const path = resolve(current, entry.name);
     const info = await lstat(path);
     if (info.isSymbolicLink()) {
@@ -225,7 +232,7 @@ export function archiveSourceRefs(docset) {
       version: product?.version,
       ref: product?.ref,
     }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort(compareNames);
 }
 
 export function archiveMetadata(docset, {
