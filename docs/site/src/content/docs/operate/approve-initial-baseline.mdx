@@ -161,7 +161,7 @@ registryctl trust bundle sign \
   --key file:evaluation-keys/relay-public.private.jwk \
   --output-dir operator-handoff/relay-public-bundle
 registryctl trust bundle verify \
-  --bundle-dir operator-handoff/relay-public-bundle/bundle \
+  --bundle-dir operator-handoff/relay-public-bundle \
   --anchor operator-handoff/relay-public-bundle/anchor.json
 ```
 
@@ -185,7 +185,7 @@ registryctl trust bundle sign \
   --key file:evaluation-keys/relay-consultation.private.jwk \
   --output-dir operator-handoff/relay-consultation-bundle
 registryctl trust bundle verify \
-  --bundle-dir operator-handoff/relay-consultation-bundle/bundle \
+  --bundle-dir operator-handoff/relay-consultation-bundle \
   --anchor operator-handoff/relay-consultation-bundle/anchor.json
 ```
 
@@ -209,7 +209,7 @@ registryctl trust bundle sign \
   --key file:evaluation-keys/notary.private.jwk \
   --output-dir operator-handoff/notary-bundle
 registryctl trust bundle verify \
-  --bundle-dir operator-handoff/notary-bundle/bundle \
+  --bundle-dir operator-handoff/notary-bundle \
   --anchor operator-handoff/notary-bundle/anchor.json
 ```
 
@@ -260,7 +260,7 @@ registryctl trust bundle sign \
   --against "$CURRENT_APPROVED_SET" \
   --output-dir "$NEXT_BUNDLE"
 registryctl trust bundle verify \
-  --bundle-dir "$NEXT_BUNDLE/bundle" \
+  --bundle-dir "$NEXT_BUNDLE" \
   --anchor "$NEXT_BUNDLE/anchor.json"
 registryctl trust approved-set assemble \
   --from "$CURRENT_APPROVED_SET" \

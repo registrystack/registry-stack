@@ -237,18 +237,21 @@ Rotation writes a fresh anchor and transition; it never edits the current anchor
 ### Inspect, verify, or sign a lane
 
 ```text
-registryctl trust bundle inspect --bundle-dir <directory>
+registryctl trust bundle inspect --bundle-dir <signed-artifact-directory>
 registryctl trust bundle verify \
-  --bundle-dir <directory> \
-  --anchor <file>
+  --bundle-dir <signed-artifact-directory> \
+  --anchor <signed-artifact-directory>/anchor.json
 registryctl trust bundle sign \
   --lane <relay-public|relay-consultation|notary> \
   --input <lane-signing-input> \
   --anchor <file> \
   --key <file:or-op-locator> \
-  --output-dir <directory>
+  --output-dir <signed-artifact-directory>
 ```
 
+The signed artifact directory is the root created by `trust bundle sign`.
+It contains the `bundle/` directory, the selected `anchor.json`, and any anchor-history links.
+Inspect, verify, and approved-set assembly all accept that same root.
 An update signing command also supplies `--against <approved-set>`.
 Registryctl accepts explicit `file:` and `op://` key locators.
 An unprefixed path or unknown scheme fails before output creation.
@@ -259,9 +262,9 @@ Initial assembly supplies all three verified lane directories:
 
 ```text
 registryctl trust approved-set assemble \
-  --relay-public <directory> \
-  --relay-consultation <directory> \
-  --notary <directory> \
+  --relay-public <signed-artifact-directory> \
+  --relay-consultation <signed-artifact-directory> \
+  --notary <signed-artifact-directory> \
   --output-file <file>
 ```
 
