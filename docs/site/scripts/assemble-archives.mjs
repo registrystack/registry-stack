@@ -131,7 +131,12 @@ async function bootstrapArchive({
   lockEntry,
   buildArchive,
 }) {
-  await buildArchive(docset, { docsRoot });
+  await buildArchive(docset, {
+    docsRoot,
+    // Candidate-era archives authenticate the canonical root separately from
+    // the versioned tree. Build that root exactly as the release workflow does.
+    indexable: !lockEntry.tree_sha256,
+  });
   const bundlePath = localArchiveBundlePath(docsRoot, docset);
   const result = await createArchiveBundle({
     docsRoot,

@@ -29,7 +29,7 @@ const docset = {
   },
 };
 
-async function fixture(t) {
+async function fixture(t, { singleTree = true } = {}) {
   const sourceRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-assemble-source-'));
   const targetRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-assemble-target-'));
   t.after(() => Promise.all([
@@ -40,12 +40,17 @@ async function fixture(t) {
   const sourceOutput = resolve(sourceRoot, 'dist/v/1.2.3');
   await mkdir(sourceOutput, { recursive: true });
   await writeFile(resolve(sourceOutput, 'index.html'), '<h1>Frozen</h1>\n');
+  if (!singleTree) {
+    const rootOutput = releaseRootOutputDirectory(sourceRoot, docset);
+    await mkdir(rootOutput, { recursive: true });
+    await writeFile(resolve(rootOutput, 'index.html'), '<h1>Canonical</h1>\n');
+  }
   const bundlePath = resolve(sourceRoot, 'bundle.tar.gz');
   const bundle = await createArchiveBundle({
     docsRoot: sourceRoot,
     docset,
     bundlePath,
-    singleTree: true,
+    singleTree,
   });
 
   await mkdir(resolve(targetRoot, 'src/data'), { recursive: true });
@@ -76,10 +81,16 @@ async function fixture(t) {
     YAML.stringify({
       schema_version: 'registry-docs.archive-lock.v1',
       archives: {
-        [docset.id]: {
-          bundle_sha256: bundle.bundle_sha256,
-          tree_sha256: bundle.tree_sha256,
-        },
+        [docset.id]: bundle.tree_sha256
+          ? {
+              bundle_sha256: bundle.bundle_sha256,
+              tree_sha256: bundle.tree_sha256,
+            }
+          : {
+              bundle_sha256: bundle.bundle_sha256,
+              root_tree_sha256: bundle.root_tree_sha256,
+              version_tree_sha256: bundle.version_tree_sha256,
+            },
       },
     }),
   );
@@ -136,6 +147,29 @@ test('only bootstraps missing bundles when explicitly allowed', async (t) => {
     await readFile(resolve(targetRoot, 'dist/_archive-bundles/v1.2.3.tar.gz')),
     await readFile(resolve(targetRoot, '.archive-bundles/v1.2.3.tar.gz')),
   );
+});
+
+test('bootstraps candidate-era archives with the indexable canonical root', async (t) => {
+  const { targetRoot } = await fixture(t, { singleTree: false });
+  let indexable;
+  const result = await assembleArchives({
+    docsRoot: targetRoot,
+    bootstrap: true,
+    fetchImpl: async () => new Response(null, { status: 404 }),
+    buildArchive: async (_docset, options) => {
+      indexable = options.indexable;
+      const output = resolve(options.docsRoot, 'dist/v/1.2.3');
+      await mkdir(output, { recursive: true });
+      await writeFile(resolve(output, 'index.html'), '<h1>Frozen</h1>\n');
+      const rootOutput = releaseRootOutputDirectory(options.docsRoot, docset);
+      await mkdir(rootOutput, { recursive: true });
+      await writeFile(resolve(rootOutput, 'index.html'), '<h1>Canonical</h1>\n');
+    },
+    restoreGeneratedData: async () => {},
+  });
+
+  assert.equal(indexable, true);
+  assert.equal(result.bootstrapped, 1);
 });
 
 test('does not fall back after a published bundle fails digest verification', async (t) => {
