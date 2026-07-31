@@ -37,6 +37,9 @@ class SelectReleaseProofLevelTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.repo = Path(self.temporary.name)
         run_git(self.repo, "init", "-q")
+        # Git 2.54 can detach automatic maintenance after repository writes. A
+        # background pack process can then race TemporaryDirectory cleanup.
+        run_git(self.repo, "config", "--local", "maintenance.auto", "false")
         run_git(self.repo, "config", "user.name", "Release Test")
         run_git(self.repo, "config", "user.email", "release@example.test")
         (self.repo / "README.md").write_text("base\n", encoding="utf-8")
@@ -44,6 +47,19 @@ class SelectReleaseProofLevelTest(unittest.TestCase):
         run_git(self.repo, "commit", "-qm", "base")
         self.base = run_git(self.repo, "rev-parse", "HEAD")
         run_git(self.repo, "tag", "-a", "v0.12.2", "-m", "v0.12.2")
+
+    def test_automatic_maintenance_is_disabled_for_temporary_repo(self) -> None:
+        self.assertEqual(
+            "false",
+            run_git(
+                self.repo,
+                "config",
+                "--local",
+                "--bool",
+                "--get",
+                "maintenance.auto",
+            ),
+        )
 
     def select(self, **overrides):
         arguments = {
