@@ -23,6 +23,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 	fi
 	HTTP_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/author-registry-project.md"
 	SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/publish-spreadsheet-secured-registry-api.md"
+	USE_SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/use-your-spreadsheet.md"
 	EVIDENCE_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-claim-registry-api.md"
 	OAUTH_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/configure-project-script-adapter.md"
 	OAUTH_HOWTO="$RELEASED_DOCS_ROOT/configure/oauth-client-credentials.md"
@@ -32,6 +33,7 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 else
 	HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
 	SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
+	USE_SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/use-your-spreadsheet.mdx"
 	EVIDENCE_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx"
 	OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
 	OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
@@ -283,6 +285,132 @@ run_reports() {
 	fi
 }
 
+run_spreadsheet_runtime() {
+	local project_directory=$1
+	local report_directory=$2
+	local project_id=$3
+	local district_code=$4
+	local sector=$5
+	local status=$6
+	local records_denied_config
+	local records_config
+	local evidence_config
+	local evidence_body
+	local denied_status
+
+	if [[ "$RUNNER_MODE" != "sealed" ]]; then
+		return
+	fi
+
+	mkdir -p "$report_directory"
+	ACTIVE_DEV_PROJECT="$project_directory"
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev --detach \
+		>"$report_directory/dev-start.txt"
+	records_denied_config="$(find \
+		"$project_directory/.registry-stack/dev/local" \
+		-type f -path '*/credentials/records-denied.curl' -print)"
+	records_config="$(find \
+		"$project_directory/.registry-stack/dev/local" \
+		-type f -path '*/credentials/records-request.curl' -print)"
+	evidence_config="$(find \
+		"$project_directory/.registry-stack/dev/local" \
+		-type f -path '*/credentials/request.curl' -print)"
+	evidence_body="$(find \
+		"$project_directory/.registry-stack/dev/local" \
+		-type f -path '*/credentials/request.json' -print)"
+	for request_artifact in \
+		"$records_denied_config" \
+		"$records_config" \
+		"$evidence_config" \
+		"$evidence_body"; do
+		if [[ -z "$request_artifact" || "$request_artifact" == *$'\n'* ]]; then
+			printf 'expected exactly one generated development request artifact per public journey\n' >&2
+			exit 1
+		fi
+	done
+	node "$HELPER" assert-contains "$report_directory/dev-start.txt" \
+		'Relay API: http://127.0.0.1:4242' \
+		'Evidence API: http://127.0.0.1:4243' \
+		"Records denied request: curl --config '$records_denied_config'" \
+		"Records request: curl --config '$records_config'" \
+		"Evidence request: curl --config '$evidence_config'"
+	denied_status="$(curl --silent --show-error \
+		--config "$records_denied_config" \
+		--no-include \
+		--output "$report_directory/records-denied.json" \
+		--write-out '%{http_code}')"
+	if [[ "$denied_status" != "401" ]]; then
+		printf 'anonymous records request returned HTTP %s, expected 401\n' \
+			"$denied_status" >&2
+		exit 1
+	fi
+	node "$HELPER" assert-json-subset "$report_directory/records-denied.json" \
+		'{"status":401,"code":"auth.missing_credential"}'
+	curl --silent --show-error --config "$records_config" \
+		>"$report_directory/records-request.json"
+	node "$HELPER" assert-json-subset "$report_directory/records-request.json" \
+		"{\"project_id\":\"$project_id\",\"district_code\":\"$district_code\",\"sector\":\"$sector\",\"status\":\"$status\"}"
+	node "$HELPER" assert-not-contains "$report_directory/records-request.json" \
+		'PW-002' \
+		'PW-003'
+	node "$HELPER" assert-json-subset "$evidence_body" \
+		"{\"target\":{\"identifiers\":[{\"scheme\":\"project_id\",\"value\":\"$project_id\"}]}}"
+	curl --silent --show-error --config "$evidence_config" \
+		>"$report_directory/evidence-request.json"
+	node "$HELPER" assert-json-subset "$report_directory/evidence-request.json" \
+		'{"results":[{"claim_id":"project-record-exists","value":true,"satisfied":true,"disclosure":"predicate"},{"claim_id":"project-status-accepted","value":true,"satisfied":true,"disclosure":"predicate"}]}'
+	node "$HELPER" assert-not-contains "$report_directory/evidence-request.json" \
+		'north-01' \
+		'water' \
+		'active' \
+		'planned'
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev smoke \
+		>"$report_directory/dev-smoke.txt"
+	node "$HELPER" assert-contains "$report_directory/dev-smoke.txt" \
+		'Development smoke: passed.' \
+		'unauthorized: status=denied; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved' \
+		'authorized: status=authorized; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved' \
+		'minimized_claim_ids=project-record-exists,project-status-accepted'
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev down \
+		>"$report_directory/dev-down.txt"
+	ACTIVE_DEV_PROJECT=""
+}
+
+run_synthetic_runtime() {
+	local project_directory=$1
+	local report_directory=$2
+	local expected_token_delta=$3
+	local expected_claim_ids=$4
+
+	if [[ "$RUNNER_MODE" != "sealed" ]]; then
+		return
+	fi
+
+	mkdir -p "$report_directory"
+	ACTIVE_DEV_PROJECT="$project_directory"
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev --detach \
+		>"$report_directory/dev-start.txt"
+	node "$HELPER" assert-contains "$report_directory/dev-start.txt" \
+		'Relay API: http://127.0.0.1:4242' \
+		'Evidence API: http://127.0.0.1:4243' \
+		'Evidence request: curl --config '
+	if find "$project_directory/.registry-stack/dev/local" -type f \
+		\( -name 'relay-*-tls.*' -o -name 'notary-tls.*' \) -print -quit | grep -q .; then
+		printf 'development runtime generated obsolete product listener TLS material\n' >&2
+		exit 1
+	fi
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev smoke \
+		>"$report_directory/dev-smoke.txt"
+	node "$HELPER" assert-contains "$report_directory/dev-smoke.txt" \
+		'Development smoke: passed.' \
+		'unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0' \
+		"authorized: status=authorized; passed=true; token_counter_delta=$expected_token_delta; source_counter_delta=1" \
+		"minimized_claim_ids=$expected_claim_ids"
+	"$REGISTRYCTL_BIN" -C "$project_directory" dev down \
+		>"$report_directory/dev-down.txt"
+	ACTIVE_DEV_PROJECT=""
+}
+
 HTTP_PROJECT="${RETAINED_PROJECT:-$WORK_ROOT/http-reader}"
 mkdir -p "$REPORT_ROOT/http"
 "$REGISTRYCTL_BIN" init "$HTTP_PROJECT" --template http >"$REPORT_ROOT/http/init.txt"
@@ -295,6 +423,11 @@ node "$HELPER" assert-fence-equals \
 	"$HTTP_PROJECT" \
 	my-registry
 run_reports "$HTTP_PROJECT" http
+run_synthetic_runtime \
+	"$HTTP_PROJECT" \
+	"$REPORT_ROOT/http/runtime" \
+	0 \
+	'person-active,person-record-exists'
 (
 	cd "$HTTP_PROJECT"
 	"$REGISTRYCTL_BIN" test
@@ -345,6 +478,13 @@ node "$HELPER" assert-fence-equals \
 		'Test the starter' \
 		text \
 		1
+run_spreadsheet_runtime \
+	"$SPREADSHEET_PROJECT" \
+	"$REPORT_ROOT/spreadsheet/runtime" \
+	pw_001 \
+	north-01 \
+	water \
+	active
 (
 	cd "$SPREADSHEET_PROJECT"
 	"$REGISTRYCTL_BIN" test \
@@ -369,6 +509,71 @@ node "$HELPER" assert-fence-equals \
 	text \
 	1
 printf 'Spreadsheet reader journey: PASS\n'
+
+ADAPTED_SPREADSHEET_PROJECT="$WORK_ROOT/spreadsheet-adapted-reader"
+ADAPTED_SPREADSHEET_REPORT="$REPORT_ROOT/spreadsheet-adapted"
+mkdir -p "$ADAPTED_SPREADSHEET_REPORT"
+"$REGISTRYCTL_BIN" init "$ADAPTED_SPREADSHEET_PROJECT" --template spreadsheet \
+	>"$ADAPTED_SPREADSHEET_REPORT/init.txt"
+python3 - "$ADAPTED_SPREADSHEET_PROJECT/data/public_works_projects.xlsx" <<'PY'
+import os
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+workbook = Path(sys.argv[1])
+descriptor, temporary_name = tempfile.mkstemp(dir=workbook.parent, suffix=".xlsx")
+os.close(descriptor)
+temporary = Path(temporary_name)
+replacements = 0
+try:
+    with zipfile.ZipFile(workbook, "r") as source, zipfile.ZipFile(temporary, "w") as target:
+        for entry in source.infolist():
+            data = source.read(entry.filename)
+            if entry.filename == "xl/worksheets/sheet1.xml":
+                updated = data.replace(b">pw_001<", b">institution_001<")
+                replacements += updated.count(b">institution_001<")
+                data = updated
+            target.writestr(entry, data)
+    if replacements != 1:
+        raise SystemExit("maintained workbook did not contain one pw_001 selector")
+    os.replace(temporary, workbook)
+finally:
+    temporary.unlink(missing_ok=True)
+PY
+node "$HELPER" replace-fence-pair \
+	"$USE_SPREADSHEET_TUTORIAL" \
+	'Record the source revision' yaml 1 \
+	'Record the source revision' yaml 2 \
+	"$ADAPTED_SPREADSHEET_PROJECT/environments/local.yaml"
+node "$HELPER" replace-fence-pair \
+	"$USE_SPREADSHEET_TUTORIAL" \
+	'Select one reviewed smoke row' yaml 1 \
+	'Select one reviewed smoke row' yaml 2 \
+	"$ADAPTED_SPREADSHEET_PROJECT/environments/local.yaml"
+node "$HELPER" replace-fence-pair \
+	"$USE_SPREADSHEET_TUTORIAL" \
+	'Select one reviewed smoke row' yaml 3 \
+	'Select one reviewed smoke row' yaml 4 \
+	"$ADAPTED_SPREADSHEET_PROJECT/integrations/project-record-snapshot/fixtures/match.yaml"
+(
+	cd "$ADAPTED_SPREADSHEET_PROJECT"
+	"$REGISTRYCTL_BIN" test
+) >"$ADAPTED_SPREADSHEET_REPORT/test.txt"
+run_reports \
+	"$ADAPTED_SPREADSHEET_PROJECT" \
+	spreadsheet-adapted \
+	fictional-public-works-registry \
+	snapshot
+run_spreadsheet_runtime \
+	"$ADAPTED_SPREADSHEET_PROJECT" \
+	"$ADAPTED_SPREADSHEET_REPORT/runtime" \
+	institution_001 \
+	north-01 \
+	water \
+	active
+printf 'Adapted spreadsheet reader journey: PASS\n'
 
 EVIDENCE_PROJECT="$SPREADSHEET_PROJECT"
 EVIDENCE_REPORT="$REPORT_ROOT/spreadsheet-evidence"
@@ -416,79 +621,13 @@ node "$HELPER" assert-contains "$EVIDENCE_REPORT/after-trace.txt" \
 	"$REGISTRYCTL_BIN" test
 ) >"$EVIDENCE_REPORT/test.txt"
 
-if [[ "$RUNNER_MODE" == "sealed" ]]; then
-	ACTIVE_DEV_PROJECT="$EVIDENCE_PROJECT"
-	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev --detach \
-		>"$EVIDENCE_REPORT/dev-start.txt"
-	RECORDS_DENIED_CONFIG="$(find \
-		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
-		-type f -path '*/credentials/records-denied.curl' -print)"
-	RECORDS_CONFIG="$(find \
-		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
-		-type f -path '*/credentials/records-request.curl' -print)"
-	EVIDENCE_CONFIG="$(find \
-		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
-		-type f -path '*/credentials/request.curl' -print)"
-	EVIDENCE_BODY="$(find \
-		"$EVIDENCE_PROJECT/.registry-stack/dev/local" \
-		-type f -path '*/credentials/request.json' -print)"
-	for request_config in \
-		"$RECORDS_DENIED_CONFIG" \
-		"$RECORDS_CONFIG" \
-		"$EVIDENCE_CONFIG" \
-		"$EVIDENCE_BODY"; do
-		if [[ -z "$request_config" || "$request_config" == *$'\n'* ]]; then
-			printf 'expected exactly one generated development request artifact per public journey\n' >&2
-			exit 1
-		fi
-	done
-	node "$HELPER" assert-contains "$EVIDENCE_REPORT/dev-start.txt" \
-		'Relay API: https://127.0.0.1:4242' \
-		'Evidence API: https://127.0.0.1:4243' \
-		"Records denied request: curl --config '$RECORDS_DENIED_CONFIG'" \
-		"Records request: curl --config '$RECORDS_CONFIG'" \
-		"Evidence request: curl --config '$EVIDENCE_CONFIG'"
-	DENIED_STATUS="$(curl --silent --show-error \
-		--config "$RECORDS_DENIED_CONFIG" \
-		--no-include \
-		--output "$EVIDENCE_REPORT/records-denied.json" \
-		--write-out '%{http_code}')"
-	if [[ "$DENIED_STATUS" != "401" ]]; then
-		printf 'anonymous records request returned HTTP %s, expected 401\n' \
-			"$DENIED_STATUS" >&2
-		exit 1
-	fi
-	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/records-denied.json" \
-		'{"status":401,"code":"auth.missing_credential"}'
-	curl --silent --show-error --config "$RECORDS_CONFIG" \
-		>"$EVIDENCE_REPORT/records-request.json"
-	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/records-request.json" \
-		'{"project_id":"pw_001","district_code":"north-01","sector":"water","status":"active"}'
-	node "$HELPER" assert-not-contains "$EVIDENCE_REPORT/records-request.json" \
-		'PW-002' \
-		'PW-003'
-	node "$HELPER" assert-json-subset "$EVIDENCE_BODY" \
-		'{"target":{"identifiers":[{"scheme":"project_id","value":"PW-002"}]}}'
-	curl --silent --show-error --config "$EVIDENCE_CONFIG" \
-		>"$EVIDENCE_REPORT/evidence-request.json"
-	node "$HELPER" assert-json-subset "$EVIDENCE_REPORT/evidence-request.json" \
-		'{"results":[{"claim_id":"project-record-exists","value":true,"satisfied":true,"disclosure":"predicate"},{"claim_id":"project-status-accepted","value":true,"satisfied":true,"disclosure":"predicate"}]}'
-	node "$HELPER" assert-not-contains "$EVIDENCE_REPORT/evidence-request.json" \
-		'north-01' \
-		'water' \
-		'active' \
-		'planned'
-	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev smoke \
-		>"$EVIDENCE_REPORT/dev-smoke.txt"
-	node "$HELPER" assert-contains "$EVIDENCE_REPORT/dev-smoke.txt" \
-		'Development smoke: passed.' \
-		'unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0' \
-		'authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1' \
-		'minimized_claim_ids=project-record-exists,project-status-accepted'
-	"$REGISTRYCTL_BIN" -C "$EVIDENCE_PROJECT" dev down \
-		>"$EVIDENCE_REPORT/dev-down.txt"
-	ACTIVE_DEV_PROJECT=""
-fi
+run_spreadsheet_runtime \
+	"$EVIDENCE_PROJECT" \
+	"$EVIDENCE_REPORT/runtime" \
+	PW-002 \
+	central-02 \
+	health \
+	planned
 
 run_reports \
 	"$EVIDENCE_PROJECT" \
@@ -593,6 +732,11 @@ node "$HELPER" assert-contains "$REPORT_ROOT/opencrvs-check-explain.txt" \
 	'birth-event-found' \
 	'birth-event-registered'
 run_reports "$OPENCRVS_PROJECT" opencrvs
+run_synthetic_runtime \
+	"$OPENCRVS_PROJECT" \
+	"$REPORT_ROOT/opencrvs/runtime" \
+	1 \
+	'birth-event-found,birth-event-registered'
 printf 'OAuth and Rhai reader journey: PASS\n'
 printf 'OpenCRVS Events API case-study journey: PASS\n'
 

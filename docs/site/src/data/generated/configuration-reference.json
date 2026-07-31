@@ -38,35 +38,35 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1826,
-    "reference_count": 505,
+    "path_count": 1829,
+    "reference_count": 506,
     "by_schema": {
       "project": 220,
-      "environment": 212,
+      "environment": 213,
       "integration": 171,
       "fixture": 63,
       "entity": 35,
-      "relay": 592,
-      "notary": 533
+      "relay": 593,
+      "notary": 534
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1456,
+      "property": 1458,
       "map_key": 26,
       "map_value": 48,
       "array_item": 178,
-      "branch": 111
+      "branch": 112
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1178,
-      "sensitive": 407,
+      "internal": 1179,
+      "sensitive": 408,
       "secret_reference": 44,
       "redacted_fixture": 51,
-      "structural": 130
+      "structural": 131
     },
     "by_intent_source": {
-      "schema_description": 527,
+      "schema_description": 530,
       "reviewed_override": 266,
       "structural_taxonomy": 131,
       "reviewed_profile": 902
@@ -90,7 +90,7 @@
       "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 92,
+      "notary_evidence_internal": 93,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 41,
       "notary_evidence_signing_keys_open_map": 1,
@@ -116,7 +116,7 @@
       "relay_auth_internal": 15,
       "relay_auth_oidc_scope_map_open_map": 1,
       "relay_auth_secret_reference": 4,
-      "relay_auth_sensitive": 15,
+      "relay_auth_sensitive": 16,
       "relay_catalog_internal": 1,
       "relay_catalog_public": 6,
       "relay_catalog_sensitive": 1,
@@ -23947,6 +23947,107 @@
         "pointer": "/$defs/internalOrigin/anyOf/1",
         "path_kind": "branch"
       },
+      "purpose": "Signed internal HTTP service origin. Runtime DNS pinning admits only eligible private addresses.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/privateServiceOrigin",
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "format",
+          "value": "uri"
+        },
+        {
+          "keyword": "pattern",
+          "value": "^[hH][tT][tT][pP]://[a-z][a-z0-9.-]{0,252}(?::[0-9]+)?/?$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/privateServiceOrigin"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/internalOrigin/anyOf/2",
+        "path_kind": "branch"
+      },
       "purpose": "HTTP IP-loopback origin; public Relay and issuer fields restrict it to the local profile, while internal Notary-to-Relay connections allow it in any profile.",
       "purpose_source": "schema_description",
       "semantic_owner": "deployment_security",
@@ -37246,6 +37347,7 @@
           "keyword": "enum",
           "value": [
             "synthetic",
+            "local_snapshot",
             "operator_bound"
           ]
         }
@@ -100953,6 +101055,89 @@
     {
       "address": {
         "schema": "relay",
+        "pointer": "/$defs/OidcConfig/properties/development_jwks_file",
+        "key_path": "auth.oidc.development_jwks_file",
+        "path_kind": "property"
+      },
+      "purpose": "Development-only public JWKS file loaded once into memory at startup.\nThis source is accepted only when `deployment.profile` is `local` and\nis mutually exclusive with `jwks_url` and `discovery_url`.",
+      "purpose_source": "schema_description",
+      "intent_profile": "relay_auth_sensitive",
+      "semantic_owner": "relay_runtime",
+      "human_owner": "relay_maintainers",
+      "scope": "The complete product-owned Relay runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "null",
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "conditional",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "schema_default",
+        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "relay",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "config.validation_error",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Relay deployment and rollback review before activating changes to runtime bindings, trust, access, or data-serving behavior.",
+      "consumers": [
+        "registry_relay",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "relay_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "relay",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": [
+            "string",
+            "null"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "relay",
         "pointer": "/$defs/OidcConfig/properties/discovery_url",
         "key_path": "auth.oidc.discovery_url",
         "path_kind": "property"
@@ -101207,7 +101392,7 @@
         "key_path": "auth.oidc.jwks_url",
         "path_kind": "property"
       },
-      "purpose": "JWKS endpoint. Either this or `discovery_url` must be set.\n`discovery_url` takes precedence: when both are configured the\nvalidator rejects the document.",
+      "purpose": "JWKS endpoint. Exactly one JWKS source must be configured.",
       "purpose_source": "schema_description",
       "intent_profile": "relay_auth_sensitive",
       "semantic_owner": "relay_runtime",
@@ -145107,6 +145292,82 @@
       },
       "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
       "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_evidence_internal",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "boolean"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "schema_default",
+        "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
+      },
+      "environment_behavior": "bound_by_environment",
+      "sensitivity": "internal",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "boolean"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "notary",
+        "pointer": "/$defs/RelayConnectionConfig/properties/allow_insecure_private_network",
+        "key_path": "evidence.relay.allow_insecure_private_network",
+        "path_kind": "property"
+      },
+      "purpose": "Permit this signed Notary-to-Relay service hop to use application HTTP.\nRuntime resolution remains confined to eligible private addresses.",
+      "purpose_source": "schema_description",
       "intent_profile": "notary_evidence_internal",
       "semantic_owner": "notary_runtime",
       "human_owner": "notary_maintainers",

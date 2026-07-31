@@ -114,6 +114,9 @@ An initial combined project can emit the closed lanes `relay-public`, `relay-con
 `notary`.
 `--against` verifies the current approved set for an update and limits output to affected lanes.
 `build` does not sign, assemble, deploy, or activate.
+Its next action is source-aware. A build backed by a project-local file remains for development
+and review only; bind an operator-managed source in a separate governed environment and rebuild
+before signing. A deployment-eligible initial build points to trust-anchor creation.
 
 ## `dev`
 

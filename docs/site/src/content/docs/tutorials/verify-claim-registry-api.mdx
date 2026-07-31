@@ -23,7 +23,7 @@ source path, or trust model.
 <QuickstartMeta
   outcome="A reviewed change to one spreadsheet-backed predicate claim, verified offline and through the disposable Relay and Notary runtime."
   time="About 15 minutes after completing the spreadsheet first run"
-  level="Local development with synthetic records"
+  level="Local development with a contained spreadsheet"
   prerequisites={['The unmodified my-first-registry project', 'A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later'] }
 />
 
@@ -171,7 +171,7 @@ In `environments/local.yaml`, replace:
 
 ```yaml
 development:
-  source_mode: synthetic
+  source_mode: local_snapshot
   default_integration: project-record-snapshot
   default_fixture: match
 ```
@@ -180,15 +180,16 @@ with:
 
 ```yaml
 development:
-  source_mode: synthetic
+  source_mode: local_snapshot
   default_integration: project-record-snapshot
   default_fixture: planned
 ```
 
 Each environment declares one development scenario.
 Registryctl does not use a command-line fixture selector for `dev`.
-The maintained `planned` fixture already contains the governed synthetic
-evidence request for `PW-002`.
+The maintained `planned` fixture already contains the development evidence
+request for `PW-002`. Relay resolves that request against the mounted workbook,
+not a synthetic source substitute.
 
 Start the disposable runtime:
 
@@ -225,10 +226,11 @@ Run the maintained checks:
 registryctl dev smoke
 ```
 
-The denial result must report zero source access.
-The authorized result must report one snapshot lookup and only
-`project-record-exists,project-status-accepted` as claim identifiers.
-It must not return a workbook row or the source `status` value.
+The denial result must be denied with no claim identifiers. The authorized
+result must report only `project-record-exists,project-status-accepted` as
+claim identifiers. Local workbook effects are reported as `unobserved`; the
+derived offline security fixture proves the zero-source-effect denial ordering.
+Neither result may return a workbook row or the source `status` value.
 
 Stop the disposable runtime:
 
@@ -274,9 +276,9 @@ You changed one bounded evidence rule while preserving:
 - [Use your own spreadsheet](../use-your-spreadsheet/) to adapt the source and
   policy together.
 - [Connect an existing HTTP registry](../author-registry-project/) when the
-  evidence comes from an institution-owned API.
-- [Approve an evidence change](../../operate/advanced/compare-and-reapprove-source-change/)
-  before moving a changed rule into a governed deployment.
+  evidence comes from an institution-owned API or the project is ready for
+  governed deployment. Project-local workbooks remain development-only in
+  Registry Stack 1.0.
 
 ## Troubleshooting
 

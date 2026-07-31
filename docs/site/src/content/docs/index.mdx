@@ -21,9 +21,10 @@ callers direct access to the source.
 
 Use the maintained spreadsheet path when the institution has a workbook or
 can prepare a reviewed workbook derivative.
-The first run starts Registry Relay and Registry Notary over synthetic records,
-then proves authorization denial before source access and a minimized evidence
-result.
+The first run starts Registry Relay and Registry Notary over the shipped
+synthetic workbook. It records a live authorization denial and a minimized
+evidence result; the offline derived fixture supplies the zero-source-access
+evidence that a local file cannot count itself.
 
 [Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
 takes about 20 minutes and uses released artifacts without a source checkout.
@@ -58,9 +59,10 @@ Registry Relay owns source access and protected record surfaces.
 Registry Notary owns evidence evaluation and disclosure.
 The caller receives only the output authorized for that service.
 
-Both paths use the same authoring, offline test, disposable development, build,
-approval, and deployment commands.
-The source shape changes, not the product ownership boundaries.
+Both paths use the same authoring, offline test, disposable development, and
+build commands. The 1.0 project-local workbook path stops there. A governed
+deployment starts after an operator-managed HTTP source is bound, then
+continues through independent approval and package generation.
 
 ## Move beyond the first run
 

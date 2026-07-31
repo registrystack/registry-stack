@@ -14,14 +14,14 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Use the released HTTP starter to model one bounded lookup against a registry API.
-Test the contract with synthetic observations before binding an institution-owned endpoint, then
-run the authorization and minimization boundaries through Registry Relay and Registry Notary.
+First test and run the contract with synthetic observations. Then bind the reviewed source in the
+authored project files, without changing the Registry Relay and Registry Notary boundaries.
 
 <QuickstartMeta
   outcome="A tested bounded HTTP integration, a disposable local runtime, and unsigned inputs for three independently approved product lanes."
   time="About 15 minutes after Registryctl and Docker are installed"
   level="Local development with synthetic records"
-  prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell and a text editor'] }
+  prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell with curl and a text editor'] }
 />
 
 The project and source observations in this tutorial are synthetic.
@@ -51,6 +51,10 @@ the same tag before running the installer.
 bash "$installer"
 ```
 
+A successful 1.0 installer ends with the installed binary and signed release lock paths, then
+prints the spreadsheet and HTTP `Try it` commands. If your shell cannot find `registryctl`, add
+the printed binary directory to `PATH` before continuing.
+
 Confirm that Registryctl and Docker Compose are available:
 
 ```sh
@@ -59,7 +63,8 @@ docker compose version
 ```
 
 Registryctl reports its installed version without contacting the network.
-Compose must report version 2.35.0 or later.
+The output has the shape `registryctl 1.x.y`. Compose reports
+`Docker Compose version v<version>` and must report 2.35.0 or later.
 
 Start in a directory that is not inside another Registry Stack project.
 Registryctl otherwise discovers the nearest parent containing `registry-stack.yaml`.
@@ -269,11 +274,48 @@ For this combined project, that directory contains signing inputs for `relay-pub
 activate a product.
 The public Relay, consultation Relay, and Notary remain independently approved.
 
+## Bind the reviewed registry
+
+Keep the passing starter as a known-good baseline, then adapt only the authored files:
+
+1. In `integrations/person-record/integration.yaml`, replace the placeholder product and version,
+   choose the source authentication profile, and author the exact method, path, query, accepted
+   statuses, output pointers, and limits from the reviewed source contract.
+2. In `environments/local.yaml`, set `development.source_mode` to `operator_bound`, replace the
+   source origin, and bind secret references when authentication is required. Never put a secret
+   value in the project.
+3. Change `registry-stack.yaml` only when the input, purpose, caller scope, claim, or disclosure
+   meaning differs from the starter.
+4. Replace the fixtures with wholly synthetic observations for every accepted and rejected source
+   outcome. Do not copy production responses or personal records into fixtures.
+
+Use the ordinary fixed HTTP capability when it can express the integration. Follow the
+[OAuth client-credentials guide](../../configure/oauth-client-credentials/) when the source needs
+a token, the [API-key guide](../configure-project-api-key-authentication/) for a reviewed key
+contract, or the [OAuth-backed Rhai guide](../configure-project-script-adapter/) only when fixed
+mapping cannot normalize the response.
+
+Run the adapted project through the same commands:
+
+```sh
+registryctl test
+registryctl check --explain
+registryctl dev --detach
+registryctl dev smoke
+registryctl dev down
+registryctl build
+```
+
+`test` remains offline. `dev` is the first command that contacts the operator-bound source, so use
+an approved non-production endpoint and test identity. The maintained public continuation below
+provides an executable no-credential example of this binding pattern.
+
 ## Optional: exercise a public no-credential source
 
 This continuation is an explicit network test, not part of the authoritative offline fixture
 gate.
 It creates a separate project and maps one tiny public JSON API through the bounded HTTP path.
+It requires curl and Python 3.
 The `public-demo` and `public-demo-missing` environments are adopter-owned source bindings with
 `source_mode: operator_bound`.
 The integration declares `auth: { type: none }`, so there is no source credential or secret

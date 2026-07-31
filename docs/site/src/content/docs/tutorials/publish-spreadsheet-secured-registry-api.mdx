@@ -23,7 +23,7 @@ record, and verify two facts without receiving that record.
 <QuickstartMeta
   outcome="A protected local API over a spreadsheet, plus minimized evidence answers from Relay and Notary."
   time="About 20 minutes after Registryctl and Docker are installed"
-  level="Local development with synthetic records"
+  level="Local development with a contained spreadsheet"
   prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'curl', 'A spreadsheet application', 'A shell and a text editor'] }
 />
 
@@ -54,6 +54,11 @@ follow `release/VERIFY.md` from the same tag before running the installer.
 bash "$installer"
 ```
 
+A successful 1.0 installer ends with the installed binary and signed release
+lock paths, followed by the spreadsheet `Try it` commands. If your shell cannot
+find `registryctl`, add the printed binary directory to `PATH` before
+continuing.
+
 Confirm that Registryctl and Docker Compose are available:
 
 ```sh
@@ -61,8 +66,9 @@ registryctl --version
 docker compose version
 ```
 
-Compose must report version 2.35.0 or later. Start in a directory that is not
-inside another Registry Stack project.
+The first line has the shape `registryctl 1.x.y`. Compose reports
+`Docker Compose version v<version>` and must report 2.35.0 or later. Start in a
+directory that is not inside another Registry Stack project.
 
 ## Create the spreadsheet registry
 
@@ -119,14 +125,15 @@ Start the disposable Registry Relay and Registry Notary runtime:
 registryctl dev --detach
 ```
 
-Registryctl validates the project, creates development-only trust and isolated
-credentials, and starts released digest-locked images on loopback HTTPS. Its
+Registryctl validates the project, mounts the contained workbook read-only,
+creates development-only trust and isolated credentials, and starts released
+digest-locked images on loopback HTTP. Its
 output identifies both APIs and prints ready-to-run commands with owner-only
 curl configuration files:
 
 ```text
-Relay API: https://127.0.0.1:4242
-Evidence API: https://127.0.0.1:4243
+Relay API: http://127.0.0.1:4242
+Evidence API: http://127.0.0.1:4243
 Records denied request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/records-denied.curl'
 Records request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/records-request.curl'
 Evidence request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/request.curl'
@@ -134,8 +141,10 @@ Evidence request: curl --config '/<absolute-project-path>/.registry-stack/dev/lo
 
 Your absolute path and runtime identifier will differ. Copy commands from your
 own output rather than the example above. The curl configurations keep
-disposable credentials and loopback certificates out of the command line and
-your shell environment.
+disposable credentials out of the command line and your shell environment.
+The generated runtime publishes only the two application ports on host
+loopback. Put an operator-owned reverse proxy or ingress in front when adapting
+the products to a shared environment that requires TLS.
 
 ### Make one denied records request
 
@@ -220,14 +229,17 @@ registryctl dev smoke
 
 ```text
 Development smoke: passed.
-  unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0; minimized_claim_ids=none
-  authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1; minimized_claim_ids=project-record-exists,project-status-accepted
+  unauthorized: status=denied; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved; minimized_claim_ids=none
+  authorized: status=authorized; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved; minimized_claim_ids=project-record-exists,project-status-accepted
 ```
 
-The first scenario proves authorization completes before any source access. The
-second performs one bounded source read and reports only the two configured
-claim identifiers. The direct records requests above and this evidence smoke
-check exercise different public surfaces.
+The first scenario proves that the live evidence route denies the unauthenticated
+request. The second performs the authorized lookup and reports only the two
+configured claim identifiers. A local workbook has no request counter, so the
+runtime honestly reports those effects as `unobserved`. The derived offline
+authorization-before-source fixture still verifies the zero-source-effect
+denial invariant in Relay. The direct records requests above and this evidence
+smoke check exercise different public surfaces.
 
 ## Inspect the contract you own
 
@@ -370,11 +382,13 @@ two predicate claims. The build ends with:
 ```text
 Built unsigned signing inputs for relay-public, relay-consultation, notary.
 Build output: .registry-stack/build/local
-Next: registryctl trust anchor create --help
+Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build
 ```
 
 The public Relay, private consultation Relay, and Notary remain separate review
-and ownership lanes. Building does not approve, sign, or deploy them.
+and ownership lanes. Building does not approve, sign, or deploy them. Registry
+Stack 1.0 runs a project-local workbook only in the disposable development
+runtime. It does not package that workbook for a governed deployment.
 
 ## What you built
 
@@ -392,12 +406,11 @@ You turned a spreadsheet into two deliberately different APIs:
 
 - [Change the spreadsheet evidence rule](../verify-claim-registry-api/) in this
   same project and watch `PW-002` become accepted.
-- [Use your own spreadsheet](../use-your-spreadsheet/) after the synthetic path
+- [Use your own spreadsheet](../use-your-spreadsheet/) after the sample path
   works.
 - [Connect an existing HTTP registry](../author-registry-project/) when the
-  institution already operates an API.
-- [Prepare an operator handoff](../../operate/) when authored intent is ready
-  for independent approval.
+  institution already operates an API or is ready to provide an
+  operator-managed source for governed deployment.
 - [Review security boundaries](../../security/) before introducing real data,
   callers, or credentials.
 

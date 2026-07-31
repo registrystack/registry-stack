@@ -28,6 +28,12 @@ The approved-set owner assembles verified lane outputs but does not sign on beha
 
 ## Before you start
 
+Use this procedure only when the selected build binds an operator-managed source and reports
+`Next: registryctl trust anchor create --help`.
+Do not sign a build that contains a project-local file dataset. Bind the operator-managed source
+in a separate governed environment, rerun its fixtures and review, and build that environment
+first.
+
 From the authored project, test, review, and build the target environment:
 
 ```sh

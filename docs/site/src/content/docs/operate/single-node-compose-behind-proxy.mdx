@@ -40,7 +40,7 @@ You need:
 - One verified `ApprovedBaselineSetV1` containing `relay-public`, `relay-consultation`, and
   `notary`
 - The released Registryctl installation whose signed release lock authorizes the images
-- Operator-owned secret and certificate files
+- Operator-owned environment, signing, workload-credential, and PostgreSQL TLS files
 - Durable storage for PostgreSQL and each product's anti-rollback state
 
 The approved set is compatibility evidence and a portable locator.
@@ -110,7 +110,7 @@ Use those values to check the package after transfer.
 ## Supply operator-owned inputs
 
 Read `generated/RUNBOOK.md`.
-Place each required secret and certificate at the package-relative path that the runbook lists.
+Place each required operator file at the package-relative path that the runbook lists.
 Use owner-only file modes.
 For each dotenv file, the runbook lists the exact environment keys copied from the signed
 product's hash-covered `descriptors/secret-consumers.json`.
@@ -119,7 +119,6 @@ creates production values.
 
 Use the input contract in the runbook for the non-dotenv files:
 
-- Matching PEM certificate and private-key pairs for each named Registry service.
 - A PostgreSQL certificate chain valid for the fixed private DNS identity `registry-postgres`.
 - A private Notary signing JWK accepted by the provider selected in the signed Notary config.
 - A compact Notary-to-Relay workload JWT that satisfies the exact signed issuer, audience,
@@ -133,8 +132,8 @@ edit them. Product startup and preparation remain the semantic validation bounda
 before a protected action.
 
 Edit `binding.yaml` only when the visible generated defaults need to change.
-The binding can select loopback ports, package-relative secret and certificate locators, durable
-state locations, restart policy, and value-free logging policy.
+The binding can select loopback ports, package-relative operator-file locators, durable state
+locations, restart policy, and value-free logging policy.
 
 Do not edit files under `generated/`.
 Do not edit generated Relay or Notary configuration.
@@ -198,7 +197,6 @@ docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file gener
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
@@ -206,7 +204,7 @@ docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file gener
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
-The three initialization stagers and four serving stagers check and copy only the operator files
+The three initialization stagers and three serving stagers check and copy only the operator files
 required by their closed product action, serving lane, or the PostgreSQL state plane.
 The PostgreSQL bootstrap runs before product state preparation.
 Preparation creates or migrates only the owning product's database schema and roles.
@@ -225,7 +223,6 @@ docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file gener
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
@@ -234,13 +231,14 @@ docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file gener
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml down
 ```
 
-The public Relay and Notary application ports bind to host loopback.
+The public Relay and Notary HTTP application ports bind to host loopback.
 The consultation Relay, administration, and posture endpoints have no host port.
 The three `verify_state` actions check accepted product state before ordinary startup.
 `up --wait` waits for the generated health conditions.
 `down` stops ordinary services without deleting durable volumes.
 
-Internet exposure and Transport Layer Security (TLS) termination remain operator concerns.
+Internet exposure and Transport Layer Security (TLS) termination remain operator concerns. The
+generated package does not create or request Relay or Notary listener certificates.
 An application that includes the package remains outside the Registryctl package verification
 claim.
 

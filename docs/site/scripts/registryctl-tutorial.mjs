@@ -398,12 +398,25 @@ export function writeEvidenceManifest(
           'http/test.json',
           'http/check.json',
           'http/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'http/runtime/dev-start.txt',
+                'http/runtime/dev-smoke.txt',
+                'http/runtime/dev-down.txt',
+              ]
+            : []),
         ],
       },
       {
         id: 'spreadsheet',
         source: 'embedded-spreadsheet-template',
-        covers: ['starter', 'evidence-rule-change', 'offline-fixtures', 'reviewed-build'],
+        covers: [
+          'starter',
+          'adapted-workbook',
+          'evidence-rule-change',
+          'offline-fixtures',
+          'reviewed-build',
+        ],
         reports: [
           'spreadsheet/init.txt',
           'spreadsheet/test.txt',
@@ -412,6 +425,11 @@ export function writeEvidenceManifest(
           'spreadsheet/test.json',
           'spreadsheet/check.json',
           'spreadsheet/build.json',
+          'spreadsheet-adapted/init.txt',
+          'spreadsheet-adapted/test.txt',
+          'spreadsheet-adapted/test.json',
+          'spreadsheet-adapted/check.json',
+          'spreadsheet-adapted/build.json',
           'spreadsheet-evidence/before-trace.txt',
           'spreadsheet-evidence/after-trace.txt',
           'spreadsheet-evidence/test.txt',
@@ -420,12 +438,24 @@ export function writeEvidenceManifest(
           'spreadsheet-evidence/build.json',
           ...(mode === 'sealed'
             ? [
-                'spreadsheet-evidence/dev-start.txt',
-                'spreadsheet-evidence/records-denied.json',
-                'spreadsheet-evidence/records-request.json',
-                'spreadsheet-evidence/evidence-request.json',
-                'spreadsheet-evidence/dev-smoke.txt',
-                'spreadsheet-evidence/dev-down.txt',
+                'spreadsheet/runtime/dev-start.txt',
+                'spreadsheet/runtime/records-denied.json',
+                'spreadsheet/runtime/records-request.json',
+                'spreadsheet/runtime/evidence-request.json',
+                'spreadsheet/runtime/dev-smoke.txt',
+                'spreadsheet/runtime/dev-down.txt',
+                'spreadsheet-adapted/runtime/dev-start.txt',
+                'spreadsheet-adapted/runtime/records-denied.json',
+                'spreadsheet-adapted/runtime/records-request.json',
+                'spreadsheet-adapted/runtime/evidence-request.json',
+                'spreadsheet-adapted/runtime/dev-smoke.txt',
+                'spreadsheet-adapted/runtime/dev-down.txt',
+                'spreadsheet-evidence/runtime/dev-start.txt',
+                'spreadsheet-evidence/runtime/records-denied.json',
+                'spreadsheet-evidence/runtime/records-request.json',
+                'spreadsheet-evidence/runtime/evidence-request.json',
+                'spreadsheet-evidence/runtime/dev-smoke.txt',
+                'spreadsheet-evidence/runtime/dev-down.txt',
               ]
             : []),
         ],
@@ -434,7 +464,18 @@ export function writeEvidenceManifest(
         id: 'opencrvs-events-api',
         source: 'public-docs-overlay-v1',
         covers: ['oauth-client-credentials', 'bounded-http', 'rhai', 'opencrvs-shaped-search'],
-        reports: ['opencrvs/test.json', 'opencrvs/check.json', 'opencrvs/build.json'],
+        reports: [
+          'opencrvs/test.json',
+          'opencrvs/check.json',
+          'opencrvs/build.json',
+          ...(mode === 'sealed'
+            ? [
+                'opencrvs/runtime/dev-start.txt',
+                'opencrvs/runtime/dev-smoke.txt',
+                'opencrvs/runtime/dev-down.txt',
+              ]
+            : []),
+        ],
       },
     ],
     release_boundary:

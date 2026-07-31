@@ -77,7 +77,14 @@ Registryctl reads the workbook but never writes its cells.
 ## Record the source revision
 
 Open `environments/local.yaml`.
-Replace the sample revision and generation:
+The starter contains:
+
+```yaml
+    source_revision: synthetic-public-works-v1
+    generation: "1"
+```
+
+Replace it with the reviewed source revision and generation:
 
 ```yaml
     source_revision: reviewed-registry-2026-07-31
@@ -150,7 +157,96 @@ Update the synthetic fixtures under
 `integrations/project-record-snapshot/fixtures/` whenever the claim meaning
 changes.
 Fixtures contain invented observations and expected results.
-Do not copy workbook rows into them.
+Do not copy whole workbook rows into them. The selected smoke fixture below
+uses only one reviewed identifier and the evidence-relevant `status` value.
+
+## Select one reviewed smoke row
+
+The local runtime needs one non-sensitive row that you are allowed to exercise.
+For a concrete checkpoint, suppose the reviewed workbook contains this row:
+
+| `project_id` | `district_code` | `sector` | `status` |
+| --- | --- | --- | --- |
+| `institution_001` | `north-01` | `water` | `active` |
+
+Use the actual identifier and evidence-relevant values from your reviewed test
+row in place of `institution_001` and `active`. Do not select a personal or
+production record merely to make the smoke check pass.
+
+In `environments/local.yaml`, replace the starter's local caller selection:
+
+```yaml
+  local_api_keys:
+    match_principal: pw_001
+    no_match_principal: registryctl_local_no_match
+    scopes: [projects:metadata, projects:rows]
+```
+
+with the reviewed row identifier:
+
+```yaml
+  local_api_keys:
+    match_principal: institution_001
+    no_match_principal: registryctl_local_no_match
+    scopes: [projects:metadata, projects:rows]
+```
+
+Then replace
+`integrations/project-record-snapshot/fixtures/match.yaml`:
+
+```yaml
+name: match
+classification: synthetic
+request:
+  target:
+    type: Project
+    identifiers: [{ scheme: project_id, value: pw_001 }]
+  claims: [project-record-exists, project-status-accepted]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: public-works-case-management
+input: { project_id: pw_001 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: active } }
+expect:
+  outcome: match
+  outputs: { status: active }
+  claims:
+    project-record-exists: true
+    project-status-accepted: true
+```
+
+with a synthetic observation matching only the selector and evidence meaning
+you intend to exercise:
+
+```yaml
+name: match
+classification: synthetic
+request:
+  target:
+    type: Project
+    identifiers: [{ scheme: project_id, value: institution_001 }]
+  claims: [project-record-exists, project-status-accepted]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: public-works-case-management
+input: { project_id: institution_001 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: active } }
+expect:
+  outcome: match
+  outputs: { status: active }
+  claims:
+    project-record-exists: true
+    project-status-accepted: true
+```
+
+Keep `development.default_fixture: match`. The fixture remains synthetic; the
+local snapshot smoke check separately confirms that the selected reviewed row
+is reachable through Relay and that Notary returns only the two predicate
+claims.
 
 ## Validate the workbook and authored policy
 
@@ -164,7 +260,7 @@ A passing unchanged fixture set reports:
 
 ```text
 Registry Stack test: passed for fictional-public-works-registry.
-Fixtures: 7.
+Fixtures: 8.
 Next: registryctl dev
 ```
 
@@ -182,7 +278,7 @@ A valid project begins with:
 
 ```text
 Registry Stack check: valid for fictional-public-works-registry.
-Fixtures: 7.
+Fixtures: 8.
 Explanation: registry.project.explanation.v1
 ```
 
@@ -192,7 +288,7 @@ limit, projection, or claim error.
 
 ## Run the local product boundaries
 
-Run the disposable local products and maintained synthetic evidence check:
+Run the disposable local products against the copied workbook:
 
 ```sh
 registryctl dev --detach
@@ -200,11 +296,18 @@ registryctl dev smoke
 registryctl dev down
 ```
 
-The smoke result reports one authorization denial with zero source access and
-one authorized result with minimized claim identifiers.
-It validates the Relay and Notary runtime boundaries using the selected
-synthetic fixture.
-The preceding `check` command is the validation of the copied workbook.
+Registryctl mounts only the validated, project-contained workbook into the
+Relay workloads that consume it. The mount is read-only and digest-bound to the
+development plan. Registryctl does not start the synthetic HTTP source or
+generate source credentials for this mode.
+
+The smoke result reports one live authorization denial and one authorized
+result with minimized claim identifiers. It exercises Relay and Notary against
+the copied workbook using the reviewed request and expected claim shape. A
+local workbook has no request counter, so smoke reports source effects as
+`unobserved`; the derived offline security fixture verifies the
+authorization-before-source contract. If smoke fails, recheck the selected
+row, `match_principal`, `match.yaml`, and evidence rule together.
 
 ## Build reviewable inputs
 
@@ -219,13 +322,15 @@ Registryctl reports:
 ```text
 Built unsigned signing inputs for relay-public, relay-consultation, notary.
 Build output: .registry-stack/build/local
-Next: registryctl trust anchor create --help
+Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build
 ```
 
 The build contains the generated product inputs and a digest-bound
 materialization.
 It does not copy the human-owned workbook into portable review reports, approve
-the data, or activate a deployment.
+the data, or activate a deployment. The 1.0 managed deployment generator does
+not package project-local workbook sources. Bind an operator-managed HTTP
+source before starting governed approval.
 
 ## Verify
 
@@ -235,10 +340,12 @@ Before handoff, confirm:
   evidence meaning.
 - `registryctl check --explain` validates the copied workbook and names no
   diagnostic violations.
-- `registryctl dev smoke` preserves authorization-before-source and minimized
-  output.
+- `registryctl dev smoke` records a live denial and minimized authorized
+  output against the selected reviewed case; the derived fixture supplies the
+  authorization-before-source evidence that a local file cannot count.
 - `registryctl build` emits all three unsigned product lanes.
-- `git status` does not include `.registry-stack/` or an unapproved workbook.
+- If the project is under version control, its status does not include
+  `.registry-stack/` or an unapproved workbook.
 
 ## Troubleshooting
 
@@ -248,4 +355,5 @@ Before handoff, confirm:
 | Duplicate primary key | Two rows share `project_id`. | Resolve the source identity problem. Registry Stack does not choose a duplicate. |
 | Formula or external reference diagnostic | The selected worksheet contains computed or linked cells. | Replace them with reviewed static values. |
 | Unexpected field appears in Relay output | The field remains in `api.projection`. | Remove it and obtain review before rebuilding. |
-| Fixture passes but workbook check fails | Fixtures test synthetic evidence semantics, while `check` validates the workbook. | Correct the workbook or authored mapping without copying live values into fixtures. |
+| Fixture passes but workbook check fails | Fixtures test authored evidence semantics, while `check` also validates the workbook mapping and rows. | Correct the workbook or authored mapping without copying sensitive workbook values into fixtures. |
+| Workbook check passes but smoke fails | The selected smoke request or expected claims no longer match the reviewed workbook case. | Update the development request fixture and expected claim shape to describe one non-sensitive reviewed example without copying unrelated rows. |

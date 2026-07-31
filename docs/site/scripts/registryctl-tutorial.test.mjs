@@ -295,7 +295,7 @@ test('accepts snapshot reports with explicit minimized outputs and claims', () =
   );
 });
 
-test('evidence manifest keeps three journeys and records retained HTTP and OAuth projects', (t) => {
+test('evidence manifest keeps three adopter outcomes and their runtime variants', (t) => {
   const root = mkdtempSync(resolve(tmpdir(), 'registryctl-tutorial-manifest-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const reports = resolve(root, 'reports');
@@ -315,22 +315,42 @@ test('evidence manifest keeps three journeys and records retained HTTP and OAuth
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/dev-smoke.txt'),
+      .reports.includes('spreadsheet-evidence/runtime/dev-smoke.txt'),
   );
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/records-denied.json'),
+      .reports.includes('spreadsheet-evidence/runtime/records-denied.json'),
   );
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/records-request.json'),
+      .reports.includes('spreadsheet-evidence/runtime/records-request.json'),
   );
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/evidence-request.json'),
+      .reports.includes('spreadsheet-evidence/runtime/evidence-request.json'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.includes('spreadsheet-adapted/runtime/dev-smoke.txt'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .covers.includes('adapted-workbook'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'http')
+      .reports.includes('http/runtime/dev-smoke.txt'),
+  );
+  assert.ok(
+    manifest.projects
+      .find((project) => project.id === 'opencrvs-events-api')
+      .reports.includes('opencrvs/runtime/dev-smoke.txt'),
   );
 });
 
@@ -370,16 +390,18 @@ test('reader gate executes the evidence change and limits development runtime to
   assert.ok(spreadsheetFence('Inspect the contract you own', 'text', 1));
   assert.ok(spreadsheetFence('Build the review inputs', 'text', 1));
   assert.match(script, /Spreadsheet evidence-change reader journey: PASS/);
-  assert.match(script, /if \[\[ "\$RUNNER_MODE" == "sealed" \]\]; then/);
+  assert.match(script, /if \[\[ "\$RUNNER_MODE" != "sealed" \]\]; then/);
+  assert.match(script, /run_spreadsheet_runtime/);
+  assert.match(script, /run_synthetic_runtime/);
   assert.match(script, /dev --detach/);
   assert.match(script, /records-denied\.curl/);
   assert.match(script, /records-request\.curl/);
   assert.match(script, /anonymous records request returned HTTP/);
   assert.match(script, /auth\.missing_credential/);
-  assert.match(script, /assert-json-subset "\$EVIDENCE_REPORT\/records-request\.json"/);
-  assert.match(script, /assert-json-subset "\$EVIDENCE_REPORT\/evidence-request\.json"/);
-  assert.match(script, /assert-json-subset "\$EVIDENCE_BODY"/);
-  assert.match(script, /"value":"PW-002"/);
+  assert.match(script, /assert-json-subset "\$report_directory\/records-request\.json"/);
+  assert.match(script, /assert-json-subset "\$report_directory\/evidence-request\.json"/);
+  assert.match(script, /assert-json-subset "\$evidence_body"/);
+  assert.match(script, /\n\tPW-002 \\\n\tcentral-02 \\\n\thealth \\\n\tplanned\n/);
   assert.match(script, /north-01/);
   assert.match(script, /'planned'/);
   assert.match(script, /dev smoke/);
