@@ -10,7 +10,7 @@ import {
   releaseRootOutputDirectory,
   validateArchiveOutputLocation,
 } from './archive-bundle.mjs';
-import { loadDocsets } from './docsets.mjs';
+import { isCandidateSourceProduct, loadDocsets } from './docsets.mjs';
 
 const execFileAsync = promisify(execFile);
 export const currentSourceGeneratedArtifacts = Object.freeze([
@@ -94,10 +94,14 @@ export async function stagePinnedGeneratedArtifacts(docset, {
   docsRoot = process.cwd(),
   executeGit = git,
 } = {}) {
-  const sourceRef = docset.products?.['registry-stack']?.ref;
-  if (typeof sourceRef !== 'string' || !/^[0-9a-f]{40}$/.test(sourceRef)) {
+  const sourceProduct = docset.products?.['registry-stack'];
+  const declaredSourceRef = sourceProduct?.ref;
+  let sourceRef = declaredSourceRef;
+  if (isCandidateSourceProduct(docset, sourceProduct)) {
+    sourceRef = 'HEAD';
+  } else if (typeof sourceRef !== 'string' || !/^[0-9a-f]{40}$/.test(sourceRef)) {
     throw new Error(
-      `Archived docset "${docset.id}" must pin products.registry-stack.ref to a full commit`,
+      `Archived docset "${docset.id}" must pin products.registry-stack.ref to a full commit or its exact candidate tag`,
     );
   }
   const repoRoot = resolve(docsRoot, '../..');

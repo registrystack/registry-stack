@@ -4,6 +4,18 @@ import YAML from 'yaml';
 
 const docsetIdPattern = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const shaPattern = /^[0-9a-f]{40}$/;
+const releaseTagPattern =
+  /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+
+export function isCandidateSourceProduct(docset, product) {
+  return (
+    docset.status === 'archived' &&
+    docset.availability === 'candidate' &&
+    releaseTagPattern.test(docset.id) &&
+    product?.version === docset.id &&
+    product.ref === docset.id
+  );
+}
 
 export async function loadYaml(path) {
   return YAML.parse(await readFile(path, 'utf8'));
@@ -82,8 +94,12 @@ export function validateDocsets(manifest) {
       if (!product.version || !product.ref) {
         throw new Error(`${prefix}.products.${repoId} must declare version and ref`);
       }
-      const isCurrentHead = docset.id === manifest.current && product.ref === 'HEAD';
-      if (!isCurrentHead && !shaPattern.test(product.ref)) {
+      const isCurrent = docset.id === manifest.current;
+      const isCandidateSourceTag = isCandidateSourceProduct(docset, product);
+      if (isCurrent && product.ref !== 'HEAD') {
+        throw new Error(`${prefix}.products.${repoId}.ref must be HEAD for the current docset`);
+      }
+      if (!isCurrent && !isCandidateSourceTag && !shaPattern.test(product.ref)) {
         throw new Error(`${prefix}.products.${repoId}.ref must be a full 40-character SHA`);
       }
     }
