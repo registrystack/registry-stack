@@ -77,6 +77,7 @@ datasets:
           read_scope: social_registry:rows
         api:
           default_limit: 100
+          require_purpose_header: true
           max_limit: 1000
           allowed_filters:
             - field: region
@@ -143,14 +144,11 @@ fn insert_ecosystem_binding_selector(path: &std::path::Path, id: &str, version: 
     .expect("runtime config rewrites");
 }
 
-fn require_runtime_purpose_header(path: &std::path::Path) {
+fn remove_runtime_purpose_header(path: &std::path::Path) {
     let yaml = std::fs::read_to_string(path).expect("runtime config reads");
     std::fs::write(
         path,
-        yaml.replace(
-            "        api:\n          default_limit: 100\n",
-            "        api:\n          default_limit: 100\n          require_purpose_header: true\n",
-        ),
+        yaml.replace("          require_purpose_header: true\n", ""),
     )
     .expect("runtime config rewrites");
 }
@@ -405,7 +403,6 @@ fn load_with_metadata_accepts_selected_governed_evidence_ecosystem_binding() {
     write_metadata_manifest(&tmp, true);
     append_ecosystem_bindings(&tmp, None);
     let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
-    require_runtime_purpose_header(&runtime_path);
     insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
 
     let loaded = config::load_with_metadata(&runtime_path).expect("split config loads");
@@ -422,11 +419,25 @@ fn load_with_metadata_accepts_selected_governed_evidence_ecosystem_binding() {
 }
 
 #[test]
+fn load_with_metadata_rejects_sensitive_runtime_surface_without_governed_binding_or_gate() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    remove_runtime_purpose_header(&runtime_path);
+
+    let err = config::load_with_metadata(&runtime_path)
+        .expect_err("sensitive runtime surface without an enforced gate should fail");
+
+    assert_eq!(err.code(), "runtime.binding.ecosystem_binding_invalid");
+}
+
+#[test]
 fn load_with_metadata_rejects_selected_binding_when_sensitive_runtime_surface_is_inert() {
     let tmp = TempDir::new().expect("tempdir");
     write_metadata_manifest(&tmp, true);
     append_ecosystem_bindings(&tmp, None);
     let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    remove_runtime_purpose_header(&runtime_path);
     insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
 
     let err = config::load_with_metadata(&runtime_path)
@@ -442,6 +453,7 @@ fn load_with_metadata_rejects_selected_binding_without_runtime_or_compiled_purpo
     remove_dataset_policy(&tmp);
     append_ecosystem_bindings(&tmp, None);
     let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    remove_runtime_purpose_header(&runtime_path);
     insert_ecosystem_binding_selector(&runtime_path, "baseline-dpi/v1", Some("v1"));
 
     let err = config::load_with_metadata(&runtime_path)
@@ -653,6 +665,7 @@ datasets:
           read_scope: social_registry:rows
         api:
           default_limit: 100
+          require_purpose_header: true
           max_limit: 1000
       - name: member
         table: members_table
@@ -666,6 +679,7 @@ datasets:
           read_scope: social_registry:rows
         api:
           default_limit: 100
+          require_purpose_header: true
           max_limit: 1000
 
 audit:

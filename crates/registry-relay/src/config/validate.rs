@@ -642,11 +642,6 @@ pub fn validate_runtime_bindings(
     metadata: &CompiledMetadata,
 ) -> Result<(), RuntimeBindingError> {
     validate_ecosystem_binding_selector(config, metadata)?;
-    let selected_governed_binding = config
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.ecosystem_binding.as_ref())
-        .is_some();
     for dataset in &config.datasets {
         let Some(metadata_dataset) = metadata.dataset(dataset.id.as_str()) else {
             tracing::error!(
@@ -718,12 +713,12 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FilterMissing);
                 }
             }
-            if selected_governed_binding && governed_runtime_surface_is_inert(dataset, entity) {
+            if governed_runtime_surface_is_inert(dataset, entity) {
                 tracing::error!(
                     code = "runtime.binding.ecosystem_binding_invalid",
                     dataset_id = %dataset.id,
                     entity = %entity.name,
-                    "selected governed ecosystem binding requires sensitive runtime entities to declare an enforced purpose header or governed policy gate"
+                    "sensitive runtime entities require an enforced purpose header or governed policy gate"
                 );
                 return Err(RuntimeBindingError::EcosystemBindingInvalid);
             }
