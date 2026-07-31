@@ -199,6 +199,32 @@ test('applyDocsetRefs keeps monorepo paths for monorepo archive docsets', () => 
   assert.equal(repos.repos['registry-relay'].docs[0].src, 'crates/registry-relay/docs/README.md');
 });
 
+test('applyDocsetRefs keeps the checked-out monorepo for an exact pre-tag candidate', () => {
+  const repos = repoManifest();
+  const candidate = {
+    ...validDocsets().docsets[1],
+    id: 'v1.2.3',
+    status: 'archived',
+    availability: 'candidate',
+    repo_docs_source: 'monorepo',
+    products: {
+      'registry-relay': {
+        version: 'v1.2.3',
+        ref: 'v1.2.3',
+      },
+    },
+  };
+
+  applyDocsetRefs(repos, candidate);
+
+  assert.equal(repos.repos['registry-relay'].ref, 'v1.2.3');
+  assert.equal(repos.repos['registry-relay'].version, 'v1.2.3');
+  assert.equal(repos.repos['registry-relay'].local, '../..');
+  assert.equal(repos.repos['registry-relay'].remote, 'https://github.com/registrystack/registry-stack');
+  assert.equal(repos.repos['registry-relay'].openapi, 'crates/registry-relay/openapi/registry-relay.openapi.json');
+  assert.equal(repos.repos['registry-relay'].docs[0].src, 'docs/README.md');
+});
+
 test('filterRepoDocsForDocset removes entries excluded from selected archive', () => {
   const repos = repoManifest();
   repos.repos['registry-relay'].docs.push({
