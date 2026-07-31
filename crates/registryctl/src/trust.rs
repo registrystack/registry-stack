@@ -1743,6 +1743,7 @@ mod tests {
                 notary: Some(verified_update.entry().reviewed_binding()),
                 ..Default::default()
             },
+            &[],
             &crate::approved_set::AffectedLaneReplacements {
                 notary: Some(update_output.clone()),
                 ..Default::default()
@@ -1805,6 +1806,7 @@ mod tests {
                 notary: Some(verified_rotated.entry().reviewed_binding()),
                 ..Default::default()
             },
+            &[crate::ApprovedLaneV1::Notary],
             &crate::approved_set::AffectedLaneReplacements {
                 notary: Some(rotated_output.clone()),
                 ..Default::default()

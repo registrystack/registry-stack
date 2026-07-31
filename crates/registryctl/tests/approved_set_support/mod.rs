@@ -32,6 +32,7 @@ pub mod project_authoring {
         pub project: String,
         pub environment: String,
         pub preceding_approved_set_digest: Option<String>,
+        pub anchor_rotation_lanes: Vec<ApprovedLaneV1>,
         pub affected_lanes: Vec<ApprovedLaneV1>,
         pub bindings: ReviewedBuildUpdateV1,
     }

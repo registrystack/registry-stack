@@ -456,6 +456,20 @@ impl VerifiedApprovedLaneV1 {
         self.manifest_sequence
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "integration rejection tests include this module directly"
+    )]
+    pub(crate) fn with_test_anchor_chain(mut self, anchor_chain_digests: Vec<String>) -> Self {
+        self.entry.anchor_digest = anchor_chain_digests
+            .last()
+            .expect("test anchor chain is non-empty")
+            .clone();
+        self.anchor_chain_digests = anchor_chain_digests;
+        self
+    }
+
     pub(crate) fn config_hash(&self) -> &str {
         &self.config_hash
     }
@@ -631,6 +645,7 @@ pub fn assemble_approved_set(
         return assemble_updated_approved_set(
             preceding_file,
             &reviewed_build.bindings,
+            &reviewed_build.anchor_rotation_lanes,
             &replacements,
             &options.output_file,
             |request| match &request.source {
@@ -705,12 +720,24 @@ pub fn assemble_initial_approved_set(
 pub fn assemble_updated_approved_set(
     preceding_set_file: &Path,
     reviewed_build: &ReviewedBuildUpdateV1,
+    anchor_rotation_lanes: &[ApprovedLaneV1],
     replacements: &AffectedLaneReplacements,
     output_file: &Path,
     mut verify: impl FnMut(LaneVerificationRequestV1) -> Result<VerifiedApprovedLaneV1>,
 ) -> Result<ApprovedSetAssemblyReportV1> {
     validate_absent_output_file(output_file)?;
     reviewed_build.validate_update()?;
+    let expected_rotation_lanes = ApprovedLaneV1::ALL
+        .into_iter()
+        .filter(|lane| anchor_rotation_lanes.contains(lane))
+        .collect::<Vec<_>>();
+    if anchor_rotation_lanes != expected_rotation_lanes
+        || anchor_rotation_lanes
+            .iter()
+            .any(|lane| reviewed_build.get(*lane).is_none())
+    {
+        bail!("anchor rotation lanes must be a canonical affected-lane subset");
+    }
     for lane in ApprovedLaneV1::ALL {
         if reviewed_build.get(lane).is_some() != replacements.get(lane).is_some() {
             bail!("replacement lanes must exactly match the reviewed build affected lanes");
@@ -765,7 +792,15 @@ pub fn assemble_updated_approved_set(
             {
                 bail!("replacement lane does not extend the preceding signed manifest");
             }
-            if replacement.entry.anchor_digest == preceding_lane.entry.anchor_digest {
+            let anchor_changed =
+                replacement.entry.anchor_digest != preceding_lane.entry.anchor_digest;
+            if anchor_rotation_lanes.contains(&lane) && !anchor_changed {
+                bail!("explicit anchor rotation lane retained its preceding anchor");
+            }
+            if !anchor_rotation_lanes.contains(&lane) && anchor_changed {
+                bail!("replacement lane changed its anchor without explicit rotation selection");
+            }
+            if !anchor_changed {
                 if replacement.anchor_chain_digests != preceding_lane.anchor_chain_digests {
                     bail!("replacement lane changed anchor history without rotating its anchor");
                 }

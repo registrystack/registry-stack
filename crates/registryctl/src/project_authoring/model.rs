@@ -2328,8 +2328,10 @@ struct FixtureProfile {
 struct VerifiedBaseline {
     lane: VerifiedBaselineLane,
     approval_state: Value,
+    approval_state_bytes: Box<[u8]>,
     approval_state_digest: String,
     verified_manifest: Value,
+    review_bytes: Box<[u8]>,
     review_digest: String,
 }
 

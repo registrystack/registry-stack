@@ -97,7 +97,7 @@ fn update_requires_exact_replacements_and_never_carries_an_unverified_lane() {
     };
     let mut verification_called = false;
     let error =
-        assemble_updated_approved_set(&preceding_file, &reviewed, &missing, &output, |_| {
+        assemble_updated_approved_set(&preceding_file, &reviewed, &[], &missing, &output, |_| {
             verification_called = true;
             unreachable!("replacement completeness fails before verification")
         })
@@ -112,21 +112,25 @@ fn update_requires_exact_replacements_and_never_carries_an_unverified_lane() {
         notary: Some(temporary.path().join("notary-next")),
     };
     let planted_canary = "CANARY_PRIVATE_PRECEDING_PATH";
-    let error =
-        assemble_updated_approved_set(&preceding_file, &reviewed, &complete, &output, |request| {
-            match request.source {
-                LaneVerificationSourceV1::PrecedingApprovedEntry { .. }
-                    if request.lane == ApprovedLaneV1::RelayPublic =>
-                {
-                    anyhow::bail!("{planted_canary}")
-                }
-                LaneVerificationSourceV1::PrecedingApprovedEntry { .. } => {
-                    Ok(initial_lane(request.lane))
-                }
-                LaneVerificationSourceV1::LaneDirectory(_) => Ok(replacement_lane(request.lane)),
+    let error = assemble_updated_approved_set(
+        &preceding_file,
+        &reviewed,
+        &[],
+        &complete,
+        &output,
+        |request| match request.source {
+            LaneVerificationSourceV1::PrecedingApprovedEntry { .. }
+                if request.lane == ApprovedLaneV1::RelayPublic =>
+            {
+                anyhow::bail!("{planted_canary}")
             }
-        })
-        .expect_err("unverified carry forward must fail");
+            LaneVerificationSourceV1::PrecedingApprovedEntry { .. } => {
+                Ok(initial_lane(request.lane))
+            }
+            LaneVerificationSourceV1::LaneDirectory(_) => Ok(replacement_lane(request.lane)),
+        },
+    )
+    .expect_err("unverified carry forward must fail");
     let message = format!("{error:#}");
     assert!(message.contains("preceding-lane verification failed"));
     assert!(!message.contains(planted_canary));
@@ -152,6 +156,7 @@ fn update_rejects_non_successor_lineage_and_reviewed_closure_mismatch() {
     let error = assemble_updated_approved_set(
         &preceding_file,
         &reviewed,
+        &[],
         &replacements,
         &output,
         |request| match request.source {
@@ -189,6 +194,7 @@ fn update_rejects_non_successor_lineage_and_reviewed_closure_mismatch() {
     let error = assemble_updated_approved_set(
         &preceding_file,
         &wrong_reviewed,
+        &[],
         &replacements,
         &output,
         |request| match request.source {
@@ -200,6 +206,60 @@ fn update_rejects_non_successor_lineage_and_reviewed_closure_mismatch() {
     )
     .expect_err("replacement outside reviewed closure must fail");
     assert!(format!("{error:#}").contains("reviewed build closure"));
+    assert!(!output.exists());
+}
+
+#[test]
+fn update_requires_explicit_anchor_rotation_and_rejects_selected_same_anchor() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let (preceding_file, _) = initial_set(&temporary);
+    let output = temporary.path().join("next.json");
+    let reviewed = ReviewedBuildUpdateV1 {
+        notary: Some(reviewed_binding(ApprovedLaneV1::Notary)),
+        ..Default::default()
+    };
+    let replacements = AffectedLaneReplacements {
+        notary: Some(temporary.path().join("notary-next")),
+        ..Default::default()
+    };
+    let same_anchor = assemble_updated_approved_set(
+        &preceding_file,
+        &reviewed,
+        &[ApprovedLaneV1::Notary],
+        &replacements,
+        &output,
+        |request| match request.source {
+            LaneVerificationSourceV1::PrecedingApprovedEntry { .. } => {
+                Ok(initial_lane(request.lane))
+            }
+            LaneVerificationSourceV1::LaneDirectory(_) => Ok(replacement_lane(request.lane)),
+        },
+    )
+    .expect_err("selected rotation must not accept the preceding anchor");
+    assert!(format!("{same_anchor:#}").contains("retained its preceding anchor"));
+    assert!(!output.exists());
+
+    let implicit_rotation = assemble_updated_approved_set(
+        &preceding_file,
+        &reviewed,
+        &[],
+        &replacements,
+        &output,
+        |request| match request.source {
+            LaneVerificationSourceV1::PrecedingApprovedEntry { .. } => {
+                Ok(initial_lane(request.lane))
+            }
+            LaneVerificationSourceV1::LaneDirectory(_) => {
+                let preceding_anchor = initial_lane(request.lane).entry().anchor_digest.clone();
+                Ok(replacement_lane(request.lane).with_test_anchor_chain(vec![
+                    preceding_anchor,
+                    approved_set_support::digest('0'),
+                ]))
+            }
+        },
+    )
+    .expect_err("anchor change without selector must fail");
+    assert!(format!("{implicit_rotation:#}").contains("without explicit rotation selection"));
     assert!(!output.exists());
 }
 

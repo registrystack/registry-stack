@@ -128,6 +128,7 @@ fn update_reverifies_every_preceding_lane_and_only_replaces_reviewed_affected_la
     let report = assemble_updated_approved_set(
         &preceding_file,
         &reviewed,
+        &[],
         &replacements,
         &next_file,
         |request| {
