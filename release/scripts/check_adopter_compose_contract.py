@@ -44,6 +44,14 @@ STAGER_SERVICES = frozenset(
         "registry-notary-stage-secrets",
     }
 )
+ACTION_STAGER_SERVICES = frozenset(
+    {
+        "registry-postgresql-actions-stage-secrets",
+        "registry-relay-public-actions-stage-secrets",
+        "registry-relay-consultation-actions-stage-secrets",
+        "registry-notary-actions-stage-secrets",
+    }
+)
 ORDINARY_SERVICES = WORKLOAD_SERVICES | STAGER_SERVICES
 INITIALIZATION_SERVICES = frozenset(
     {
@@ -60,6 +68,9 @@ INITIALIZATION_SERVICES = frozenset(
         "registry-relay-public-accept-state",
         "registry-relay-consultation-accept-state",
         "registry-notary-accept-state",
+        "registry-relay-public-verify-state",
+        "registry-relay-consultation-verify-state",
+        "registry-notary-verify-state",
     }
 )
 
@@ -73,6 +84,7 @@ OPERATOR_ENVIRONMENT_FILES = frozenset(
 )
 OPERATOR_SECRET_FILES = frozenset(
     {
+        "notary-product-action-audit-key",
         "notary-relay-workload-credential",
         "notary-signing-key",
         "notary-tls-certificate",
@@ -82,8 +94,10 @@ OPERATOR_SECRET_FILES = frozenset(
         "postgresql-tls-private-key",
         "relay-consultation-tls-certificate",
         "relay-consultation-tls-private-key",
+        "relay-consultation-product-action-audit-key",
         "relay-public-tls-certificate",
         "relay-public-tls-private-key",
+        "relay-public-product-action-audit-key",
     }
 )
 EXPECTED_OPERATOR_FILES = OPERATOR_ENVIRONMENT_FILES | OPERATOR_SECRET_FILES
@@ -181,6 +195,17 @@ INITIALIZATION_COMMANDS = {
         "accept_state",
     ],
     "registry-notary-accept-state": ["product-action", "accept_state"],
+    "registry-relay-public-verify-state": [
+        "product-action",
+        "relay-public",
+        "verify_state",
+    ],
+    "registry-relay-consultation-verify-state": [
+        "product-action",
+        "relay-consultation",
+        "verify_state",
+    ],
+    "registry-notary-verify-state": ["product-action", "verify_state"],
 }
 INITIALIZATION_METADATA = {
     "registry-relay-public-prepare-state": (
@@ -243,48 +268,61 @@ INITIALIZATION_METADATA = {
         "notary",
         "accept",
     ),
+    "registry-relay-public-verify-state": (
+        "registry-relay-public",
+        "relay-public",
+        "verify",
+    ),
+    "registry-relay-consultation-verify-state": (
+        "registry-relay-consultation",
+        "relay-consultation",
+        "verify",
+    ),
+    "registry-notary-verify-state": (
+        "registry-notary",
+        "notary",
+        "verify",
+    ),
 }
 INITIALIZATION_DEPENDENCIES = {
     "registry-relay-public-prepare-state": {},
     "registry-relay-public-initialize": {},
     "registry-relay-consultation-prepare-state": {
         "registry-postgres": "service_healthy",
-        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+        "registry-relay-consultation-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
     },
     "registry-relay-consultation-initialize": {
         "registry-postgres": "service_healthy",
-        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+        "registry-relay-consultation-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
     },
     "registry-notary-prepare-state": {
         "registry-postgres": "service_healthy",
-        "registry-notary-stage-secrets": "service_completed_successfully",
+        "registry-notary-actions-stage-secrets": "service_completed_successfully",
     },
-    "registry-notary-initialize": {
-        "registry-postgres": "service_healthy",
-        "registry-notary-stage-secrets": "service_completed_successfully",
-    },
-    "registry-relay-public-preview-state": {
-        "registry-relay-public-stage-secrets": "service_completed_successfully"
-    },
+    "registry-notary-initialize": {},
+    "registry-relay-public-preview-state": {},
     "registry-relay-public-accept-state": {
-        "registry-relay-public-stage-secrets": "service_completed_successfully"
+        "registry-relay-public-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
     },
-    "registry-relay-consultation-preview-state": {
-        "registry-postgres": "service_healthy",
-        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
-    },
+    "registry-relay-consultation-preview-state": {},
     "registry-relay-consultation-accept-state": {
-        "registry-postgres": "service_healthy",
-        "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
+        "registry-relay-consultation-actions-stage-secrets": (
+            "service_completed_successfully"
+        ),
     },
-    "registry-notary-preview-state": {
-        "registry-postgres": "service_healthy",
-        "registry-notary-stage-secrets": "service_completed_successfully",
-    },
+    "registry-notary-preview-state": {},
     "registry-notary-accept-state": {
-        "registry-postgres": "service_healthy",
-        "registry-notary-stage-secrets": "service_completed_successfully",
+        "registry-notary-actions-stage-secrets": "service_completed_successfully"
     },
+    "registry-relay-public-verify-state": {},
+    "registry-relay-consultation-verify-state": {},
+    "registry-notary-verify-state": {},
 }
 
 STAGER_COMMAND = ["umask 077\nexit 0\n"]
@@ -292,7 +330,6 @@ STAGER_SPECS = {
     "registry-postgresql-stage-secrets": {
         "outputs": {
             "postgresql-serve": "registry-operator-files-postgresql-serve",
-            "postgresql-bootstrap": ("registry-operator-files-postgresql-bootstrap"),
         },
         "secrets": {
             "registry-postgresql-admin-password",
@@ -303,12 +340,6 @@ STAGER_SPECS = {
     "registry-relay-public-stage-secrets": {
         "outputs": {
             "relay-public-serve": ("registry-operator-files-relay-public-serve"),
-            "relay-public-preview": (
-                "registry-operator-files-relay-public-preview"
-            ),
-            "relay-public-accept": (
-                "registry-operator-files-relay-public-accept"
-            ),
         },
         "secrets": {
             "registry-relay-public-tls-certificate",
@@ -320,18 +351,6 @@ STAGER_SPECS = {
             "relay-consultation-serve": (
                 "registry-operator-files-relay-consultation-serve"
             ),
-            "relay-consultation-prepare": (
-                "registry-operator-files-relay-consultation-prepare"
-            ),
-            "relay-consultation-initialize": (
-                "registry-operator-files-relay-consultation-initialize"
-            ),
-            "relay-consultation-preview": (
-                "registry-operator-files-relay-consultation-preview"
-            ),
-            "relay-consultation-accept": (
-                "registry-operator-files-relay-consultation-accept"
-            ),
         },
         "secrets": {
             "registry-postgresql-tls-certificate",
@@ -342,10 +361,6 @@ STAGER_SPECS = {
     "registry-notary-stage-secrets": {
         "outputs": {
             "notary-serve": "registry-operator-files-notary-serve",
-            "notary-prepare": "registry-operator-files-notary-prepare",
-            "notary-initialize": "registry-operator-files-notary-initialize",
-            "notary-preview": "registry-operator-files-notary-preview",
-            "notary-accept": "registry-operator-files-notary-accept",
         },
         "secrets": {
             "registry-notary-relay-workload-credential",
@@ -358,20 +373,71 @@ STAGER_SPECS = {
     },
 }
 
-STAGER_RUNTIME_ACTIONS = {
+ACTION_STAGER_SPECS = {
+    "registry-postgresql-actions-stage-secrets": {
+        "outputs": {
+            "postgresql-bootstrap": "registry-operator-files-postgresql-bootstrap",
+        },
+        "secrets": {
+            "registry-postgresql-admin-password",
+            "registry-postgresql-tls-certificate",
+        },
+    },
+    "registry-relay-public-actions-stage-secrets": {
+        "outputs": {
+            "relay-public-accept": "registry-operator-files-relay-public-accept",
+        },
+        "secrets": {"registry-relay-public-product-action-audit-key"},
+    },
+    "registry-relay-consultation-actions-stage-secrets": {
+        "outputs": {
+            "relay-consultation-prepare": (
+                "registry-operator-files-relay-consultation-prepare"
+            ),
+            "relay-consultation-initialize": (
+                "registry-operator-files-relay-consultation-initialize"
+            ),
+            "relay-consultation-accept": (
+                "registry-operator-files-relay-consultation-accept"
+            ),
+        },
+        "secrets": {
+            "registry-postgresql-tls-certificate",
+            "registry-relay-consultation-product-action-audit-key",
+        },
+    },
+    "registry-notary-actions-stage-secrets": {
+        "outputs": {
+            "notary-prepare": "registry-operator-files-notary-prepare",
+            "notary-accept": "registry-operator-files-notary-accept",
+        },
+        "secrets": {
+            "registry-notary-product-action-audit-key",
+            "registry-postgresql-tls-certificate",
+        },
+    },
+}
+
+ORDINARY_STAGER_RUNTIME_ACTIONS = {
     "registry-postgresql-stage-secrets": [
         ("postgresql-serve", "postgresql_state_plane", "serve"),
-        ("postgresql-bootstrap", "postgresql_state_plane", "bootstrap"),
     ],
     "registry-relay-public-stage-secrets": [
         ("relay-public-serve", "relay_public", "serve"),
-        ("relay-public-prepare", "relay_public", "prepare_state_store"),
-        ("relay-public-initialize", "relay_public", "initialize_state"),
-        ("relay-public-preview", "relay_public", "preview_state"),
-        ("relay-public-accept", "relay_public", "accept_state"),
     ],
     "registry-relay-consultation-stage-secrets": [
         ("relay-consultation-serve", "relay_consultation", "serve"),
+    ],
+    "registry-notary-stage-secrets": [
+        ("notary-serve", "notary", "serve"),
+    ],
+}
+
+ACTION_STAGER_RUNTIME_ACTIONS = {
+    "registry-postgresql-actions-stage-secrets": [
+        ("postgresql-bootstrap", "postgresql_state_plane", "bootstrap"),
+    ],
+    "registry-relay-consultation-actions-stage-secrets": [
         (
             "relay-consultation-prepare",
             "relay_consultation",
@@ -392,13 +458,18 @@ STAGER_RUNTIME_ACTIONS = {
             "relay_consultation",
             "accept_state",
         ),
+        (
+            "relay-consultation-verify",
+            "relay_consultation",
+            "verify_state",
+        ),
     ],
-    "registry-notary-stage-secrets": [
-        ("notary-serve", "notary", "serve"),
+    "registry-notary-actions-stage-secrets": [
         ("notary-prepare", "notary", "prepare_state_store"),
         ("notary-initialize", "notary", "initialize_state"),
         ("notary-preview", "notary", "preview_state"),
         ("notary-accept", "notary", "accept_state"),
+        ("notary-verify", "notary", "verify_state"),
     ],
 }
 
@@ -413,10 +484,19 @@ DURABLE_VOLUMES = frozenset(
         "registry-notary-audit",
     }
 )
-STAGED_SECRET_VOLUMES = frozenset(
+ORDINARY_STAGED_SECRET_VOLUMES = frozenset(
     volume for spec in STAGER_SPECS.values() for volume in spec["outputs"].values()
 )
-EXPECTED_VOLUMES = DURABLE_VOLUMES | STAGED_SECRET_VOLUMES
+INITIALIZATION_STAGED_SECRET_VOLUMES = frozenset(
+    volume
+    for spec in ACTION_STAGER_SPECS.values()
+    for volume in spec["outputs"].values()
+)
+STAGED_SECRET_VOLUMES = (
+    ORDINARY_STAGED_SECRET_VOLUMES | INITIALIZATION_STAGED_SECRET_VOLUMES
+)
+EXPECTED_VOLUMES = DURABLE_VOLUMES | ORDINARY_STAGED_SECRET_VOLUMES
+EXPECTED_INITIALIZATION_VOLUMES = DURABLE_VOLUMES | STAGED_SECRET_VOLUMES
 
 EXPECTED_PLAN_WORKLOADS = {
     "relay-public": {
@@ -584,6 +664,21 @@ EXPECTED_INITIALIZATION_ACTIONS = [
         "workload": "notary",
         "action": "accept_state",
     },
+    {
+        "id": "verify-relay-public-state",
+        "workload": "relay-public",
+        "action": "verify_state",
+    },
+    {
+        "id": "verify-relay-consultation-state",
+        "workload": "relay-consultation",
+        "action": "verify_state",
+    },
+    {
+        "id": "verify-notary-state",
+        "workload": "notary",
+        "action": "verify_state",
+    },
 ]
 EXPECTED_RECOVERY_GROUPS = [
     {
@@ -637,8 +732,11 @@ def fixture_runtime_contract() -> dict[str, Any]:
             name: ["CMD", "/conformance-only-healthcheck"]
             for name in WORKLOAD_SERVICES
         },
-        "stager_commands": {
+        "ordinary_stager_commands": {
             name: STAGER_COMMAND for name in STAGER_SERVICES
+        },
+        "initialization_stager_commands": {
+            name: STAGER_COMMAND for name in ACTION_STAGER_SERVICES
         },
         "declared_compose_files": OPERATOR_SECRET_FILES,
     }
@@ -705,42 +803,64 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
         "registry-notary-accept-state": (
             products["registry-notary"]["accept_state"]["command"]
         ),
+        "registry-relay-public-verify-state": (
+            products["registry-relay-public"]["verify_state"]["command"]
+        ),
+        "registry-relay-consultation-verify-state": (
+            products["registry-relay-consultation"]["verify_state"]["command"]
+        ),
+        "registry-notary-verify-state": (
+            products["registry-notary"]["verify_state"]["command"]
+        ),
     }
     health_probes = {
         name: recipe["health_probe"] for name, recipe in products.items()
     }
     health_probes["registry-postgres"] = postgresql["health_probe"]
 
-    stager_commands = {}
-    declared_compose_files = set()
-    for service, actions in STAGER_RUNTIME_ACTIONS.items():
-        script = "umask 077\n"
-        for stage_id, recipe_id, action_id in actions:
-            projections = runtime[recipe_id][action_id]["secret_files"]
-            if not projections:
-                continue
-            declared_compose_files.update(
-                projection["file_id"] for projection in projections
-            )
-            output = f"/registryctl-stage/output/{stage_id}"
-            script += (
-                f"/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
-            )
-            for projection in projections:
-                target = Path(projection["target"]).name
+    def stager_commands_for(
+        action_inventory: dict[str, list[tuple[str, str, str]]],
+    ) -> tuple[dict[str, list[str]], set[str]]:
+        commands = {}
+        files = set()
+        for service, actions in action_inventory.items():
+            script = "umask 077\n"
+            for stage_id, recipe_id, action_id in actions:
+                projections = runtime[recipe_id][action_id]["secret_files"]
+                if not projections:
+                    continue
+                files.update(projection["file_id"] for projection in projections)
+                output = f"/registryctl-stage/output/{stage_id}"
                 script += (
-                    f"/usr/bin/install -m {projection['mode']} "
-                    f"/run/secrets/{projection['file_id']} {output}/{target}\n"
-                    f"/usr/bin/chown {projection['uid']}:{projection['gid']} "
-                    f"{output}/{target}\n"
+                    f"/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
                 )
-        stager_commands[service] = [script]
+                for projection in projections:
+                    target = Path(projection["target"]).name
+                    script += (
+                        f"/usr/bin/install -m {projection['mode']} "
+                        f"/run/secrets/{projection['file_id']} {output}/{target}\n"
+                        f"/usr/bin/chown {projection['uid']}:{projection['gid']} "
+                        f"{output}/{target}\n"
+                    )
+            commands[service] = [script]
+        return commands, files
+
+    ordinary_stager_commands, ordinary_files = stager_commands_for(
+        ORDINARY_STAGER_RUNTIME_ACTIONS
+    )
+    initialization_stager_commands, initialization_files = stager_commands_for(
+        ACTION_STAGER_RUNTIME_ACTIONS
+    )
+    declared_compose_files = set()
+    declared_compose_files.update(ordinary_files)
+    declared_compose_files.update(initialization_files)
 
     return {
         "ordinary_commands": ordinary_commands,
         "initialization_commands": initialization_commands,
         "health_probes": health_probes,
-        "stager_commands": stager_commands,
+        "ordinary_stager_commands": ordinary_stager_commands,
+        "initialization_stager_commands": initialization_stager_commands,
         "declared_compose_files": declared_compose_files,
     }
 
@@ -869,7 +989,8 @@ def _assert_product_hardening(
     health_probe: list[str] | None,
 ) -> None:
     if (
-        service.get("user") != "65532:65532"
+        service.get("platform") != "linux/amd64"
+        or service.get("user") != "65532:65532"
         or service.get("read_only") is not True
         or service.get("cap_drop") != ["ALL"]
         or service.get("security_opt") != ["no-new-privileges:true"]
@@ -900,7 +1021,8 @@ def _assert_postgresql_hardening(
     health_probe: list[str] | None,
 ) -> None:
     if (
-        service.get("user") != "999:999"
+        service.get("platform") != "linux/amd64"
+        or service.get("user") != "999:999"
         or service.get("read_only") is not True
         or service.get("cap_drop") != ["ALL"]
         or service.get("security_opt") != ["no-new-privileges:true"]
@@ -957,7 +1079,7 @@ def _assert_product_mounts(
     }
     if action != "prepare":
         expected_targets.add("/var/lib/registry/state")
-    if action != "preview":
+    if action not in {"preview", "verify"}:
         expected_targets.add("/var/lib/registry/audit")
     secret_volume = f"registry-operator-files-{lane}-{action}"
     if secret_volume in STAGED_SECRET_VOLUMES:
@@ -1013,10 +1135,12 @@ def _assert_stager(
     *,
     postgresql_image: str,
     command: list[str],
+    spec: dict[str, Any] | None = None,
 ) -> None:
-    spec = STAGER_SPECS[name]
+    spec = spec or STAGER_SPECS[name]
     if (
         service.get("image") != postgresql_image
+        or service.get("platform") != "linux/amd64"
         or service.get("entrypoint") != ["/bin/sh", "-ceu"]
         or service.get("command") != command
         or service.get("user") != "0:0"
@@ -1122,7 +1246,7 @@ def _assert_top_level_resources(model: dict[str, Any]) -> None:
     for name in DURABLE_VOLUMES:
         if volumes[name] != {"name": f"{project_name}_{name}"}:
             raise ContractError(f"durable volume {name} lost its stable physical name")
-    for name in STAGED_SECRET_VOLUMES:
+    for name in ORDINARY_STAGED_SECRET_VOLUMES:
         if volumes[name] != {"name": f"{project_name}_{name}"}:
             raise ContractError(f"scratch volume {name} lost its project scope")
 
@@ -1183,7 +1307,13 @@ def validate_plan(path: Path) -> dict[str, str]:
         if (
             expected is None
             or workload_id in observed_ids
-            or set(workload) != {"id", "image_identity", *expected}
+            or set(workload) != {
+                "id",
+                "image_identity",
+                "image_platform",
+                *expected,
+            }
+            or workload.get("image_platform") != "linux-amd64"
             or {key: workload.get(key) for key in expected} != expected
             or not isinstance(image, str)
             or IMAGE_IDENTITY.fullmatch(image) is None
@@ -1229,7 +1359,7 @@ def assert_ordinary_model(
             name,
             services[name],
             postgresql_image=expected_images["registry-postgres"],
-            command=runtime_contract["stager_commands"][name],
+            command=runtime_contract["ordinary_stager_commands"][name],
         )
     for name in WORKLOAD_SERVICES:
         service = services[name]
@@ -1307,7 +1437,7 @@ def assert_ordinary_model(
                 "mode": "ingress",
                 "protocol": "tcp",
                 "published": "4242",
-                "target": 4242,
+                "target": 8080,
             }
         ],
         "registry-notary": [
@@ -1316,7 +1446,7 @@ def assert_ordinary_model(
                 "mode": "ingress",
                 "protocol": "tcp",
                 "published": "4255",
-                "target": 4255,
+                "target": 8081,
             }
         ],
     }
@@ -1343,12 +1473,22 @@ def assert_initialization_model(
     package_root = package_root or FIXTURE_ROOT / "package"
     assert_value_free(model)
     services = _services(model)
-    if set(services) != ORDINARY_SERVICES | INITIALIZATION_SERVICES:
+    if set(services) != (
+        ORDINARY_SERVICES | ACTION_STAGER_SERVICES | INITIALIZATION_SERVICES
+    ):
         raise ContractError("initialization model has the wrong explicit services")
     ordinary_services = _services(ordinary)
     for name in ORDINARY_SERVICES - {"registry-postgres"}:
         if services[name] != ordinary_services[name]:
             raise ContractError(f"initialization delta changed ordinary service {name}")
+    for name in ACTION_STAGER_SERVICES:
+        _assert_stager(
+            name,
+            services[name],
+            postgresql_image=expected_images["registry-postgres"],
+            command=runtime_contract["initialization_stager_commands"][name],
+            spec=ACTION_STAGER_SPECS[name],
+        )
     postgres_delta = {
         key: value
         for key, value in services["registry-postgres"].items()
@@ -1381,7 +1521,9 @@ def assert_initialization_model(
         or _dependencies(bootstrap)
         != {
             "registry-postgres": "service_healthy",
-            "registry-postgresql-stage-secrets": ("service_completed_successfully"),
+            "registry-postgresql-actions-stage-secrets": (
+                "service_completed_successfully"
+            ),
         }
         or "network_mode" in bootstrap
         or "secrets" in bootstrap
@@ -1404,16 +1546,32 @@ def assert_initialization_model(
     for name, (ordinary_name, lane, action) in INITIALIZATION_METADATA.items():
         service = services[name]
         environment = LANE_ENVIRONMENTS[ordinary_name]
+        requires_postgresql = (
+            lane == "relay-consultation"
+            and action in {"prepare", "initialize"}
+        ) or (lane == "notary" and action == "prepare")
+        expected_environment_files = (
+            [package_root / "operator/secrets" / environment]
+            if action in {"prepare", "initialize"}
+            else []
+        )
         if (
             service.get("image") != expected_images[ordinary_name]
             or service.get("command")
             != runtime_contract["initialization_commands"][name]
             or service.get("restart") != "no"
-            or set(service.get("networks", {})) != {NETWORK_RUNTIME}
+            or (
+                set(service.get("networks", {})) != {NETWORK_RUNTIME}
+                if requires_postgresql
+                else "networks" in service
+            )
             or _dependencies(service) != INITIALIZATION_DEPENDENCIES[name]
-            or _env_file_paths(service)
-            != [package_root / "operator/secrets" / environment]
-            or "network_mode" in service
+            or _env_file_paths(service) != expected_environment_files
+            or (
+                "network_mode" in service
+                if requires_postgresql
+                else service.get("network_mode") != "none"
+            )
             or "secrets" in service
             or "ports" in service
         ):
@@ -1428,8 +1586,16 @@ def assert_initialization_model(
         )
     if model.get("networks") != ordinary.get("networks"):
         raise ContractError("initialization delta changed package networks")
-    if model.get("volumes") != ordinary.get("volumes"):
-        raise ContractError("initialization delta changed package volumes")
+    volumes = model.get("volumes")
+    project_name = model.get("name")
+    if not isinstance(volumes, dict) or set(volumes) != EXPECTED_INITIALIZATION_VOLUMES:
+        raise ContractError("initialization model has the wrong volume inventory")
+    for name in DURABLE_VOLUMES:
+        if volumes[name] != ordinary["volumes"][name]:
+            raise ContractError(f"initialization changed durable volume {name}")
+    for name in STAGED_SECRET_VOLUMES:
+        if volumes[name] != {"name": f"{project_name}_{name}"}:
+            raise ContractError(f"initialization scratch volume {name} lost project scope")
     if model.get("secrets") != ordinary.get("secrets"):
         raise ContractError("initialization delta changed operator secrets")
 
@@ -1500,7 +1666,7 @@ def assert_parent_include(model: dict[str, Any], ordinary: dict[str, Any]) -> No
     for name in DURABLE_VOLUMES:
         if parent_volumes[name] != ordinary_volumes[name]:
             raise ContractError(f"parent include renamed durable volume {name}")
-    for name in STAGED_SECRET_VOLUMES:
+    for name in ORDINARY_STAGED_SECRET_VOLUMES:
         if (
             parent_volumes[name] != {"name": f"{parent_name}_{name}"}
             or ordinary_volumes[name] != {"name": f"{ordinary_name}_{name}"}

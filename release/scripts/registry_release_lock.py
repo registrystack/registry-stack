@@ -177,6 +177,7 @@ def secret_projection(
 
 def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     assert lane is not None
+    health_port = 8080 if product == "registry-relay" else 8081
     prefix = ["product-action"]
     if product == "registry-relay":
         prefix.append(lane)
@@ -197,6 +198,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     serve_secrets: list[dict[str, str]]
     if lane == "relay-public":
         preparation_secrets = []
+        initialization_secrets = []
         serve_secrets = [
             secret_projection(
                 "relay-public-tls-certificate",
@@ -209,6 +211,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         ]
     elif lane == "relay-consultation":
         preparation_secrets = [database_ca]
+        initialization_secrets = [database_ca]
         serve_secrets = [
             database_ca,
             secret_projection(
@@ -222,6 +225,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         ]
     else:
         preparation_secrets = [database_ca]
+        initialization_secrets = []
         serve_secrets = [
             database_ca,
             secret_projection(
@@ -242,6 +246,10 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
                 "notary-tls-private-key", "/run/secrets/notary-tls.key"
             ),
         ]
+    action_audit_secret = secret_projection(
+        f"{lane}-product-action-audit-key",
+        "/run/secrets/product-action-audit-key",
+    )
 
     def action(
         name: str,
@@ -249,6 +257,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         secrets: list[dict[str, str]],
         *,
         development: bool = False,
+        environment: bool = True,
     ) -> dict[str, Any]:
         command_prefix = ["development-action"] if development else prefix
         if development and product == "registry-relay":
@@ -256,7 +265,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         return {
             "command": [*command_prefix, name],
             "mounts": mounts,
-            "environment_files": [f"{lane}-environment"],
+            "environment_files": [f"{lane}-environment"] if environment else [],
             "secret_files": secrets,
         }
 
@@ -274,22 +283,25 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         "initialize_state": action(
             "initialize_state",
             [*common_mounts, state, audit],
-            preparation_secrets,
+            initialization_secrets,
         ),
         "verify_state": action(
             "verify_state",
-            [*common_mounts, state_read_only, audit],
-            serve_secrets,
+            [*common_mounts, state_read_only],
+            [],
+            environment=False,
         ),
         "preview_state": action(
             "preview_state",
             [*common_mounts, state_read_only],
-            serve_secrets,
+            [],
+            environment=False,
         ),
         "accept_state": action(
             "accept_state",
             [*common_mounts, state, audit],
-            serve_secrets,
+            [action_audit_secret],
+            environment=False,
         ),
         "development_prepare_state_store": action(
             "prepare_state_store",
@@ -314,7 +326,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
             f"/usr/local/bin/{product}",
             "healthcheck",
             "--url",
-            "http://127.0.0.1:8080/ready",
+            f"http://127.0.0.1:{health_port}/ready",
         ],
     }
 
@@ -495,6 +507,15 @@ def operator_files() -> list[dict[str, Any]]:
             {
                 "id": f"{lane}-environment",
                 "format": "dotenv",
+                "mode": "0600",
+                "allowed_owners": product_owners,
+                "required_keys": [],
+            }
+        )
+        files.append(
+            {
+                "id": f"{lane}-product-action-audit-key",
+                "format": "opaque",
                 "mode": "0600",
                 "allowed_owners": product_owners,
                 "required_keys": [],

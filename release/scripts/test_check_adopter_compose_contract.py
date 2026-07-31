@@ -60,6 +60,7 @@ def bind(kind: str, lane: str, target: str) -> dict:
 
 def product_hardening() -> dict:
     return {
+        "platform": "linux/amd64",
         "user": "65532:65532",
         "read_only": True,
         "cap_drop": ["ALL"],
@@ -71,6 +72,7 @@ def product_hardening() -> dict:
 
 def postgresql_hardening() -> dict:
     return {
+        "platform": "linux/amd64",
         "user": "999:999",
         "read_only": True,
         "cap_drop": ["ALL"],
@@ -105,7 +107,7 @@ def product_mounts(lane: str, action: str) -> list[dict]:
                 read_only=action in {"serve", "preview", "verify"},
             )
         )
-    if action != "preview":
+    if action not in {"preview", "verify"}:
         result.append(volume(f"registry-{lane}-audit", "/var/lib/registry/audit"))
     secret_volume = f"registry-operator-files-{lane}-{action}"
     if secret_volume in CHECKER.STAGED_SECRET_VOLUMES:
@@ -113,10 +115,12 @@ def product_mounts(lane: str, action: str) -> list[dict]:
     return result
 
 
-def stager(name: str) -> dict:
-    spec = CHECKER.STAGER_SPECS[name]
+def stager(name: str, *, action: bool = False) -> dict:
+    specs = CHECKER.ACTION_STAGER_SPECS if action else CHECKER.STAGER_SPECS
+    spec = specs[name]
     return {
         "image": expected_images()["registry-postgres"],
+        "platform": "linux/amd64",
         "entrypoint": ["/bin/sh", "-ceu"],
         "command": CHECKER.STAGER_COMMAND,
         "user": "0:0",
@@ -197,7 +201,7 @@ def ordinary_model() -> dict:
             "mode": "ingress",
             "protocol": "tcp",
             "published": "4242",
-            "target": 4242,
+            "target": 8080,
         }
     ]
     services["registry-notary"]["ports"] = [
@@ -206,7 +210,7 @@ def ordinary_model() -> dict:
             "mode": "ingress",
             "protocol": "tcp",
             "published": "4255",
-            "target": 4255,
+            "target": 8081,
         }
     ]
     return {
@@ -233,6 +237,11 @@ def ordinary_model() -> dict:
 
 def initialization_model(ordinary: dict) -> dict:
     initialized = copy.deepcopy(ordinary)
+    project_name = initialized["name"]
+    for name in CHECKER.ACTION_STAGER_SERVICES:
+        initialized["services"][name] = stager(name, action=True)
+    for name in CHECKER.INITIALIZATION_STAGED_SECRET_VOLUMES:
+        initialized["volumes"][name] = {"name": f"{project_name}_{name}"}
     initialized["services"]["registry-postgres"]["entrypoint"] = list(
         CHECKER.POSTGRESQL_INITIALIZATION_ENTRYPOINT
     )
@@ -245,7 +254,9 @@ def initialization_model(ordinary: dict) -> dict:
         "depends_on": dependency_model(
             {
                 "registry-postgres": "service_healthy",
-                "registry-postgresql-stage-secrets": ("service_completed_successfully"),
+                "registry-postgresql-actions-stage-secrets": (
+                    "service_completed_successfully"
+                ),
             }
         ),
         "env_file": [
@@ -266,15 +277,23 @@ def initialization_model(ordinary: dict) -> dict:
             "image": expected_images()[ordinary_name],
             "command": CHECKER.INITIALIZATION_COMMANDS[name],
             "restart": "no",
-            "networks": {CHECKER.NETWORK_RUNTIME: {}},
-            "env_file": [
+            "volumes": product_mounts(lane, action),
+        }
+        requires_postgresql = (
+            lane == "relay-consultation"
+            and action in {"prepare", "initialize"}
+        ) or (lane == "notary" and action == "prepare")
+        if requires_postgresql:
+            service["networks"] = {CHECKER.NETWORK_RUNTIME: {}}
+        else:
+            service["network_mode"] = "none"
+        if action in {"prepare", "initialize"}:
+            service["env_file"] = [
                 (
                     "/fixture/package/operator/secrets/"
                     f"{CHECKER.LANE_ENVIRONMENTS[ordinary_name]}"
                 )
-            ],
-            "volumes": product_mounts(lane, action),
-        }
+            ]
         dependencies = CHECKER.INITIALIZATION_DEPENDENCIES[name]
         if dependencies:
             service["depends_on"] = dependency_model(dependencies)
@@ -306,6 +325,21 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_ordinary_model_rejects_namespace_holder(self) -> None:
         model = ordinary_model()
         model["services"]["registry-private-namespace"] = {}
+        with self.assertRaisesRegex(
+            CHECKER.ContractError,
+            "four workloads and four lane stagers",
+        ):
+            assert_ordinary(model)
+
+    def test_ordinary_model_excludes_action_stagers_and_scratch_volumes(self) -> None:
+        model = ordinary_model()
+        self.assertTrue(CHECKER.ACTION_STAGER_SERVICES.isdisjoint(model["services"]))
+        self.assertTrue(
+            CHECKER.INITIALIZATION_STAGED_SECRET_VOLUMES.isdisjoint(model["volumes"])
+        )
+
+        action_stager = "registry-relay-consultation-actions-stage-secrets"
+        model["services"][action_stager] = stager(action_stager, action=True)
         with self.assertRaisesRegex(
             CHECKER.ContractError,
             "four workloads and four lane stagers",
@@ -647,6 +681,170 @@ class AdopterComposeContractTests(unittest.TestCase):
         initialized = initialization_model(ordinary)
         assert_initialization(initialized, ordinary)
 
+    def test_initialization_keeps_ordinary_stagers_unchanged(self) -> None:
+        ordinary = ordinary_model()
+        initialized = initialization_model(ordinary)
+        for name in CHECKER.STAGER_SERVICES:
+            self.assertEqual(initialized["services"][name], ordinary["services"][name])
+
+        changed = initialization_model(ordinary)
+        changed["services"]["registry-relay-public-stage-secrets"]["command"] = [
+            "changed"
+        ]
+        with self.assertRaisesRegex(
+            CHECKER.ContractError,
+            "changed ordinary service registry-relay-public-stage-secrets",
+        ):
+            assert_initialization(changed, ordinary)
+
+    def test_initialization_action_stagers_are_closed_and_isolated(self) -> None:
+        ordinary = ordinary_model()
+        baseline = initialization_model(ordinary)
+        fields = (
+            "image",
+            "platform",
+            "entrypoint",
+            "command",
+            "user",
+            "read_only",
+            "cap_drop",
+            "cap_add",
+            "security_opt",
+            "tmpfs",
+            "network_mode",
+            "restart",
+        )
+        for service_name in CHECKER.ACTION_STAGER_SERVICES:
+            for field in fields:
+                with self.subTest(service=service_name, field=field):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name].pop(field)
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+            for projection in baseline["services"][service_name]["secrets"]:
+                with self.subTest(
+                    service=service_name,
+                    secret=projection["source"],
+                ):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name]["secrets"] = [
+                        item
+                        for item in initialized["services"][service_name]["secrets"]
+                        if item["source"] != projection["source"]
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+            for mount in baseline["services"][service_name]["volumes"]:
+                with self.subTest(service=service_name, output=mount["target"]):
+                    initialized = initialization_model(ordinary)
+                    initialized["services"][service_name]["volumes"] = [
+                        item
+                        for item in initialized["services"][service_name]["volumes"]
+                        if item["target"] != mount["target"]
+                    ]
+                    with self.assertRaises(CHECKER.ContractError):
+                        assert_initialization(initialized, ordinary)
+
+    def test_state_checks_are_non_mutating_and_accept_has_only_lane_audit_key(
+        self,
+    ) -> None:
+        ordinary = ordinary_model()
+        initialized = initialization_model(ordinary)
+        for lane in ("relay-public", "relay-consultation", "notary"):
+            accept_name = f"registry-{lane}-accept-state"
+            accept = initialized["services"][accept_name]
+            self.assertNotIn("env_file", accept)
+            self.assertEqual(accept["network_mode"], "none")
+            accept_secrets = [
+                mount
+                for mount in accept["volumes"]
+                if mount["target"] == "/run/secrets"
+            ]
+            self.assertEqual(
+                accept_secrets,
+                [
+                    volume(
+                        f"registry-operator-files-{lane}-accept",
+                        "/run/secrets",
+                        read_only=True,
+                    )
+                ],
+            )
+            self.assertEqual(
+                CHECKER._dependencies(accept),
+                {
+                    f"registry-{lane}-actions-stage-secrets": (
+                        "service_completed_successfully"
+                    )
+                },
+            )
+            for action in ("preview", "verify"):
+                service = initialized["services"][f"registry-{lane}-{action}-state"]
+                self.assertNotIn("env_file", service)
+                self.assertNotIn("secrets", service)
+                self.assertEqual(service["network_mode"], "none")
+                self.assertNotIn(
+                    "/run/secrets",
+                    {mount["target"] for mount in service["volumes"]},
+                )
+
+        changed = initialization_model(ordinary)
+        changed["services"]["registry-notary-accept-state"]["env_file"] = [
+            "/fixture/package/operator/secrets/notary-environment"
+        ]
+        with self.assertRaises(CHECKER.ContractError):
+            assert_initialization(changed, ordinary)
+
+        changed = initialization_model(ordinary)
+        changed["services"]["registry-notary-accept-state"]["volumes"] = [
+            mount
+            for mount in changed["services"]["registry-notary-accept-state"]["volumes"]
+            if mount["target"] != "/run/secrets"
+        ]
+        with self.assertRaises(CHECKER.ContractError):
+            assert_initialization(changed, ordinary)
+
+        changed = initialization_model(ordinary)
+        changed["services"]["registry-relay-public-preview-state"]["volumes"].append(
+            volume(
+                "registry-operator-files-relay-public-accept",
+                "/run/secrets",
+                read_only=True,
+            )
+        )
+        with self.assertRaises(CHECKER.ContractError):
+            assert_initialization(changed, ordinary)
+
+    def test_preparation_and_bootstrap_use_only_action_stagers(self) -> None:
+        ordinary = ordinary_model()
+        initialized = initialization_model(ordinary)
+        expected = {
+            "registry-postgres-bootstrap": (
+                "registry-postgresql-actions-stage-secrets"
+            ),
+            "registry-relay-consultation-prepare-state": (
+                "registry-relay-consultation-actions-stage-secrets"
+            ),
+            "registry-relay-consultation-initialize": (
+                "registry-relay-consultation-actions-stage-secrets"
+            ),
+            "registry-notary-prepare-state": (
+                "registry-notary-actions-stage-secrets"
+            ),
+        }
+        for service_name, stager_name in expected.items():
+            dependencies = initialized["services"][service_name]["depends_on"]
+            self.assertIn(stager_name, dependencies)
+            self.assertTrue(CHECKER.STAGER_SERVICES.isdisjoint(dependencies))
+
+        changed = initialization_model(ordinary)
+        dependencies = changed["services"]["registry-postgres-bootstrap"]["depends_on"]
+        dependencies["registry-postgresql-stage-secrets"] = dependencies.pop(
+            "registry-postgresql-actions-stage-secrets"
+        )
+        with self.assertRaises(CHECKER.ContractError):
+            assert_initialization(changed, ordinary)
+
     def test_initialization_requires_exact_postgresql_delta(self) -> None:
         ordinary = ordinary_model()
         initialized = initialization_model(ordinary)
@@ -738,7 +936,16 @@ class AdopterComposeContractTests(unittest.TestCase):
         ordinary = ordinary_model()
         baseline = initialization_model(ordinary)
         for service_name in CHECKER.INITIALIZATION_SERVICES:
-            for field in ("command", "restart", "networks"):
+            metadata = CHECKER.INITIALIZATION_METADATA.get(service_name)
+            requires_postgresql = metadata is None or (
+                (
+                    metadata[1] == "relay-consultation"
+                    and metadata[2] in {"prepare", "initialize"}
+                )
+                or (metadata[1] == "notary" and metadata[2] == "prepare")
+            )
+            network_field = "networks" if requires_postgresql else "network_mode"
+            for field in ("command", "restart", network_field):
                 with self.subTest(service=service_name, field=field):
                     initialized = initialization_model(ordinary)
                     initialized["services"][service_name].pop(field)
@@ -963,7 +1170,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         parent["networks"][CHECKER.NETWORK_RUNTIME] = {
             "name": f"{parent_name}_{CHECKER.NETWORK_RUNTIME}"
         }
-        for name in CHECKER.STAGED_SECRET_VOLUMES:
+        for name in CHECKER.ORDINARY_STAGED_SECRET_VOLUMES:
             parent["volumes"][name] = {"name": f"{parent_name}_{name}"}
         for name in parent["secrets"]:
             parent["secrets"][name]["name"] = f"{parent_name}_{name}"
@@ -983,7 +1190,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         parent["networks"][CHECKER.NETWORK_RUNTIME] = {
             "name": f"{parent_name}_{CHECKER.NETWORK_RUNTIME}"
         }
-        for name in CHECKER.STAGED_SECRET_VOLUMES:
+        for name in CHECKER.ORDINARY_STAGED_SECRET_VOLUMES:
             parent["volumes"][name] = {"name": f"{parent_name}_{name}"}
         for name in parent["secrets"]:
             parent["secrets"][name]["name"] = f"{parent_name}_{name}"

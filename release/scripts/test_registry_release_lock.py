@@ -282,6 +282,31 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 prefix = ["product-action"]
                 if product == "registry-relay":
                     prefix.append(lane)
+                initialization_secrets = (
+                    lane_secrets[lane]["preparation"]
+                    if lane == "relay-consultation"
+                    else []
+                )
+                action_inputs = {
+                    "serve": (
+                        [f"{lane}-environment"],
+                        lane_secrets[lane]["serve"],
+                    ),
+                    "prepare_state_store": (
+                        [f"{lane}-environment"],
+                        lane_secrets[lane]["preparation"],
+                    ),
+                    "initialize_state": (
+                        [f"{lane}-environment"],
+                        initialization_secrets,
+                    ),
+                    "verify_state": ([], []),
+                    "preview_state": ([], []),
+                    "accept_state": (
+                        [],
+                        [f"{lane}-product-action-audit-key"],
+                    ),
+                }
                 for action in [
                     "serve",
                     "prepare_state_store",
@@ -296,20 +321,19 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         recipe[action]["environment_files"],
-                        [f"{lane}-environment"],
+                        action_inputs[action][0],
                     )
-                    expected_secrets = lane_secrets[lane][
-                        "preparation"
-                        if action in ["prepare_state_store", "initialize_state"]
-                        else "serve"
-                    ]
                     self.assertEqual(
                         [
                             projection["file_id"]
                             for projection in recipe[action]["secret_files"]
                         ],
-                        expected_secrets,
+                        action_inputs[action][1],
                     )
+                self.assertEqual(
+                    recipe["accept_state"]["secret_files"][0]["target"],
+                    "/run/secrets/product-action-audit-key",
+                )
                 development_prefix = ["development-action"]
                 if product == "registry-relay":
                     development_prefix.append(lane)
@@ -368,13 +392,14 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         if mount["source"] == "anti_rollback_state"
                     )
                     self.assertFalse(state_mount["read_only"], field)
-                self.assertNotIn(
-                    "audit",
-                    {
-                        mount["source"]
-                        for mount in recipe["preview_state"]["mounts"]
-                    },
-                )
+                for field in ["preview_state", "verify_state"]:
+                    self.assertNotIn(
+                        "audit",
+                        {
+                            mount["source"]
+                            for mount in recipe[field]["mounts"]
+                        },
+                    )
                 self.assertEqual(
                     recipe["health_probe"],
                     [
@@ -382,7 +407,11 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         f"/usr/local/bin/{product}",
                         "healthcheck",
                         "--url",
-                        "http://127.0.0.1:8080/ready",
+                        (
+                            "http://127.0.0.1:8080/ready"
+                            if product == "registry-relay"
+                            else "http://127.0.0.1:8081/ready"
+                        ),
                     ],
                 )
             self.assertEqual(postgresql["hardening"]["user"], "999:999")
@@ -421,10 +450,13 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 | {
                     "relay-public-tls-certificate",
                     "relay-public-tls-private-key",
+                    "relay-public-product-action-audit-key",
                     "relay-consultation-tls-certificate",
                     "relay-consultation-tls-private-key",
+                    "relay-consultation-product-action-audit-key",
                     "notary-tls-certificate",
                     "notary-tls-private-key",
+                    "notary-product-action-audit-key",
                     "notary-signing-key",
                     "notary-relay-workload-credential",
                     "postgresql-tls-certificate",
