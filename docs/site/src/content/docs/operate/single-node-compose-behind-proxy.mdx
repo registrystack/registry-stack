@@ -112,6 +112,25 @@ Use those values to check the package after transfer.
 Read `generated/RUNBOOK.md`.
 Place each required secret and certificate at the package-relative path that the runbook lists.
 Use owner-only file modes.
+For each dotenv file, the runbook lists the exact environment keys copied from the signed
+product's hash-covered `descriptors/secret-consumers.json`.
+Obtain their values from the owning secret manager or identity provider. Registryctl never
+creates production values.
+
+Use the input contract in the runbook for the non-dotenv files:
+
+- Matching PEM certificate and private-key pairs for each named Registry service.
+- A PostgreSQL certificate chain valid for the fixed private DNS identity `registry-postgres`.
+- A private Notary signing JWK accepted by the provider selected in the signed Notary config.
+- A compact Notary-to-Relay workload JWT that satisfies the exact signed issuer, audience,
+  client/principal, scope, and expiry contract.
+- The PostgreSQL administrator password and every bootstrap database-role password named in the
+  inventory.
+
+The copied bundles under `generated/bundles/` contain the signed, value-free `config/` and
+`descriptors/secret-consumers.json` files that define those requirements. Inspect them, but do not
+edit them. Product startup and preparation remain the semantic validation boundary and fail closed
+before a protected action.
 
 Edit `binding.yaml` only when the visible generated defaults need to change.
 The binding can select loopback ports, package-relative secret and certificate locators, durable

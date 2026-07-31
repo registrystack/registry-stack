@@ -406,6 +406,10 @@ test('transferred package acceptance uses external closure and operator-file che
 
   assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*operator-files\.v1\.json/);
   assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*postgresql-server\.env/);
+  assert.match(page, /exact environment keys copied from the signed/);
+  assert.match(page, /Registryctl never\s+creates production values/);
+  assert.match(page, /compact Notary-to-Relay workload JWT/);
+  assert.match(page, /Product startup and preparation remain the semantic validation boundary/);
   assert.match(
     verifyBlock,
     /^TRANSFER_CLOSURE_SHA256="<independently-recorded-generated-closure-sha256>"$/m,

@@ -419,8 +419,32 @@ fn write_source_tree(root: &Path, lane: ApprovedLaneV1) {
     let bundle_dir = lane_dir.join("bundle");
     let anchor_dir = lane_dir;
     fs::create_dir_all(bundle_dir.join("config")).unwrap();
+    fs::create_dir_all(bundle_dir.join("descriptors")).unwrap();
     fs::create_dir_all(&anchor_dir).unwrap();
     fs::write(bundle_dir.join("config/config.yaml"), "value-free: true\n").unwrap();
+    let environment_key = format!(
+        "REGISTRY_{}_TEST_SECRET",
+        lane_id.replace('-', "_").to_ascii_uppercase()
+    );
+    let product = if lane == ApprovedLaneV1::Notary {
+        "registry-notary"
+    } else {
+        "registry-relay"
+    };
+    fs::write(
+        bundle_dir.join("descriptors/secret-consumers.json"),
+        serde_json::to_vec(&json!({
+            "schema": "registry.project.secret-consumers.v1",
+            "product": product,
+            "consumers": [{
+                "kind": "environment",
+                "locator": environment_key,
+                "config_pointer": "/audit/hash_secret_env",
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     fs::write(bundle_dir.join("manifest.json"), "{}\n").unwrap();
     fs::write(bundle_dir.join("manifest.sig.json"), "{}\n").unwrap();
     fs::write(anchor_dir.join("anchor.json"), "{}\n").unwrap();
@@ -2043,6 +2067,29 @@ fn operator_file_checks_reject_intermediate_non_directory() {
 fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
     let fixture = package_fixture();
     let runbook = fs::read_to_string(fixture.package.join("generated/RUNBOOK.md")).unwrap();
+    let inventory: Value = serde_json::from_slice(
+        &fs::read(fixture.package.join("generated/operator-files.v1.json")).unwrap(),
+    )
+    .unwrap();
+    for lane in ["relay-public", "relay-consultation", "notary"] {
+        let expected_key = format!(
+            "REGISTRY_{}_TEST_SECRET",
+            lane.replace('-', "_").to_ascii_uppercase()
+        );
+        let environment = inventory["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["id"] == format!("{lane}-environment"))
+            .unwrap();
+        assert_eq!(environment["required_keys"], json!([expected_key.clone()]));
+        assert!(
+            runbook.contains(expected_key.as_str()),
+            "runbook omits the signed environment requirement for {lane}"
+        );
+    }
+    assert!(runbook
+        .contains("Environment requirements below come directly from the hash-covered product"));
     for required in [
         "## First installation only",
         "## Ordinary start and stop",

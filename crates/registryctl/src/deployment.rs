@@ -1165,9 +1165,7 @@ fn signed_environment_keys(
     }
     let mut keys = BTreeMap::new();
     for lane in lanes {
-        let descriptor_path = lane
-            .bundle_dir
-            .join("descriptors/secret-consumers.json");
+        let descriptor_path = lane.bundle_dir.join("descriptors/secret-consumers.json");
         let bytes = read_bounded_regular_file(&descriptor_path, MAX_PORTABLE_DOCUMENT_BYTES)
             .context("failed to read signed secret-consumer descriptor")?;
         let descriptor: SecretConsumerDescriptorV1 = serde_json::from_slice(&bytes)
@@ -1197,13 +1195,9 @@ fn signed_environment_keys(
                 let mut bytes = consumer.locator.bytes();
                 if consumer.locator.len() > 128
                     || !matches!(bytes.next(), Some(b'A'..=b'Z' | b'_'))
-                    || !bytes.all(|byte| {
-                        matches!(byte, b'A'..=b'Z' | b'0'..=b'9' | b'_')
-                    })
+                    || !bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'0'..=b'9' | b'_'))
                 {
-                    bail!(
-                        "signed secret-consumer descriptor contains an invalid environment key"
-                    );
+                    bail!("signed secret-consumer descriptor contains an invalid environment key");
                 }
                 lane_keys.insert(consumer.locator);
             }
@@ -1814,7 +1808,8 @@ fn generate_deployment_package_core(
         },
     };
     let candidate_ownership = if use_production_verifier {
-        let candidate_inventory = operator_file_inventory(&verified_inputs.runtime, &binding)?;
+        let candidate_inventory =
+            operator_file_inventory(&verified_inputs.runtime, &binding, &verified_inputs.lanes)?;
         let operator_violations = verify_operator_files(&request.output_dir, &candidate_inventory);
         if !operator_violations.is_empty() {
             bail!("candidate operator-file inventory is not satisfied by the current package");
@@ -1987,7 +1982,8 @@ pub fn render_deployment_package(
     validate_first_generation_target(&request.output_dir)?;
 
     let rendered = render_compose_package(inputs, &request.binding)?;
-    let operator_inventory = operator_file_inventory(&inputs.runtime, &request.binding)?;
+    let operator_inventory =
+        operator_file_inventory(&inputs.runtime, &request.binding, &inputs.lanes)?;
     let parent = request
         .output_dir
         .parent()
@@ -2322,7 +2318,8 @@ fn verify_deployment_package_core(
         unreachable!("invalid package bindings return before rendering");
     };
     let expected_models = effective_rendered_models(&expected_rendered.models)?;
-    let operator_inventory = operator_file_inventory(&inputs.runtime, generation_binding)?;
+    let operator_inventory =
+        operator_file_inventory(&inputs.runtime, generation_binding, &inputs.lanes)?;
     let manifest: DeploymentManifestV1 = read_json(
         &request
             .package_dir
@@ -3783,7 +3780,7 @@ fn expected_fixed_generated_files(
     let mut plan = serde_json::to_vec_pretty(&inputs.plan)?;
     plan.push(b'\n');
     let approved = canonicalize_json(&serde_json::to_value(&inputs.normalized_approved_set)?)?;
-    let inventory = operator_file_inventory(&inputs.runtime, binding)?;
+    let inventory = operator_file_inventory(&inputs.runtime, binding, &inputs.lanes)?;
     let mut inventory_bytes = serde_json::to_vec_pretty(&inventory)?;
     inventory_bytes.push(b'\n');
     let binding_projection = serde_norway::to_string(binding)?.into_bytes();
@@ -4376,7 +4373,7 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
         .iter()
         .map(|file| {
             format!(
-                "| `{}` | {} | `{}` | `{}` | `{}` |",
+                "| `{}` | {} | `{}` | {} | `{}` | `{}` |",
                 file.path,
                 file.consumers
                     .iter()
@@ -4384,6 +4381,15 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
                     .collect::<Vec<_>>()
                     .join("<br>"),
                 operator_file_format(file.format),
+                if file.required_keys.is_empty() {
+                    "not applicable".to_string()
+                } else {
+                    file.required_keys
+                        .iter()
+                        .map(|key| format!("`{key}`"))
+                        .collect::<Vec<_>>()
+                        .join("<br>")
+                },
                 file.mode,
                 file.allowed_owners.join(", ")
             )
@@ -4395,10 +4401,11 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
 Package: `{package_name}`\n\n\
 Record the approved-set digest and generated closure root printed by `registryctl deploy generate` outside this package. After transfer, run `registryctl deploy verify --package . --expected-closure-sha256 <recorded-sha256>` and compare both externally recorded values before any initialization.\n\n\
 ## Required operator files\n\n\
-The signed inventory is also recorded at `generated/operator-files.v1.json`. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package . --check-operator-files`. Registryctl checks only structural isolation, mode, owner, and consumer assignment; Relay and Notary remain the semantic authorities for their environment and secret values. The PostgreSQL certificate chain must validate the fixed private DNS identity `registry-postgres`; bootstrap uses TLS `verify-full` and fails closed on any other identity. Do not create placeholders or print file values.\n\n\
-| Path | Consumers and targets | Format | Mode | Allowed owners |\n\
-|---|---|---|---|---|\n\
+The signed inventory is also recorded at `generated/operator-files.v1.json`. Environment requirements below come directly from the hash-covered product `descriptors/secret-consumers.json`; Registryctl does not infer product semantics. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package . --check-operator-files`. Registryctl checks only structural isolation, mode, owner, and consumer assignment; Relay and Notary remain the semantic authorities for their environment and secret values. Do not create placeholders or print file values.\n\n\
+| Path | Consumers and targets | Format | Required environment keys | Mode | Allowed owners |\n\
+|---|---|---|---|---|---|\n\
 {operator_files}\n\n\
+Obtain environment values from the owning secret manager and identity provider. Obtain private keys from the owning key custodian. Certificates and keys must be matching PEM material for their named service; the PostgreSQL certificate chain must validate `registry-postgres`, because bootstrap uses TLS `verify-full`. The Notary signing file must be a private JWK accepted by the signing provider in the signed Notary config. The Notary-to-Relay file must be a compact JWT issued under the signed consultation Relay workload contract, including its exact issuer, audience, client/principal binding, scope, and expiry. Inspect those value-free requirements in each copied signed bundle's `config/` and `descriptors/secret-consumers.json`; never edit them. Product startup or preparation performs the semantic checks and fails closed before its protected action.\n\n\
 ## Compose project context\n\n\
 The generated package is standalone by default. Set `REGISTRY_STACK_COMPOSE_PROJECT` once and use the same value for every stage, preview, stop, accept, verify, and start command:\n\n\
 ```sh\n\
