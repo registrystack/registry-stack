@@ -263,11 +263,18 @@ test('archived docset builds use isolated generation with release-bound environm
     DOCS_RELEASE_BASE_URL: 'https://mutable.example.invalid/releases',
     GITHUB_ACTIONS: 'true',
     GITHUB_SHA: 'f'.repeat(40),
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_GLOBAL: '/mutable/home/.gitconfig',
+    GIT_CONFIG_KEY_0: 'core.autocrlf',
+    GIT_CONFIG_NOSYSTEM: '0',
+    GIT_CONFIG_VALUE_0: 'true',
+    HTTPS_PROXY: 'https://proxy.example.invalid',
     HOME: '/archive-test/home',
     LANG: 'mutable-locale',
     LC_ALL: 'mutable-locale',
     PATH: '/archive-test/bin',
     PUBLIC_UMAMI_WEBSITE_ID: 'mutable-analytics-id',
+    SSL_CERT_FILE: '/archive-test/ca.pem',
     SOURCE_DATE_EPOCH: '1234',
     TMPDIR: '/archive-test/tmp',
     TZ: 'Pacific/Kiritimati',
@@ -314,12 +321,23 @@ test('archived docset builds use isolated generation with release-bound environm
     assert.equal(env.ASTRO_TELEMETRY_DISABLED, '1');
     assert.equal(env.CI, 'true');
     assert.equal(env.DOCS_DOCSET, 'v1.2.3');
-    assert.equal(env.HOME, '/archive-test/home');
+    assert.match(env.HOME, /registry-docs-archive-home-/);
+    assert.equal(env.USERPROFILE, env.HOME);
+    assert.equal(env.XDG_CACHE_HOME, resolve(env.HOME, '.cache'));
+    assert.equal(env.XDG_CONFIG_HOME, resolve(env.HOME, '.config'));
+    assert.equal(env.GIT_ATTR_NOSYSTEM, '1');
+    assert.equal(env.GIT_CONFIG_COUNT, '1');
+    assert.equal(env.GIT_CONFIG_GLOBAL, process.platform === 'win32' ? 'NUL' : '/dev/null');
+    assert.equal(env.GIT_CONFIG_KEY_0, 'core.autocrlf');
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.equal(env.GIT_CONFIG_VALUE_0, 'false');
+    assert.equal(env.HTTPS_PROXY, 'https://proxy.example.invalid');
     assert.equal(env.LANG, 'C.UTF-8');
     assert.equal(env.LC_ALL, 'C.UTF-8');
     assert.equal(env.NO_COLOR, '1');
     assert.equal(env.PATH, '/archive-test/bin');
     assert.equal(env.SOURCE_DATE_EPOCH, '0');
+    assert.equal(env.SSL_CERT_FILE, '/archive-test/ca.pem');
     assert.equal(env.TMPDIR, '/archive-test/tmp');
     assert.equal(env.TZ, 'UTC');
     assert.equal(env.PUBLIC_UMAMI_WEBSITE_ID, '');
@@ -337,6 +355,7 @@ test('archived docset builds use isolated generation with release-bound environm
   }
   assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
   assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
+  await assert.rejects(readFile(calls[0].env.HOME), { code: 'ENOENT' });
   assert.deepEqual(normalizationCalls, [
     resolve(root, '.release-docsets/v1.2.3/root'),
     resolve(root, 'dist/v/1.2.3'),
