@@ -21,7 +21,13 @@ import { execFile } from 'node:child_process';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
-import { applyDocsetRefs, getDocset, loadDocsets, selectedDocsetId } from './docsets.mjs';
+import {
+  applyDocsetRefs,
+  getDocset,
+  loadDocsets,
+  selectedDocsetId,
+  usesCheckedOutCandidate,
+} from './docsets.mjs';
 
 const run = promisify(execFile);
 
@@ -115,13 +121,18 @@ async function main() {
     }
 
     const localPath = repo.local ? resolve(root, repo.local) : null;
+    const checkedOutCandidate = usesCheckedOutCandidate(docset, docset.products[repoId]);
+    const localRef = checkedOutCandidate ? 'HEAD' : repo.ref;
     let raw = null;
     let mode = null;
     if (localPath && (await isDir(localPath))) {
-      raw = await specFromLocal(localPath, repo.ref, resolvedSpecPath);
+      raw = await specFromLocal(localPath, localRef, resolvedSpecPath);
       if (raw !== null) mode = 'local';
     }
     if (raw === null) {
+      if (checkedOutCandidate) {
+        fail(`${repoId}: candidate spec ${resolvedSpecPath} not found in the checked-out source`);
+      }
       if (!repo.remote) {
         fail(`${repoId}: spec ${resolvedSpecPath} not found at ${repo.ref} locally and no remote to clone`);
       }

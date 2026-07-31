@@ -4,6 +4,7 @@ import {
   applyDocsetRefs,
   currentProductsMatchRepoManifest,
   filterRepoDocsForDocset,
+  usesCheckedOutCandidate,
   validateDocsets,
 } from './docsets.mjs';
 
@@ -223,6 +224,30 @@ test('applyDocsetRefs keeps the checked-out monorepo for an exact pre-tag candid
   assert.equal(repos.repos['registry-relay'].remote, 'https://github.com/registrystack/registry-stack');
   assert.equal(repos.repos['registry-relay'].openapi, 'crates/registry-relay/openapi/registry-relay.openapi.json');
   assert.equal(repos.repos['registry-relay'].docs[0].src, 'docs/README.md');
+  assert.equal(
+    usesCheckedOutCandidate(candidate, candidate.products['registry-relay']),
+    true,
+  );
+});
+
+test('released and external products do not use the checked-out candidate source', () => {
+  const released = validDocsets().docsets[1];
+  assert.equal(
+    usesCheckedOutCandidate(released, released.products['registry-relay']),
+    false,
+  );
+
+  const candidate = {
+    ...released,
+    id: 'v1.2.3',
+    availability: 'candidate',
+    repo_docs_source: 'monorepo',
+  };
+  const external = {
+    version: 'crosswalk-core-v0.2.0',
+    ref: '3'.repeat(40),
+  };
+  assert.equal(usesCheckedOutCandidate(candidate, external), false);
 });
 
 test('filterRepoDocsForDocset removes entries excluded from selected archive', () => {
