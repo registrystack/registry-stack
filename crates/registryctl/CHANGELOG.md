@@ -48,6 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   acceptance record. The 1.0 record requires the complete product identity,
   bundle identity, and accepted anchor pin. Recreate a reviewed 1.0 lineage;
   do not edit or reset governed state in place.
+- Generated Relay and Notary deployments now write hash-chained audit records
+  to their managed persistent file volumes instead of bare standard output.
+  Operators still own retention and off-host shipping for those records.
 
 ## [0.15.2] - 2026-07-28
 
