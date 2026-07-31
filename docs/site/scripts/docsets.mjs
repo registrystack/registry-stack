@@ -17,6 +17,13 @@ export function isCandidateSourceProduct(docset, product) {
   );
 }
 
+export function usesCheckedOutCandidate(docset, product) {
+  return (
+    docset.repo_docs_source === 'monorepo' &&
+    isCandidateSourceProduct(docset, product)
+  );
+}
+
 export async function loadYaml(path) {
   return YAML.parse(await readFile(path, 'utf8'));
 }
@@ -153,10 +160,7 @@ export function applyDocsetRefs(repoManifest, docset, { requireAllActive = true 
     repo.ref = product.ref;
     repo.version = product.version;
     if (docset.status === 'archived') {
-      const usesCheckedOutCandidate =
-        docset.repo_docs_source === 'monorepo' &&
-        isCandidateSourceProduct(docset, product);
-      if (!usesCheckedOutCandidate) delete repo.local;
+      if (!usesCheckedOutCandidate(docset, product)) delete repo.local;
       if (docset.repo_docs_source !== 'monorepo') {
         if (repo.archive_remote) repo.remote = repo.archive_remote;
         if (Object.hasOwn(repo, 'archive_local')) {
