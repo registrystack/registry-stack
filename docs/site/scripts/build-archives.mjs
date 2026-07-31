@@ -13,6 +13,20 @@ import {
 import { isCandidateSourceProduct, loadDocsets } from './docsets.mjs';
 
 const execFileAsync = promisify(execFile);
+const archiveExecutionEnvironmentKeys = Object.freeze([
+  'COMSPEC',
+  'ComSpec',
+  'HOME',
+  'Path',
+  'PATH',
+  'PATHEXT',
+  'SYSTEMROOT',
+  'SystemRoot',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'USERPROFILE',
+]);
 export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/src/data/generated/project-authoring-journeys.json',
   'docs/site/src/data/generated/project-starters.json',
@@ -27,6 +41,40 @@ export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/generated/diagnostics/fixture.v1.json',
   'docs/site/public/generated/diagnostics/operator.v1.json',
 ]);
+
+function compareEntryNames(left, right) {
+  if (left.name < right.name) return -1;
+  if (left.name > right.name) return 1;
+  return 0;
+}
+
+function archiveBuildEnvironment(inheritedEnvironment, docset, {
+  base,
+  indexable,
+}) {
+  const environment = {};
+  for (const key of archiveExecutionEnvironmentKeys) {
+    if (inheritedEnvironment[key] !== undefined) {
+      environment[key] = inheritedEnvironment[key];
+    }
+  }
+  return {
+    ...environment,
+    ASTRO_TELEMETRY_DISABLED: '1',
+    CI: 'true',
+    DOCS_BASE: base,
+    DOCS_DOCSET: docset.id,
+    DOCS_RELEASED_ARCHIVE: indexable ? 'true' : '',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    NO_COLOR: '1',
+    PUBLIC_UMAMI_DOMAINS: '',
+    PUBLIC_UMAMI_SCRIPT_SRC: '',
+    PUBLIC_UMAMI_WEBSITE_ID: '',
+    SOURCE_DATE_EPOCH: '0',
+    TZ: 'UTC',
+  };
+}
 
 async function run(command, args, env) {
   await new Promise((resolveRun, rejectRun) => {
@@ -93,7 +141,7 @@ export async function normalizePagefindGzipMetadata(outputRoot) {
   let normalized = 0;
   for (const entry of entries
     .filter(({ name }) => /^wasm\.[^.]+\.pagefind$/.test(name))
-    .sort((left, right) => left.name.localeCompare(right.name))) {
+    .sort(compareEntryNames)) {
     const path = resolve(pagefindRoot, entry.name);
     if (!entry.isFile()) {
       throw new Error(`generated Pagefind WebAssembly must be a regular file: ${path}`);
@@ -197,6 +245,7 @@ export async function stagePinnedGeneratedArtifacts(docset, {
 
 export async function buildDocsetArchive(docset, {
   docsRoot = process.cwd(),
+  environment = process.env,
   runCommand = run,
   applySeo = applyArchiveSeo,
   normalizePagefind = normalizePagefindGzipMetadata,
@@ -207,23 +256,18 @@ export async function buildDocsetArchive(docset, {
     throw new Error(`Docset "${docset.id}" is not archived`);
   }
 
-  const rootEnv = {
-    ...process.env,
-    DOCS_DOCSET: docset.id,
-    DOCS_BASE: '/',
-    DOCS_RELEASED_ARCHIVE: indexable ? 'true' : '',
-    TZ: 'UTC',
-    // Archives are immutable release files, so their bytes cannot depend on
-    // mutable deployment analytics configuration.
-    PUBLIC_UMAMI_WEBSITE_ID: '',
-    PUBLIC_UMAMI_SCRIPT_SRC: '',
-    PUBLIC_UMAMI_DOMAINS: '',
-  };
-  const versionEnv = {
-    ...rootEnv,
-    DOCS_BASE: docset.path,
-    DOCS_RELEASED_ARCHIVE: '',
-  };
+  // Archives are immutable release files. Pass only the operating-system
+  // variables needed to execute local tools, then bind every build input that
+  // may affect their bytes. Hosted-runner metadata and mutable deployment
+  // configuration must not enter the archive build.
+  const rootEnv = archiveBuildEnvironment(environment, docset, {
+    base: '/',
+    indexable,
+  });
+  const versionEnv = archiveBuildEnvironment(environment, docset, {
+    base: docset.path,
+    indexable: false,
+  });
   const versionOutDir = await validateArchiveOutputLocation(docsRoot, docset);
   const rootOutDir = releaseRootOutputDirectory(docsRoot, docset);
   await rm(rootOutDir, { recursive: true, force: true });

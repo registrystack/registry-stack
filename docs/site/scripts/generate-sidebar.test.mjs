@@ -94,6 +94,26 @@ test('small product (<= threshold) stays flat, Overview first, ordered by nav_or
   ]);
 });
 
+test('equal nav orders use host-independent English collation', () => {
+  const labels = ['README', 'notary', 'alpha', '-dash', '_meta'];
+  const [group] = buildProductSidebar({
+    repos: {
+      'registry-collation': {
+        docs: labels.map((label) => doc(
+          `products/registry-collation/${label}`,
+          'reference',
+          10,
+          label,
+        )),
+      },
+    },
+  });
+  assert.deepEqual(
+    group.items.map(({ label }) => label),
+    ['_meta', '-dash', 'alpha', 'notary', 'README'],
+  );
+});
+
 test('the threshold is exclusive: exactly threshold non-index docs stays flat', () => {
   const docs = [doc('products/p/index', 'explanation', 0, 'P')];
   for (let i = 0; i < SUBGROUP_THRESHOLD; i += 1) {

@@ -163,6 +163,21 @@ test('archive generation excludes current-source generators', async () => {
   );
 });
 
+test('archive byte producers pin collation independently of the host locale', async () => {
+  for (const path of [
+    'scripts/archive-bundle.mjs',
+    'scripts/generate-registryctl-example-overlays.mjs',
+    'scripts/generate-sidebar.mjs',
+    'src/components/SpecRegister.astro',
+  ]) {
+    const source = await readFile(resolve(docsRoot, path), 'utf8');
+    const comparisons = [...source.matchAll(/localeCompare\(/g)];
+    const pinnedComparisons = [...source.matchAll(/localeCompare\([^)]*, 'en-US'\)/g)];
+    assert.ok(comparisons.length > 0, `${path} must keep its explicit archive ordering`);
+    assert.equal(pinnedComparisons.length, comparisons.length, path);
+  }
+});
+
 test('candidate archive stages generated artifacts from the checked-out source', async (t) => {
   const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-candidate-ref-'));
   t.after(() => rm(repoRoot, { recursive: true, force: true }));
@@ -240,9 +255,27 @@ test('archived docset builds use isolated generation with release-bound environm
   const calls = [];
   const normalizationCalls = [];
   const seoCalls = [];
+  const environment = {
+    BASE_URL: '/mutable-deployment/',
+    CI: 'false',
+    DOCS_ARCHIVE_BASE_URL: 'https://mutable.example.invalid/archives',
+    DOCS_BASE: '/mutable/',
+    DOCS_RELEASE_BASE_URL: 'https://mutable.example.invalid/releases',
+    GITHUB_ACTIONS: 'true',
+    GITHUB_SHA: 'f'.repeat(40),
+    HOME: '/archive-test/home',
+    LANG: 'mutable-locale',
+    LC_ALL: 'mutable-locale',
+    PATH: '/archive-test/bin',
+    PUBLIC_UMAMI_WEBSITE_ID: 'mutable-analytics-id',
+    SOURCE_DATE_EPOCH: '1234',
+    TMPDIR: '/archive-test/tmp',
+    TZ: 'Pacific/Kiritimati',
+  };
 
   await buildDocsetArchive(archivedDocset, {
     docsRoot: root,
+    environment,
     stageGeneratedArtifacts: async () => async () => {},
     runCommand: async (command, args, env) => {
       calls.push({ command, args, env });
@@ -276,10 +309,31 @@ test('archived docset builds use isolated generation with release-bound environm
     assert.equal(env.DOCS_DOCSET, 'v1.2.3');
     assert.equal(env.DOCS_BASE, '/');
     assert.equal(env.DOCS_RELEASED_ARCHIVE, '');
+  }
+  for (const { env } of calls) {
+    assert.equal(env.ASTRO_TELEMETRY_DISABLED, '1');
+    assert.equal(env.CI, 'true');
+    assert.equal(env.DOCS_DOCSET, 'v1.2.3');
+    assert.equal(env.HOME, '/archive-test/home');
+    assert.equal(env.LANG, 'C.UTF-8');
+    assert.equal(env.LC_ALL, 'C.UTF-8');
+    assert.equal(env.NO_COLOR, '1');
+    assert.equal(env.PATH, '/archive-test/bin');
+    assert.equal(env.SOURCE_DATE_EPOCH, '0');
+    assert.equal(env.TMPDIR, '/archive-test/tmp');
     assert.equal(env.TZ, 'UTC');
     assert.equal(env.PUBLIC_UMAMI_WEBSITE_ID, '');
     assert.equal(env.PUBLIC_UMAMI_SCRIPT_SRC, '');
     assert.equal(env.PUBLIC_UMAMI_DOMAINS, '');
+    for (const key of [
+      'BASE_URL',
+      'DOCS_ARCHIVE_BASE_URL',
+      'DOCS_RELEASE_BASE_URL',
+      'GITHUB_ACTIONS',
+      'GITHUB_SHA',
+    ]) {
+      assert.equal(Object.hasOwn(env, key), false);
+    }
   }
   assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
   assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');

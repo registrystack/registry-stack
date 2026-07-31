@@ -94,7 +94,7 @@ async function fixture(t, { singleTree = true } = {}) {
       },
     }),
   );
-  return { bundlePath, sourceRoot, targetRoot };
+  return { bundle, bundlePath, sourceRoot, targetRoot };
 }
 
 test('restores a locked release bundle without rebuilding', async (t) => {
@@ -170,6 +170,37 @@ test('bootstraps candidate-era archives with the indexable canonical root', asyn
 
   assert.equal(indexable, true);
   assert.equal(result.bootstrapped, 1);
+});
+
+test('reports expected and actual digests when a bootstrap drifts', async (t) => {
+  const { bundle, targetRoot } = await fixture(t, { singleTree: false });
+  await assert.rejects(
+    assembleArchives({
+      docsRoot: targetRoot,
+      bootstrap: true,
+      fetchImpl: async () => new Response(null, { status: 404 }),
+      buildArchive: async (_docset, options) => {
+        const output = resolve(options.docsRoot, 'dist/v/1.2.3');
+        await mkdir(output, { recursive: true });
+        await writeFile(resolve(output, 'index.html'), '<h1>Drifted version</h1>\n');
+        const rootOutput = releaseRootOutputDirectory(options.docsRoot, docset);
+        await mkdir(rootOutput, { recursive: true });
+        await writeFile(resolve(rootOutput, 'index.html'), '<h1>Drifted root</h1>\n');
+      },
+      restoreGeneratedData: async () => {},
+    }),
+    (error) => {
+      assert.match(error.message, /bootstrapped archive v1\.2\.3 does not match/);
+      assert.match(error.message, new RegExp(`expected: bundle_sha256=${bundle.bundle_sha256}`));
+      assert.match(error.message, new RegExp(`root_tree_sha256=${bundle.root_tree_sha256}`));
+      assert.match(error.message, new RegExp(`version_tree_sha256=${bundle.version_tree_sha256}`));
+      assert.match(
+        error.message,
+        /actual: bundle_sha256=[0-9a-f]{64} root_tree_sha256=[0-9a-f]{64} version_tree_sha256=[0-9a-f]{64}/,
+      );
+      return true;
+    },
+  );
 });
 
 test('does not fall back after a published bundle fails digest verification', async (t) => {

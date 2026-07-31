@@ -18,6 +18,7 @@ import {
   LEGACY_ARCHIVE_BUNDLE_SCHEMA,
   SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA,
   archiveMetadata,
+  archiveSourceRefs,
   assertArchiveMetadataMatchesDocset,
   createArchiveBundle,
   inspectArchiveBundle,
@@ -208,4 +209,17 @@ test('historical v1 metadata remains parseable with its source refs', () => {
     }],
     tree_sha256: 'b'.repeat(64),
   }, docset));
+});
+
+test('archive source refs preserve the explicit historical English order', () => {
+  assert.deepEqual(
+    archiveSourceRefs({
+      products: {
+        zeta: { version: '1', ref: 'z' },
+        'äther': { version: '2', ref: 'a-umlaut' },
+        alpha: { version: '3', ref: 'a' },
+      },
+    }).map(({ name }) => name),
+    ['alpha', 'äther', 'zeta'],
+  );
 });
