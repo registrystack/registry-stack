@@ -270,7 +270,8 @@ fn generated_relay_config(
         },
         "auth": auth,
         "audit": {
-            "sink": "stdout",
+            "sink": "file",
+            "path": "/var/lib/registry/audit/audit.jsonl",
             "hash_secret_env": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         },
         "datasets": datasets,

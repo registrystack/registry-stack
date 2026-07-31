@@ -319,7 +319,8 @@ fn generated_notary_config(
         "server": { "bind": "0.0.0.0:8081", "request_timeout": "30s" },
         "auth": auth,
         "audit": {
-            "sink": "stdout",
+            "sink": "file",
+            "path": "/var/lib/registry/audit/audit.jsonl",
             "hash_secret_env": "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
         },
         "state": state,

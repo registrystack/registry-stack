@@ -11,12 +11,15 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     mkdir -p \
         /workspace/runtime-root/etc/registry-notary \
         /workspace/runtime-root/usr/local/bin \
+        /workspace/runtime-root/var/lib/registry/audit \
+        /workspace/runtime-root/var/lib/registry/state \
         /workspace/runtime-root/var/lib/registry-notary \
         /workspace/runtime-root/var/log/registry-notary \
     && install -m 0755 /workspace/image-bin/registry-notary /workspace/runtime-root/usr/local/bin/registry-notary \
     && install -m 0755 /workspace/image-bin/registry-notary-cel-worker /workspace/runtime-root/usr/local/bin/registry-notary-cel-worker \
     && chown -R 65532:65532 \
         /workspace/runtime-root/etc/registry-notary \
+        /workspace/runtime-root/var/lib/registry \
         /workspace/runtime-root/var/lib/registry-notary \
         /workspace/runtime-root/var/log/registry-notary \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +

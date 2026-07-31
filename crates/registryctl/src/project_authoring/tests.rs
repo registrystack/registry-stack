@@ -1893,6 +1893,51 @@ outputs:
     }
 
     #[test]
+    fn generated_products_persist_audit_records_to_the_managed_volume() {
+        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let compiled = compile_project(&loaded, None).expect("golden project compiles");
+        let product_configs = [
+            (
+                "Relay",
+                compiled
+                    .relay_private
+                    .get(Path::new("config/relay.yaml"))
+                    .expect("Relay config exists"),
+            ),
+            (
+                "consultation Relay",
+                compiled
+                    .relay_consultation_private
+                    .get(Path::new("config/relay.yaml"))
+                    .expect("consultation Relay config exists"),
+            ),
+            (
+                "Notary",
+                compiled
+                    .notary_private
+                    .get(Path::new("config/notary.yaml"))
+                    .expect("Notary config exists"),
+            ),
+        ];
+
+        for (product, bytes) in product_configs {
+            let config: Value =
+                serde_norway::from_slice(bytes).expect("generated product config parses");
+            assert_eq!(
+                config.pointer("/audit/sink"),
+                Some(&json!("file")),
+                "{product} must use a durable audit sink"
+            );
+            assert_eq!(
+                config.pointer("/audit/path"),
+                Some(&json!("/var/lib/registry/audit/audit.jsonl")),
+                "{product} must write to the managed audit volume"
+            );
+        }
+    }
+
+    #[test]
     fn disclosure_review_classes_are_directional() {
         let loaded = load_registry_project(&project_golden("custom-system"), None)
             .expect("golden project loads");

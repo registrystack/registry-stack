@@ -1380,6 +1380,23 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
+    def test_release_product_images_preown_managed_audit_and_state_directories(
+        self,
+    ) -> None:
+        for product in ("relay", "notary"):
+            dockerfile = (
+                ROOT / f"release/docker/Dockerfile.registry-{product}"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry/audit", dockerfile
+            )
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry/state", dockerfile
+            )
+            self.assertIn(
+                "/workspace/runtime-root/var/lib/registry \\", dockerfile
+            )
+
     def legacy_release_workflow_publishes_cross_platform_registryctl_binaries(
         self,
     ) -> None:
