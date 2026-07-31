@@ -287,6 +287,8 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     "prepare_state_store",
                     "initialize_state",
                     "verify_state",
+                    "preview_state",
+                    "accept_state",
                 ]:
                     self.assertEqual(
                         recipe[action]["command"],
@@ -308,9 +310,80 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         ],
                         expected_secrets,
                     )
+                development_prefix = ["development-action"]
+                if product == "registry-relay":
+                    development_prefix.append(lane)
+                for field, action in [
+                    (
+                        "development_prepare_state_store",
+                        "prepare_state_store",
+                    ),
+                    ("development_initialize_state", "initialize_state"),
+                    ("development_serve", "serve"),
+                ]:
+                    self.assertEqual(
+                        recipe[field]["command"],
+                        [*development_prefix, action],
+                    )
+                    self.assertEqual(
+                        recipe[field]["environment_files"],
+                        [f"{lane}-environment"],
+                    )
+                    expected_secrets = lane_secrets[lane][
+                        "preparation"
+                        if field
+                        in {
+                            "development_prepare_state_store",
+                            "development_initialize_state",
+                        }
+                        else "serve"
+                    ]
+                    self.assertEqual(
+                        [
+                            projection["file_id"]
+                            for projection in recipe[field]["secret_files"]
+                        ],
+                        expected_secrets,
+                    )
+                for field in [
+                    "serve",
+                    "verify_state",
+                    "preview_state",
+                    "development_serve",
+                ]:
+                    state_mount = next(
+                        mount
+                        for mount in recipe[field]["mounts"]
+                        if mount["source"] == "anti_rollback_state"
+                    )
+                    self.assertTrue(state_mount["read_only"], field)
+                for field in [
+                    "initialize_state",
+                    "accept_state",
+                    "development_initialize_state",
+                ]:
+                    state_mount = next(
+                        mount
+                        for mount in recipe[field]["mounts"]
+                        if mount["source"] == "anti_rollback_state"
+                    )
+                    self.assertFalse(state_mount["read_only"], field)
+                self.assertNotIn(
+                    "audit",
+                    {
+                        mount["source"]
+                        for mount in recipe["preview_state"]["mounts"]
+                    },
+                )
                 self.assertEqual(
                     recipe["health_probe"],
-                    ["CMD", f"/usr/local/bin/{product}", "healthcheck"],
+                    [
+                        "CMD",
+                        f"/usr/local/bin/{product}",
+                        "healthcheck",
+                        "--url",
+                        "http://127.0.0.1:8080/ready",
+                    ],
                 )
             self.assertEqual(postgresql["hardening"]["user"], "999:999")
             self.assertEqual(
@@ -545,6 +618,10 @@ class RegistryReleaseLockTests(unittest.TestCase):
         lock_sign = workflow.index(
             "contract/registry-release-lock.payload.json", install
         )
+        lock_verify = workflow.index(
+            "cosign verify-blob contract/registry-release-lock.payload.json",
+            lock_sign,
+        )
         assemble = workflow.index(
             "--output release-assets/registry-release-lock.v1.json", lock_sign
         )
@@ -556,9 +633,20 @@ class RegistryReleaseLockTests(unittest.TestCase):
             checksum,
         )
         self.assertLess(install, lock_sign)
-        self.assertLess(lock_sign, assemble)
+        self.assertLess(lock_sign, lock_verify)
+        self.assertLess(lock_verify, assemble)
         self.assertLess(assemble, checksum)
         self.assertLess(checksum, checksum_sign)
+        verification = workflow[lock_verify:assemble]
+        self.assertIn(
+            ".github/workflows/release.yml@refs/tags/${tag}",
+            workflow[lock_sign:assemble],
+        )
+        self.assertIn("--certificate-identity", verification)
+        self.assertIn(
+            "https://token.actions.githubusercontent.com",
+            verification,
+        )
 
     def test_release_workflow_resolves_platform_manifests_and_retries_finalization(
         self,
@@ -601,9 +689,14 @@ class RegistryReleaseLockTests(unittest.TestCase):
 
         render = workflow.index("Render the final P to T image lock")
         inspect = workflow.index('crane manifest "${image_ref}"', render)
+        image_lock_compare = workflow.index(
+            'select(.kind == "image-lock" and .name == $name)',
+            inspect,
+        )
         create = workflow.index("registry_release_lock.py create-payload", inspect)
         self.assertLess(render, inspect)
-        self.assertLess(inspect, create)
+        self.assertLess(inspect, image_lock_compare)
+        self.assertLess(image_lock_compare, create)
         for argument in [
             "--relay-image-index",
             "--notary-image-index",

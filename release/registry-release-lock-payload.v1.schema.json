@@ -237,6 +237,11 @@
         "prepare_state_store",
         "initialize_state",
         "verify_state",
+        "preview_state",
+        "accept_state",
+        "development_prepare_state_store",
+        "development_initialize_state",
+        "development_serve",
         "health_probe"
       ],
       "properties": {
@@ -250,6 +255,21 @@
           "$ref": "#/$defs/runtime_action"
         },
         "verify_state": {
+          "$ref": "#/$defs/runtime_action"
+        },
+        "preview_state": {
+          "$ref": "#/$defs/runtime_action"
+        },
+        "accept_state": {
+          "$ref": "#/$defs/runtime_action"
+        },
+        "development_prepare_state_store": {
+          "$ref": "#/$defs/runtime_action"
+        },
+        "development_initialize_state": {
+          "$ref": "#/$defs/runtime_action"
+        },
+        "development_serve": {
           "$ref": "#/$defs/runtime_action"
         },
         "health_probe": {

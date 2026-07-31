@@ -188,6 +188,9 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     state = runtime_mount(
         "anti_rollback_state", "/var/lib/registry/state", False
     )
+    state_read_only = runtime_mount(
+        "anti_rollback_state", "/var/lib/registry/state", True
+    )
     database_ca = secret_projection(
         "postgresql-tls-certificate", "/run/secrets/postgresql-ca.pem"
     )
@@ -244,9 +247,14 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         name: str,
         mounts: list[dict[str, Any]],
         secrets: list[dict[str, str]],
+        *,
+        development: bool = False,
     ) -> dict[str, Any]:
+        command_prefix = ["development-action"] if development else prefix
+        if development and product == "registry-relay":
+            command_prefix.append(lane)
         return {
-            "command": [*prefix, name],
+            "command": [*command_prefix, name],
             "mounts": mounts,
             "environment_files": [f"{lane}-environment"],
             "secret_files": secrets,
@@ -255,7 +263,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     return {
         "serve": action(
             "serve",
-            [*common_mounts, state, audit],
+            [*common_mounts, state_read_only, audit],
             serve_secrets,
         ),
         "prepare_state_store": action(
@@ -270,10 +278,44 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         ),
         "verify_state": action(
             "verify_state",
+            [*common_mounts, state_read_only, audit],
+            serve_secrets,
+        ),
+        "preview_state": action(
+            "preview_state",
+            [*common_mounts, state_read_only],
+            serve_secrets,
+        ),
+        "accept_state": action(
+            "accept_state",
             [*common_mounts, state, audit],
             serve_secrets,
         ),
-        "health_probe": ["CMD", f"/usr/local/bin/{product}", "healthcheck"],
+        "development_prepare_state_store": action(
+            "prepare_state_store",
+            [*common_mounts, audit],
+            preparation_secrets,
+            development=True,
+        ),
+        "development_initialize_state": action(
+            "initialize_state",
+            [*common_mounts, state, audit],
+            preparation_secrets,
+            development=True,
+        ),
+        "development_serve": action(
+            "serve",
+            [*common_mounts, state_read_only, audit],
+            serve_secrets,
+            development=True,
+        ),
+        "health_probe": [
+            "CMD",
+            f"/usr/local/bin/{product}",
+            "healthcheck",
+            "--url",
+            "http://127.0.0.1:8080/ready",
+        ],
     }
 
 
