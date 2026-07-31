@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -73,6 +73,50 @@ async function replaceFile(path, contents) {
     await rm(temporary, { force: true }).catch(() => {});
     throw error;
   }
+}
+
+export async function normalizePagefindGzipMetadata(outputRoot) {
+  const pagefindRoot = resolve(outputRoot, 'pagefind');
+  let pagefindInfo;
+  try {
+    pagefindInfo = await lstat(pagefindRoot);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { files: 0, normalized: 0 };
+    throw error;
+  }
+  if (pagefindInfo.isSymbolicLink() || !pagefindInfo.isDirectory()) {
+    throw new Error(`generated Pagefind output must be a real directory: ${pagefindRoot}`);
+  }
+  const entries = await readdir(pagefindRoot, { withFileTypes: true });
+
+  let files = 0;
+  let normalized = 0;
+  for (const entry of entries
+    .filter(({ name }) => /^wasm\.[^.]+\.pagefind$/.test(name))
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = resolve(pagefindRoot, entry.name);
+    if (!entry.isFile()) {
+      throw new Error(`generated Pagefind WebAssembly must be a regular file: ${path}`);
+    }
+    const contents = await readOptionalRegularFile(path);
+    if (
+      contents === null ||
+      contents.length < 10 ||
+      contents[0] !== 0x1f ||
+      contents[1] !== 0x8b ||
+      contents[2] !== 0x08
+    ) {
+      throw new Error(`generated Pagefind WebAssembly must use gzip framing: ${path}`);
+    }
+    files += 1;
+    if (contents.subarray(4, 8).some((byte) => byte !== 0)) {
+      const updated = Buffer.from(contents);
+      updated.fill(0, 4, 8);
+      await replaceFile(path, updated);
+      normalized += 1;
+    }
+  }
+  return { files, normalized };
 }
 
 async function git(command, args, cwd) {
@@ -155,6 +199,7 @@ export async function buildDocsetArchive(docset, {
   docsRoot = process.cwd(),
   runCommand = run,
   applySeo = applyArchiveSeo,
+  normalizePagefind = normalizePagefindGzipMetadata,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
   indexable = false,
 } = {}) {
@@ -203,6 +248,8 @@ export async function buildDocsetArchive(docset, {
       ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)],
       versionEnv,
     );
+    await normalizePagefind(rootOutDir);
+    await normalizePagefind(versionOutDir);
     await applySeo(rootOutDir, { indexable });
     await applySeo(versionOutDir, { indexable: false });
   } finally {

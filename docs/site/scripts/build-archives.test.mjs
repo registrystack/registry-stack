@@ -13,14 +13,17 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { gzipSync } from 'node:zlib';
 
 import {
   buildDocsetArchive,
   currentSourceGeneratedArtifacts,
+  normalizePagefindGzipMetadata,
   readOptionalRegularFile,
   stagePinnedGeneratedArtifacts,
 } from './build-archives.mjs';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
+import { treeDigest } from './archive-bundle.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +59,74 @@ test('archive snapshot reads one no-follow regular-file descriptor', async (t) =
     (error) => error?.code === 'ELOOP' || /regular file/.test(error?.message),
   );
   assert.equal(await readOptionalRegularFile(resolve(root, 'missing.json')), null);
+});
+
+test('Pagefind gzip metadata normalizes to a stable archive tree', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-pagefind-gzip-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const left = resolve(root, 'left');
+  const right = resolve(root, 'right');
+  await mkdir(resolve(left, 'pagefind'), { recursive: true });
+  await mkdir(resolve(right, 'pagefind'), { recursive: true });
+
+  const compressed = gzipSync('architecture-independent WebAssembly');
+  for (const name of ['wasm.en.pagefind', 'wasm.unknown.pagefind']) {
+    const leftContents = Buffer.from(compressed);
+    const rightContents = Buffer.from(compressed);
+    leftContents.writeUInt32LE(1_700_000_000, 4);
+    rightContents.writeUInt32LE(1_800_000_000, 4);
+    await writeFile(resolve(left, 'pagefind', name), leftContents);
+    await writeFile(resolve(right, 'pagefind', name), rightContents);
+    assert.notDeepEqual(leftContents, rightContents);
+  }
+
+  assert.deepEqual(
+    await normalizePagefindGzipMetadata(left),
+    { files: 2, normalized: 2 },
+  );
+  assert.deepEqual(
+    await normalizePagefindGzipMetadata(right),
+    { files: 2, normalized: 2 },
+  );
+  for (const name of ['wasm.en.pagefind', 'wasm.unknown.pagefind']) {
+    const normalizedLeft = await readFile(resolve(left, 'pagefind', name));
+    const normalizedRight = await readFile(resolve(right, 'pagefind', name));
+    assert.deepEqual(normalizedLeft.subarray(4, 8), Buffer.alloc(4));
+    assert.deepEqual(normalizedLeft, normalizedRight);
+  }
+  assert.equal(await treeDigest(left), await treeDigest(right));
+});
+
+test('Pagefind metadata normalization rejects an unexpected WASM format', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-pagefind-format-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(resolve(root, 'pagefind'), { recursive: true });
+  await writeFile(resolve(root, 'pagefind/wasm.en.pagefind'), 'not gzip');
+
+  await assert.rejects(
+    normalizePagefindGzipMetadata(root),
+    /must use gzip framing/,
+  );
+});
+
+test('Pagefind metadata normalization rejects a symlinked output directory', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-pagefind-symlink-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const output = resolve(root, 'output');
+  const outside = resolve(root, 'outside');
+  await mkdir(output);
+  await mkdir(outside);
+  const externalWasm = resolve(outside, 'wasm.en.pagefind');
+  const contents = gzipSync('must remain unchanged');
+  contents.writeUInt32LE(1_700_000_000, 4);
+  await writeFile(externalWasm, contents);
+  await symlink(outside, resolve(output, 'pagefind'));
+
+  await assert.rejects(
+    normalizePagefindGzipMetadata(output),
+    /must be a real directory/,
+  );
+  assert.deepEqual(await readFile(externalWasm), contents);
 });
 
 test('archive generation excludes current-source generators', async () => {
@@ -167,6 +238,7 @@ test('archived docset builds use isolated generation with release-bound environm
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
+  const normalizationCalls = [];
   const seoCalls = [];
 
   await buildDocsetArchive(archivedDocset, {
@@ -174,6 +246,9 @@ test('archived docset builds use isolated generation with release-bound environm
     stageGeneratedArtifacts: async () => async () => {},
     runCommand: async (command, args, env) => {
       calls.push({ command, args, env });
+    },
+    normalizePagefind: async (path) => {
+      normalizationCalls.push(path);
     },
     applySeo: async (path, options) => {
       seoCalls.push([path, options]);
@@ -208,6 +283,10 @@ test('archived docset builds use isolated generation with release-bound environm
   }
   assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
   assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
+  assert.deepEqual(normalizationCalls, [
+    resolve(root, '.release-docsets/v1.2.3/root'),
+    resolve(root, 'dist/v/1.2.3'),
+  ]);
   assert.deepEqual(seoCalls, [
     [
       resolve(root, '.release-docsets/v1.2.3/root'),
