@@ -24,7 +24,7 @@ function validDocsets() {
         products: {
           'registry-relay': {
             version: 'main snapshot',
-            ref: '1111111111111111111111111111111111111111',
+            ref: 'HEAD',
           },
         },
       },
@@ -52,7 +52,7 @@ function repoManifest() {
   return {
     repos: {
       'registry-relay': {
-        ref: '1111111111111111111111111111111111111111',
+        ref: 'HEAD',
         version: 'main snapshot',
         remote: 'https://github.com/registrystack/registry-stack',
         local: '../..',
@@ -79,9 +79,68 @@ test('validateDocsets rejects duplicate docset ids', () => {
   assert.throws(() => validateDocsets(manifest), /Duplicate docset id/);
 });
 
-test('validateDocsets rejects non-SHA product refs', () => {
+test('validateDocsets requires HEAD for current product refs', () => {
   const manifest = validDocsets();
   manifest.docsets[0].products['registry-relay'].ref = 'main';
+  assert.throws(() => validateDocsets(manifest), /must be HEAD for the current docset/);
+});
+
+test('validateDocsets accepts the exact canonical tag for archived candidate source products', () => {
+  const manifest = validDocsets();
+  manifest.docsets.push({
+    id: 'v1.2.3',
+    label: 'v1.2.3',
+    path: '/v/1.2.3/',
+    status: 'archived',
+    availability: 'candidate',
+    source: 'registry-stack-v1.2.3',
+    published_at: '2026-08-01',
+    description: 'Candidate docs.',
+    products: {
+      'registry-relay': {
+        version: 'v1.2.3',
+        ref: 'v1.2.3',
+      },
+      crosswalk: {
+        version: 'crosswalk-core-v0.2.0',
+        ref: '3333333333333333333333333333333333333333',
+      },
+    },
+  });
+
+  assert.doesNotThrow(() => validateDocsets(manifest));
+});
+
+test('validateDocsets rejects arbitrary tags for archived candidate products', () => {
+  for (const ref of ['v1.2.4', 'v01.2.3', 'candidate-v1.2.3']) {
+    const manifest = validDocsets();
+    manifest.docsets[1].availability = 'candidate';
+    manifest.docsets[1].id = 'v1.2.3';
+    manifest.docsets[1].products['registry-relay'] = {
+      version: 'v1.2.3',
+      ref,
+    };
+
+    assert.throws(() => validateDocsets(manifest), /must be a full 40-character SHA/);
+  }
+});
+
+test('validateDocsets requires SHA refs for external candidate products', () => {
+  const manifest = validDocsets();
+  manifest.docsets[1].availability = 'candidate';
+  manifest.docsets[1].id = 'v1.2.3';
+  manifest.docsets[1].products.crosswalk = {
+    version: 'crosswalk-core-v0.2.0',
+    ref: 'v1.2.3',
+  };
+
+  assert.throws(() => validateDocsets(manifest), /products\.crosswalk\.ref must be a full 40-character SHA/);
+});
+
+test('validateDocsets requires SHA refs for released products', () => {
+  const manifest = validDocsets();
+  manifest.docsets[1].products['registry-relay'].ref = 'v0.2.0';
+
   assert.throws(() => validateDocsets(manifest), /must be a full 40-character SHA/);
 });
 
@@ -176,6 +235,6 @@ test('currentProductsMatchRepoManifest reports latest drift', () => {
   const repos = repoManifest();
   repos.repos['registry-relay'].ref = '9999999999999999999999999999999999999999';
   assert.deepEqual(currentProductsMatchRepoManifest(repos, validDocsets()), [
-    'registry-relay: repo-docs ref 9999999999999999999999999999999999999999 does not match current docset ref 1111111111111111111111111111111111111111',
+    'registry-relay: repo-docs ref 9999999999999999999999999999999999999999 does not match current docset ref HEAD',
   ]);
 });

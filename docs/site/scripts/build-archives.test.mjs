@@ -18,6 +18,7 @@ import {
   buildDocsetArchive,
   currentSourceGeneratedArtifacts,
   readOptionalRegularFile,
+  stagePinnedGeneratedArtifacts,
 } from './build-archives.mjs';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 
@@ -28,8 +29,10 @@ const archivedDocset = {
   id: 'v1.2.3',
   path: '/v/1.2.3/',
   status: 'archived',
+  availability: 'released',
   products: {
     'registry-stack': {
+      version: 'v1.2.3',
       ref: 'a'.repeat(40),
     },
   },
@@ -86,6 +89,51 @@ test('archive generation excludes current-source generators', async () => {
   assert.match(
     packageJson.scripts.build,
     /node scripts\/apply-archive-seo\.mjs dist/,
+  );
+});
+
+test('candidate archive stages generated artifacts from the checked-out source', async (t) => {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-candidate-ref-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const calls = [];
+  const restore = await stagePinnedGeneratedArtifacts(
+    {
+      ...archivedDocset,
+      availability: 'candidate',
+      products: {
+        'registry-stack': {
+          version: 'v1.2.3',
+          ref: 'v1.2.3',
+        },
+      },
+    },
+    {
+      docsRoot: resolve(repoRoot, 'docs/site'),
+      executeGit: async (_command, args) => {
+        calls.push(args);
+        return { stdout: Buffer.alloc(0) };
+      },
+    },
+  );
+
+  await restore();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 5), ['ls-tree', '-rz', '--name-only', 'HEAD', '--']);
+});
+
+test('candidate archive rejects a tag that does not match its release identity', async () => {
+  await assert.rejects(
+    stagePinnedGeneratedArtifacts({
+      ...archivedDocset,
+      availability: 'candidate',
+      products: {
+        'registry-stack': {
+          version: 'v1.2.3',
+          ref: 'v1.2.4',
+        },
+      },
+    }),
+    /must pin products\.registry-stack\.ref to a full commit or its exact candidate tag/,
   );
 });
 
