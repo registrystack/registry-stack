@@ -207,40 +207,40 @@ pub(crate) fn load_direct_signed_bundle_server_config(
     // startup. Do not consult config_trust from another file or fall back to an
     // unsigned selection when verification or anti-rollback checks fail.
     let verified = verify_notary_product_bundle(bundle_dir, anchor_path)?;
-    load_verified_bundle_server_config_with_state(state_path, None, initialize_state, verified)
+    load_verified_bundle_server_config_with_state(
+        state_path,
+        None,
+        initialize_state,
+        verified,
+        ProductTrustDomainV1::Governed,
+    )
 }
 
 pub(crate) fn verify_notary_product_bundle(
     bundle_dir: &Path,
     anchor_path: &Path,
 ) -> Result<VerifiedConfigBundle, Box<dyn std::error::Error>> {
+    verify_notary_product_bundle_for_domain(bundle_dir, anchor_path, ProductTrustDomainV1::Governed)
+}
+
+pub(crate) fn verify_notary_product_bundle_for_domain(
+    bundle_dir: &Path,
+    anchor_path: &Path,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<VerifiedConfigBundle, Box<dyn std::error::Error>> {
     let verified = verify_config_bundle(bundle_dir, anchor_path).map_err(|error| {
         let code = log_bundle_verification_error(&error);
         bundle_verification_failure(code)
     })?;
-    ensure_direct_config_bundle_instance_binding(&verified)?;
+    ensure_notary_acceptance_identity_for_domain(&verified, trust_domain)?;
     Ok(verified)
 }
 
-pub(crate) fn verify_notary_state_read_only(
-    bundle_dir: &Path,
-    anchor_path: &Path,
-    state_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let verified = verify_notary_product_bundle(bundle_dir, anchor_path)?;
-    let expected =
-        registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
-            .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
-    registry_platform_ops::FileAntiRollbackStore::new(state_path)
-        .verify_state(expected.expectation())
-        .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
-    Ok(())
-}
-
-pub(crate) fn load_verified_notary_config_read_only(
+pub(crate) fn load_verified_notary_config_read_only_for_domain(
     verified: &VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
-    ensure_notary_acceptance_identity(verified)?;
+    ensure_notary_acceptance_identity_for_domain(verified, trust_domain)?;
     let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|_| {
         log_safe_bundle_rejection(
             "config.bundle_rejected",
@@ -278,6 +278,7 @@ pub(crate) fn load_verified_bundle_server_config(
         config_trust.break_glass_override_path.as_deref(),
         initialize_state,
         verified,
+        ProductTrustDomainV1::Governed,
     )
 }
 
@@ -286,8 +287,9 @@ fn load_verified_bundle_server_config_with_state(
     rollback_override_path: Option<&Path>,
     initialize_state: bool,
     verified: VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
-    ensure_notary_acceptance_identity(&verified)?;
+    ensure_notary_acceptance_identity_for_domain(&verified, trust_domain)?;
     let verified_acceptance_state =
         registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
             .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
@@ -371,15 +373,28 @@ fn load_verified_bundle_server_config_with_state(
     })
 }
 
+pub(crate) fn load_verified_product_server_config(
+    state_path: &Path,
+    verified: VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    load_verified_bundle_server_config_with_state(state_path, None, false, verified, trust_domain)
+}
+
 fn ensure_notary_acceptance_identity(
     verified: &VerifiedConfigBundle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use registry_platform_config::{
-        ProductAcceptanceLaneV1, ProductAcceptanceProductV1, ProductTrustDomainV1,
-    };
+    ensure_notary_acceptance_identity_for_domain(verified, ProductTrustDomainV1::Governed)
+}
+
+fn ensure_notary_acceptance_identity_for_domain(
+    verified: &VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use registry_platform_config::{ProductAcceptanceLaneV1, ProductAcceptanceProductV1};
 
     let identity = &verified.manifest.acceptance_identity;
-    if identity.trust_domain == ProductTrustDomainV1::Governed
+    if identity.trust_domain == trust_domain
         && identity.lane == ProductAcceptanceLaneV1::Notary
         && identity.product == ProductAcceptanceProductV1::RegistryNotary
     {
@@ -393,32 +408,6 @@ fn ensure_notary_acceptance_identity(
     Err(bundle_verification_failure(
         BundleVerificationCode::REJECTED_BINDING,
     ))
-}
-
-fn ensure_direct_config_bundle_instance_binding(
-    verified: &VerifiedConfigBundle,
-) -> Result<(), Box<dyn std::error::Error>> {
-    verify_notary_direct_config_bundle_binding(verified).map_err(|code| {
-        log_safe_bundle_rejection("config.bundle_rejected", code, None);
-        bundle_verification_failure(code)
-    })
-}
-
-pub(crate) fn verify_notary_direct_config_bundle_binding(
-    verified: &VerifiedConfigBundle,
-) -> Result<(), BundleVerificationCode> {
-    use registry_platform_config::{
-        ProductAcceptanceLaneV1, ProductAcceptanceProductV1, ProductTrustDomainV1,
-    };
-
-    let identity = &verified.manifest.acceptance_identity;
-    if identity.trust_domain != ProductTrustDomainV1::Governed
-        || identity.lane != ProductAcceptanceLaneV1::Notary
-        || identity.product != ProductAcceptanceProductV1::RegistryNotary
-    {
-        return Err(BundleVerificationCode::REJECTED_BINDING);
-    }
-    Ok(())
 }
 
 pub(crate) fn load_unsigned_break_glass_or_pin_server_config(

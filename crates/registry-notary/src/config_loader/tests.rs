@@ -552,6 +552,42 @@ fn direct_startup_rejects_verified_cross_product_bundle_before_state_resolution(
     );
 }
 
+#[tokio::test]
+async fn product_serve_loader_uses_the_verified_bundle_after_its_path_changes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let verified =
+        verify_notary_product_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("verifies");
+    let candidate =
+        registry_platform_ops::VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+            .expect("acceptance candidate");
+    let store = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path);
+    let plan = store.plan_initialize(&candidate).expect("initial plan");
+    store
+        .commit_acceptance(plan, |_| async { Ok::<(), std::convert::Infallible>(()) })
+        .await
+        .expect("state initializes");
+    let moved_bundle = tmp.path().join("bundle-after-verification");
+    std::fs::rename(&fixture.bundle_dir, &moved_bundle)
+        .expect("verified bundle path becomes unavailable");
+
+    let loaded = load_verified_product_server_config(
+        &fixture.state_path,
+        verified,
+        ProductTrustDomainV1::Governed,
+    )
+    .expect("preverified product input loads without reopening the bundle");
+
+    assert_eq!(loaded.config_source, ConfigSource::SignedBundleFile);
+    assert_eq!(
+        loaded
+            .verified_acceptance_state
+            .expect("verified acceptance state")
+            .expectation(),
+        candidate.expectation()
+    );
+}
+
 #[test]
 fn direct_startup_rejects_every_acceptance_identity_mismatch_before_state_access() {
     const STATE_SENTINEL: &str = "SENTINEL_PRIVATE_ACCEPTANCE_STATE";

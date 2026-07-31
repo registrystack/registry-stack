@@ -27,30 +27,18 @@ pub(crate) async fn run_server(
 }
 
 pub(crate) async fn run_governed_server(
-    config_input: ServerConfigInput,
-    previous_anchor: Option<registry_platform_config::ConfigTrustAnchor>,
-    transition: Option<registry_platform_config::AnchorTransitionV1>,
+    verified: VerifiedConfigBundle,
+    state_path: &Path,
+    trust_domain: ProductTrustDomainV1,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    run_server_with_acceptance(
-        config_input,
-        None,
-        false,
-        ServerAcceptanceMode::Governed(Box::new(GovernedServerAcceptance {
-            previous_anchor,
-            transition,
-        })),
-    )
-    .await
+    init_tracing().map_err(value_free_configuration_failure)?;
+    let loaded = load_verified_product_server_config(state_path, verified, trust_domain)?;
+    run_loaded_server(loaded, None, ServerAcceptanceMode::Governed).await
 }
 
 enum ServerAcceptanceMode {
     Legacy,
-    Governed(Box<GovernedServerAcceptance>),
-}
-
-struct GovernedServerAcceptance {
-    previous_anchor: Option<registry_platform_config::ConfigTrustAnchor>,
-    transition: Option<registry_platform_config::AnchorTransitionV1>,
+    Governed,
 }
 
 enum PreparedServerAcceptance {
@@ -59,7 +47,6 @@ enum PreparedServerAcceptance {
         acceptance: PendingBundleAcceptance,
         audit_evidence: GovernedAcceptanceAuditEvidence,
     },
-    GovernedMutation(Box<GovernedServerMutation>),
 }
 
 struct GovernedAcceptanceAuditEvidence {
@@ -70,6 +57,7 @@ struct GovernedAcceptanceAuditEvidence {
 }
 
 impl GovernedAcceptanceAuditEvidence {
+    #[cfg(test)]
     fn from_intent(intent: &registry_platform_ops::AcceptanceAuditIntentV1) -> Self {
         Self {
             acceptance_identity: intent.key.acceptance_identity.clone(),
@@ -93,12 +81,6 @@ impl GovernedAcceptanceAuditEvidence {
     }
 }
 
-struct GovernedServerMutation {
-    acceptance: PendingBundleAcceptance,
-    store: registry_platform_ops::FileAntiRollbackStore,
-    plan: registry_platform_ops::AcceptanceStatePlanV1,
-}
-
 async fn run_server_with_acceptance(
     config_input: ServerConfigInput,
     bind_override: Option<SocketAddr>,
@@ -108,6 +90,14 @@ async fn run_server_with_acceptance(
     init_tracing().map_err(value_free_configuration_failure)?;
 
     let loaded = load_server_config_input(&config_input, initialize_state)?;
+    run_loaded_server(loaded, bind_override, acceptance_mode).await
+}
+
+async fn run_loaded_server(
+    loaded: LoadedServerConfig,
+    bind_override: Option<SocketAddr>,
+    acceptance_mode: ServerAcceptanceMode,
+) -> Result<(), Box<dyn std::error::Error>> {
     let prepared_acceptance = prepare_server_acceptance(&loaded, acceptance_mode)?;
     let mut config = loaded.config;
     apply_bind_override(&mut config, bind_override);
@@ -214,11 +204,7 @@ fn prepare_server_acceptance(
         ServerAcceptanceMode::Legacy => Ok(PreparedServerAcceptance::Legacy(
             loaded.pending_bundle_acceptance.clone(),
         )),
-        ServerAcceptanceMode::Governed(governed) => {
-            let GovernedServerAcceptance {
-                previous_anchor,
-                transition,
-            } = *governed;
+        ServerAcceptanceMode::Governed => {
             let acceptance = loaded.pending_bundle_acceptance.clone().ok_or_else(|| {
                 Box::new(BundleVerificationFailure::from(
                     BundleVerificationCode::REJECTED_VALIDATION,
@@ -230,30 +216,15 @@ fn prepare_server_acceptance(
                 )) as Box<dyn std::error::Error>
             })?;
             let store = registry_platform_ops::FileAntiRollbackStore::new(&acceptance.state_path);
-            if store.verify_state(candidate.expectation()).is_ok() {
-                if previous_anchor.is_some() || transition.is_some() {
-                    return Err(map_config_boot_error(ConfigBootError::Store(
-                        registry_platform_ops::AntiRollbackStoreError::UnexpectedAnchorTransition,
-                    )));
-                }
-                let audit_evidence =
-                    GovernedAcceptanceAuditEvidence::from_exact_acceptance(&acceptance)?;
-                return Ok(PreparedServerAcceptance::GovernedExact {
-                    acceptance,
-                    audit_evidence,
-                });
-            }
-            let plan = store
-                .plan_acceptance(candidate, previous_anchor.as_ref(), transition.as_ref())
+            store
+                .verify_state(candidate.expectation())
                 .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
-            ensure_acceptance_audit_matches_plan(&acceptance, plan.audit_intent())?;
-            Ok(PreparedServerAcceptance::GovernedMutation(Box::new(
-                GovernedServerMutation {
-                    acceptance,
-                    store,
-                    plan,
-                },
-            )))
+            let audit_evidence =
+                GovernedAcceptanceAuditEvidence::from_exact_acceptance(&acceptance)?;
+            Ok(PreparedServerAcceptance::GovernedExact {
+                acceptance,
+                audit_evidence,
+            })
         }
     }
 }
@@ -273,31 +244,10 @@ async fn finalize_server_acceptance(
             emit_boot_config_audits_for_action(runtime, &acceptance, "serve", Some(&audit_evidence))
                 .await
         }
-        PreparedServerAcceptance::GovernedMutation(mutation) => {
-            let GovernedServerMutation {
-                acceptance,
-                store,
-                plan,
-            } = *mutation;
-            store
-                .commit_acceptance(plan, |intent| async move {
-                    ensure_acceptance_audit_matches_plan(&acceptance, &intent)?;
-                    let audit_evidence = GovernedAcceptanceAuditEvidence::from_intent(&intent);
-                    emit_boot_config_audits_for_action(
-                        runtime,
-                        &acceptance,
-                        "serve",
-                        Some(&audit_evidence),
-                    )
-                    .await
-                })
-                .await
-                .map_err(|error| map_config_boot_error(ConfigBootError::Store(error)))?;
-            Ok(())
-        }
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn initialize_state_once(
     config_input: impl Into<ServerConfigInput>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -356,6 +306,7 @@ pub(crate) async fn initialize_state_once(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_acceptance_audit_matches_plan(
     acceptance: &PendingBundleAcceptance,
     intent: &registry_platform_ops::AcceptanceAuditIntentV1,

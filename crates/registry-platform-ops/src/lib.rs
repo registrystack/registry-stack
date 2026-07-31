@@ -1842,6 +1842,24 @@ pub enum AcceptanceMutationKindV1 {
     RotateAnchor,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceptanceStatePreviewV1 {
+    Current,
+    Advance,
+    RotateAnchor,
+}
+
+impl AcceptanceStatePreviewV1 {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Advance => "advance",
+            Self::RotateAnchor => "rotate",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcceptanceAuditIntentV1 {
     pub mutation: AcceptanceMutationKindV1,
@@ -1854,7 +1872,7 @@ pub struct AcceptanceAuditIntentV1 {
     pub anchor_version: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcceptanceStateExpectationV1<'a> {
     pub key: &'a AntiRollbackKey,
     pub sequence: u64,
@@ -2259,6 +2277,32 @@ impl FileAntiRollbackStore {
             transition: transition.cloned(),
             intent: acceptance_audit_intent(mutation, &accepted),
         })
+    }
+
+    pub fn preview_acceptance(
+        &self,
+        candidate: &VerifiedAcceptanceStateV1,
+        current_anchor: Option<&registry_platform_config::ConfigTrustAnchor>,
+        transition: Option<&registry_platform_config::AnchorTransitionV1>,
+    ) -> Result<AcceptanceStatePreviewV1, AntiRollbackStoreError> {
+        match self.verify_state(candidate.expectation()) {
+            Ok(_) => Ok(AcceptanceStatePreviewV1::Current),
+            Err(AntiRollbackStoreError::StateMismatch(_)) => {
+                let plan = self.plan_acceptance(candidate, current_anchor, transition)?;
+                Ok(match plan.audit_intent().mutation {
+                    AcceptanceMutationKindV1::Advance => AcceptanceStatePreviewV1::Advance,
+                    AcceptanceMutationKindV1::RotateAnchor => {
+                        AcceptanceStatePreviewV1::RotateAnchor
+                    }
+                    AcceptanceMutationKindV1::Initialize => {
+                        return Err(AntiRollbackStoreError::InvalidState(
+                            "update preview produced an initialization plan".to_string(),
+                        ));
+                    }
+                })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn commit_acceptance<AuditFn, AuditFuture, AuditError>(
@@ -5593,6 +5637,216 @@ mod tests {
                 .expect("exact state")
                 .last_sequence,
             2
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_is_read_only_for_current_advance_and_rotation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let current_anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &current_anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let initial_bytes = fs::read(&state_path).expect("initial state bytes");
+
+        assert_eq!(
+            store.preview_acceptance(&initial, None, None),
+            Ok(AcceptanceStatePreviewV1::Current)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after current preview"),
+            initial_bytes
+        );
+
+        let advance = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &current_anchor,
+        );
+        assert_eq!(
+            store.preview_acceptance(&advance, None, None),
+            Ok(AcceptanceStatePreviewV1::Advance)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after advance preview"),
+            initial_bytes
+        );
+
+        let mut next_anchor = current_anchor.clone();
+        next_anchor.version = 2;
+        let rotate = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &next_anchor,
+        );
+        let transition = signed_transition(&current_anchor, &next_anchor);
+        assert_eq!(
+            store.preview_acceptance(&rotate, Some(&current_anchor), Some(&transition)),
+            Ok(AcceptanceStatePreviewV1::RotateAnchor)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after rotation preview"),
+            initial_bytes
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_is_idempotent_with_retained_rotation_inputs_and_rejects_invalid_updates()
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let current_anchor = test_anchor(&key);
+        let initial = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &current_anchor,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&initial).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+        let initial_bytes = fs::read(&state_path).expect("initial state bytes");
+        let mut next_anchor = current_anchor.clone();
+        next_anchor.version = 2;
+        let transition = signed_transition(&current_anchor, &next_anchor);
+
+        assert_eq!(
+            store.preview_acceptance(&initial, Some(&current_anchor), Some(&transition)),
+            Ok(AcceptanceStatePreviewV1::Current)
+        );
+
+        let rotate = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &next_anchor,
+        );
+        let mut invalid = transition;
+        invalid.signatures[0].sig = base64url_no_pad(&[0u8; 64]);
+        assert_eq!(
+            store.preview_acceptance(&rotate, Some(&current_anchor), Some(&invalid)),
+            Err(AntiRollbackStoreError::AnchorTransitionRejected)
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("state after rejected previews"),
+            initial_bytes
+        );
+    }
+
+    #[test]
+    fn acceptance_preview_supports_retained_aliases_same_anchor_advance_and_next_rotation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let store = FileAntiRollbackStore::new(&state_path);
+        let key = governed_test_key();
+        let anchor_1 = test_anchor(&key);
+        let sequence_1 = acceptance_candidate(
+            &key,
+            1,
+            None,
+            test_hash('a'),
+            test_hash('b'),
+            "bundle-1",
+            &anchor_1,
+        );
+        block_on(store.commit_acceptance(
+            store.plan_initialize(&sequence_1).expect("initial plan"),
+            |_| async { Ok::<(), ()>(()) },
+        ))
+        .expect("state initializes");
+
+        let mut anchor_2 = anchor_1.clone();
+        anchor_2.version = 2;
+        let transition_1_to_2 = signed_transition(&anchor_1, &anchor_2);
+        let sequence_2 = acceptance_candidate(
+            &key,
+            2,
+            Some(test_hash('a')),
+            test_hash('c'),
+            test_hash('d'),
+            "bundle-2",
+            &anchor_2,
+        );
+        let rotation_plan = store
+            .plan_acceptance(&sequence_2, Some(&anchor_1), Some(&transition_1_to_2))
+            .expect("first rotation plan");
+        block_on(store.commit_acceptance(rotation_plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("first rotation commits");
+
+        assert_eq!(
+            store.preview_acceptance(&sequence_2, Some(&anchor_1), Some(&transition_1_to_2),),
+            Ok(AcceptanceStatePreviewV1::Current),
+            "a just-rotated current bundle is idempotent even while aliases remain"
+        );
+
+        let sequence_3 = acceptance_candidate(
+            &key,
+            3,
+            Some(test_hash('c')),
+            test_hash('e'),
+            test_hash('f'),
+            "bundle-3",
+            &anchor_2,
+        );
+        assert_eq!(
+            store.preview_acceptance(&sequence_3, None, None),
+            Ok(AcceptanceStatePreviewV1::Advance),
+            "same-anchor advancement does not need retained rotation aliases"
+        );
+        let advance_plan = store
+            .plan_acceptance(&sequence_3, None, None)
+            .expect("same-anchor advance plan");
+        block_on(store.commit_acceptance(advance_plan, |_| async { Ok::<(), ()>(()) }))
+            .expect("same-anchor advance commits");
+
+        let mut anchor_3 = anchor_2.clone();
+        anchor_3.version = 3;
+        let transition_2_to_3 = signed_transition(&anchor_2, &anchor_3);
+        let sequence_4 = acceptance_candidate(
+            &key,
+            4,
+            Some(test_hash('e')),
+            test_hash('1'),
+            test_hash('2'),
+            "bundle-4",
+            &anchor_3,
+        );
+        assert_eq!(
+            store.preview_acceptance(&sequence_4, Some(&anchor_2), Some(&transition_2_to_3),),
+            Ok(AcceptanceStatePreviewV1::RotateAnchor),
+            "the next rotation must authenticate from the currently pinned anchor"
         );
     }
 

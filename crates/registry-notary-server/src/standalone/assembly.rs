@@ -199,8 +199,18 @@ pub async fn emit_prepare_state_store_mutation_intent_audit(
     config: &registry_notary_core::EvidenceAuditConfig,
     evidence: PrepareStateStoreAuditEvidence,
 ) -> Result<(), StandaloneServerError> {
+    emit_product_action_mutation_intent_audit(config, "prepare_state_store", evidence).await
+}
+
+/// Write the checked mutation intent for a closed product action without
+/// constructing issuer, signer, source, or serving capabilities.
+pub async fn emit_product_action_mutation_intent_audit(
+    config: &registry_notary_core::EvidenceAuditConfig,
+    action: &'static str,
+    evidence: PrepareStateStoreAuditEvidence,
+) -> Result<(), StandaloneServerError> {
     let audit = ConfigAuditEvent {
-        action: "prepare_state_store".to_string(),
+        action: action.to_string(),
         source: ConfigSource::SignedBundleFile.as_posture_str().to_string(),
         acceptance_identity: Some(evidence.acceptance_identity),
         bundle_id: Some(evidence.bundle_id),

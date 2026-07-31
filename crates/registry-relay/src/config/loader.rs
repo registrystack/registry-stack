@@ -550,7 +550,19 @@ pub fn load_verified_product_bundle_with_metadata_for_lane(
 #[derive(Debug)]
 pub struct VerifiedProductActionInput {
     pub verified: VerifiedConfigBundle,
-    pub runtime: Config,
+    loaded: LoadedConfig,
+}
+
+impl VerifiedProductActionInput {
+    #[must_use]
+    pub fn runtime(&self) -> &Config {
+        &self.loaded.runtime
+    }
+
+    #[must_use]
+    pub fn into_loaded_config(self) -> LoadedConfig {
+        self.loaded
+    }
 }
 
 pub fn verify_relay_runtime_lane_binding(
@@ -576,29 +588,79 @@ pub fn load_verified_product_action_input(
     trust_anchor_path: &Path,
     expected_lane: RelayProductLane,
 ) -> Result<VerifiedProductActionInput, Error> {
+    load_verified_product_action_input_for_domain(
+        bundle_path,
+        trust_anchor_path,
+        expected_lane,
+        ProductTrustDomainV1::Governed,
+    )
+}
+
+pub fn load_verified_development_action_input(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    expected_lane: RelayProductLane,
+) -> Result<VerifiedProductActionInput, Error> {
+    load_verified_product_action_input_for_domain(
+        bundle_path,
+        trust_anchor_path,
+        expected_lane,
+        ProductTrustDomainV1::Development,
+    )
+}
+
+fn load_verified_product_action_input_for_domain(
+    bundle_path: &Path,
+    trust_anchor_path: &Path,
+    expected_lane: RelayProductLane,
+    expected_domain: ProductTrustDomainV1,
+) -> Result<VerifiedProductActionInput, Error> {
     let verified = verify_config_bundle(bundle_path, trust_anchor_path).map_err(|error| {
         log_bundle_verification_error(&error);
         Error::from(ConfigError::ValidationError)
     })?;
     enforce_relay_direct_bundle_binding(&verified)?;
-    enforce_relay_product_action_identity(&verified, expected_lane)?;
-    let (runtime, _) = parse_config_bytes_for_product_action(&verified.config_bytes)?;
+    enforce_relay_action_identity(&verified, expected_lane, expected_domain)?;
+    let (runtime, config_value) = parse_config_bytes_for_product_action(&verified.config_bytes)?;
     let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(&verified)
         .map_err(map_consultation_artifact_error)?;
-    load_consultation_artifacts(
+    let consultation_artifacts = load_consultation_artifacts(
         &verified.config_path,
         &runtime,
         ConfigSource::SignedBundleFile,
         Some(&signed_bundle_files),
     )
     .map_err(map_consultation_artifact_error)?;
-    load_config_metadata_for_source(
+    let (metadata, metadata_source_digest) = load_config_metadata_for_source(
         &verified.config_path,
         &runtime,
         ConfigSource::SignedBundleFile,
         Some(&signed_bundle_files),
     )?;
-    Ok(VerifiedProductActionInput { verified, runtime })
+    let provenance = ConfigProvenance {
+        source: ConfigSource::SignedBundleFile,
+        internal_config_hash: verified.manifest.config_hash.clone(),
+        posture_config_hash: posture_safe_runtime_config_hash(&config_value),
+        dynamic_reload_supported: false,
+        last_bundle_id: Some(verified.manifest.bundle_id.clone()),
+        last_bundle_sequence: Some(verified.manifest.sequence),
+        last_bundle_signer_kids: verified.signer_kids.clone(),
+        override_pin: None,
+        last_apply_result: None,
+        last_apply_at: None,
+        restart_required: false,
+    };
+    Ok(VerifiedProductActionInput {
+        verified,
+        loaded: LoadedConfig {
+            runtime,
+            metadata,
+            metadata_source_digest,
+            consultation_artifacts,
+            provenance,
+            pending_bundle_acceptance: None,
+        },
+    })
 }
 
 fn load_document_with_metadata(document: LoadedConfigDocument) -> Result<LoadedConfig, Error> {
@@ -668,13 +730,28 @@ pub fn verify_relay_product_action_identity(
     verified: &VerifiedConfigBundle,
     expected_lane: RelayProductLane,
 ) -> Result<(), BundleVerificationCode> {
+    verify_relay_action_identity(verified, expected_lane, ProductTrustDomainV1::Governed)
+}
+
+pub fn verify_relay_development_action_identity(
+    verified: &VerifiedConfigBundle,
+    expected_lane: RelayProductLane,
+) -> Result<(), BundleVerificationCode> {
+    verify_relay_action_identity(verified, expected_lane, ProductTrustDomainV1::Development)
+}
+
+fn verify_relay_action_identity(
+    verified: &VerifiedConfigBundle,
+    expected_lane: RelayProductLane,
+    expected_domain: ProductTrustDomainV1,
+) -> Result<(), BundleVerificationCode> {
     verify_relay_direct_bundle_binding(verified)?;
     let expected_lane = match expected_lane {
         RelayProductLane::Public => ProductAcceptanceLaneV1::RelayPublic,
         RelayProductLane::Consultation => ProductAcceptanceLaneV1::RelayConsultation,
     };
     let identity = &verified.manifest.acceptance_identity;
-    if identity.trust_domain == ProductTrustDomainV1::Governed
+    if identity.trust_domain == expected_domain
         && identity.product == ProductAcceptanceProductV1::RegistryRelay
         && identity.lane == expected_lane
     {
@@ -702,7 +779,15 @@ fn enforce_relay_product_action_identity(
     verified: &VerifiedConfigBundle,
     expected_lane: RelayProductLane,
 ) -> Result<(), Error> {
-    verify_relay_product_action_identity(verified, expected_lane).map_err(|code| {
+    enforce_relay_action_identity(verified, expected_lane, ProductTrustDomainV1::Governed)
+}
+
+fn enforce_relay_action_identity(
+    verified: &VerifiedConfigBundle,
+    expected_lane: RelayProductLane,
+    expected_domain: ProductTrustDomainV1,
+) -> Result<(), Error> {
+    verify_relay_action_identity(verified, expected_lane, expected_domain).map_err(|code| {
         emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(code));
         Error::from(ConfigError::ValidationError)
     })

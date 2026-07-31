@@ -47,14 +47,13 @@ use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
 use registry_platform_config::{
     expand_config_env_vars, load_anchor_transition, load_trust_anchor, sha256_uri,
-    verify_config_bundle,
+    verify_config_bundle, ProductTrustDomainV1,
 };
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
-    internal_config_hash, persist_bundle_acceptance as persist_config_bundle_acceptance,
-    verify_bundle_state_read_only, AcceptanceAuditIntentV1, AcceptanceMutationKindV1,
-    AcceptanceStatePlanV1, AcceptedAnchorPinV1, ApplyReportResult, AuditSinkKind,
-    BundleVerificationCode, ConfigOverrideMode, ConfigSource, DeploymentProfile,
+    audit_shipping_target, bundle_verify_rejection_code, internal_config_hash,
+    persist_bundle_acceptance as persist_config_bundle_acceptance, AcceptanceAuditIntentV1,
+    AcceptanceMutationKindV1, AcceptanceStatePreviewV1, AntiRollbackStoreError, ApplyReportResult,
+    AuditSinkKind, BundleVerificationCode, ConfigOverrideMode, ConfigSource, DeploymentProfile,
     FileAntiRollbackStore, VerifiedAcceptanceStateV1,
 };
 use registry_relay::audit::{
@@ -128,8 +127,11 @@ const CONFIG_COMMAND: &str = "config";
 
 /// Exact product-owned runtime interface consumed by the signed release lock.
 const PRODUCT_ACTION_COMMAND: &str = "product-action";
+const DEVELOPMENT_ACTION_COMMAND: &str = "development-action";
 const PREPARE_STATE_STORE_ACTION: &str = "prepare_state_store";
 const INITIALIZE_STATE_ACTION: &str = "initialize_state";
+const PREVIEW_STATE_ACTION: &str = "preview_state";
+const ACCEPT_STATE_ACTION: &str = "accept_state";
 const VERIFY_STATE_ACTION: &str = "verify_state";
 const SERVE_ACTION: &str = "serve";
 const PRODUCT_BUNDLE_PATH: &str = "/run/registry/bundle";
@@ -183,6 +185,7 @@ enum CliCommand {
         bind_override: Option<SocketAddr>,
     },
     ProductAction(ProductActionCommand),
+    DevelopmentAction(ProductActionCommand),
     Healthcheck {
         url: String,
         timeout: Duration,
@@ -259,17 +262,12 @@ struct ProductActionCommand {
     action: ProductAction,
 }
 
-struct ProductServeAcceptance {
-    store: FileAntiRollbackStore,
-    plan: AcceptanceStatePlanV1,
-    signer_kids: Vec<String>,
-    previous_config_hash: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProductAction {
     PrepareStateStore,
     InitializeState,
+    PreviewState,
+    AcceptState,
     VerifyState,
     Serve,
 }
@@ -421,7 +419,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             env_file,
             bind_override,
         } => run_server(config_source, env_file, bind_override, None).await,
-        CliCommand::ProductAction(command) => run_product_action(command).await,
+        CliCommand::ProductAction(command) => {
+            run_product_action(command, ProductTrustDomainV1::Governed).await
+        }
+        CliCommand::DevelopmentAction(command) => {
+            run_product_action(command, ProductTrustDomainV1::Development).await
+        }
         CliCommand::Healthcheck { url, timeout } => {
             run_healthcheck(&url, timeout).await?;
             println!("registry-relay healthcheck ok");
@@ -482,23 +485,30 @@ async fn run_server(
     config_source: ServeConfigSource,
     env_file: Option<PathBuf>,
     bind_override: Option<SocketAddr>,
-    product_acceptance: Option<ProductServeAcceptance>,
+    verified_product_input: Option<config::loader::VerifiedProductActionInput>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
-    if matches!(&config_source, ServeConfigSource::SignedBundle { .. }) && config_path_env_is_set()
+    if (matches!(&config_source, ServeConfigSource::SignedBundle { .. })
+        || verified_product_input.is_some())
+        && config_path_env_is_set()
     {
         return Err(Box::new(CliError(
             "local config cannot be combined with signed-bundle serve flags".to_string(),
         )));
     }
-    let handle = Arc::new(RelayRuntimeHandle::new(
-        compile_relay_runtime_with_options(
-            config_source,
-            bind_override,
-            config::LoadOptions::default(),
-        )
-        .await?,
-    ));
+    let handle = Arc::new(RelayRuntimeHandle::new(match verified_product_input {
+        Some(input) => {
+            compile_loaded_relay_runtime(input.into_loaded_config(), bind_override).await?
+        }
+        None => {
+            compile_relay_runtime_with_options(
+                config_source,
+                bind_override,
+                config::LoadOptions::default(),
+            )
+            .await?
+        }
+    }));
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
 
@@ -551,25 +561,6 @@ async fn run_server(
         write_boot_config_audits(&runtime.audit_sink, acceptance).await?;
         persist_bundle_acceptance(acceptance)?;
     }
-    if let Some(acceptance) = product_acceptance {
-        let audit_sink = Arc::clone(&runtime.audit_sink);
-        let signer_kids = acceptance.signer_kids;
-        let previous_config_hash = acceptance.previous_config_hash;
-        acceptance
-            .store
-            .commit_acceptance(acceptance.plan, move |intent| async move {
-                write_acceptance_intent_audit(
-                    &audit_sink,
-                    &intent,
-                    &signer_kids,
-                    previous_config_hash.as_deref(),
-                )
-                .await
-            })
-            .await
-            .map_err(|_| product_acceptance_failure())?;
-    }
-
     runtime
         .ingest
         .run_initial_ingest(runtime.readiness_tx.clone())
@@ -1359,21 +1350,31 @@ fn now_rfc3339() -> String {
 
 async fn run_product_action(
     command: ProductActionCommand,
+    trust_domain: ProductTrustDomainV1,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bundle_path = std::path::Path::new(PRODUCT_BUNDLE_PATH);
     let anchor_path = std::path::Path::new(PRODUCT_ANCHOR_PATH);
     let state_path = std::path::Path::new(PRODUCT_ANTIROLLBACK_STATE_PATH);
 
-    let input = reported_config_load(config::loader::load_verified_product_action_input(
-        bundle_path,
-        anchor_path,
-        command.lane,
-    ))?;
-    verify_product_action_runtime_lane(command.lane, &input.runtime)?;
+    let input = reported_config_load(match trust_domain {
+        ProductTrustDomainV1::Governed => config::loader::load_verified_product_action_input(
+            bundle_path,
+            anchor_path,
+            command.lane,
+        ),
+        ProductTrustDomainV1::Development => {
+            config::loader::load_verified_development_action_input(
+                bundle_path,
+                anchor_path,
+                command.lane,
+            )
+        }
+    })?;
+    verify_product_action_runtime_lane(command.lane, input.runtime())?;
 
     match command.action {
         ProductAction::PrepareStateStore => {
-            let audit_sink = build_product_action_audit_sink(&input.runtime)?;
+            let audit_sink = build_product_action_audit_sink(input.runtime())?;
             write_signed_product_action_intent_audit(
                 &audit_sink,
                 "prepare_state_store",
@@ -1381,7 +1382,7 @@ async fn run_product_action(
             )
             .await?;
             let state_plane = if command.lane == config::loader::RelayProductLane::Consultation {
-                let result = prepare_state_store_from_signed_policy(&input.runtime).await?;
+                let result = prepare_state_store_from_signed_policy(input.runtime()).await?;
                 serde_json::to_value(result.state_plane)?
             } else {
                 Value::String("not_required".to_string())
@@ -1400,12 +1401,12 @@ async fn run_product_action(
             let plan = store
                 .plan_initialize(&candidate)
                 .map_err(|_| product_acceptance_failure())?;
-            let audit_sink = build_product_action_audit_sink(&input.runtime)?;
+            let audit_sink = build_product_action_audit_sink(input.runtime())?;
             let signer_kids = input.verified.signer_kids.clone();
             let previous_config_hash = input.verified.manifest.previous_config_hash.clone();
             let initialize_consultation = (command.lane
                 == config::loader::RelayProductLane::Consultation)
-                .then_some(&input.runtime);
+                .then_some(input.runtime());
             store
                 .commit_acceptance(plan, move |intent| async move {
                     write_acceptance_intent_audit(
@@ -1428,7 +1429,55 @@ async fn run_product_action(
                 "status": "succeeded",
             }))
         }
+        ProductAction::PreviewState => {
+            ensure_governed_state_action(trust_domain)?;
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
+                .map_err(|_| product_acceptance_failure())?;
+            let (preview, _, _) =
+                preview_product_acceptance(&FileAntiRollbackStore::new(state_path), &candidate)?;
+            print_json_report(json!({
+                "schema": "registry.relay.product-action-result.v1",
+                "action": PREVIEW_STATE_ACTION,
+                "status": "previewed",
+                "state": preview.as_str(),
+            }))
+        }
+        ProductAction::AcceptState => {
+            ensure_governed_state_action(trust_domain)?;
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
+                .map_err(|_| product_acceptance_failure())?;
+            let store = FileAntiRollbackStore::new(state_path);
+            let (preview, previous_anchor, transition) =
+                preview_product_acceptance(&store, &candidate)?;
+            if preview != AcceptanceStatePreviewV1::Current {
+                let plan = store
+                    .plan_acceptance(&candidate, previous_anchor.as_ref(), transition.as_ref())
+                    .map_err(|_| product_acceptance_failure())?;
+                let audit_sink = build_product_action_audit_sink(input.runtime())?;
+                let signer_kids = input.verified.signer_kids.clone();
+                let previous_config_hash = input.verified.manifest.previous_config_hash.clone();
+                store
+                    .commit_acceptance(plan, move |intent| async move {
+                        write_acceptance_intent_audit(
+                            &audit_sink,
+                            &intent,
+                            &signer_kids,
+                            previous_config_hash.as_deref(),
+                        )
+                        .await
+                    })
+                    .await
+                    .map_err(|_| product_acceptance_failure())?;
+            }
+            print_json_report(json!({
+                "schema": "registry.relay.product-action-result.v1",
+                "action": ACCEPT_STATE_ACTION,
+                "status": "succeeded",
+                "state": preview.as_str(),
+            }))
+        }
         ProductAction::VerifyState => {
+            ensure_governed_state_action(trust_domain)?;
             let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
                 .map_err(|_| product_acceptance_failure())?;
             FileAntiRollbackStore::new(state_path)
@@ -1441,7 +1490,11 @@ async fn run_product_action(
             }))
         }
         ProductAction::Serve => {
-            let acceptance = plan_product_serve_acceptance(&input.verified, state_path)?;
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&input.verified)
+                .map_err(|_| product_acceptance_failure())?;
+            FileAntiRollbackStore::new(state_path)
+                .verify_state(candidate.expectation())
+                .map_err(|_| product_acceptance_failure())?;
             run_server(
                 ServeConfigSource::SignedBundle {
                     bundle_dir: bundle_path.to_path_buf(),
@@ -1451,50 +1504,77 @@ async fn run_product_action(
                 },
                 None,
                 None,
-                acceptance,
+                Some(input),
             )
             .await
         }
     }
 }
 
-fn plan_product_serve_acceptance(
-    verified: &registry_platform_config::VerifiedConfigBundle,
-    state_path: &std::path::Path,
-) -> Result<Option<ProductServeAcceptance>, Box<dyn std::error::Error + Send + Sync>> {
-    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(verified)
-        .map_err(|_| product_acceptance_failure())?;
-    let store = FileAntiRollbackStore::new(state_path);
-    match store.verify_state(candidate.expectation()) {
-        Ok(_) => return Ok(None),
-        Err(registry_platform_ops::AntiRollbackStoreError::StateMismatch(_)) => {}
-        Err(_) => return Err(product_acceptance_failure().into()),
-    }
-    let current = store
-        .load(&candidate.key)
-        .map_err(|_| product_acceptance_failure())?;
-    if candidate.sequence != current.last_sequence.checked_add(1).unwrap_or(0) {
-        return Err(product_acceptance_failure().into());
-    }
-    let candidate_anchor = AcceptedAnchorPinV1::from_trust_anchor(&candidate.anchor)
-        .map_err(|_| product_acceptance_failure())?;
-    let plan = if candidate_anchor == current.accepted_anchor {
-        store.plan_acceptance(&candidate, None, None)
-    } else {
-        let current_anchor = load_trust_anchor(std::path::Path::new(PRODUCT_PREVIOUS_ANCHOR_PATH))
-            .map_err(|_| product_acceptance_failure())?;
-        let transition =
-            load_anchor_transition(std::path::Path::new(PRODUCT_ANCHOR_TRANSITION_PATH))
+fn ensure_governed_state_action(
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), ProcessStartupFailure> {
+    (trust_domain == ProductTrustDomainV1::Governed)
+        .then_some(())
+        .ok_or_else(|| ProcessStartupFailure::new(ProcessStartupCode::BUNDLE_BINDING_REJECTED))
+}
+
+type ProductRotationInputs = (
+    AcceptanceStatePreviewV1,
+    Option<registry_platform_config::ConfigTrustAnchor>,
+    Option<registry_platform_config::AnchorTransitionV1>,
+);
+
+fn preview_product_acceptance(
+    store: &FileAntiRollbackStore,
+    candidate: &VerifiedAcceptanceStateV1,
+) -> Result<ProductRotationInputs, ProcessStartupFailure> {
+    match store.preview_acceptance(candidate, None, None) {
+        Ok(preview) => Ok((preview, None, None)),
+        Err(AntiRollbackStoreError::AnchorTransitionRequired) => {
+            let (previous_anchor, transition) = load_optional_product_rotation_inputs()?;
+            let preview = store
+                .preview_acceptance(candidate, previous_anchor.as_ref(), transition.as_ref())
                 .map_err(|_| product_acceptance_failure())?;
-        store.plan_acceptance(&candidate, Some(&current_anchor), Some(&transition))
+            Ok((preview, previous_anchor, transition))
+        }
+        Err(_) => Err(product_acceptance_failure()),
     }
-    .map_err(|_| product_acceptance_failure())?;
-    Ok(Some(ProductServeAcceptance {
-        store,
-        plan,
-        signer_kids: verified.signer_kids.clone(),
-        previous_config_hash: verified.manifest.previous_config_hash.clone(),
-    }))
+}
+
+fn load_optional_product_rotation_inputs() -> Result<
+    (
+        Option<registry_platform_config::ConfigTrustAnchor>,
+        Option<registry_platform_config::AnchorTransitionV1>,
+    ),
+    ProcessStartupFailure,
+> {
+    let previous = load_optional_closed_product_file(
+        std::path::Path::new(PRODUCT_PREVIOUS_ANCHOR_PATH),
+        load_trust_anchor,
+    )?;
+    let transition = load_optional_closed_product_file(
+        std::path::Path::new(PRODUCT_ANCHOR_TRANSITION_PATH),
+        load_anchor_transition,
+    )?;
+    if previous.is_some() != transition.is_some() {
+        return Err(product_acceptance_failure());
+    }
+    Ok((previous, transition))
+}
+
+fn load_optional_closed_product_file<T>(
+    path: &std::path::Path,
+    loader: impl FnOnce(&std::path::Path) -> Result<T, registry_platform_config::ConfigBundleError>,
+) -> Result<Option<T>, ProcessStartupFailure> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => loader(path)
+            .map(Some)
+            .map_err(|_| product_acceptance_failure()),
+        Ok(_) => Err(product_acceptance_failure()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(product_acceptance_failure()),
+    }
 }
 
 fn product_acceptance_failure() -> ProcessStartupFailure {
@@ -1659,14 +1739,29 @@ async fn run_config_verify_bundle(
             ProcessStartupFailure::new(ProcessStartupCode::from_bundle_verification(code)).into(),
         );
     }
-    let key = antirollback_key_from_verified_bundle(&verified);
-    if let Err(error) = verify_bundle_state_read_only(
-        &command.state_path,
-        &key,
-        verified.manifest.sequence,
-        &verified.manifest.config_hash,
-        &verified.manifest_hash,
-    ) {
+    let candidate = match VerifiedAcceptanceStateV1::from_verified_bundle(&verified) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let code = registry_platform_ops::ConfigBootError::Store(error).bundle_rejection_code();
+            print_json_report(config_verify_bundle_report(
+                ApplyReportResult::from(code),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(code),
+            ))?;
+            return Err(
+                ProcessStartupFailure::new(ProcessStartupCode::from_bundle_verification(code))
+                    .into(),
+            );
+        }
+    };
+    if let Err(error) =
+        FileAntiRollbackStore::new(&command.state_path).verify_state(candidate.expectation())
+    {
+        let error = registry_platform_ops::ConfigBootError::Store(error);
         let code = error.bundle_rejection_code();
         print_json_report(config_verify_bundle_report(
             ApplyReportResult::from(code),
@@ -1864,6 +1959,13 @@ async fn compile_relay_runtime_with_options(
             ),
         },
     })?;
+    compile_loaded_relay_runtime(loaded, bind_override).await
+}
+
+async fn compile_loaded_relay_runtime(
+    loaded: config::loader::LoadedConfig,
+    bind_override: Option<SocketAddr>,
+) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
     let config_provenance = loaded.provenance.clone();
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
@@ -2176,7 +2278,12 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         .first()
         .is_some_and(|arg| arg == PRODUCT_ACTION_COMMAND)
     {
-        parse_product_action_command(&rest[1..])
+        parse_product_action_command(&rest[1..], false)
+    } else if rest
+        .first()
+        .is_some_and(|arg| arg == DEVELOPMENT_ACTION_COMMAND)
+    {
+        parse_product_action_command(&rest[1..], true)
     } else if rest.first().is_some_and(|arg| arg == CONSULTATION_COMMAND) {
         Err(CliError(
             "consultation bootstrap-state is replaced by signed product-action".to_string(),
@@ -2207,37 +2314,53 @@ fn parse_synthetic_source_command(args: &[String]) -> Result<CliCommand, CliErro
     }))
 }
 
-fn parse_product_action_command(args: &[String]) -> Result<CliCommand, CliError> {
+fn parse_product_action_command(
+    args: &[String],
+    development: bool,
+) -> Result<CliCommand, CliError> {
+    let namespace = if development {
+        DEVELOPMENT_ACTION_COMMAND
+    } else {
+        PRODUCT_ACTION_COMMAND
+    };
     if args.len() != 2 {
-        return Err(CliError(
-            "product-action requires one canonical Relay lane and one closed action".to_string(),
-        ));
+        return Err(CliError(format!(
+            "{namespace} requires one canonical Relay lane and one closed action"
+        )));
     }
     let lane = match args[0].as_str() {
         "relay-public" => config::loader::RelayProductLane::Public,
         "relay-consultation" => config::loader::RelayProductLane::Consultation,
         _ => {
-            return Err(CliError(
-                "product-action lane must be relay-public or relay-consultation".to_string(),
-            ));
+            return Err(CliError(format!(
+                "{namespace} lane must be relay-public or relay-consultation"
+            )));
         }
     };
-    let action = match args[1].as_str() {
-        PREPARE_STATE_STORE_ACTION => ProductAction::PrepareStateStore,
-        INITIALIZE_STATE_ACTION => ProductAction::InitializeState,
-        VERIFY_STATE_ACTION => ProductAction::VerifyState,
-        SERVE_ACTION => ProductAction::Serve,
-        _ => {
-            return Err(CliError(
-                "product-action action must be prepare_state_store, initialize_state, verify_state, or serve"
-                    .to_string(),
-            ));
+    let action = match (development, args[1].as_str()) {
+        (_, PREPARE_STATE_STORE_ACTION) => ProductAction::PrepareStateStore,
+        (_, INITIALIZE_STATE_ACTION) => ProductAction::InitializeState,
+        (false, PREVIEW_STATE_ACTION) => ProductAction::PreviewState,
+        (false, ACCEPT_STATE_ACTION) => ProductAction::AcceptState,
+        (false, VERIFY_STATE_ACTION) => ProductAction::VerifyState,
+        (_, SERVE_ACTION) => ProductAction::Serve,
+        (true, _) => {
+            return Err(CliError(format!(
+                "{namespace} action must be prepare_state_store, initialize_state, or serve"
+            )));
+        }
+        (false, _) => {
+            return Err(CliError(format!(
+                "{namespace} action must be prepare_state_store, initialize_state, preview_state, accept_state, verify_state, or serve"
+            )));
         }
     };
-    Ok(CliCommand::ProductAction(ProductActionCommand {
-        lane,
-        action,
-    }))
+    let command = ProductActionCommand { lane, action };
+    Ok(if development {
+        CliCommand::DevelopmentAction(command)
+    } else {
+        CliCommand::ProductAction(command)
+    })
 }
 
 fn parse_audit_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -3058,8 +3181,9 @@ mod tests {
         ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
         OperatorSafeConsultationActivationFailure, OutputFormat, ProcessStartupCode,
         ProcessStartupFailure, ProductAction, ProductActionCommand, ReportedConfigLoadFailure,
-        ServeConfigSource, SyntheticSourceCommand, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
-        DEFAULT_HEALTHCHECK_URL, INITIALIZE_STATE_ACTION, PREPARE_STATE_STORE_ACTION,
+        ServeConfigSource, SyntheticSourceCommand, ACCEPT_STATE_ACTION,
+        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL, DEVELOPMENT_ACTION_COMMAND,
+        INITIALIZE_STATE_ACTION, PREPARE_STATE_STORE_ACTION, PREVIEW_STATE_ACTION,
         PRODUCT_ACTION_COMMAND, SERVE_ACTION, VERIFY_STATE_ACTION,
     };
     use axum::routing::get;
@@ -4139,6 +4263,33 @@ config_trust:
         std::env::remove_var(env_name);
     }
 
+    #[test]
+    fn product_serve_input_retains_verified_runtime_after_bundle_path_changes() {
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, "UNUSED_PRODUCT_SERVE_AUDIT_SECRET");
+        let input = registry_relay::config::loader::load_verified_product_action_input(
+            &fixture.bundle_dir,
+            &fixture.anchor_path,
+            registry_relay::config::loader::RelayProductLane::Public,
+        )
+        .expect("product action input verifies and loads");
+        let expected_title = input.runtime().catalog.title.clone();
+        let moved_bundle = dir.path().join("bundle-after-verification");
+        std::fs::rename(&fixture.bundle_dir, &moved_bundle)
+            .expect("verified bundle path becomes unavailable");
+
+        let loaded = input.into_loaded_config();
+        assert_eq!(loaded.runtime.catalog.title, expected_title);
+        assert_eq!(
+            loaded.provenance.source,
+            registry_platform_ops::ConfigSource::SignedBundleFile
+        );
+        assert!(
+            loaded.pending_bundle_acceptance.is_none(),
+            "serve performs its exact state check at the product-action boundary"
+        );
+    }
+
     fn config_with_file_audit(path: &std::path::Path, hash_secret_env: &str) -> Config {
         serde_saphyr::from_str(&format!(
             r#"
@@ -4747,6 +4898,8 @@ audit:
             for (action, expected_action) in [
                 (PREPARE_STATE_STORE_ACTION, ProductAction::PrepareStateStore),
                 (INITIALIZE_STATE_ACTION, ProductAction::InitializeState),
+                (PREVIEW_STATE_ACTION, ProductAction::PreviewState),
+                (ACCEPT_STATE_ACTION, ProductAction::AcceptState),
                 (VERIFY_STATE_ACTION, ProductAction::VerifyState),
                 (SERVE_ACTION, ProductAction::Serve),
             ] {
@@ -4763,6 +4916,40 @@ audit:
                         action: expected_action,
                     })
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn development_action_cli_is_distinct_and_cannot_select_governed_actions() {
+        for lane in ["relay-public", "relay-consultation"] {
+            for action in [
+                PREPARE_STATE_STORE_ACTION,
+                INITIALIZE_STATE_ACTION,
+                SERVE_ACTION,
+            ] {
+                assert!(matches!(
+                    parse_cli_command_from(command_args(&[
+                        "registry-relay",
+                        DEVELOPMENT_ACTION_COMMAND,
+                        lane,
+                        action,
+                    ])),
+                    Ok(CliCommand::DevelopmentAction(_))
+                ));
+            }
+            for action in [
+                PREVIEW_STATE_ACTION,
+                ACCEPT_STATE_ACTION,
+                VERIFY_STATE_ACTION,
+            ] {
+                assert!(parse_cli_command_from(command_args(&[
+                    "registry-relay",
+                    DEVELOPMENT_ACTION_COMMAND,
+                    lane,
+                    action,
+                ]))
+                .is_err());
             }
         }
     }

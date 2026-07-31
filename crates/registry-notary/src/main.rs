@@ -53,17 +53,18 @@ use registry_notary_server::{
 };
 use registry_platform_config::{
     expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
-    ConfigBundleError, VerifiedConfigBundle,
+    ConfigBundleError, ProductTrustDomainV1, VerifiedConfigBundle,
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     evaluate_ack_health, load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
-    posture_safe_runtime_config_hash, resolve_bundle_state_action, AuditSinkKind,
-    BundleStateAction, BundleStateRequest, BundleVerificationCode, BundleVerificationFailure,
-    ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource, PendingBundleAcceptance,
-    UnsignedConfigSelection,
+    posture_safe_runtime_config_hash, resolve_bundle_state_action, AcceptanceStatePreviewV1,
+    AntiRollbackStoreError, AuditSinkKind, BundleStateAction, BundleStateRequest,
+    BundleVerificationCode, BundleVerificationFailure, ConfigBootError, ConfigOverrideMode,
+    ConfigProvenance, ConfigSource, FileAntiRollbackStore, PendingBundleAcceptance,
+    UnsignedConfigSelection, VerifiedAcceptanceStateV1,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -126,6 +127,11 @@ enum Command {
     ProductAction {
         #[command(subcommand)]
         action: ProductAction,
+    },
+    /// Run one closed development-package action.
+    DevelopmentAction {
+        #[command(subcommand)]
+        action: DevelopmentAction,
     },
     /// Print the Registry Notary OpenAPI document as JSON.
     Openapi,
@@ -279,8 +285,11 @@ struct ConfigVerifyBundleArgs {
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let server_startup =
-        args.command.is_none() || matches!(&args.command, Some(Command::ProductAction { .. }));
+    let server_startup = args.command.is_none()
+        || matches!(
+            &args.command,
+            Some(Command::ProductAction { .. } | Command::DevelopmentAction { .. })
+        );
     match run(args).await {
         Ok(code) => code,
         Err(err) => {
@@ -317,7 +326,12 @@ fn top_level_error_message(
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if let Some(Command::ProductAction { action }) = args.command.as_ref() {
         ensure_closed_product_action_arguments(&args)?;
-        run_product_action(*action).await?;
+        run_product_action(*action, ProductTrustDomainV1::Governed).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(Command::DevelopmentAction { action }) = args.command.as_ref() {
+        ensure_closed_product_action_arguments(&args)?;
+        run_development_action(*action).await?;
         return Ok(ExitCode::SUCCESS);
     }
     let server_startup = args.command.is_none();
@@ -365,7 +379,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             .await?;
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::ProductAction { .. }) => {
+        Some(Command::ProductAction { .. } | Command::DevelopmentAction { .. }) => {
             unreachable!("product actions return before legacy input resolution")
         }
         Some(Command::Openapi) => {

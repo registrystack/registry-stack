@@ -20,10 +20,26 @@ pub(crate) enum ProductAction {
     /// Verify and record sequence-1 acceptance in absent product state, then exit.
     #[command(name = "initialize_state")]
     InitializeState,
+    /// Preview an exact, advancing, or anchor-rotating state acceptance.
+    #[command(name = "preview_state")]
+    PreviewState,
+    /// Audit and commit the previously previewable state acceptance, then exit.
+    #[command(name = "accept_state")]
+    AcceptState,
     /// Verify exact accepted product state without changing it, then exit.
     #[command(name = "verify_state")]
     VerifyState,
     /// Serve the verified product bundle; absent state is a hard failure.
+    #[command(name = "serve")]
+    Serve,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Subcommand)]
+pub(crate) enum DevelopmentAction {
+    #[command(name = "prepare_state_store")]
+    PrepareStateStore,
+    #[command(name = "initialize_state")]
+    InitializeState,
     #[command(name = "serve")]
     Serve,
 }
@@ -47,21 +63,44 @@ pub(crate) fn ensure_closed_product_action_arguments(
 
 pub(crate) async fn run_product_action(
     action: ProductAction,
+    trust_domain: ProductTrustDomainV1,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let verified = verify_notary_product_bundle_for_domain(
+        Path::new(PRODUCT_BUNDLE_DIR),
+        Path::new(PRODUCT_ANCHOR_PATH),
+        trust_domain,
+    )?;
     match action {
-        ProductAction::PrepareStateStore => prepare_product_state_store().await,
-        ProductAction::InitializeState => initialize_product_state().await,
-        ProductAction::VerifyState => verify_product_state(),
+        ProductAction::PrepareStateStore => {
+            prepare_product_state_store(verified, trust_domain).await
+        }
+        ProductAction::InitializeState => initialize_product_state(verified, trust_domain).await,
+        ProductAction::PreviewState => preview_product_state(&verified),
+        ProductAction::AcceptState => accept_product_state(verified, trust_domain).await,
+        ProductAction::VerifyState => verify_product_state(&verified),
         ProductAction::Serve => {
-            let previous_anchor =
-                load_optional_previous_anchor(Path::new(PRODUCT_PREVIOUS_ANCHOR_PATH))?;
-            let transition =
-                load_optional_anchor_transition(Path::new(PRODUCT_ANCHOR_TRANSITION_PATH))?;
-            run_governed_server(canonical_product_input(), previous_anchor, transition).await
+            let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+                .map_err(map_product_state_error)?;
+            FileAntiRollbackStore::new(PRODUCT_STATE_PATH)
+                .verify_state(candidate.expectation())
+                .map_err(map_product_state_error)?;
+            run_governed_server(verified, Path::new(PRODUCT_STATE_PATH), trust_domain).await
         }
     }
 }
 
+pub(crate) async fn run_development_action(
+    action: DevelopmentAction,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let action = match action {
+        DevelopmentAction::PrepareStateStore => ProductAction::PrepareStateStore,
+        DevelopmentAction::InitializeState => ProductAction::InitializeState,
+        DevelopmentAction::Serve => ProductAction::Serve,
+    };
+    run_product_action(action, ProductTrustDomainV1::Development).await
+}
+
+#[cfg(test)]
 fn canonical_product_input() -> ServerConfigInput {
     ServerConfigInput::SignedBundle {
         bundle_dir: PathBuf::from(PRODUCT_BUNDLE_DIR),
@@ -70,20 +109,20 @@ fn canonical_product_input() -> ServerConfigInput {
     }
 }
 
-async fn prepare_product_state_store() -> Result<(), Box<dyn std::error::Error>> {
-    prepare_product_state_store_at(
-        Path::new(PRODUCT_BUNDLE_DIR),
-        Path::new(PRODUCT_ANCHOR_PATH),
-    )
-    .await
-}
-
+#[cfg(test)]
 async fn prepare_product_state_store_at(
     bundle_dir: &Path,
     anchor_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let verified = verify_notary_product_bundle(bundle_dir, anchor_path)?;
-    let config = load_verified_notary_config_read_only(&verified)?;
+    prepare_product_state_store(verified, ProductTrustDomainV1::Governed).await
+}
+
+async fn prepare_product_state_store(
+    verified: VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_verified_notary_config_read_only_for_domain(&verified, trust_domain)?;
     let audit_evidence = prepare_state_store_audit_evidence(&verified)?;
     registry_notary_server::emit_prepare_state_store_mutation_intent_audit(
         &config.audit,
@@ -125,19 +164,134 @@ fn prepare_state_store_audit_evidence(
     })
 }
 
-async fn initialize_product_state() -> Result<(), Box<dyn std::error::Error>> {
-    initialize_state_once(canonical_product_input()).await?;
+async fn initialize_product_state(
+    verified: VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_verified_notary_config_read_only_for_domain(&verified, trust_domain)?;
+    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+        .map_err(map_product_state_error)?;
+    let store = FileAntiRollbackStore::new(PRODUCT_STATE_PATH);
+    let plan = store
+        .plan_initialize(&candidate)
+        .map_err(map_product_state_error)?;
+    let evidence = prepare_state_store_audit_evidence(&verified)?;
+    store
+        .commit_acceptance(plan, move |_| async move {
+            registry_notary_server::emit_product_action_mutation_intent_audit(
+                &config.audit,
+                "initialize_state",
+                evidence,
+            )
+            .await
+        })
+        .await
+        .map_err(map_product_state_error)?;
     println!("registry-notary initialize_state complete");
     Ok(())
 }
 
-fn verify_product_state() -> Result<(), Box<dyn std::error::Error>> {
-    verify_notary_state_read_only(
-        Path::new(PRODUCT_BUNDLE_DIR),
-        Path::new(PRODUCT_ANCHOR_PATH),
-        Path::new(PRODUCT_STATE_PATH),
-    )?;
+fn verify_product_state(verified: &VerifiedConfigBundle) -> Result<(), Box<dyn std::error::Error>> {
+    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(verified)
+        .map_err(map_product_state_error)?;
+    FileAntiRollbackStore::new(PRODUCT_STATE_PATH)
+        .verify_state(candidate.expectation())
+        .map_err(map_product_state_error)?;
     println!("registry-notary verify_state complete");
+    Ok(())
+}
+
+type ProductRotationInputs = (
+    AcceptanceStatePreviewV1,
+    Option<registry_platform_config::ConfigTrustAnchor>,
+    Option<registry_platform_config::AnchorTransitionV1>,
+);
+
+fn preview_product_acceptance(
+    store: &FileAntiRollbackStore,
+    candidate: &VerifiedAcceptanceStateV1,
+) -> Result<ProductRotationInputs, Box<dyn std::error::Error>> {
+    match store.preview_acceptance(candidate, None, None) {
+        Ok(preview) => Ok((preview, None, None)),
+        Err(AntiRollbackStoreError::AnchorTransitionRequired) => {
+            let previous_anchor =
+                load_optional_previous_anchor(Path::new(PRODUCT_PREVIOUS_ANCHOR_PATH))?;
+            let transition =
+                load_optional_anchor_transition(Path::new(PRODUCT_ANCHOR_TRANSITION_PATH))?;
+            if previous_anchor.is_some() != transition.is_some() {
+                return Err(map_product_state_error(
+                    AntiRollbackStoreError::UnexpectedAnchorTransition,
+                ));
+            }
+            let preview = store
+                .preview_acceptance(candidate, previous_anchor.as_ref(), transition.as_ref())
+                .map_err(map_product_state_error)?;
+            Ok((preview, previous_anchor, transition))
+        }
+        Err(error) => Err(map_product_state_error(error)),
+    }
+}
+
+fn map_product_state_error<E>(_: E) -> Box<dyn std::error::Error> {
+    Box::new(BundleVerificationFailure::from(
+        BundleVerificationCode::REJECTED_ROLLBACK,
+    ))
+}
+
+fn preview_product_state(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(verified)
+        .map_err(map_product_state_error)?;
+    let (preview, _, _) =
+        preview_product_acceptance(&FileAntiRollbackStore::new(PRODUCT_STATE_PATH), &candidate)?;
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "schema": "registry.notary.product-action-result.v1",
+            "action": "preview_state",
+            "status": "previewed",
+            "state": preview.as_str(),
+        }))?
+    );
+    Ok(())
+}
+
+async fn accept_product_state(
+    verified: VerifiedConfigBundle,
+    trust_domain: ProductTrustDomainV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let candidate = VerifiedAcceptanceStateV1::from_verified_bundle(&verified)
+        .map_err(map_product_state_error)?;
+    let store = FileAntiRollbackStore::new(PRODUCT_STATE_PATH);
+    let (preview, previous_anchor, transition) = preview_product_acceptance(&store, &candidate)?;
+    if preview != AcceptanceStatePreviewV1::Current {
+        let config = load_verified_notary_config_read_only_for_domain(&verified, trust_domain)?;
+        let plan = store
+            .plan_acceptance(&candidate, previous_anchor.as_ref(), transition.as_ref())
+            .map_err(map_product_state_error)?;
+        let evidence = prepare_state_store_audit_evidence(&verified)?;
+        store
+            .commit_acceptance(plan, move |_| async move {
+                registry_notary_server::emit_product_action_mutation_intent_audit(
+                    &config.audit,
+                    "accept_state",
+                    evidence,
+                )
+                .await
+            })
+            .await
+            .map_err(map_product_state_error)?;
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "schema": "registry.notary.product-action-result.v1",
+            "action": "accept_state",
+            "status": "succeeded",
+            "state": preview.as_str(),
+        }))?
+    );
     Ok(())
 }
 
@@ -171,7 +325,10 @@ fn load_optional_anchor_transition(
 
 fn closed_artifact_exists(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(Box::new(BundleVerificationFailure::from(
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(_) => Err(Box::new(BundleVerificationFailure::from(
             BundleVerificationCode::REJECTED_VALIDATION,
@@ -201,6 +358,8 @@ mod tests {
         for (name, expected) in [
             ("prepare_state_store", ProductAction::PrepareStateStore),
             ("initialize_state", ProductAction::InitializeState),
+            ("preview_state", ProductAction::PreviewState),
+            ("accept_state", ProductAction::AcceptState),
             ("verify_state", ProductAction::VerifyState),
             ("serve", ProductAction::Serve),
         ] {
@@ -212,6 +371,28 @@ mod tests {
             ));
             ensure_closed_product_action_arguments(&args)
                 .expect("closed action has no legacy runtime arguments");
+        }
+    }
+
+    #[test]
+    fn development_actions_have_a_distinct_closed_namespace() {
+        for (name, expected) in [
+            ("prepare_state_store", DevelopmentAction::PrepareStateStore),
+            ("initialize_state", DevelopmentAction::InitializeState),
+            ("serve", DevelopmentAction::Serve),
+        ] {
+            let args = Args::try_parse_from(["registry-notary", "development-action", name])
+                .expect("closed development action parses");
+            assert!(matches!(
+                args.command,
+                Some(Command::DevelopmentAction { action }) if action == expected
+            ));
+        }
+        for name in ["preview_state", "accept_state", "verify_state"] {
+            assert!(
+                Args::try_parse_from(["registry-notary", "development-action", name]).is_err(),
+                "development namespace must reject governed action {name}"
+            );
         }
     }
 
