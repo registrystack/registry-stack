@@ -3048,15 +3048,10 @@ fn validate_environment(
                 bail!("Relay allowed_clients must not contain duplicates");
             }
         }
-        let publishes_records = project
-            .services
-            .values()
-            .any(|service| service.kind == ServiceKind::RecordsApi);
-        if publishes_records && relay.allowed_clients.is_empty() {
-            bail!("a records_api service requires at least one admitted Relay OIDC client");
-        }
-        if relay.allowed_clients.is_empty() && environment.notary_relay.is_none() {
-            bail!("a Relay environment must admit at least one OIDC client");
+        if relay.allowed_clients.is_empty() && relay.local_api_keys.is_none() {
+            bail!(
+                "a public Relay requires at least one admitted OIDC client; the Notary workload client belongs only in notary_relay"
+            );
         }
         validate_https_or_local_loopback_resource(&relay.jwks_url, "Relay OIDC JWKS URL", local)?;
     }

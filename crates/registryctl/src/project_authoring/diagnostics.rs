@@ -1677,6 +1677,18 @@ fn collect_environment_semantics(
     if let Some(diagnostic) = representative_issuance_diagnostic(project, environment, &file) {
         diagnostics.push(diagnostic);
     }
+    if environment
+        .relay
+        .as_ref()
+        .is_some_and(|relay| relay.allowed_clients.is_empty() && relay.local_api_keys.is_none())
+    {
+        diagnostics.push(environment_invalid(
+            &file,
+            "relay.allowed_clients",
+            "The public Relay has no admitted OpenID Connect client.",
+            "Add at least one intended public Relay client id. Keep the private Notary workload client only in notary_relay.",
+        ));
+    }
     if diagnostics.len() == before
         && validate_environment(project, integrations, entities, environment).is_err()
     {
