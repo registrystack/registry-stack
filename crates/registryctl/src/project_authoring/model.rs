@@ -1713,15 +1713,9 @@ struct EnvironmentDocument {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DevelopmentDeclaration {
-    #[cfg_attr(test, schemars(required))]
-    #[serde(default)]
-    source_mode: Option<DevelopmentSourceMode>,
-    #[cfg_attr(test, schemars(required))]
-    #[serde(default)]
-    default_integration: Option<String>,
-    #[cfg_attr(test, schemars(required))]
-    #[serde(default)]
-    default_fixture: Option<String>,
+    source_mode: DevelopmentSourceMode,
+    default_integration: String,
+    default_fixture: String,
     #[serde(default)]
     relay_port: Option<u16>,
     #[serde(default)]
@@ -1733,6 +1727,7 @@ struct DevelopmentDeclaration {
 #[serde(rename_all = "snake_case")]
 enum DevelopmentSourceMode {
     Synthetic,
+    LocalSnapshot,
     OperatorBound,
 }
 

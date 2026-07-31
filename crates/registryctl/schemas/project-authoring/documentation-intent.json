@@ -134,6 +134,7 @@
     { "schema": "environment", "pointer": "/allOf/6/else/properties/relay/not", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/1", "path_kind": "branch" },
+    { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/2", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/0", "path_kind": "branch" },

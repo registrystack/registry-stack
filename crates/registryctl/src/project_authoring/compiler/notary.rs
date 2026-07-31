@@ -238,12 +238,29 @@ fn generated_notary_config(
         evidence["signing_keys"] = Value::Object(signing_keys);
     }
     if let Some(connection) = &environment.notary_relay {
+        let base_url = normalize_url_scheme(&connection.base_url)?;
+        let local_notary_add_on = matches!(
+            environment.deployment.profile,
+            DeploymentProfile::Local
+        ) && connection.base_url == LOCAL_NOTARY_RELAY_BASE_URL
+            && connection.workload_client_id == LOCAL_NOTARY_RELAY_CLIENT_ID
+            && connection.token_file == Path::new(LOCAL_NOTARY_RELAY_TOKEN_FILE);
+        let private_service_http = url::Url::parse(&base_url).is_ok_and(|url| {
+            url.scheme() == "http" && matches!(url.host(), Some(url::Host::Domain(_)))
+        });
         evidence["relay"] = json!({
-            "base_url": normalize_url_scheme(&connection.base_url)?,
+            "base_url": base_url,
             "workload_client_id": connection.workload_client_id,
             "token_file": connection.token_file,
-            "allowed_private_cidrs": [],
-            "allow_insecure_localhost": url_uses_http(&connection.base_url),
+            "allowed_private_cidrs": if local_notary_add_on {
+                vec![LOCAL_NOTARY_RELAY_PRIVATE_CIDR]
+            } else {
+                Vec::new()
+            },
+            "allow_insecure_localhost": !local_notary_add_on
+                && !private_service_http
+                && url_uses_http(&connection.base_url),
+            "allow_insecure_private_network": private_service_http,
             "max_in_flight": 8,
         });
     }

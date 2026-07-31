@@ -1,7 +1,7 @@
 version: 1
 
 development:
-  source_mode: synthetic
+  source_mode: local_snapshot
   default_integration: project-record-snapshot
   default_fixture: match
 
@@ -41,7 +41,7 @@ relay:
     scopes: [projects:metadata, projects:rows]
 
 notary_relay:
-  base_url: http://127.0.0.1:8080
+  base_url: http://registry-relay-consultation:8080
   workload_client_id: registryctl-local-notary
   token_file: /run/secrets/relay-workload-token
 

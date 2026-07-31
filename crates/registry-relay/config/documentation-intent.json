@@ -1948,6 +1948,16 @@
     },
     {
       "schema": "relay",
+      "pointer": "/$defs/OidcConfig/properties/development_jwks_file",
+      "key_path": "auth.oidc.development_jwks_file",
+      "path_kind": "property",
+      "profile": "relay_auth_sensitive",
+      "purpose_source": "schema_description",
+      "default_source": "schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "relay",
       "pointer": "/$defs/OidcConfig/properties/discovery_url",
       "key_path": "auth.oidc.discovery_url",
       "path_kind": "property",

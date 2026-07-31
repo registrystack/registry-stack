@@ -1540,7 +1540,7 @@ outputs:
     }
 
     #[test]
-    fn local_notary_add_on_uses_exact_private_consultation_issuer_and_jwks_endpoint() {
+    fn local_notary_add_on_uses_stable_issuer_and_mounted_jwks_file() {
         let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
             .expect("golden project loads");
         let environment = loaded.environment.as_mut().expect("environment exists");
@@ -1589,9 +1589,17 @@ outputs:
             .notary_relay
             .as_mut()
             .expect("Notary-to-Relay binding exists");
-        binding.base_url = "http://127.0.0.1:8080".to_string();
+        binding.base_url = "http://10.89.0.4:8080".to_string();
         binding.workload_client_id = "registryctl-local-notary".to_string();
         binding.token_file = PathBuf::from("/run/secrets/relay-workload-token");
+        loaded
+            .environment
+            .as_mut()
+            .expect("environment exists")
+            .relay
+            .as_mut()
+            .expect("Relay binding exists")
+            .issuer = "https://registryctl-local-notary.invalid".to_string();
 
         let compiled = compile_project(&loaded, None).expect("local add-on project compiles");
         let public: Value = serde_norway::from_slice(
@@ -1612,18 +1620,22 @@ outputs:
         assert_eq!(consultation["auth"]["mode"], "oidc");
         assert_eq!(
             consultation["auth"]["oidc"]["issuer"],
-            "http://127.0.0.1:4255"
+            "https://registryctl-local-notary.invalid"
         );
         assert_eq!(
-            consultation["auth"]["oidc"]["jwks_url"],
-            "http://127.0.0.1:8081/.well-known/evidence/jwks.json"
+            consultation["auth"]["oidc"]["development_jwks_file"],
+            "/run/registry/dev-public/notary-workload-jwks.json"
         );
+        assert!(consultation["auth"]["oidc"].get("jwks_url").is_none());
+        assert!(consultation["auth"]["oidc"]
+            .get("discovery_url")
+            .is_none());
         assert_eq!(
             consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
-            true
+            false
         );
         validate_generated_product_configs(&compiled)
-            .expect("both local add-on Relay configs pass production validation");
+            .expect("local add-on product configs pass production validation");
     }
 
     #[test]

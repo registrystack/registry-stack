@@ -889,7 +889,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:b5a50f164fa02f86d0c9875eb4689120f4c42384cc60fcc7df8298e4f4424129";
+    "sha256:537dde0f120d9874e74cae1d899d7e4d86ad013a5d1b918021a73e1045f951b1";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,

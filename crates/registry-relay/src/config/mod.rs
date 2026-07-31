@@ -570,9 +570,7 @@ pub struct OidcConfig {
     /// One or more accepted `aud` values. Tokens with no `aud`, or
     /// whose `aud` does not intersect this list, are rejected.
     pub audiences: Vec<String>,
-    /// JWKS endpoint. Either this or `discovery_url` must be set.
-    /// `discovery_url` takes precedence: when both are configured the
-    /// validator rejects the document.
+    /// JWKS endpoint. Exactly one JWKS source must be configured.
     #[serde(default)]
     pub jwks_url: Option<String>,
     /// OIDC discovery document URL
@@ -580,6 +578,11 @@ pub struct OidcConfig {
     /// from `jwks_uri` in the discovered document.
     #[serde(default)]
     pub discovery_url: Option<String>,
+    /// Development-only public JWKS file loaded once into memory at startup.
+    /// This source is accepted only when `deployment.profile` is `local` and
+    /// is mutually exclusive with `jwks_url` and `discovery_url`.
+    #[serde(default)]
+    pub development_jwks_file: Option<PathBuf>,
     /// Development-only escape hatch that permits loopback HTTP issuer,
     /// discovery, and JWKS URLs. Private non-loopback networks and cloud
     /// metadata endpoints remain denied by the platform fetch policy.

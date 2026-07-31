@@ -173,7 +173,7 @@ enum Commands {
 
     /// Emit deterministic unsigned product-lane signing inputs.
     #[command(
-        after_help = "Governed handoff:\n  Input owner: country implementer and reviewer\n  Output owner: independent product-lane trust owners\n  Mutation: replaces only generated build output for the selected environment\n  Next command: registryctl trust anchor create --help\n  Update next command: registryctl trust bundle sign --help when a lane changed"
+        after_help = "Governed handoff:\n  Input owner: country implementer and reviewer\n  Output owner: independent product-lane trust owners\n  Mutation: replaces only generated build output for the selected environment\n  Next command: registryctl trust anchor create --help for a managed-deployment-eligible source\n  File source: remains development-only until an operator-managed source is bound\n  Update next command: registryctl trust bundle sign --help when a lane changed"
     )]
     Build {
         /// Select one declared project environment.
@@ -732,7 +732,6 @@ fn run(cli: Cli) -> CliResult {
             rotate_anchors,
             format,
         } => {
-            let is_update = against.is_some();
             let project = discover_project(project_dir.as_deref())?;
             let environment = resolve_environment(&project, environment)?;
             let report = registryctl::build_reviewed_project(&ReviewedProjectBuildOptions {
@@ -742,7 +741,7 @@ fn run(cli: Cli) -> CliResult {
                 anchor_rotations: rotate_anchors.into_iter().map(Into::into).collect(),
             })
             .map_err(CliFailure::domain)?;
-            let next_action = build_next_action(is_update, &report.affected_lanes);
+            let next_action = report.next_action;
             match format {
                 OutputFormat::Json => {
                     let mut value = serde_json::to_value(&report).map_err(|error| {
@@ -854,16 +853,6 @@ fn run(cli: Cli) -> CliResult {
         },
         Commands::Trust { command } => run_trust(project_dir.as_deref(), command),
         Commands::Tooling { command } => run_tooling(project_dir.as_deref(), command),
-    }
-}
-
-fn build_next_action(is_update: bool, affected_lanes: &[ApprovedLaneV1]) -> &'static str {
-    if !is_update {
-        "registryctl trust anchor create --help"
-    } else if affected_lanes.is_empty() {
-        "retain the current approved set; no lane signing input was emitted"
-    } else {
-        "registryctl trust bundle sign --help"
     }
 }
 
@@ -1010,14 +999,27 @@ fn dev_runtime_is_absent(project: &Path, environment: &str) -> bool {
 }
 
 fn dev_api_line(label: &str, endpoint_url: &str) -> CliResult<String> {
-    let authority = endpoint_url.strip_prefix("https://").ok_or_else(|| {
+    let url = url::Url::parse(endpoint_url).map_err(|_| {
         CliFailure::operational(anyhow!(
-            "development runtime returned a non-HTTPS public endpoint"
+            "development runtime returned an invalid public endpoint"
         ))
     })?;
-    if authority.is_empty() || endpoint_url.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    if url.scheme() != "http"
+        || !loopback
+        || url.port().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         return Err(CliFailure::operational(anyhow!(
-            "development runtime returned an invalid public endpoint"
+            "development runtime returned a public endpoint outside the loopback HTTP boundary"
         )));
     }
     Ok(format!("{label}: {endpoint_url}"))
@@ -2326,15 +2328,24 @@ mod tests {
     }
 
     #[test]
-    fn development_success_endpoints_are_scheme_bearing_https_urls() {
+    fn development_success_endpoints_are_bounded_loopback_http_urls() {
         assert_eq!(
-            dev_api_line("Relay API", "https://127.0.0.1:4255").expect("HTTPS endpoint renders"),
-            "Relay API: https://127.0.0.1:4255"
+            dev_api_line("Relay API", "http://127.0.0.1:4255")
+                .expect("loopback HTTP endpoint renders"),
+            "Relay API: http://127.0.0.1:4255"
         );
-        let error = dev_api_line("Evidence API", "http://127.0.0.1:4255")
-            .expect_err("HTTP endpoint must fail closed");
-        assert_eq!(error.status, EXIT_OPERATIONAL);
-        assert!(error.error.to_string().contains("non-HTTPS"));
+        for endpoint in [
+            "https://127.0.0.1:4255",
+            "http://10.89.0.4:4255",
+            "http://localhost:4255",
+            "http://user@127.0.0.1:4255",
+            "http://127.0.0.1:4255/path",
+        ] {
+            let error = dev_api_line("Evidence API", endpoint)
+                .expect_err("endpoint outside the loopback HTTP boundary must fail closed");
+            assert_eq!(error.status, EXIT_OPERATIONAL);
+            assert!(error.error.to_string().contains("loopback HTTP boundary"));
+        }
     }
 
     #[test]
@@ -2367,21 +2378,5 @@ mod tests {
         assert!(message.contains("run registryctl doctor"));
         assert!(message.contains("reinstall Registryctl from a verified Registry Stack release"));
         assert!(!message.contains("file not found"));
-    }
-
-    #[test]
-    fn build_handoff_distinguishes_initial_changed_and_unchanged_updates() {
-        assert_eq!(
-            build_next_action(false, &ApprovedLaneV1::ALL),
-            "registryctl trust anchor create --help"
-        );
-        assert_eq!(
-            build_next_action(true, &[ApprovedLaneV1::RelayPublic]),
-            "registryctl trust bundle sign --help"
-        );
-        assert_eq!(
-            build_next_action(true, &[]),
-            "retain the current approved set; no lane signing input was emitted"
-        );
     }
 }

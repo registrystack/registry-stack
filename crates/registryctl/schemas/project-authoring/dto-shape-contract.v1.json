@@ -1490,11 +1490,9 @@
             "additionalProperties": false,
             "properties": {
               "default_fixture": {
-                "default": null,
                 "type": "string"
               },
               "default_integration": {
-                "default": null,
                 "type": "string"
               },
               "notary_port": {
@@ -1518,15 +1516,23 @@
                 ]
               },
               "source_mode": {
-                "default": null,
-                "enum": [
-                  "synthetic",
-                  "operator_bound"
-                ],
-                "type": "string"
+                "$ref": "#/$defs/DevelopmentSourceMode"
               }
             },
+            "required": [
+              "source_mode",
+              "default_integration",
+              "default_fixture"
+            ],
             "type": "object"
+          },
+          "DevelopmentSourceMode": {
+            "enum": [
+              "synthetic",
+              "local_snapshot",
+              "operator_bound"
+            ],
+            "type": "string"
           },
           "EnvironmentCredential": {
             "additionalProperties": false,

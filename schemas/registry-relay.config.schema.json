@@ -2304,6 +2304,14 @@
           },
           "type": "array"
         },
+        "development_jwks_file": {
+          "default": null,
+          "description": "Development-only public JWKS file loaded once into memory at startup.\nThis source is accepted only when `deployment.profile` is `local` and\nis mutually exclusive with `jwks_url` and `discovery_url`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "discovery_url": {
           "default": null,
           "description": "OIDC discovery document URL\n(`.well-known/openid-configuration`). The JWKS URL is resolved\nfrom `jwks_uri` in the discovered document.",
@@ -2326,7 +2334,7 @@
         },
         "jwks_url": {
           "default": null,
-          "description": "JWKS endpoint. Either this or `discovery_url` must be set.\n`discovery_url` takes precedence: when both are configured the\nvalidator rejects the document.",
+          "description": "JWKS endpoint. Exactly one JWKS source must be configured.",
           "type": [
             "string",
             "null"

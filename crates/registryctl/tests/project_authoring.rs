@@ -6181,7 +6181,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "3a2303263cd0c3139b2a0dd1a5ef92c8b59252c51c8d0319a36ce55eb1d745e0",
+        "e70b4fa66f78b18dc86bd36b0adb8ffcf0c714ff2ecb0c0b4d6dbcc75d93a916",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6915,6 +6915,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         Some(true)
     );
     assert_eq!(
+        notary["evidence"]["relay"]["allow_insecure_private_network"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
         notary["evidence"]["relay"]["base_url"].as_str(),
         Some("http://127.0.0.1:18081")
     );
@@ -6960,7 +6964,7 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
 }
 
 #[test]
-fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
+fn hosted_notary_can_use_explicit_loopback_or_private_service_relay_connections() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let environment_path = project.join("environments/local.yaml");
@@ -6997,6 +7001,42 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
         Some(true)
     );
 
+    let private_root = tempfile::tempdir().expect("private-service temporary directory");
+    let private = copy_project("custom-system", private_root.path());
+    let private_environment_path = private.join("environments/local.yaml");
+    let mut private_environment = read_yaml(&private_environment_path);
+    private_environment["deployment"]["profile"] =
+        serde_norway::Value::String("production".to_string());
+    private_environment["notary_relay"]["base_url"] =
+        serde_norway::Value::String("http://registry-relay-consultation:8080".to_string());
+    private_environment["notary_state"] = serde_norway::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
+    )
+    .expect("private-service Notary state binding parses");
+    private_environment["relay_state"] = serde_norway::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/relay-postgres-ca.pem\n",
+    )
+    .expect("private-service Relay state binding parses");
+    write_yaml(&private_environment_path, &private_environment);
+    let private_build = build_registry_project(&ProjectBuildOptions {
+        project_directory: private.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("production project builds with a signed private service Relay connection");
+    let private_output =
+        resolve_build_output(&private, private_build.output.expect("build output"));
+    let private_notary = read_yaml(&private_output.join("private/notary/config/notary.yaml"));
+    assert_eq!(
+        private_notary["evidence"]["relay"]["allow_insecure_private_network"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        private_notary["evidence"]["relay"]["allow_insecure_localhost"].as_bool(),
+        Some(false)
+    );
+
     let rejected_root = tempfile::tempdir().expect("rejected temporary directory");
     let rejected = copy_project("custom-system", rejected_root.path());
     let rejected_environment_path = rejected.join("environments/local.yaml");
@@ -7011,7 +7051,7 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
         against: None,
         anchor: None,
     })
-    .expect_err("private-network cleartext Notary-to-Relay URL must fail");
+    .expect_err("private IP cleartext Notary-to-Relay URL must fail authoring");
     assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 

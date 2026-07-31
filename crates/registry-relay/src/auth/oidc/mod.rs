@@ -26,6 +26,7 @@ pub mod provider;
 
 pub use fetcher::ReqwestJwksFetcher;
 pub use jwks::{
-    static_fetcher, JwksCache, JwksError, JwksFetchError, JwksFetchResult, JwksFetcher,
+    development_jwks_fetcher, static_fetcher, JwksCache, JwksError, JwksFetchError,
+    JwksFetchResult, JwksFetcher,
 };
 pub use provider::OidcAuth;

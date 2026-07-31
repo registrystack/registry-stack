@@ -241,12 +241,6 @@ mod dev_credentials {
         pub notary_signing_key: PathBuf,
         pub postgres_tls_certificate: PathBuf,
         pub postgres_tls_private_key: PathBuf,
-        pub relay_public_tls_certificate: PathBuf,
-        pub relay_public_tls_private_key: PathBuf,
-        pub relay_consultation_tls_certificate: PathBuf,
-        pub relay_consultation_tls_private_key: PathBuf,
-        pub notary_tls_certificate: PathBuf,
-        pub notary_tls_private_key: PathBuf,
         pub source: Option<PreparedDevSourceCredentialFiles>,
         pub issuance_public_jwk: Option<PathBuf>,
         pub lane_public_jwks: [PathBuf; 3],
@@ -375,12 +369,6 @@ mod dev_credentials {
                 notary_signing_key: root.join("notary-signing-key.jwk"),
                 postgres_tls_certificate: root.join("postgres-tls.crt"),
                 postgres_tls_private_key: root.join("postgres-tls.key"),
-                relay_public_tls_certificate: root.join("relay-public-tls.crt"),
-                relay_public_tls_private_key: root.join("relay-public-tls.key"),
-                relay_consultation_tls_certificate: root.join("relay-consultation-tls.crt"),
-                relay_consultation_tls_private_key: root.join("relay-consultation-tls.key"),
-                notary_tls_certificate: root.join("notary-tls.crt"),
-                notary_tls_private_key: root.join("notary-tls.key"),
                 source,
                 issuance_public_jwk: None,
                 lane_public_jwks: [
@@ -421,12 +409,6 @@ mod dev_credentials {
                 (&files.notary_signing_key, "{}"),
                 (&files.postgres_tls_certificate, "certificate"),
                 (&files.postgres_tls_private_key, "private-key"),
-                (&files.relay_public_tls_certificate, "certificate"),
-                (&files.relay_public_tls_private_key, "private-key"),
-                (&files.relay_consultation_tls_certificate, "certificate"),
-                (&files.relay_consultation_tls_private_key, "private-key"),
-                (&files.notary_tls_certificate, "certificate"),
-                (&files.notary_tls_private_key, "private-key"),
                 (&files.lane_public_jwks[0], "{}"),
                 (&files.lane_public_jwks[1], "{}"),
                 (&files.lane_public_jwks[2], "{}"),
@@ -480,6 +462,7 @@ mod project_authoring {
         pub development: AuthoredDevelopment,
         pub scenarios: Vec<AuthoredDevScenario>,
         pub records_request: Option<AuthoredRecordsRequest>,
+        pub local_snapshot: Option<crate::dev_runtime::AuthoredLocalSnapshot>,
         pub operator_source_secret_env: Vec<String>,
     }
 
@@ -836,6 +819,7 @@ fn plan_input_generation(
         },
         scenarios: vec![scenario(provider, oauth_profile)],
         records_request: None,
+        local_snapshot: None,
         artifacts,
         credentials: PreparedDevCredentialClosure::synthetic(
             match oauth_profile {
@@ -849,6 +833,21 @@ fn plan_input_generation(
         ),
         operator_source_secret_env: Vec::new(),
     }
+}
+
+fn local_snapshot_plan_input(root: &Path) -> DevRuntimePlanInput {
+    let workbook = root.join("data.xlsx");
+    fs::write(&workbook, b"bounded workbook fixture").unwrap();
+    let mut input = plan_input(root, DevSourceProvider::Spreadsheet, DevOAuthProfile::None);
+    input.development.source_mode = DevSourceMode::LocalSnapshot;
+    input.scenarios[0].synthetic_source = None;
+    input.credentials = PreparedDevCredentialClosure::operator_bound();
+    input.local_snapshot = Some(AuthoredLocalSnapshot {
+        host_path: fs::canonicalize(&workbook).unwrap(),
+        container_path: "/var/lib/registry/data.xlsx".to_string(),
+        digest: registry_platform_config::sha256_uri(b"bounded workbook fixture"),
+    });
+    input
 }
 
 #[test]
@@ -1070,13 +1069,24 @@ fn credential_mount_inventory_is_lane_and_action_specific() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([
             "/run/secrets/notary-signing-key.jwk".to_string(),
-            "/run/secrets/notary-tls.crt".to_string(),
-            "/run/secrets/notary-tls.key".to_string(),
             "/run/secrets/postgresql-ca.pem".to_string(),
-            "/run/secrets/relay-consultation-ca.pem".to_string(),
             "/run/secrets/relay-workload-token".to_string(),
         ])
     );
+    assert!(relay_consultation.mounts.iter().any(|mount| {
+        mount.container_path == "/run/registry/dev-public/notary-workload-jwks.json"
+            && mount.read_only
+            && mount.kind == DevWorkloadMountKind::Bind
+    }));
+    for workload in plan
+        .workloads
+        .iter()
+        .filter(|workload| workload.id != DevWorkloadId::RelayConsultation)
+    {
+        assert!(workload.mounts.iter().all(|mount| {
+            mount.container_path != "/run/registry/dev-public/notary-workload-jwks.json"
+        }));
+    }
     for action in plan
         .workloads
         .iter()
@@ -1101,6 +1111,149 @@ fn credential_mount_inventory_is_lane_and_action_specific() {
 }
 
 #[test]
+fn local_snapshot_mounts_one_bounded_workbook_only_into_relay_serve_workloads() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = DevRuntimePlan::derive(local_snapshot_plan_input(temporary.path())).unwrap();
+
+    assert_eq!(plan.source_mode, DevSourceMode::LocalSnapshot);
+    assert!(!plan
+        .workloads
+        .iter()
+        .any(|workload| workload.id == DevWorkloadId::SyntheticSource));
+    let project_mounts = plan
+        .workloads
+        .iter()
+        .flat_map(|workload| {
+            workload
+                .mounts
+                .iter()
+                .filter(|mount| mount.kind == DevWorkloadMountKind::ProjectFile)
+                .map(move |mount| (workload.id, mount))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(project_mounts.len(), 2);
+    assert_eq!(project_mounts[0].0, DevWorkloadId::RelayPublic);
+    assert_eq!(project_mounts[1].0, DevWorkloadId::RelayConsultation);
+    assert_eq!(project_mounts[0].1, project_mounts[1].1);
+    assert!(project_mounts.iter().all(|(_, mount)| mount.read_only));
+    assert!(plan.workloads.iter().all(|workload| workload
+        .mounts
+        .iter()
+        .all(|mount| { !mount.container_path.contains("synthetic-source") })));
+    assert!(plan.workloads.iter().all(|workload| [
+        workload.prepare_state_store.as_ref(),
+        workload.initialize_state.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|action| &action.mounts)
+    .all(|mount| mount.kind != DevWorkloadMountKind::ProjectFile)));
+
+    let compose = temporary.path().join("local-snapshot-compose.json");
+    render_closed_compose(&compose, &plan.workloads, DevSourceMode::LocalSnapshot).unwrap();
+    let compose: serde_json::Value = serde_json::from_slice(&fs::read(compose).unwrap()).unwrap();
+    assert!(compose["networks"].get("registry_egress").is_none());
+    assert!(compose["services"]
+        .get("registry-synthetic-source")
+        .is_none());
+    for service in ["registry-relay-public", "registry-relay-consultation"] {
+        assert!(compose["services"][service]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|mount| {
+                mount["target"] == "/var/lib/registry/data.xlsx" && mount["read_only"] == true
+            }));
+    }
+    let debug = format!("{plan:?}");
+    assert!(!debug.contains(&temporary.path().join("data.xlsx").display().to_string()));
+    validate_local_snapshot(&plan).unwrap();
+}
+
+#[test]
+fn local_snapshot_cannot_shadow_runtime_owned_mounts() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut input = local_snapshot_plan_input(temporary.path());
+    input.local_snapshot.as_mut().unwrap().container_path =
+        "/run/registry/dev-public/notary-workload-jwks.json".to_string();
+
+    assert!(DevRuntimePlan::derive(input).is_err());
+}
+
+#[test]
+fn local_snapshot_rejects_changed_extra_escaped_and_oversized_project_files() {
+    let changed = tempfile::tempdir().unwrap();
+    let changed_plan = DevRuntimePlan::derive(local_snapshot_plan_input(changed.path())).unwrap();
+    let mut changed_controller = DevRuntimeController::new(FakeBackend::default());
+    changed_controller.start(&changed_plan, true).unwrap();
+    fs::write(changed.path().join("data.xlsx"), b"changed workbook").unwrap();
+    assert!(validate_local_snapshot(&changed_plan).is_err());
+    assert_eq!(
+        changed_controller
+            .status(&changed_plan)
+            .unwrap_err()
+            .category,
+        DevFailureCategory::ProjectBinding
+    );
+    changed_controller.down(&changed_plan).unwrap();
+
+    let extra = tempfile::tempdir().unwrap();
+    let mut extra_plan = DevRuntimePlan::derive(local_snapshot_plan_input(extra.path())).unwrap();
+    let mount = extra_plan
+        .workloads
+        .iter()
+        .find(|workload| workload.id == DevWorkloadId::RelayPublic)
+        .unwrap()
+        .mounts
+        .iter()
+        .find(|mount| mount.kind == DevWorkloadMountKind::ProjectFile)
+        .unwrap()
+        .clone();
+    extra_plan
+        .workloads
+        .iter_mut()
+        .find(|workload| workload.id == DevWorkloadId::Notary)
+        .unwrap()
+        .mounts
+        .push(mount);
+    assert!(validate_local_snapshot(&extra_plan).is_err());
+
+    let escaped = tempfile::tempdir().unwrap();
+    let external = tempfile::NamedTempFile::new().unwrap();
+    let mut escaped_input = local_snapshot_plan_input(escaped.path());
+    escaped_input.local_snapshot.as_mut().unwrap().host_path =
+        fs::canonicalize(external.path()).unwrap();
+    escaped_input.local_snapshot.as_mut().unwrap().digest =
+        registry_platform_config::sha256_uri(&fs::read(external.path()).unwrap());
+    assert!(DevRuntimePlan::derive(escaped_input).is_err());
+
+    let oversized = tempfile::tempdir().unwrap();
+    let mut oversized_input = local_snapshot_plan_input(oversized.path());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(oversized.path().join("data.xlsx"))
+        .unwrap()
+        .set_len(MAX_LOCAL_SNAPSHOT_BYTES + 1)
+        .unwrap();
+    oversized_input.local_snapshot.as_mut().unwrap().digest =
+        registry_platform_config::sha256_uri(b"");
+    assert!(DevRuntimePlan::derive(oversized_input).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn local_snapshot_rejects_a_symlink_swap_after_planning() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = DevRuntimePlan::derive(local_snapshot_plan_input(temporary.path())).unwrap();
+    let external = tempfile::NamedTempFile::new().unwrap();
+    fs::remove_file(temporary.path().join("data.xlsx")).unwrap();
+    symlink(external.path(), temporary.path().join("data.xlsx")).unwrap();
+    assert!(validate_local_snapshot(&plan).is_err());
+}
+
+#[test]
 fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets() {
     let synthetic_temp = tempfile::tempdir().unwrap();
     let synthetic = DevRuntimePlan::derive(plan_input(
@@ -1112,7 +1265,12 @@ fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets()
     let synthetic_compose = synthetic_temp
         .path()
         .join(".registry-stack/build/local/dev/synthetic-compose.json");
-    render_closed_compose(&synthetic_compose, &synthetic.workloads).unwrap();
+    render_closed_compose(
+        &synthetic_compose,
+        &synthetic.workloads,
+        DevSourceMode::Synthetic,
+    )
+    .unwrap();
     let value: serde_json::Value =
         serde_json::from_slice(&fs::read(synthetic_compose).unwrap()).unwrap();
     assert!(value["networks"].get("registry_egress").is_none());
@@ -1137,11 +1295,16 @@ fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets()
         mount["target"] == "/run/registry/dev-public/synthetic-source-tls.crt"
             && mount["read_only"] == true
     }));
+    assert!(consultation_mounts.iter().any(|mount| {
+        mount["target"] == "/run/registry/dev-public/notary-workload-jwks.json"
+            && mount["read_only"] == true
+    }));
     let notary_mounts = value["services"]["registry-notary"]["volumes"]
         .as_array()
         .unwrap();
-    assert!(notary_mounts.iter().any(|mount| {
-        mount["target"] == "/run/secrets/relay-consultation-ca.pem" && mount["read_only"] == true
+    assert!(notary_mounts.iter().all(|mount| {
+        mount["target"] != "/run/secrets/relay-consultation-ca.pem"
+            && mount["target"] != "/run/registry/dev-public/notary-workload-jwks.json"
     }));
     #[cfg(unix)]
     {
@@ -1212,7 +1375,12 @@ fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets()
     let operator_compose = operator_temp
         .path()
         .join(".registry-stack/build/local/dev/operator-compose.json");
-    render_closed_compose(&operator_compose, &operator.workloads).unwrap();
+    render_closed_compose(
+        &operator_compose,
+        &operator.workloads,
+        DevSourceMode::OperatorBound,
+    )
+    .unwrap();
     let value: serde_json::Value =
         serde_json::from_slice(&fs::read(operator_compose).unwrap()).unwrap();
     assert!(value["networks"].get("registry_egress").is_some());
@@ -1685,12 +1853,25 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
 
     let request_config = fs::read_to_string(&plan.paths.request_config).unwrap();
     assert!(request_config.contains("/v1/evaluations"));
-    assert!(request_config.contains("url = \"https://"));
-    assert!(!request_config.contains("url = \"http://"));
-    assert!(request_config.contains("cacert = "));
-    assert!(request_config.contains("notary-tls.crt"));
-    assert!(startup.relay_api_url.starts_with("https://"));
-    assert!(startup.evidence_api_url.starts_with("https://"));
+    assert!(request_config.contains("url = \"http://127.0.0.1:"));
+    assert!(!request_config.contains("url = \"https://"));
+    assert!(!request_config.contains("cacert = "));
+    assert!(startup.relay_api_url.starts_with("http://127.0.0.1:"));
+    assert!(startup.evidence_api_url.starts_with("http://127.0.0.1:"));
+    for obsolete_listener_credential in [
+        "relay-public-tls.crt",
+        "relay-public-tls.key",
+        "relay-consultation-tls.crt",
+        "relay-consultation-tls.key",
+        "notary-tls.crt",
+        "notary-tls.key",
+    ] {
+        assert!(!plan
+            .paths
+            .credentials
+            .join(obsolete_listener_credential)
+            .exists());
+    }
     let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
     assert!(request_config.contains(&caller_token));
     assert!(!startup.evidence_request_command.contains(&caller_token));
@@ -1829,7 +2010,7 @@ fn records_requests_are_owner_only_minimal_and_credential_separated() {
     let mut controller = DevRuntimeController::new(FakeBackend::default());
     let startup = controller.start(&plan, true).unwrap();
 
-    assert!(startup.relay_api_url.starts_with("https://127.0.0.1:"));
+    assert!(startup.relay_api_url.starts_with("http://127.0.0.1:"));
     assert!(startup
         .records_denied_command
         .as_ref()
@@ -1849,6 +2030,8 @@ fn records_requests_are_owner_only_minimal_and_credential_separated() {
         fs::read_to_string(plan.paths.credentials.join("relay-no-match-token")).unwrap();
     let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
     assert!(authorized.contains("/v1/datasets/projects/entities/projects/records/pw_001"));
+    assert!(authorized.contains("url = \"http://127.0.0.1:"));
+    assert!(!authorized.contains("cacert = "));
     assert!(authorized.contains("header = \"Data-Purpose: public-works-case-management\""));
     assert!(authorized.contains(&match_token));
     assert!(authorized.contains("fail\n"));
@@ -1886,6 +2069,33 @@ fn records_requests_are_owner_only_minimal_and_credential_separated() {
             );
         }
     }
+}
+
+#[test]
+fn records_request_percent_encodes_each_path_segment_without_encoding_separators() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut input = plan_input(
+        temp.path(),
+        DevSourceProvider::Spreadsheet,
+        DevOAuthProfile::None,
+    );
+    input.records_request = Some(project_authoring::AuthoredRecordsRequest {
+        dataset_id: "pro/jects".to_string(),
+        entity_id: "entity?x#y".to_string(),
+        record_id: "PW/%?#café".to_string(),
+        purpose: "public-works-case-management".to_string(),
+    });
+    input.credentials = PreparedDevCredentialClosure::synthetic_records();
+    let plan = DevRuntimePlan::derive(input).unwrap();
+    DevRuntimeController::new(FakeBackend::default())
+        .start(&plan, true)
+        .unwrap();
+
+    let request = fs::read_to_string(&plan.paths.records_request_config).unwrap();
+    assert!(request.contains(
+        "/v1/datasets/pro%2Fjects/entities/entity%3Fx%23y/records/PW%2F%25%3F%23caf%C3%A9"
+    ));
+    assert!(!request.contains("/datasets/pro/jects/"));
 }
 
 #[test]

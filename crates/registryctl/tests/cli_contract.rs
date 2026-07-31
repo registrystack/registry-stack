@@ -306,6 +306,50 @@ fn project_next_actions_preserve_explicit_project_and_environment_selection() {
 }
 
 #[test]
+fn spreadsheet_build_does_not_send_a_file_backed_project_to_governed_approval() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+    let initialized = run(&["init", project_argument, "--template", "spreadsheet"]);
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+
+    let build = run(&["-C", project_argument, "build"]);
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let output = String::from_utf8(build.stdout).expect("build output is UTF-8");
+    assert!(
+        output.contains(
+            "Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build"
+        ),
+        "{output}"
+    );
+    assert!(
+        !output.contains("Next: registryctl trust anchor create"),
+        "{output}"
+    );
+
+    let json_build = run(&["-C", project_argument, "build", "--format", "json"]);
+    assert!(
+        json_build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_build.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&json_build.stdout).expect("build report is JSON");
+    assert_eq!(
+        report["output_owner"], "country implementer and reviewer",
+        "a development-only file build must remain with its implementer and reviewer"
+    );
+}
+
+#[test]
 fn governed_handoff_help_names_ownership_mutation_and_the_exact_next_command() {
     for (args, next) in [
         (

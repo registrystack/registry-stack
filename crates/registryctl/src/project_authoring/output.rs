@@ -735,6 +735,16 @@ pub fn build_reviewed_project(
     )?;
     preflight_project_rhai_scripts(&prepared.loaded)?;
     validate_generated_product_configs(&prepared.compiled)?;
+    let has_project_local_file_input = prepared
+        .loaded
+        .environment
+        .as_ref()
+        .is_some_and(|environment| {
+            environment
+                .entities
+                .values()
+                .any(|binding| matches!(&binding.provider, RecordProvider::Xlsx { .. }))
+        });
     let artifact_inputs = validate_project_workbook_inputs(&prepared.loaded, &prepared.compiled)?;
     let (fixtures, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
@@ -769,6 +779,11 @@ pub fn build_reviewed_project(
         bindings: prepared.bindings,
     };
     record.validate()?;
+    let next_action = reviewed_build_next_action(
+        options.against.is_some(),
+        &record.affected_lanes,
+        has_project_local_file_input,
+    );
     let emitted = record
         .affected_lanes
         .iter()
@@ -821,9 +836,29 @@ pub fn build_reviewed_project(
         anchor_rotation_lanes: record.anchor_rotation_lanes,
         reviewed_build_record: record_relative,
         reviewed_build_record_digest: sha256_uri(&record_bytes),
-        output_owner: "product signers and approved-set operator",
-        next_action: "sign each emitted affected lane, then assemble the approved set",
+        output_owner: if has_project_local_file_input {
+            "country implementer and reviewer"
+        } else {
+            "product signers and approved-set operator"
+        },
+        next_action,
     })
+}
+
+fn reviewed_build_next_action(
+    is_update: bool,
+    affected_lanes: &[crate::ApprovedLaneV1],
+    has_project_local_file_input: bool,
+) -> &'static str {
+    if has_project_local_file_input {
+        "bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build"
+    } else if !is_update {
+        "registryctl trust anchor create --help"
+    } else if affected_lanes.is_empty() {
+        "retain the current approved set; no lane signing input was emitted"
+    } else {
+        "registryctl trust bundle sign --help"
+    }
 }
 
 pub(crate) fn reviewed_project_id(project_directory: &Path, environment: &str) -> Result<String> {
@@ -2826,7 +2861,9 @@ fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Resul
     let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
     let secure = origin.scheme() == "https";
     let local_loopback = origin.scheme() == "http" && url_host_is_ip_loopback(&origin);
-    if (!secure && !local_loopback)
+    let private_service = origin.scheme() == "http"
+        && matches!(origin.host(), Some(url::Host::Domain(host)) if host != "localhost" && !host.ends_with(".localhost"));
+    if (!secure && !local_loopback && !private_service)
         || origin.host().is_none()
         || !origin.username().is_empty()
         || origin.password().is_some()
@@ -2834,7 +2871,9 @@ fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Resul
         || origin.query().is_some()
         || origin.fragment().is_some()
     {
-        bail!("{field} must be an exact HTTPS origin or HTTP IP-loopback origin");
+        bail!(
+            "{field} must be an exact HTTPS origin, HTTP private-service hostname origin, or HTTP IP-loopback origin"
+        );
     }
     Ok(())
 }

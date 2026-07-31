@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(revision, PROMOTION_FIELD_KNOWLEDGE_REVISION);
 
         let index = knowledge::published_field_knowledge_index().expect("knowledge indexes");
-        assert_eq!(index.by_path().len(), 701);
+        assert_eq!(index.by_path().len(), 702);
         let mapped = index
             .by_path()
             .keys()

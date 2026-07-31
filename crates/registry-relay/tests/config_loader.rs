@@ -1946,6 +1946,48 @@ audit:
 }
 
 #[test]
+fn oidc_config_with_development_jwks_file_loads_only_for_local_profile() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = oidc_config_body("").replace(
+        "    jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs",
+        "    development_jwks_file: /run/registry/dev-public/notary-workload-jwks.json",
+    );
+    let path = write_config(&tmp, &body);
+    let config = config::load(&path).expect("local development JWKS config must load");
+    let oidc = config.auth.oidc.as_ref().expect("oidc present");
+    assert!(oidc.jwks_url.is_none());
+    assert!(oidc.discovery_url.is_none());
+    assert_eq!(
+        oidc.development_jwks_file.as_deref(),
+        Some(Path::new(
+            "/run/registry/dev-public/notary-workload-jwks.json"
+        ))
+    );
+
+    let production = body.replace("profile: local", "profile: production");
+    let production_path = write_config(&tmp, &production);
+    assert_config_code(config::load(&production_path), "config.validation_error");
+}
+
+#[test]
+fn oidc_development_jwks_file_requires_an_absolute_normalized_path() {
+    for invalid_path in [
+        "relative/jwks.json",
+        "/run/registry/../private/jwks.json",
+        "/run/registry/./dev-public/jwks.json",
+        "/run/registry//dev-public/jwks.json",
+    ] {
+        let tmp = TempDir::new().expect("tempdir");
+        let body = oidc_config_body("").replace(
+            "    jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs",
+            &format!("    development_jwks_file: {invalid_path}"),
+        );
+        let path = write_config(&tmp, &body);
+        assert_config_code(config::load(&path), "config.validation_error");
+    }
+}
+
+#[test]
 fn example_oidc_config_loads_and_validates() {
     let config = config::load(&example_oidc_path()).expect("oidc example config must load");
 
@@ -2105,6 +2147,16 @@ audit:
   format: jsonl
 "#;
     let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_development_file_combined_with_a_url() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = oidc_config_body(
+        "    development_jwks_file: /run/registry/dev-public/notary-workload-jwks.json\n",
+    );
+    let path = write_config(&tmp, &body);
     assert_config_code(config::load(&path), "config.validation_error");
 }
 

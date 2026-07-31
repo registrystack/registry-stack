@@ -7,8 +7,9 @@ use crate::dev_credentials::{
 };
 use crate::dev_runtime::{
     AuthoredDevScenario, AuthoredDevelopment, AuthoredSyntheticOauthRequest,
-    AuthoredSyntheticSourcePlan, AuthoredSyntheticSourceRequest, DevEnvironmentProfile,
-    DevOAuthProfile, DevSourceMode, DevSourceProvider, SyntheticOAuthResponseCase,
+    AuthoredLocalSnapshot, AuthoredSyntheticSourcePlan, AuthoredSyntheticSourceRequest,
+    DevEnvironmentProfile, DevOAuthProfile, DevSourceMode, DevSourceProvider,
+    SyntheticOAuthResponseCase,
     SyntheticRequestEncoding, SyntheticRequestMethod, SyntheticSourceAuth, SyntheticSourceScenario,
 };
 use base64::Engine as _;
@@ -41,6 +42,7 @@ pub(crate) struct DevAuthoringProjection {
     pub operator_source_secret_env: Vec<String>,
     pub scenarios: Vec<AuthoredDevScenario>,
     pub records_request: Option<AuthoredRecordsRequest>,
+    pub local_snapshot: Option<AuthoredLocalSnapshot>,
     credential_requirements: DevCredentialRequirements,
 }
 
@@ -106,21 +108,19 @@ pub(crate) fn compile_dev_runtime_authoring(
     let development = environment.development.as_ref().ok_or_else(|| {
         anyhow!("environments/{environment_id}.yaml#/development is required for registryctl dev")
     })?;
-    let source_mode = development.source_mode.ok_or_else(|| {
-        anyhow!(
-            "environments/{environment_id}.yaml#/development/source_mode is required; accepted values: synthetic, operator_bound"
-        )
+    let source_mode = development.source_mode;
+    let default_integration = development.default_integration.as_str();
+    validate_stable_id(default_integration, "development.default_integration").with_context(
+        || {
+            format!(
+                "environments/{environment_id}.yaml#/development/default_integration is invalid"
+            )
+        },
+    )?;
+    let default_fixture = development.default_fixture.as_str();
+    validate_stable_id(default_fixture, "development.default_fixture").with_context(|| {
+        format!("environments/{environment_id}.yaml#/development/default_fixture is invalid")
     })?;
-    let default_integration = required_development_id(
-        environment_id,
-        "default_integration",
-        development.default_integration.as_deref(),
-    )?;
-    let default_fixture = required_development_id(
-        environment_id,
-        "default_fixture",
-        development.default_fixture.as_deref(),
-    )?;
     validate_development_ports(environment_id, development)?;
 
     let available = available_development_scenarios(&loaded);
@@ -164,6 +164,7 @@ pub(crate) fn compile_dev_runtime_authoring(
     )?;
     let operator_source_secret_env =
         operator_source_secret_env(environment, default_integration, source_mode);
+    let local_snapshot = development_local_snapshot(&loaded, integration, source_mode)?;
     let (source_provider, credential) = development_provider_and_credential(integration);
     let integration_file = loaded.project.integrations[default_integration]
         .file
@@ -237,6 +238,7 @@ pub(crate) fn compile_dev_runtime_authoring(
         operator_source_secret_env,
         scenarios: vec![scenario],
         records_request,
+        local_snapshot,
         credential_requirements,
     })
 }
@@ -370,7 +372,10 @@ fn development_credential_requirements(
         .environment
         .as_ref()
         .expect("selected environment was loaded");
-    let source = if source_mode == DevelopmentSourceMode::OperatorBound {
+    let source = if matches!(
+        source_mode,
+        DevelopmentSourceMode::OperatorBound | DevelopmentSourceMode::LocalSnapshot
+    ) {
         DevSourceCredentialProfile::OperatorBound
     } else {
         let binding = environment
@@ -495,20 +500,6 @@ fn prevalidate_development_required_fields(
         }
     }
     Ok(())
-}
-
-fn required_development_id<'a>(
-    environment_id: &str,
-    field: &str,
-    value: Option<&'a str>,
-) -> Result<&'a str> {
-    let value = value.ok_or_else(|| {
-        anyhow!("environments/{environment_id}.yaml#/development/{field} is required")
-    })?;
-    validate_stable_id(value, &format!("development.{field}")).with_context(|| {
-        format!("environments/{environment_id}.yaml#/development/{field} is invalid")
-    })?;
-    Ok(value)
 }
 
 fn validate_development_ports(
@@ -668,20 +659,34 @@ fn validate_development_source_mode(
     };
     match source_mode {
         DevelopmentSourceMode::Synthetic => {
-            if let CapabilityDeclaration::Snapshot { snapshot } = &integration.document.capability {
-                let binding = &environment.entities[&snapshot.entity];
-                if !matches!(
-                    binding.provider,
-                    RecordProvider::Xlsx {
-                        project_file: _,
-                        ..
-                    }
-                ) {
-                    bail!(
-                        "environments/{environment_id}.yaml#/entities/{}/provider is not a contained synthetic spreadsheet source",
-                        snapshot.entity
-                    );
-                }
+            if matches!(
+                integration.document.capability,
+                CapabilityDeclaration::Snapshot { .. }
+            ) {
+                bail!(
+                    "environments/{environment_id}.yaml#/development/source_mode must be local_snapshot for a spreadsheet integration"
+                );
+            }
+            Ok(false)
+        }
+        DevelopmentSourceMode::LocalSnapshot => {
+            let CapabilityDeclaration::Snapshot { snapshot } = &integration.document.capability
+            else {
+                bail!(
+                    "environments/{environment_id}.yaml#/development/source_mode is local_snapshot but the selected integration is not a snapshot"
+                );
+            };
+            let binding = environment.entities.get(&snapshot.entity).ok_or_else(|| {
+                anyhow!(
+                    "environments/{environment_id}.yaml#/entities/{} is missing the selected snapshot binding",
+                    snapshot.entity
+                )
+            })?;
+            if !matches!(binding.provider, RecordProvider::Xlsx { .. }) {
+                bail!(
+                    "environments/{environment_id}.yaml#/entities/{}/provider is not a contained XLSX project file",
+                    snapshot.entity
+                );
             }
             Ok(false)
         }
@@ -694,6 +699,51 @@ fn validate_development_source_mode(
             Ok(true)
         }
     }
+}
+
+fn development_local_snapshot(
+    loaded: &LoadedRegistryProject,
+    integration: &LoadedIntegration,
+    source_mode: DevelopmentSourceMode,
+) -> Result<Option<AuthoredLocalSnapshot>> {
+    if source_mode != DevelopmentSourceMode::LocalSnapshot {
+        return Ok(None);
+    }
+    let CapabilityDeclaration::Snapshot { snapshot } = &integration.document.capability else {
+        bail!("local snapshot development lost its validated snapshot integration");
+    };
+    let binding = loaded
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.entities.get(&snapshot.entity))
+        .ok_or_else(|| anyhow!("local snapshot development lost its validated entity binding"))?;
+    let RecordProvider::Xlsx {
+        project_file, path, ..
+    } = &binding.provider
+    else {
+        bail!("local snapshot development lost its validated XLSX provider");
+    };
+    let host_path = std::fs::canonicalize(loaded.root.join(project_file))
+        .context("local snapshot project file cannot be resolved")?;
+    if !host_path.starts_with(&loaded.root) || !host_path.is_file() {
+        bail!("local snapshot project file must be a regular file contained by the project");
+    }
+    let container_path = path
+        .to_str()
+        .ok_or_else(|| anyhow!("local snapshot runtime path is not Unicode"))?
+        .to_string();
+    let digest = registry_platform_config::sha256_uri(
+        &crate::dev_runtime::read_bounded_regular_file(
+            &host_path,
+            crate::dev_runtime::MAX_LOCAL_SNAPSHOT_BYTES,
+        )
+        .context("local snapshot project file is unsafe, unreadable, or too large")?,
+    );
+    Ok(Some(AuthoredLocalSnapshot {
+        host_path,
+        container_path,
+        digest,
+    }))
 }
 
 fn development_provider_and_credential(
@@ -859,6 +909,7 @@ fn compile_synthetic_source_response(
 const fn development_source_mode(source_mode: DevelopmentSourceMode) -> DevSourceMode {
     match source_mode {
         DevelopmentSourceMode::Synthetic => DevSourceMode::Synthetic,
+        DevelopmentSourceMode::LocalSnapshot => DevSourceMode::LocalSnapshot,
         DevelopmentSourceMode::OperatorBound => DevSourceMode::OperatorBound,
     }
 }
@@ -925,7 +976,6 @@ impl DevBindingProjection {
             .as_mut()
             .ok_or_else(|| anyhow!("development Relay binding is absent"))?;
         relay.issuer = self.credentials.relay_oidc.issuer.clone();
-        relay.jwks_url = self.credentials.relay_oidc.jwks_url.clone();
         relay.audience = self.credentials.relay_oidc.audience.clone();
         relay.allowed_clients = vec![self.credentials.relay_oidc.client_id.clone()];
         relay.local_api_keys = self.credentials.relay_api_keys.as_ref().map(|keys| {
@@ -1004,14 +1054,18 @@ impl DevBindingProjection {
                 &mut selected.source,
                 &self.credentials.source,
             )?;
-        } else if self.source_mode == DevSourceMode::OperatorBound
+        } else if matches!(
+            self.source_mode,
+            DevSourceMode::OperatorBound | DevSourceMode::LocalSnapshot
+        )
             && !matches!(
                 self.credentials.source,
                 DevSourceCredentialProjection::OperatorBound
             )
         {
-            bail!("operator-bound development cannot consume generated source credentials");
+            bail!("non-synthetic development cannot consume generated source credentials");
         } else if self.entity_id.is_some()
+            && self.source_mode == DevSourceMode::Synthetic
             && !matches!(
                 self.credentials.source,
                 DevSourceCredentialProjection::SyntheticUnauthenticated { .. }
@@ -1025,10 +1079,10 @@ impl DevBindingProjection {
                 .entities
                 .get(entity_id)
                 .ok_or_else(|| anyhow!("selected development entity binding is absent"))?;
-            if self.source_mode == DevSourceMode::Synthetic
+            if self.source_mode == DevSourceMode::LocalSnapshot
                 && !matches!(entity.provider, RecordProvider::Xlsx { .. })
             {
-                bail!("synthetic snapshot development requires a contained XLSX source");
+                bail!("local snapshot development requires a contained XLSX source");
             }
         }
         Ok(())
@@ -1205,14 +1259,14 @@ fn inject_development_notary_relay_transport(
         .and_then(Value::as_object_mut)
         .ok_or_else(|| anyhow!("compiled Notary Relay binding is absent"))?;
     relay.insert(
-        "root_certificate_path".to_string(),
-        json!(credentials.notary_relay.root_certificate_path),
-    );
-    relay.insert(
         "allowed_private_cidrs".to_string(),
         json!([credentials.notary_relay.allowed_private_cidr]),
     );
     relay.insert("allow_insecure_localhost".to_string(), json!(false));
+    relay.insert(
+        "allow_insecure_private_network".to_string(),
+        json!(false),
+    );
     let rendered = serde_norway::to_string(&config)
         .context("failed to render bound Notary config")?
         .into_bytes()
@@ -1547,20 +1601,30 @@ mod development_authoring_tests {
             ["projects:metadata", "projects:rows"]
         );
         let scenario = &projection.scenarios[0];
+        assert_eq!(projection.development.source_mode, DevSourceMode::LocalSnapshot);
         assert_eq!(scenario.integration_id, "project-record-snapshot");
         assert_eq!(scenario.fixture_id, "match");
         assert_eq!(scenario.source_provider, DevSourceProvider::Spreadsheet);
+        assert!(scenario.synthetic_source.is_none());
+        let snapshot = projection.local_snapshot.as_ref().expect("local snapshot");
         assert_eq!(
-            scenario
-                .synthetic_source
-                .as_ref()
-                .expect("synthetic source")
-                .source_request
-                .path,
-            "/snapshot"
+            snapshot.host_path,
+            std::fs::canonicalize(project.join("data/public_works_projects.xlsx")).unwrap()
         );
+        assert_eq!(
+            snapshot.container_path,
+            "/var/lib/registry/public_works_projects.xlsx"
+        );
+        assert!(matches!(
+            projection.credential_requirements().source,
+            DevSourceCredentialProfile::OperatorBound
+        ));
         let credentials =
             PreparedDevCredentialClosure::generate(projection.credential_requirements()).unwrap();
+        assert!(matches!(
+            credentials.public_projection().source,
+            DevSourceCredentialProjection::OperatorBound
+        ));
         let signed = compile_and_sign_dev_lanes(
             project,
             "local",
@@ -1593,6 +1657,9 @@ mod development_authoring_tests {
             Some(&json!(["projects:metadata", "projects:rows"]))
         );
         assert!(!public.to_string().contains("unrelated:admin"));
+        assert!(public
+            .to_string()
+            .contains("/var/lib/registry/public_works_projects.xlsx"));
         let consultation = registry_platform_config::verify_config_bundle(
             &signed.relay_consultation_bundle,
             &signed.relay_consultation_anchor,
@@ -1602,6 +1669,47 @@ mod development_authoring_tests {
             serde_norway::from_slice(&consultation.config_bytes).unwrap();
         assert_eq!(consultation.pointer("/auth/mode"), Some(&json!("oidc")));
         assert!(consultation.pointer("/auth/api_keys").is_none());
+        assert!(consultation
+            .to_string()
+            .contains("/var/lib/registry/public_works_projects.xlsx"));
+    }
+
+    #[test]
+    fn local_snapshot_authoring_rejects_an_oversized_workbook() {
+        let temporary = tempfile::tempdir().unwrap();
+        let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
+        copy_embedded_dir(embedded, temporary.path()).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(temporary.path().join("data/public_works_projects.xlsx"))
+            .unwrap()
+            .set_len(crate::dev_runtime::MAX_LOCAL_SNAPSHOT_BYTES + 1)
+            .unwrap();
+
+        let error = compile_dev_runtime_authoring(temporary.path(), "local")
+            .err()
+            .expect("oversized local snapshot must fail");
+        assert!(
+            error.to_string().contains("unsafe, unreadable, or too large"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn spreadsheet_integration_requires_explicit_local_snapshot_mode() {
+        let temporary = tempfile::tempdir().unwrap();
+        let embedded = PROJECT_STARTERS.get_dir("spreadsheet").unwrap();
+        copy_embedded_dir(embedded, temporary.path()).unwrap();
+        let environment = temporary.path().join("environments/local.yaml");
+        let bytes = fs::read_to_string(&environment)
+            .unwrap()
+            .replacen("source_mode: local_snapshot", "source_mode: synthetic", 1);
+        fs::write(environment, bytes).unwrap();
+
+        let error = compile_dev_runtime_authoring(temporary.path(), "local")
+            .err()
+            .expect("spreadsheet source cannot use synthetic HTTP mode");
+        assert!(error.to_string().contains("must be local_snapshot"), "{error:#}");
     }
 
     #[test]
@@ -1804,7 +1912,13 @@ api:
         let relay: Value = serde_norway::from_slice(&verified.config_bytes).unwrap();
         assert_eq!(
             relay.pointer("/auth/oidc/issuer"),
-            Some(&json!("http://registry-notary:8081"))
+            Some(&json!("https://registryctl-local-notary.invalid"))
+        );
+        assert_eq!(
+            relay.pointer("/auth/oidc/development_jwks_file"),
+            Some(&json!(
+                "/run/registry/dev-public/notary-workload-jwks.json"
+            ))
         );
         assert_eq!(
             relay.pointer("/consultation/bootstrap/migration_database_url_env"),
@@ -1876,18 +1990,21 @@ api:
         );
         assert_eq!(
             notary_config.pointer("/evidence/relay/base_url"),
-            Some(&json!("https://10.89.0.4:8080"))
+            Some(&json!("http://10.89.0.4:8080"))
         );
-        assert_eq!(
-            notary_config.pointer("/evidence/relay/root_certificate_path"),
-            Some(&json!("/run/secrets/relay-consultation-ca.pem"))
-        );
+        assert!(notary_config
+            .pointer("/evidence/relay/root_certificate_path")
+            .is_none());
         assert_eq!(
             notary_config.pointer("/evidence/relay/allowed_private_cidrs"),
             Some(&json!(["10.89.0.4/32"]))
         );
         assert_eq!(
             notary_config.pointer("/evidence/relay/allow_insecure_localhost"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            notary_config.pointer("/evidence/relay/allow_insecure_private_network"),
             Some(&json!(false))
         );
     }

@@ -43,6 +43,7 @@ auth.oidc.allowed_token_types
 auth.oidc.allowed_token_types[]
 auth.oidc.audiences
 auth.oidc.audiences[]
+auth.oidc.development_jwks_file
 auth.oidc.discovery_url
 auth.oidc.issuer
 auth.oidc.jwks_cache_ttl

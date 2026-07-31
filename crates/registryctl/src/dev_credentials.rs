@@ -22,8 +22,7 @@ use zeroize::Zeroizing;
 const DEV_SECRET_ROOT: &str = "/run/registry/dev-secrets";
 const DEV_PUBLIC_ROOT: &str = "/run/registry/dev-public";
 const SYNTHETIC_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
-const DEV_WORKLOAD_ISSUER: &str = "http://registry-notary:8081";
-const DEV_WORKLOAD_JWKS_URL: &str = "http://registry-notary:8081/.well-known/evidence/jwks.json";
+const DEV_WORKLOAD_ISSUER: &str = "https://registryctl-local-notary.invalid";
 const DEV_WORKLOAD_KID: &str = "registryctl-local-workload";
 const DEV_NOTARY_RUNTIME_SIGNING_KID: &str = "registryctl-local-notary-runtime-issuer";
 const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
@@ -71,12 +70,6 @@ const WORKLOAD_PUBLIC_JWK_FILE: &str = "notary-workload-public.jwk";
 const WORKLOAD_JWKS_FILE: &str = "notary-workload-jwks.json";
 const POSTGRES_TLS_CERTIFICATE_FILE: &str = "postgres-tls.crt";
 const POSTGRES_TLS_PRIVATE_KEY_FILE: &str = "postgres-tls.key";
-const RELAY_PUBLIC_TLS_CERTIFICATE_FILE: &str = "relay-public-tls.crt";
-const RELAY_PUBLIC_TLS_PRIVATE_KEY_FILE: &str = "relay-public-tls.key";
-const RELAY_CONSULTATION_TLS_CERTIFICATE_FILE: &str = "relay-consultation-tls.crt";
-const RELAY_CONSULTATION_TLS_PRIVATE_KEY_FILE: &str = "relay-consultation-tls.key";
-const NOTARY_TLS_CERTIFICATE_FILE: &str = "notary-tls.crt";
-const NOTARY_TLS_PRIVATE_KEY_FILE: &str = "notary-tls.key";
 const NOTARY_SIGNING_KEY_FILE: &str = "notary-signing-key.jwk";
 const POSTGRES_ADMIN_PASSWORD_FILE: &str = "postgres-admin-password";
 const SYNTHETIC_CONTROL_TOKEN_FILE: &str = "control-token";
@@ -164,7 +157,6 @@ pub(crate) struct DevRelayApiKeyProjection {
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct DevRelayOidcProjection {
     pub(crate) issuer: String,
-    pub(crate) jwks_url: String,
     pub(crate) jwks_file: String,
     pub(crate) public_jwk: String,
     pub(crate) audience: String,
@@ -176,7 +168,6 @@ pub(crate) struct DevNotaryRelayProjection {
     pub(crate) base_url: String,
     pub(crate) workload_client_id: String,
     pub(crate) token_file: String,
-    pub(crate) root_certificate_path: String,
     pub(crate) allowed_private_cidr: String,
 }
 
@@ -327,13 +318,6 @@ struct TlsCredential {
     private_key: Zeroizing<String>,
 }
 
-struct ProductTlsCredentialSet {
-    relay_public: TlsCredential,
-    relay_consultation: TlsCredential,
-    notary: TlsCredential,
-    postgres: TlsCredential,
-}
-
 enum SourceCredential {
     OperatorBound,
     SyntheticUnauthenticated {
@@ -372,7 +356,7 @@ pub(crate) struct PreparedDevCredentialClosure {
     notary_audit: Zeroizing<String>,
     relay_pseudonym: Zeroizing<String>,
     databases: DatabaseCredentialSet,
-    product_tls: ProductTlsCredentialSet,
+    postgres_tls: TlsCredential,
     source: SourceCredential,
     issuance: Option<IssuanceCredential>,
     notary_runtime_signing: Option<NotaryRuntimeSigningCredential>,
@@ -419,12 +403,6 @@ pub(crate) struct PreparedDevCredentialFiles {
     pub(crate) notary_signing_key: PathBuf,
     pub(crate) postgres_tls_certificate: PathBuf,
     pub(crate) postgres_tls_private_key: PathBuf,
-    pub(crate) relay_public_tls_certificate: PathBuf,
-    pub(crate) relay_public_tls_private_key: PathBuf,
-    pub(crate) relay_consultation_tls_certificate: PathBuf,
-    pub(crate) relay_consultation_tls_private_key: PathBuf,
-    pub(crate) notary_tls_certificate: PathBuf,
-    pub(crate) notary_tls_private_key: PathBuf,
     pub(crate) source: Option<PreparedDevSourceCredentialFiles>,
     pub(crate) issuance_public_jwk: Option<PathBuf>,
     pub(crate) lane_public_jwks: [PathBuf; 3],
@@ -486,12 +464,7 @@ impl PreparedDevCredentialClosure {
             None
         };
         let source = generate_source_credential(&requirements.source)?;
-        let product_tls = ProductTlsCredentialSet {
-            relay_public: generate_tls_credential("registry-relay-public")?,
-            relay_consultation: generate_tls_credential("registry-relay-consultation")?,
-            notary: generate_tls_credential("registry-notary")?,
-            postgres: generate_tls_credential(POSTGRES_HOST)?,
-        };
+        let postgres_tls = generate_tls_credential(POSTGRES_HOST)?;
         let databases = DatabaseCredentialSet::generate()?;
         let relay_public_audit = secret_token(48)?;
         let relay_consultation_audit = secret_token(48)?;
@@ -519,17 +492,15 @@ impl PreparedDevCredentialClosure {
                 }),
             relay_oidc: DevRelayOidcProjection {
                 issuer: DEV_WORKLOAD_ISSUER.to_string(),
-                jwks_url: DEV_WORKLOAD_JWKS_URL.to_string(),
                 jwks_file: public_container_path(WORKLOAD_JWKS_FILE),
                 public_jwk: workload_public_jwk.clone(),
                 audience: DEV_WORKLOAD_AUDIENCE.to_string(),
                 client_id: DEV_WORKLOAD_CLIENT.to_string(),
             },
             notary_relay: DevNotaryRelayProjection {
-                base_url: "https://10.89.0.4:8080".to_string(),
+                base_url: "http://10.89.0.4:8080".to_string(),
                 workload_client_id: DEV_WORKLOAD_CLIENT.to_string(),
                 token_file: "/run/secrets/relay-workload-token".to_string(),
-                root_certificate_path: "/run/secrets/relay-consultation-ca.pem".to_string(),
                 allowed_private_cidr: DEV_RELAY_CONSULTATION_PRIVATE_CIDR.to_string(),
             },
             databases: DevDatabaseCredentialProjection {
@@ -585,7 +556,7 @@ impl PreparedDevCredentialClosure {
             notary_audit,
             relay_pseudonym,
             databases,
-            product_tls,
+            postgres_tls,
             source,
             issuance,
             notary_runtime_signing,
@@ -851,24 +822,9 @@ impl PreparedDevCredentialClosure {
         write_new_owner_only(&files.notary_signing_key, notary_signing_key.as_bytes())?;
 
         write_tls_files(
-            &files.relay_public_tls_certificate,
-            &files.relay_public_tls_private_key,
-            &self.product_tls.relay_public,
-        )?;
-        write_tls_files(
-            &files.relay_consultation_tls_certificate,
-            &files.relay_consultation_tls_private_key,
-            &self.product_tls.relay_consultation,
-        )?;
-        write_tls_files(
-            &files.notary_tls_certificate,
-            &files.notary_tls_private_key,
-            &self.product_tls.notary,
-        )?;
-        write_tls_files(
             &files.postgres_tls_certificate,
             &files.postgres_tls_private_key,
-            &self.product_tls.postgres,
+            &self.postgres_tls,
         )?;
 
         if let Some(source_files) = &files.source {
@@ -893,10 +849,7 @@ impl PreparedDevCredentialClosure {
             self.relay_consultation_audit.as_str(),
             self.notary_audit.as_str(),
             self.relay_pseudonym.as_str(),
-            self.product_tls.relay_public.private_key.as_str(),
-            self.product_tls.relay_consultation.private_key.as_str(),
-            self.product_tls.notary.private_key.as_str(),
-            self.product_tls.postgres.private_key.as_str(),
+            self.postgres_tls.private_key.as_str(),
         ]);
         values.extend(self.relay_match_token.iter().map(|token| token.as_str()));
         values.extend(self.relay_no_match_token.iter().map(|token| token.as_str()));
@@ -1091,12 +1044,6 @@ impl PreparedDevCredentialFiles {
             notary_signing_key: root.join(NOTARY_SIGNING_KEY_FILE),
             postgres_tls_certificate: root.join(POSTGRES_TLS_CERTIFICATE_FILE),
             postgres_tls_private_key: root.join(POSTGRES_TLS_PRIVATE_KEY_FILE),
-            relay_public_tls_certificate: root.join(RELAY_PUBLIC_TLS_CERTIFICATE_FILE),
-            relay_public_tls_private_key: root.join(RELAY_PUBLIC_TLS_PRIVATE_KEY_FILE),
-            relay_consultation_tls_certificate: root.join(RELAY_CONSULTATION_TLS_CERTIFICATE_FILE),
-            relay_consultation_tls_private_key: root.join(RELAY_CONSULTATION_TLS_PRIVATE_KEY_FILE),
-            notary_tls_certificate: root.join(NOTARY_TLS_CERTIFICATE_FILE),
-            notary_tls_private_key: root.join(NOTARY_TLS_PRIVATE_KEY_FILE),
             source,
             issuance_public_jwk: projection
                 .issuance
@@ -1559,13 +1506,8 @@ fn sign_dev_workload_jwt(private_jwk: &str, service_id: &str) -> Result<String> 
 
 fn generate_tls_credential(service_name: &str) -> Result<TlsCredential> {
     let mut subject_alt_names = vec![service_name.to_string()];
-    match service_name {
-        "registry-synthetic-source" => subject_alt_names.push("10.89.0.3".to_string()),
-        "registry-relay-consultation" => subject_alt_names.push("10.89.0.4".to_string()),
-        "registry-relay-public" | "registry-notary" => {
-            subject_alt_names.push("127.0.0.1".to_string());
-        }
-        _ => {}
+    if service_name == "registry-synthetic-source" {
+        subject_alt_names.push("10.89.0.3".to_string());
     }
     let (certificate, private_key) = generate_self_signed_tls_identity(subject_alt_names)
         .context("failed to generate a disposable development TLS identity")?;
@@ -1751,14 +1693,18 @@ mod tests {
             public_container_path(files.workload_jwks.file_name().unwrap().to_str().unwrap())
         );
         assert_eq!(
+            projection.relay_oidc.issuer,
+            "https://registryctl-local-notary.invalid"
+        );
+        assert_eq!(
+            projection.relay_oidc.jwks_file,
+            "/run/registry/dev-public/notary-workload-jwks.json"
+        );
+        assert_eq!(
             projection.notary_relay.token_file,
             "/run/secrets/relay-workload-token"
         );
-        assert_eq!(projection.notary_relay.base_url, "https://10.89.0.4:8080");
-        assert_eq!(
-            projection.notary_relay.root_certificate_path,
-            "/run/secrets/relay-consultation-ca.pem"
-        );
+        assert_eq!(projection.notary_relay.base_url, "http://10.89.0.4:8080");
         assert_eq!(projection.notary_relay.allowed_private_cidr, "10.89.0.4/32");
         let source_transport = projection.synthetic_source_transport.as_ref().unwrap();
         assert_eq!(

@@ -1809,7 +1809,7 @@ fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
                 );
                 ConfigError::ValidationError
             })?;
-            validate_oidc(oidc)?;
+            validate_oidc(config, oidc)?;
         }
     }
     Ok(())
@@ -1871,7 +1871,7 @@ const OIDC_MAX_JWKS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OIDC_MAX_LEEWAY: Duration = Duration::from_secs(5 * 60);
 const ZITADEL_PROJECT_ROLES_CLAIM: &str = "urn:zitadel:iam:org:project:roles";
 
-fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
+fn validate_oidc(config: &Config, oidc: &OidcConfig) -> Result<(), ConfigError> {
     if !is_allowed_oidc_url(&oidc.issuer, oidc.allow_dev_insecure_fetch_urls) {
         tracing::error!(
             code = "config.validation_error",
@@ -1890,30 +1890,53 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
 
-    match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
-        (Some(_), Some(_)) => {
+    let jwks_source_count = usize::from(oidc.jwks_url.is_some())
+        + usize::from(oidc.discovery_url.is_some())
+        + usize::from(oidc.development_jwks_file.is_some());
+    if jwks_source_count != 1 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.oidc requires exactly one of jwks_url, discovery_url, or development_jwks_file"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if let Some(url) = oidc.jwks_url.as_deref().or(oidc.discovery_url.as_deref()) {
+        if !is_allowed_oidc_url(url, oidc.allow_dev_insecure_fetch_urls) {
             tracing::error!(
                 code = "config.validation_error",
-                "auth.oidc.jwks_url and auth.oidc.discovery_url are mutually exclusive"
+                field = "auth.oidc.jwks_url|discovery_url",
+                "JWKS or discovery URL must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
             );
             return Err(ConfigError::ValidationError);
         }
-        (None, None) => {
+    }
+
+    if let Some(path) = &oidc.development_jwks_file {
+        if config.deployment.profile != Some(registry_platform_ops::DeploymentProfile::Local) {
             tracing::error!(
                 code = "config.validation_error",
-                "auth.oidc requires exactly one of jwks_url or discovery_url"
+                field = "auth.oidc.development_jwks_file",
+                "development_jwks_file is allowed only when deployment.profile is local"
             );
             return Err(ConfigError::ValidationError);
         }
-        (Some(url), None) | (None, Some(url)) => {
-            if !is_allowed_oidc_url(url, oidc.allow_dev_insecure_fetch_urls) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    field = "auth.oidc.jwks_url|discovery_url",
-                    "JWKS or discovery URL must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
-                );
-                return Err(ConfigError::ValidationError);
-            }
+        let normalized: std::path::PathBuf = path.components().collect();
+        if !path.is_absolute()
+            || path.as_os_str() != normalized.as_os_str()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "auth.oidc.development_jwks_file",
+                "development_jwks_file must be an absolute normalized path without dot components"
+            );
+            return Err(ConfigError::ValidationError);
         }
     }
 
@@ -4897,6 +4920,7 @@ datasets: []
         let dev_http_issuer: Config =
             serde_saphyr::from_str(&dev_http_issuer).expect("dev OIDC config parses");
         validate_oidc(
+            &dev_http_issuer,
             dev_http_issuer
                 .auth
                 .oidc
