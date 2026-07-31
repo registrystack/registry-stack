@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "synthetic.snapshot.person-status",
     "version": "1",
-    "hash": "sha256:c332a961e43cb1f758fd2341924f142a544b62bf569f22f475be8cae011692ee"
+    "hash": "sha256:e9f550c4d262eb4ebc9c04218851573a5bb4e2893fad0c8f7520399b02be8cc5"
   },
   "tenant": "synthetic-government",
   "registry_instance": "synthetic-benefits-primary",

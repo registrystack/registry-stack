@@ -8,6 +8,9 @@ deployment:
 server:
   bind: "127.0.0.1:8081"
 
+state:
+  storage: in_memory
+
 auth:
   api_keys:
     - id: synthetic-snapshot-verifier
@@ -47,8 +50,6 @@ evidence:
               person_id: target.id
             outputs:
               registration_status: { type: string, nullable: false, max_bytes: 32 }
-              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
-              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: boolean
       purpose: benefit-status-verification
@@ -76,8 +77,6 @@ evidence:
               person_id: target.id
             outputs:
               registration_status: { type: string, nullable: false, max_bytes: 32 }
-              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
-              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: string
         nullable: true

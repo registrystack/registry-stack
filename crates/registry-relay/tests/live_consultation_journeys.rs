@@ -202,7 +202,7 @@ impl JourneyProfile {
                 "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768"
             }
             Self::SyntheticSnapshot => {
-                "sha256:c332a961e43cb1f758fd2341924f142a544b62bf569f22f475be8cae011692ee"
+                "sha256:e9f550c4d262eb4ebc9c04218851573a5bb4e2893fad0c8f7520399b02be8cc5"
             }
         }
     }
@@ -1106,7 +1106,7 @@ fn validate_minimized_notary_response(
         serde_json::to_string(response).map_err(|_| LiveJourneyError::NotaryResponse)?;
     if [
         "consultation_id",
-        "relay_consultation",
+        "\"relay_consultation\":",
         selector,
         sensitive.source_base_url,
         sensitive.notary_api_key,
