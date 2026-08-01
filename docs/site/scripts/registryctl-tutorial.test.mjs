@@ -411,6 +411,9 @@ test('reader gate executes the evidence change and limits development runtime to
   assert.doesNotMatch(script, /deploy generate/);
   assert.match(script, /oauth2_bearer_no_expiry/);
   assert.match(script, /REGISTRYCTL_BIN must be an absolute installed-binary path/);
+  assert.match(script, /REGISTRYCTL_TUTORIAL_RUNTIME_MODE must be authoring or sealed/);
+  assert.match(script, /TUTORIAL_RUNTIME_MODE="\$\{TUTORIAL_RUNTIME_MODE:-sealed\}"/);
+  assert.match(script, /TUTORIAL_RUNTIME_MODE="\$\{TUTORIAL_RUNTIME_MODE:-authoring\}"/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_EVIDENCE_DIR/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_PROJECT_DIR/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR/);

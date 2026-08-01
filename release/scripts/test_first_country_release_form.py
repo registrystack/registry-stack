@@ -2450,6 +2450,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "${{ runner.temp }}/candidate-released-docs/version",
             candidate,
         )
+        self.assertIn("REGISTRYCTL_TUTORIAL_RUNTIME_MODE: authoring", candidate)
         self.assertIn(
             "bash docs/site/scripts/check-registryctl-tutorials.sh", candidate
         )
@@ -2463,6 +2464,10 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertIn("if ((major >= 1)); then", release)
         self.assertIn("first-country-release-form.py run", release)
         self.assertIn("registry-release-lock.v1.json", release)
+        self.assertIn(
+            '"REGISTRYCTL_TUTORIAL_RUNTIME_MODE": "sealed"',
+            SCRIPT.read_text(encoding="utf-8"),
+        )
         self.assertIn("REGISTRYCTL_ASSET_DIR", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("--relay-image-override", release)
         self.assertNotIn("--notary-image-override", release)

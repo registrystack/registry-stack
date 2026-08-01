@@ -3360,6 +3360,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "REGISTRYCTL_TUTORIAL_EVIDENCE_DIR": str(reader_evidence),
                     "REGISTRYCTL_TUTORIAL_PROJECT_DIR": str(project),
                     "REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR": str(oauth_project),
+                    "REGISTRYCTL_TUTORIAL_RUNTIME_MODE": "sealed",
                     "REGISTRYCTL_RELEASED_DOCS_ROOT": str(released_docs_root),
                 }
             )
