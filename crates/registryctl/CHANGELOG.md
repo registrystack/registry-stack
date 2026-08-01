@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-08-01
+
+- No user-visible Registryctl changes. This release fixes forward from the
+  v0.16.1 tag workflow, which stopped after creating an unpublished empty
+  draft. Install v0.16.2; no final v0.16.1 images, assets, or documentation
+  were published.
+
 ## [0.16.1] - 2026-08-01
 
 - No user-visible Registryctl changes. This release fixes forward from the
