@@ -104,7 +104,6 @@ class CiChangesTest(unittest.TestCase):
 
     def test_archive_dependent_scripts_select_archive_verification(self) -> None:
         for path in (
-            ".github/scripts/ci_changes.py",
             "docs/site/scripts/check-built-links.mjs",
             "docs/site/scripts/check-seo.mjs",
             "docs/site/scripts/docsets.mjs",
@@ -112,6 +111,18 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["docs_archives"])
+
+    def test_release_or_classifier_changes_skip_historical_archive_rebuilds(
+        self,
+    ) -> None:
+        for path in (
+            ".github/scripts/ci_changes.py",
+            ".github/workflows/docs-pages.yml",
+            ".github/workflows/release.yml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertFalse(outputs["docs_archives"])
 
     def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
         outputs = classify(self.workspace, (), run_all=True)
