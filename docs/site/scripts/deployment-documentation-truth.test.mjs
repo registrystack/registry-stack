@@ -97,7 +97,7 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
       assert.match(docset.description, /failed-train record/);
       for (const [productId, product] of Object.entries(docset.products)) {
         if (productId === 'crosswalk') continue;
-        assert.equal(product.ref, 'd05776c6ff7db56a83cf2704458680f4e24d0580');
+        assert.equal(product.ref, 'v0.16.0');
       }
       continue;
     }

@@ -86,30 +86,35 @@ test('validateDocsets requires HEAD for current product refs', () => {
   assert.throws(() => validateDocsets(manifest), /must be HEAD for the current docset/);
 });
 
-test('validateDocsets accepts the exact canonical tag for archived candidate source products', () => {
-  const manifest = validDocsets();
-  manifest.docsets.push({
-    id: 'v1.2.3',
-    label: 'v1.2.3',
-    path: '/v/1.2.3/',
-    status: 'archived',
-    availability: 'candidate',
-    source: 'registry-stack-v1.2.3',
-    published_at: '2026-08-01',
-    description: 'Candidate docs.',
-    products: {
-      'registry-relay': {
-        version: 'v1.2.3',
-        ref: 'v1.2.3',
+test('validateDocsets accepts the exact canonical tag for versioned source records', () => {
+  for (const [status, availability] of [
+    ['archived', 'candidate'],
+    ['draft', 'failed'],
+  ]) {
+    const manifest = validDocsets();
+    manifest.docsets.push({
+      id: 'v1.2.3',
+      label: 'v1.2.3',
+      path: '/v/1.2.3/',
+      status,
+      availability,
+      source: 'registry-stack-v1.2.3',
+      published_at: '2026-08-01',
+      description: 'Release source record.',
+      products: {
+        'registry-relay': {
+          version: 'v1.2.3',
+          ref: 'v1.2.3',
+        },
+        crosswalk: {
+          version: 'crosswalk-core-v0.2.0',
+          ref: '3333333333333333333333333333333333333333',
+        },
       },
-      crosswalk: {
-        version: 'crosswalk-core-v0.2.0',
-        ref: '3333333333333333333333333333333333333333',
-      },
-    },
-  });
+    });
 
-  assert.doesNotThrow(() => validateDocsets(manifest));
+    assert.doesNotThrow(() => validateDocsets(manifest));
+  }
 });
 
 test('validateDocsets rejects arbitrary tags for archived candidate products', () => {

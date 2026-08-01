@@ -7,13 +7,27 @@ const shaPattern = /^[0-9a-f]{40}$/;
 const releaseTagPattern =
   /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
+function isCanonicalReleaseSourceProduct(docset, product) {
+  return (
+    releaseTagPattern.test(docset.id) &&
+    product?.version === docset.id &&
+    product.ref === docset.id
+  );
+}
+
 export function isCandidateSourceProduct(docset, product) {
   return (
     docset.status === 'archived' &&
     docset.availability === 'candidate' &&
-    releaseTagPattern.test(docset.id) &&
-    product?.version === docset.id &&
-    product.ref === docset.id
+    isCanonicalReleaseSourceProduct(docset, product)
+  );
+}
+
+function isFailedTrainProduct(docset, product) {
+  return (
+    docset.status === 'draft' &&
+    docset.availability === 'failed' &&
+    isCanonicalReleaseSourceProduct(docset, product)
   );
 }
 
@@ -102,11 +116,12 @@ export function validateDocsets(manifest) {
         throw new Error(`${prefix}.products.${repoId} must declare version and ref`);
       }
       const isCurrent = docset.id === manifest.current;
-      const isCandidateSourceTag = isCandidateSourceProduct(docset, product);
+      const isReleaseSourceTag =
+        isCandidateSourceProduct(docset, product) || isFailedTrainProduct(docset, product);
       if (isCurrent && product.ref !== 'HEAD') {
         throw new Error(`${prefix}.products.${repoId}.ref must be HEAD for the current docset`);
       }
-      if (!isCurrent && !isCandidateSourceTag && !shaPattern.test(product.ref)) {
+      if (!isCurrent && !isReleaseSourceTag && !shaPattern.test(product.ref)) {
         throw new Error(`${prefix}.products.${repoId}.ref must be a full 40-character SHA`);
       }
     }
