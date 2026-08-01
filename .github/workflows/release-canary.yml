@@ -13,6 +13,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  archive-debug:
+    name: Capture hosted archive output
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Build candidate archive and inventory Pagefind
+        working-directory: docs/site
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          DOCS_DOCSET=v0.16.0 npm run build:archive
+          npm run archive:snapshot -- v0.16.0
+          find .release-docsets/v0.16.0/root/pagefind -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum
+
+      - name: Upload hosted archive trees
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            docs/site/.release-docsets/v0.16.0/root
+            docs/site/dist/v/0.16.0
+          if-no-files-found: error
+          retention-days: 1
+
   control-plane:
     name: Exercise release control plane without public writes
     runs-on: ubuntu-24.04
