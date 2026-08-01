@@ -67,13 +67,11 @@
       "outputs": {
         "active": { "type": "boolean" },
         "parents": {
-          "type": "array",
-          "nullable": false,
+          "type": ["array", "null"],
           "max_bytes": 4096,
           "max_items": 2,
           "items": {
             "type": "object",
-            "nullable": false,
             "max_bytes": 2048,
             "fields": {
               "name": {
@@ -577,14 +575,45 @@
         "schema": {"x-registry-field": "property", "$ref": "#/$defs/outputSchema" }
       }
     },
+    "objectType": {
+      "description": "The object form, optionally paired with null for a nullable structured output object.",
+      "oneOf": [
+        {"x-registry-field": "branch", "const": "object" },
+        {
+          "x-registry-field": "branch",
+          "type": "array",
+          "prefixItems": [
+            {"x-registry-field": "array_item", "const": "object" },
+            {"x-registry-field": "array_item", "const": "null" }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ]
+    },
+    "arrayType": {
+      "description": "The array form, optionally paired with null for a nullable structured output array.",
+      "oneOf": [
+        {"x-registry-field": "branch", "const": "array" },
+        {
+          "x-registry-field": "branch",
+          "type": "array",
+          "prefixItems": [
+            {"x-registry-field": "array_item", "const": "array" },
+            {"x-registry-field": "array_item", "const": "null" }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ]
+    },
     "outputObject": {
       "description": "A recursively typed object output with a canonical byte ceiling and an always-closed field map.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "nullable", "max_bytes", "fields"],
+      "required": ["type", "max_bytes", "fields"],
       "properties": {
-        "type": {"x-registry-field": "property", "const": "object" },
-        "nullable": {"x-registry-field": "property", "type": "boolean" },
+        "type": {"x-registry-field": "property", "$ref": "#/$defs/objectType" },
         "max_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 },
         "fields": {
           "x-registry-field": "property",
@@ -600,10 +629,9 @@
       "description": "A recursively typed array output with canonical byte and item-count ceilings.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "nullable", "max_bytes", "max_items", "items"],
+      "required": ["type", "max_bytes", "max_items", "items"],
       "properties": {
-        "type": {"x-registry-field": "property", "const": "array" },
-        "nullable": {"x-registry-field": "property", "type": "boolean" },
+        "type": {"x-registry-field": "property", "$ref": "#/$defs/arrayType" },
         "max_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 },
         "max_items": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 256 },
         "items": {"x-registry-field": "property", "$ref": "#/$defs/outputSchema" }

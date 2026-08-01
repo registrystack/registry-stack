@@ -3,13 +3,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use registry_notary_core::{
+    ClaimEvidenceMode, RelayOutputContract, StandaloneRegistryNotaryConfig,
+    MAX_RELAY_OUTPUT_EXPANDED_NODES_V1,
+};
+use registry_relay::rhai_worker::{
+    OutputSchema, TypedValue, WorkerError, WorkerLimits, WorkerOutcome, WorkerOutput,
+    WorkerProcess, WorkerRequest,
+};
 use registryctl::ProjectSchemaKind;
 use registryctl::{
-    check_registry_project_with_context, ProjectAuthoringDiagnostics, ProjectCheckOptions,
-    ProjectExecutionContext,
+    build_registry_project_with_context, check_registry_project_with_context,
+    ProjectAuthoringDiagnostics, ProjectBuildOptions, ProjectCheckOptions, ProjectExecutionContext,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[path = "../src/project_authoring/knowledge.rs"]
 mod field_knowledge;
@@ -249,7 +257,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         [
             (SchemaKind::Project, 220),
             (SchemaKind::Environment, 213),
-            (SchemaKind::Integration, 171),
+            (SchemaKind::Integration, 177),
             (SchemaKind::Fixture, 63),
             (SchemaKind::Entity, 35),
         ]
@@ -261,11 +269,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 492),
+            (FieldPathKind::Property, 490),
             (FieldPathKind::MapKey, 26),
             (FieldPathKind::MapValue, 33),
-            (FieldPathKind::ArrayItem, 34),
-            (FieldPathKind::Branch, 112),
+            (FieldPathKind::ArrayItem, 38),
+            (FieldPathKind::Branch, 116),
         ]
         .into_iter()
         .collect(),
@@ -275,11 +283,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 445),
+            (Sensitivity::Internal, 447),
             (Sensitivity::Sensitive, 69),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 51),
-            (Sensitivity::Structural, 117),
+            (Sensitivity::Structural, 121),
         ]
         .into_iter()
         .collect(),
@@ -287,12 +295,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        702,
+        708,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        279,
+        281,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -817,28 +825,28 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "integration",
                 PublishedStructuralInventory {
-                    nodes: 200,
-                    local_refs: 46,
-                    union_nodes: 12,
-                    union_branches: 29,
+                    nodes: 208,
+                    local_refs: 48,
+                    union_nodes: 14,
+                    union_branches: 33,
                     conditionals: 1,
                     objects: 38,
                     closed_objects: 31,
                     typed_maps: 7,
                     open_maps: 0,
-                    arrays: 9,
-                    scalar_types: 59,
+                    arrays: 11,
+                    scalar_types: 57,
                     nullable_nodes: 0,
                     integer_lower_bounds: 22,
                     integer_upper_bounds: 22,
                     string_length_bounds: 14,
                     string_patterns: 20,
-                    array_size_bounds: 9,
+                    array_size_bounds: 11,
                     unique_arrays: 8,
                     object_size_bounds: 9,
                     property_name_constraints: 4,
                     enums: 11,
-                    consts: 17,
+                    consts: 21,
                     defaults: 3,
                     deprecations: 0,
                 },
@@ -1539,4 +1547,960 @@ fn representative_mutations_fail_schema_and_runtime() {
             .collect(),
         "each maintained mutation must name the exact schema keywords observed to fail"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Boundary parity: one authored structured output, three product boundaries.
+//
+// Registryctl compiles an authored `outputs` declaration into the public Relay
+// consultation contract and into the Notary evidence configuration. The two
+// runtime products then read that declaration through independent Rust types
+// (`registry_relay::rhai_worker::OutputSchema` and
+// `registry_notary_core::RelayOutputContract`). The tests below pin the shared
+// wire shape, the shared value verdicts, and the exact places where the two
+// platform bounds deliberately differ.
+// ---------------------------------------------------------------------------
+
+const OPENCRVS_FIXTURE: &str = "crates/registryctl/tests/fixtures/project-authoring/opencrvs";
+const OPENCRVS_INTEGRATION: &str = "integrations/birth-record/integration.yaml";
+const RELAY_CONSULTATION_CONTRACT: &str = "private/relay-consultation/config/artifacts/consultation-contracts/birth-verification-birth.json";
+const NOTARY_CONFIG: &str = "private/notary/config/notary.yaml";
+/// The claim whose authored output is the structured array of objects.
+const STRUCTURED_OUTPUT: &str = "parents";
+/// The synthesized output name used to drive both product boundaries.
+const PROBE_OUTPUT: &str = "probe";
+
+/// Reviewed echo program: whatever the host supplies as `probe` is returned as
+/// the `probe` output, so the worker validates a real value against the
+/// compiler-produced declaration instead of against a literal.
+const ECHO_PROGRAM: &str = "fn consult(ctx) { result.match(#{ probe: ctx.input.probe }) }";
+
+/// Reviewed program that produces no outputs, so a worker verdict reports only
+/// whether the declared output schema itself was accepted.
+const NO_OUTPUT_PROGRAM: &str = "fn consult(ctx) { result.no_match() }";
+
+/// The two product views of one authored `outputs` block.
+struct BoundaryOutputs {
+    /// `spec.output` from the generated Relay consultation contract.
+    relay: BTreeMap<String, Value>,
+    /// The generated Notary consultation outputs, re-serialized from the
+    /// production `RelayOutputContract` model rather than from raw YAML.
+    notary: BTreeMap<String, Value>,
+    /// The generated Notary configuration as plain data, so a parity case can
+    /// splice one probe declaration into it and revalidate.
+    notary_document: Value,
+}
+
+fn build_opencrvs_outputs(edit: impl FnOnce(&mut Value)) -> BoundaryOutputs {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let project = temporary.path().join("project");
+    copy_tree(&repository_root().join(OPENCRVS_FIXTURE), &project);
+    let integration_path = project.join(OPENCRVS_INTEGRATION);
+    let mut integration = read_yaml_json(&integration_path);
+    edit(&mut integration);
+    std::fs::write(
+        &integration_path,
+        serde_norway::to_string(&integration).expect("integration document serializes as YAML"),
+    )
+    .expect("integration document writes");
+
+    let context = ProjectExecutionContext::new(env!("CARGO_BIN_EXE_registryctl"))
+        .expect("Cargo provides the real registryctl executable");
+    let report = build_registry_project_with_context(
+        &ProjectBuildOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        &context,
+    )
+    .expect("the opencrvs project builds");
+    let output = project.join(report.output.expect("build reports an output directory"));
+
+    let contract: Value = serde_json::from_slice(
+        &std::fs::read(output.join(RELAY_CONSULTATION_CONTRACT))
+            .expect("Relay consultation contract reads"),
+    )
+    .expect("Relay consultation contract parses");
+    let relay = contract["spec"]["output"]
+        .as_object()
+        .expect("the Relay contract declares an output map")
+        .iter()
+        .map(|(name, declaration)| (name.clone(), declaration.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let notary_path = output.join(NOTARY_CONFIG);
+    let notary_config: StandaloneRegistryNotaryConfig =
+        serde_norway::from_slice(&std::fs::read(&notary_path).expect("Notary config reads"))
+            .expect("the generated Notary config parses through its production model");
+    notary_config
+        .validate()
+        .expect("the generated Notary config passes its own platform validation");
+    let notary = structured_consultation_outputs(&notary_config)
+        .iter()
+        .map(|(name, contract)| {
+            (
+                name.clone(),
+                serde_json::to_value(contract).expect("a Notary output contract serializes"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    BoundaryOutputs {
+        relay,
+        notary,
+        notary_document: read_yaml_json(&notary_path),
+    }
+}
+
+fn structured_consultation_outputs(
+    config: &StandaloneRegistryNotaryConfig,
+) -> &BTreeMap<String, RelayOutputContract> {
+    let claim = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == STRUCTURED_OUTPUT)
+        .expect("the structured-output claim is generated");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        panic!("the structured-output claim remains registry backed");
+    };
+    &consultations
+        .values()
+        .next()
+        .expect("the structured-output claim has one consultation")
+        .outputs
+}
+
+/// Aligns the worker string ceiling with the Notary platform ceiling so a
+/// rejection can only come from the declaration, never from a narrower
+/// per-deployment budget.
+fn boundary_worker_limits() -> WorkerLimits {
+    WorkerLimits {
+        max_string_bytes: 64 * 1024,
+        max_call_levels: 16,
+        max_expr_depth: 16,
+        ..WorkerLimits::default()
+    }
+}
+
+fn relay_verdict(request: &WorkerRequest) -> bool {
+    let worker = WorkerProcess::with_program(env!("CARGO_BIN_EXE_registryctl"));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime builds");
+    match runtime.block_on(worker.evaluate(request)) {
+        Ok(WorkerOutput::Success { outcome, .. }) => {
+            assert_ne!(
+                outcome,
+                WorkerOutcome::Ambiguous,
+                "the reviewed parity program is never ambiguous"
+            );
+            true
+        }
+        Ok(WorkerOutput::Failure { failure }) => {
+            panic!("the reviewed parity program never fails: {failure:?}")
+        }
+        Err(WorkerError::ContractViolation) => false,
+        Err(error) => panic!("the Relay worker did not reach a contract verdict: {error}"),
+    }
+}
+
+/// Wraps a probe value in the worker's typed input envelope using the declared
+/// output type, so a null probe still crosses the boundary with its type.
+fn typed_probe(declaration: &Value, value: &Value) -> TypedValue {
+    match declaration["type"]
+        .as_str()
+        .expect("every output declaration names one type")
+    {
+        "string" => TypedValue::String {
+            value: value.as_str().map(str::to_owned),
+        },
+        "date" => TypedValue::Date {
+            value: value.as_str().map(str::to_owned),
+        },
+        "boolean" => TypedValue::Boolean {
+            value: value.as_bool(),
+        },
+        "integer" => TypedValue::Integer {
+            value: value.as_i64(),
+        },
+        "object" => TypedValue::Object {
+            value: (!value.is_null()).then(|| value.clone()),
+        },
+        "array" => TypedValue::Array {
+            value: (!value.is_null()).then(|| value.clone()),
+        },
+        other => panic!("unknown declared output type: {other}"),
+    }
+}
+
+fn relay_accepts_value(declaration: &Value, value: &Value) -> bool {
+    let schema: OutputSchema = serde_json::from_value(declaration.clone())
+        .expect("the declaration decodes into the Relay worker output contract");
+    let mut request = WorkerRequest::v1(ECHO_PROGRAM, "consult", boundary_worker_limits());
+    request.input = BTreeMap::from([(PROBE_OUTPUT.to_string(), typed_probe(declaration, value))]);
+    request.output_schema = BTreeMap::from([(PROBE_OUTPUT.to_string(), schema)]);
+    relay_verdict(&request)
+}
+
+fn notary_accepts_value(declaration: &Value, value: &Value) -> bool {
+    let contract: RelayOutputContract = serde_json::from_value(declaration.clone())
+        .expect("the declaration decodes into the Notary Relay output contract");
+    contract.validates_value(value)
+}
+
+fn relay_accepts_declaration(declaration: &Value) -> bool {
+    let Ok(schema) = serde_json::from_value::<OutputSchema>(declaration.clone()) else {
+        return false;
+    };
+    let mut request = WorkerRequest::v1(NO_OUTPUT_PROGRAM, "consult", boundary_worker_limits());
+    request.output_schema = BTreeMap::from([(PROBE_OUTPUT.to_string(), schema)]);
+    relay_verdict(&request)
+}
+
+/// Splices one probe output into every generated consultation and revalidates
+/// the whole Notary configuration, which is the only public path to the
+/// platform output-schema bounds.
+fn notary_accepts_declaration(document: &Value, declaration: &Value) -> bool {
+    let mut document = document.clone();
+    for claim in document["evidence"]["claims"]
+        .as_array_mut()
+        .expect("the generated Notary config declares claims")
+    {
+        for consultation in claim["evidence_mode"]["consultations"]
+            .as_object_mut()
+            .expect("every generated claim is registry backed")
+            .values_mut()
+        {
+            consultation["outputs"]
+                .as_object_mut()
+                .expect("every generated consultation declares outputs")
+                .insert(PROBE_OUTPUT.to_string(), declaration.clone());
+        }
+    }
+    let yaml = serde_norway::to_string(&document).expect("the Notary config serializes as YAML");
+    serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&yaml)
+        .is_ok_and(|config| config.validate().is_ok())
+}
+
+/// Reports whether the Registryctl authoring stage rejects an authored output.
+///
+/// The maintained adapter script never produces an extra output, so a project
+/// carrying one always fails somewhere; the authoring verdict is which stage
+/// fails. An accepted declaration reaches fixture execution, and a rejected one
+/// stops at authoring with a diagnostic that names the offending output path.
+fn authoring_rejects_output(name: &str, declaration: &Value) -> bool {
+    let error = check_authored_output(name, declaration)
+        .expect_err("an extra authored output never reaches a clean check");
+    if let Some(report) = error.downcast_ref::<ProjectAuthoringDiagnostics>() {
+        let pointer = format!("/outputs/{name}");
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "registryctl.authoring.integration.invalid"
+                    && diagnostic
+                        .addresses
+                        .iter()
+                        .any(|address| address.pointer.starts_with(&pointer))
+            }),
+            "an authoring rejection must name the offending output path: {error:#} PROBE {:?}",
+            report
+                .diagnostics
+                .iter()
+                .flat_map(|diagnostic| diagnostic.addresses.iter())
+                .map(|address| address.pointer.clone())
+                .collect::<Vec<_>>()
+        );
+        return true;
+    }
+    assert!(
+        format!("{error:#}").contains("project integration fixtures failed"),
+        "an authoring acceptance must reach fixture execution: {error:#}"
+    );
+    false
+}
+
+/// Runs the production check path over an authored project that declares one
+/// extra structured output.
+fn check_authored_output(name: &str, declaration: &Value) -> anyhow::Result<()> {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let project = temporary.path().join("project");
+    copy_tree(&repository_root().join(OPENCRVS_FIXTURE), &project);
+    let integration_path = project.join(OPENCRVS_INTEGRATION);
+    let mut integration = read_yaml_json(&integration_path);
+    integration["outputs"]
+        .as_object_mut()
+        .expect("the maintained integration declares outputs")
+        .insert(name.to_string(), declaration.clone());
+    std::fs::write(
+        &integration_path,
+        serde_norway::to_string(&integration).expect("integration document serializes as YAML"),
+    )
+    .expect("integration document writes");
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .map(|_| ())
+}
+
+/// A chain of `nodes` schema nodes: `nodes - 1` nested arrays around a boolean.
+fn array_layers(nodes: usize) -> Value {
+    assert!(nodes > 0);
+    let mut schema = json!({ "type": "boolean", "nullable": false });
+    for _ in 1..nodes {
+        schema = json!({
+            "type": "array",
+            "nullable": false,
+            "max_bytes": 65_536,
+            "max_items": 1,
+            "items": schema,
+        });
+    }
+    schema
+}
+
+/// The fixed nodes the Notary decoder reserves for the Relay result envelope
+/// before it reads any consultation output.
+const RELAY_RESULT_ENVELOPE_NODES: usize = 20;
+
+/// The shared expansion formula both products implement: a scalar expands to
+/// itself, an object to itself plus its fields, and an array to its item
+/// expansion repeated `max_items` times plus itself.
+fn expanded_nodes(declaration: &Value) -> usize {
+    match declaration["type"]
+        .as_str()
+        .expect("every declaration names one type")
+    {
+        "object" => declaration["fields"]
+            .as_object()
+            .expect("an object declaration carries fields")
+            .values()
+            .map(|field| expanded_nodes(&field["schema"]))
+            .sum::<usize>()
+            .checked_add(1)
+            .expect("the expansion fits"),
+        "array" => expanded_nodes(&declaration["items"])
+            .checked_mul(
+                declaration["max_items"]
+                    .as_u64()
+                    .expect("an array declaration carries max_items") as usize,
+            )
+            .and_then(|expanded| expanded.checked_add(1))
+            .expect("the expansion fits"),
+        _ => 1,
+    }
+}
+
+/// Builds an object declaration that expands to exactly `target` nodes, using
+/// bounded arrays of booleans as the adjustable field weights.
+fn expanded_object(target: usize) -> Value {
+    let mut remaining = target
+        .checked_sub(1)
+        .expect("an object expands to at least one node");
+    let mut fields = serde_json::Map::new();
+    while remaining > 0 {
+        let weight = remaining.min(257);
+        let schema = if weight == 1 {
+            json!({ "type": "boolean", "nullable": false })
+        } else {
+            json!({
+                "type": "array",
+                "nullable": false,
+                "max_bytes": 65_536,
+                "max_items": weight - 1,
+                "items": { "type": "boolean", "nullable": false },
+            })
+        };
+        fields.insert(
+            format!("field_{}", fields.len()),
+            json!({ "required": true, "schema": schema }),
+        );
+        remaining -= weight;
+    }
+    json!({
+        "type": "object",
+        "nullable": false,
+        "max_bytes": 65_536,
+        "fields": fields,
+    })
+}
+
+fn boolean_object(fields: usize) -> Value {
+    json!({
+        "type": "object",
+        "nullable": false,
+        "max_bytes": 65_536,
+        "fields": (0..fields)
+            .map(|index| {
+                (
+                    format!("field_{index}"),
+                    json!({ "required": true, "schema": { "type": "boolean", "nullable": false } }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>(),
+    })
+}
+
+#[test]
+fn authored_structured_output_reaches_relay_and_notary_as_one_declaration() {
+    let baseline = build_opencrvs_outputs(|_| {});
+    let structured = baseline
+        .relay
+        .get(STRUCTURED_OUTPUT)
+        .expect("the Relay contract carries the structured output");
+    assert_eq!(
+        Some(structured),
+        baseline.notary.get(STRUCTURED_OUTPUT),
+        "one authored structured declaration must reach Relay and Notary as the same declaration"
+    );
+    assert_eq!(
+        serde_json::to_value(
+            serde_json::from_value::<OutputSchema>(structured.clone())
+                .expect("the structured declaration decodes into the Relay worker contract")
+        )
+        .expect("the Relay worker contract re-serializes"),
+        *structured,
+        "the Relay worker type must round-trip the compiler-produced declaration exactly"
+    );
+    assert_eq!(
+        serde_json::to_value(
+            serde_json::from_value::<RelayOutputContract>(structured.clone())
+                .expect("the structured declaration decodes into the Notary output contract")
+        )
+        .expect("the Notary output contract re-serializes"),
+        *structured,
+        "the Notary type must round-trip the compiler-produced declaration exactly"
+    );
+
+    // The public Relay contract keeps the authored `maxLength` on a date so the
+    // published surface stays self-describing; neither runtime type carries it.
+    // Every other output must be identical on both sides.
+    let divergent = baseline
+        .relay
+        .iter()
+        .filter(|(name, declaration)| baseline.notary.get(*name) != Some(*declaration))
+        .map(|(name, declaration)| {
+            let mut relay_only = declaration.clone();
+            let notary = baseline
+                .notary
+                .get(name)
+                .expect("Relay and Notary declare the same output names");
+            relay_only
+                .as_object_mut()
+                .expect("an output declaration is an object")
+                .retain(|key, value| notary.get(key) != Some(value));
+            (name.clone(), relay_only)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        divergent,
+        BTreeMap::from([("date_of_birth".to_string(), json!({ "max_bytes": 10 }))]),
+        "only the documented date byte hint may differ between the two product views"
+    );
+    assert_eq!(
+        baseline.relay.keys().collect::<Vec<_>>(),
+        baseline.notary.keys().collect::<Vec<_>>(),
+        "both products must receive the same output names"
+    );
+
+    // The one authored nullability idiom must lower to `nullable: true` at both
+    // boundaries and at every level of a recursive declaration.
+    assert_eq!(structured["nullable"], json!(false));
+    assert_eq!(structured["items"]["nullable"], json!(false));
+    let nullable = build_opencrvs_outputs(|integration| {
+        integration["outputs"][STRUCTURED_OUTPUT]["type"] = json!(["array", "null"]);
+        integration["outputs"][STRUCTURED_OUTPUT]["items"]["type"] = json!(["object", "null"]);
+    });
+    let nullable_structured = nullable
+        .relay
+        .get(STRUCTURED_OUTPUT)
+        .expect("the nullable Relay contract carries the structured output");
+    assert_eq!(
+        Some(nullable_structured),
+        nullable.notary.get(STRUCTURED_OUTPUT),
+        "the nullable union idiom must reach Relay and Notary as the same declaration"
+    );
+    assert_eq!(nullable_structured["nullable"], json!(true));
+    assert_eq!(nullable_structured["items"]["nullable"], json!(true));
+    assert_eq!(
+        nullable_structured["items"]["fields"], structured["items"]["fields"],
+        "declaring the composite nullable must not change any nested field"
+    );
+}
+
+#[test]
+fn structured_output_values_agree_at_the_relay_and_notary_boundaries() {
+    let built = build_opencrvs_outputs(|_| {});
+    let parents = built
+        .relay
+        .get(STRUCTURED_OUTPUT)
+        .expect("the Relay contract carries the structured output")
+        .clone();
+    let item = parents["items"].clone();
+    // Authored `maxLength: 16` on the item's `type` field lowers to 64 bytes.
+    let type_field_bytes = item["fields"]["type"]["schema"]["max_bytes"]
+        .as_u64()
+        .expect("the item type field declares a byte ceiling") as usize;
+    let item_bytes = item["max_bytes"]
+        .as_u64()
+        .expect("the item declares a byte ceiling") as usize;
+
+    // A UTF-8 byte ceiling is measured in bytes, not characters.
+    let at_scalar_cap = "é".repeat(type_field_bytes / 2);
+    let over_scalar_cap = "é".repeat(type_field_bytes / 2 + 1);
+    assert_eq!(at_scalar_cap.len(), type_field_bytes);
+    assert_eq!(over_scalar_cap.len(), type_field_bytes + 2);
+    let ascii_under_cap = "a".repeat(type_field_bytes - 1);
+    let ascii_at_cap = "a".repeat(type_field_bytes);
+    let ascii_over_cap = "a".repeat(type_field_bytes + 1);
+
+    // Pad the item's `name` so the serialized item lands exactly on its cap.
+    let padding = |extra: isize| {
+        let empty = json!({ "type": "mother", "name": "", "identifier": "P-1" });
+        let base = serde_json::to_vec(&empty)
+            .expect("the probe item serializes")
+            .len();
+        let width = usize::try_from(item_bytes as isize - base as isize + extra)
+            .expect("the padded item stays positive");
+        json!({ "type": "mother", "name": "n".repeat(width), "identifier": "P-1" })
+    };
+    assert_eq!(
+        serde_json::to_vec(&padding(0))
+            .expect("the padded item serializes")
+            .len(),
+        item_bytes
+    );
+
+    // A synthesized array reaches its own byte ceiling, which the authored
+    // declaration cannot: two items of at most 384 bytes never reach 1024.
+    let capped_array = json!({
+        "type": "array",
+        "nullable": false,
+        "max_bytes": 64,
+        "max_items": 8,
+        "items": { "type": "string", "nullable": false, "max_bytes": 64 },
+    });
+    let array_at_cap = json!(["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert_eq!(
+        serde_json::to_vec(&array_at_cap)
+            .expect("the capped array serializes")
+            .len(),
+        64
+    );
+    let array_over_cap = json!(["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    let array_under_cap = json!(["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+
+    let json_safe_integer = json!({
+        "type": "integer",
+        "nullable": false,
+        "minimum": -9_007_199_254_740_991_i64,
+        "maximum": 9_007_199_254_740_991_i64,
+    });
+    let nullable_integer = json!({
+        "type": "integer",
+        "nullable": true,
+        "minimum": 0,
+        "maximum": 10,
+    });
+
+    for (case, declaration, value, accepted) in [
+        (
+            "two conforming items",
+            &parents,
+            json!([
+                { "type": "mother", "name": "Mira Example", "identifier": "PARENT-0001" },
+                { "type": "father", "name": "Noah Example", "identifier": "PARENT-0002" },
+            ]),
+            true,
+        ),
+        (
+            "more items than the declared maximum",
+            &parents,
+            json!([
+                { "type": "mother", "name": "Mira Example" },
+                { "type": "father", "name": "Noah Example" },
+                { "type": "guardian", "name": "Ada Example" },
+            ]),
+            false,
+        ),
+        (
+            "absent optional nested field",
+            &parents,
+            json!([{ "type": "mother", "name": "Mira Example" }]),
+            true,
+        ),
+        (
+            "null optional nested field",
+            &parents,
+            json!([{ "type": "mother", "name": "Mira Example", "identifier": null }]),
+            true,
+        ),
+        (
+            "absent required nested field",
+            &parents,
+            json!([{ "type": "mother", "identifier": "PARENT-0001" }]),
+            false,
+        ),
+        (
+            "null required nested field",
+            &parents,
+            json!([{ "type": "mother", "name": null }]),
+            false,
+        ),
+        (
+            "null value for a non-nullable composite",
+            &parents,
+            Value::Null,
+            false,
+        ),
+        (
+            "unknown ASCII nested key",
+            &parents,
+            json!([{ "type": "mother", "name": "Mira Example", "age": "41" }]),
+            false,
+        ),
+        (
+            "unknown non-ASCII nested key",
+            &parents,
+            json!([{ "type": "mother", "name": "Mira Example", "prénom": "Mira" }]),
+            false,
+        ),
+        (
+            "non-ASCII string value",
+            &parents,
+            json!([{ "type": "mother", "name": "José Mará Ñuñez" }]),
+            true,
+        ),
+        (
+            "escaped control characters in a string value",
+            &parents,
+            json!([{ "type": "mother", "name": "Mira\u{0001}\u{0007}\nExample" }]),
+            true,
+        ),
+        (
+            "string one byte below the scalar byte ceiling",
+            &parents,
+            json!([{ "type": ascii_under_cap, "name": "Mira Example" }]),
+            true,
+        ),
+        (
+            "string exactly on the scalar byte ceiling",
+            &parents,
+            json!([{ "type": ascii_at_cap, "name": "Mira Example" }]),
+            true,
+        ),
+        (
+            "string one byte past the scalar byte ceiling",
+            &parents,
+            json!([{ "type": ascii_over_cap, "name": "Mira Example" }]),
+            false,
+        ),
+        (
+            "non-ASCII string exactly on the scalar byte ceiling",
+            &parents,
+            json!([{ "type": at_scalar_cap, "name": "Mira Example" }]),
+            true,
+        ),
+        (
+            "non-ASCII string one byte pair past the scalar byte ceiling",
+            &parents,
+            json!([{ "type": over_scalar_cap, "name": "Mira Example" }]),
+            false,
+        ),
+        (
+            "serialized item one byte below its ceiling",
+            &parents,
+            json!([padding(-1)]),
+            true,
+        ),
+        (
+            "serialized item exactly on its ceiling",
+            &parents,
+            json!([padding(0)]),
+            true,
+        ),
+        (
+            "serialized item one byte past its ceiling",
+            &parents,
+            json!([padding(1)]),
+            false,
+        ),
+        (
+            "serialized array one byte below its ceiling",
+            &capped_array,
+            array_under_cap,
+            true,
+        ),
+        (
+            "serialized array exactly on its ceiling",
+            &capped_array,
+            array_at_cap,
+            true,
+        ),
+        (
+            "serialized array one byte past its ceiling",
+            &capped_array,
+            array_over_cap,
+            false,
+        ),
+        (
+            "exact JSON-safe maximum integer",
+            &json_safe_integer,
+            json!(9_007_199_254_740_991_i64),
+            true,
+        ),
+        (
+            "one past the JSON-safe maximum integer",
+            &json_safe_integer,
+            json!(9_007_199_254_740_992_i64),
+            false,
+        ),
+        (
+            "exact JSON-safe minimum integer",
+            &json_safe_integer,
+            json!(-9_007_199_254_740_991_i64),
+            true,
+        ),
+        (
+            "one past the JSON-safe minimum integer",
+            &json_safe_integer,
+            json!(-9_007_199_254_740_992_i64),
+            false,
+        ),
+        (
+            "integer exactly on a narrow declared maximum",
+            &nullable_integer,
+            json!(10),
+            true,
+        ),
+        (
+            "integer one past a narrow declared maximum",
+            &nullable_integer,
+            json!(11),
+            false,
+        ),
+        (
+            "null value for a nullable scalar",
+            &nullable_integer,
+            Value::Null,
+            true,
+        ),
+    ] {
+        let relay = relay_accepts_value(declaration, &value);
+        let notary = notary_accepts_value(declaration, &value);
+        assert_eq!(
+            relay, notary,
+            "Relay and Notary must reach the same verdict for {case}"
+        );
+        assert_eq!(relay, accepted, "unexpected boundary verdict for {case}");
+    }
+}
+
+#[test]
+fn platform_output_schema_bounds_agree_across_registryctl_relay_and_notary() {
+    let built = build_opencrvs_outputs(|_| {});
+
+    // The Notary decoder wraps consultation outputs in the Relay result root
+    // (three levels) and reserves the twenty fixed envelope nodes. Registryctl
+    // reserves the same envelope when it validates an authored declaration, so
+    // Notary is the binding bound and Relay, which validates only the bare
+    // output map, is deliberately more permissive.
+    assert!(
+        relay_accepts_declaration(&array_layers(6)),
+        "six schema levels fit inside the Relay worker depth bound"
+    );
+    assert!(
+        notary_accepts_declaration(&built.notary_document, &array_layers(6)),
+        "six schema levels fit beneath the reserved Notary result envelope"
+    );
+    assert!(
+        !authoring_rejects_output("nested", &authored_array_layers(6)),
+        "six schema levels are authorable"
+    );
+    assert!(
+        relay_accepts_declaration(&array_layers(7)),
+        "seven schema levels still fit the Relay worker depth bound"
+    );
+    assert!(
+        !notary_accepts_declaration(&built.notary_document, &array_layers(7)),
+        "seven schema levels exceed the reserved Notary result envelope"
+    );
+    assert!(
+        authoring_rejects_output("nested", &authored_array_layers(7)),
+        "Registryctl reserves the same result envelope as the Notary platform"
+    );
+    assert!(
+        !relay_accepts_declaration(&array_layers(9)),
+        "nine schema levels exceed the Relay worker depth bound"
+    );
+    assert!(
+        !notary_accepts_declaration(&built.notary_document, &array_layers(9)),
+        "nine schema levels exceed the Notary depth bound"
+    );
+
+    for (case, declaration, accepted) in [
+        ("thirty-two object fields", boolean_object(32), true),
+        ("thirty-three object fields", boolean_object(33), false),
+        (
+            "two hundred and fifty-six array items",
+            json!({
+                "type": "array",
+                "nullable": false,
+                "max_bytes": 65_536,
+                "max_items": 256,
+                "items": { "type": "boolean", "nullable": false },
+            }),
+            true,
+        ),
+        (
+            "two hundred and fifty-seven array items",
+            json!({
+                "type": "array",
+                "nullable": false,
+                "max_bytes": 65_536,
+                "max_items": 257,
+                "items": { "type": "boolean", "nullable": false },
+            }),
+            false,
+        ),
+        (
+            "declared field name carrying a control character",
+            json!({
+                "type": "object",
+                "nullable": false,
+                "max_bytes": 65_536,
+                "fields": {
+                    "wrapped\u{0001}name": {
+                        "required": true,
+                        "schema": { "type": "boolean", "nullable": false },
+                    },
+                },
+            }),
+            false,
+        ),
+        (
+            "declared non-ASCII field name",
+            json!({
+                "type": "object",
+                "nullable": false,
+                "max_bytes": 65_536,
+                "fields": {
+                    "prénom": {
+                        "required": true,
+                        "schema": { "type": "boolean", "nullable": false },
+                    },
+                },
+            }),
+            true,
+        ),
+        (
+            "string byte ceiling exactly on the platform bound",
+            json!({ "type": "string", "nullable": false, "max_bytes": 65_536 }),
+            true,
+        ),
+        (
+            "string byte ceiling one byte past the platform bound",
+            json!({ "type": "string", "nullable": false, "max_bytes": 65_537 }),
+            false,
+        ),
+    ] {
+        let relay = relay_accepts_declaration(&declaration);
+        let notary = notary_accepts_declaration(&built.notary_document, &declaration);
+        assert_eq!(
+            relay, notary,
+            "Relay and Notary must reach the same declaration verdict for {case}"
+        );
+        assert_eq!(relay, accepted, "unexpected declaration verdict for {case}");
+    }
+
+    // The expanded-node budget is a whole-consultation budget, and the Notary
+    // decoder spends the reserved result envelope inside it before reading any
+    // output. A worker request that carries one output therefore admits a
+    // larger single declaration than the same declaration inside a generated
+    // consultation. Both products expand a declaration identically; only the
+    // reserve differs.
+    let reserved =
+        RELAY_RESULT_ENVELOPE_NODES + built.notary.values().map(expanded_nodes).sum::<usize>();
+    let notary_budget = MAX_RELAY_OUTPUT_EXPANDED_NODES_V1 - reserved;
+    for (case, target, relay_accepts, notary_accepts) in [
+        (
+            "the generated consultation budget",
+            notary_budget,
+            true,
+            true,
+        ),
+        (
+            "one node past the generated consultation budget",
+            notary_budget + 1,
+            true,
+            false,
+        ),
+        (
+            "the bare platform expanded-node bound",
+            MAX_RELAY_OUTPUT_EXPANDED_NODES_V1,
+            true,
+            false,
+        ),
+        (
+            "one node past the platform expanded-node bound",
+            MAX_RELAY_OUTPUT_EXPANDED_NODES_V1 + 1,
+            false,
+            false,
+        ),
+    ] {
+        let declaration = expanded_object(target);
+        assert_eq!(
+            expanded_nodes(&declaration),
+            target,
+            "the parity builder must expand to exactly {target} nodes for {case}"
+        );
+        assert_eq!(
+            relay_accepts_declaration(&declaration),
+            relay_accepts,
+            "unexpected Relay expanded-node verdict for {case}"
+        );
+        assert_eq!(
+            notary_accepts_declaration(&built.notary_document, &declaration),
+            notary_accepts,
+            "unexpected Notary expanded-node verdict for {case}"
+        );
+    }
+
+    // Registryctl is the strictest of the three gates: the published authoring
+    // grammar rejects declared field names that both runtime products accept.
+    assert!(
+        authoring_rejects_output(
+            "named",
+            &json!({
+                "type": "object",
+                "max_bytes": 1_024,
+                "fields": {
+                    "prénom": { "required": true, "schema": { "type": "boolean" } },
+                },
+            }),
+        ),
+        "a non-ASCII declared field name is outside the published authoring grammar"
+    );
+}
+
+/// The authored form of [`array_layers`]: the authoring surface omits the
+/// lowered `nullable` flag and expresses the leaf as a scalar declaration.
+fn authored_array_layers(nodes: usize) -> Value {
+    assert!(nodes > 0);
+    let mut schema = json!({ "type": "boolean" });
+    for _ in 1..nodes {
+        schema = json!({
+            "type": "array",
+            "max_bytes": 65_536,
+            "max_items": 1,
+            "items": schema,
+        });
+    }
+    schema
 }

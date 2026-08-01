@@ -180,6 +180,14 @@
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/1/prefixItems/0", "path_kind": "array_item" },
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/1/prefixItems/1", "path_kind": "array_item" },
+    { "schema": "integration", "pointer": "/$defs/objectType/oneOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/objectType/oneOf/1", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/objectType/oneOf/1/prefixItems/0", "path_kind": "array_item" },
+    { "schema": "integration", "pointer": "/$defs/objectType/oneOf/1/prefixItems/1", "path_kind": "array_item" },
+    { "schema": "integration", "pointer": "/$defs/arrayType/oneOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/arrayType/oneOf/1", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/arrayType/oneOf/1/prefixItems/0", "path_kind": "array_item" },
+    { "schema": "integration", "pointer": "/$defs/arrayType/oneOf/1/prefixItems/1", "path_kind": "array_item" },
     { "schema": "integration", "pointer": "/$defs/versions/anyOf/0", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/versions/anyOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/versionList/items", "path_kind": "array_item" },
@@ -1475,12 +1483,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/outputObject/properties/type",
-      "purpose": "Selects the closed object form for a structured integration output."
-    },
-    {
-      "schema": "integration",
-      "pointer": "/$defs/outputObject/properties/nullable",
-      "purpose": "Declares whether the complete structured output object may be null."
+      "purpose": "Selects the closed object form for a structured integration output, and declares the object nullable by pairing it with null."
     },
     {
       "schema": "integration",
@@ -1495,12 +1498,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/outputArray/properties/type",
-      "purpose": "Selects the array form for a structured integration output."
-    },
-    {
-      "schema": "integration",
-      "pointer": "/$defs/outputArray/properties/nullable",
-      "purpose": "Declares whether the complete structured output array may be null."
+      "purpose": "Selects the array form for a structured integration output, and declares the array nullable by pairing it with null."
     },
     {
       "schema": "integration",

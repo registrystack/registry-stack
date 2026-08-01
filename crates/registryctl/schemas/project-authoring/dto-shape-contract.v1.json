@@ -2529,6 +2529,26 @@
       "rust_type": "AuthoredIntegrationDocument",
       "schema": {
         "$defs": {
+          "AuthoredArraySchemaType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredOutputArrayType"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/AuthoredOutputArrayType"
+                  },
+                  {
+                    "$ref": "#/$defs/AuthoredNullType"
+                  }
+                ],
+                "type": "array"
+              }
+            ]
+          },
           "AuthoredByteSize": {
             "anyOf": [
               {
@@ -2899,6 +2919,34 @@
             ],
             "type": "object"
           },
+          "AuthoredNullType": {
+            "description": "The `\"null\"` member of an authored composite `type` union.",
+            "enum": [
+              "null"
+            ],
+            "type": "string"
+          },
+          "AuthoredObjectSchemaType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredOutputObjectType"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/AuthoredOutputObjectType"
+                  },
+                  {
+                    "$ref": "#/$defs/AuthoredNullType"
+                  }
+                ],
+                "type": "array"
+              }
+            ],
+            "description": "The one authored nullability idiom, shared with `AuthoredSchemaType`.\n\nScalar, object, and array declarations all express nullability as the\nJSON-Schema-native `type` union `[<form>, \"null\"]`. The tuple arm makes the\ntwo-member scalar/null order part of the type rather than a runtime rule."
+          },
           "AuthoredOutputArrayDeclaration": {
             "additionalProperties": false,
             "properties": {
@@ -2916,16 +2964,12 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "nullable": {
-                "type": "boolean"
-              },
               "type": {
-                "$ref": "#/$defs/AuthoredOutputArrayType"
+                "$ref": "#/$defs/AuthoredArraySchemaType"
               }
             },
             "required": [
               "type",
-              "nullable",
               "max_bytes",
               "max_items",
               "items"
@@ -2965,16 +3009,12 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "nullable": {
-                "type": "boolean"
-              },
               "type": {
-                "$ref": "#/$defs/AuthoredOutputObjectType"
+                "$ref": "#/$defs/AuthoredObjectSchemaType"
               }
             },
             "required": [
               "type",
-              "nullable",
               "max_bytes",
               "fields"
             ],

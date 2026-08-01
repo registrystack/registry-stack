@@ -39,12 +39,12 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1829,
-    "reference_count": 506,
+    "path_count": 1835,
+    "reference_count": 508,
     "by_schema": {
       "project": 220,
       "environment": 213,
-      "integration": 171,
+      "integration": 177,
       "fixture": 63,
       "entity": 35,
       "relay": 593,
@@ -52,24 +52,24 @@
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1458,
+      "property": 1456,
       "map_key": 26,
       "map_value": 48,
-      "array_item": 178,
-      "branch": 112
+      "array_item": 182,
+      "branch": 116
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1179,
+      "internal": 1181,
       "sensitive": 408,
       "secret_reference": 44,
       "redacted_fixture": 51,
-      "structural": 131
+      "structural": 135
     },
     "by_intent_source": {
       "schema_description": 530,
-      "reviewed_override": 266,
-      "structural_taxonomy": 131,
+      "reviewed_override": 264,
+      "structural_taxonomy": 139,
       "reviewed_profile": 902
     },
     "by_intent_profile": {
@@ -148,10 +148,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1829,
-  "reviewed_intent_assignment_covered_count": 1829,
-  "distinct_reviewed_intent_count": 629,
+  "reviewed_intent_assignment_required_count": 1835,
+  "reviewed_intent_assignment_covered_count": 1835,
+  "distinct_reviewed_intent_count": 627,
   "distinct_reviewed_intents_reused_count": 86,
-  "reviewed_intent_assignments_using_reused_intent_count": 1286,
+  "reviewed_intent_assignments_using_reused_intent_count": 1294,
   "missing_intent": []
 }

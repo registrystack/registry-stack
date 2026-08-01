@@ -289,7 +289,6 @@ maximum: 9007199254740991
     fn integer_integration_outputs_enforce_json_safe_bounds_recursively() {
         let safe: AuthoredOutputDeclaration = serde_norway::from_str(
             r#"type: object
-nullable: false
 max_bytes: 1024
 fields:
   direct:
@@ -302,7 +301,6 @@ fields:
     required: true
     schema:
       type: array
-      nullable: false
       max_bytes: 512
       max_items: 2
       items:
@@ -320,7 +318,6 @@ fields:
             (
                 "nested object lower bound",
                 r#"type: object
-nullable: false
 max_bytes: 256
 fields:
   sequence:
@@ -334,7 +331,6 @@ fields:
             (
                 "nested array upper bound",
                 r#"type: array
-nullable: false
 max_bytes: 256
 max_items: 2
 items:
@@ -360,12 +356,10 @@ items:
     #[test]
     fn structured_script_output_lowers_recursively_with_closed_bounded_fields() {
         let authored = r#"type: array
-nullable: false
 max_bytes: 1024
 max_items: 2
 items:
   type: object
-  nullable: false
   max_bytes: 384
   fields:
     type:
@@ -435,6 +429,172 @@ items:
         .expect_err("HTTP cannot author structured output projection")
         .to_string()
         .contains("require capability.script"));
+    }
+
+    #[test]
+    fn structured_output_nullability_uses_the_one_scalar_type_union_idiom() {
+        fn parse(source: &str) -> AuthoredOutputDeclaration {
+            serde_norway::from_str(source).expect("structured output parses")
+        }
+
+        fn lower(name: &str, output: AuthoredOutputDeclaration) -> OutputDeclaration {
+            let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+            validate_authored_output(name, &output, &mut nodes)
+                .expect("union-typed structured output validates");
+            lower_output_map(
+                &BTreeMap::from([(name.to_string(), output)]),
+                "birth",
+                false,
+            )
+            .expect("union-typed structured output lowers")
+            .remove(name)
+            .expect("the lowered output is present")
+        }
+
+        let nullable_object = lower(
+            "record",
+            parse(
+                r#"type: [object, "null"]
+max_bytes: 64
+fields:
+  active:
+    required: true
+    schema: { type: boolean }
+"#,
+            ),
+        );
+        assert_eq!(nullable_object.output_type, OutputType::Object);
+        assert!(nullable_object.nullable);
+        assert!(matches!(
+            nullable_object.structured_schema,
+            Some(StructuredOutputSchema::Object {
+                nullable: true,
+                ..
+            })
+        ));
+
+        let required_object = lower(
+            "record",
+            parse(
+                r#"type: object
+max_bytes: 64
+fields:
+  active:
+    required: true
+    schema: { type: boolean }
+"#,
+            ),
+        );
+        assert!(!required_object.nullable);
+        assert!(matches!(
+            required_object.structured_schema,
+            Some(StructuredOutputSchema::Object {
+                nullable: false,
+                ..
+            })
+        ));
+
+        let nullable_array = lower(
+            "records",
+            parse(
+                r#"type: [array, "null"]
+max_bytes: 64
+max_items: 2
+items: { type: boolean }
+"#,
+            ),
+        );
+        assert_eq!(nullable_array.output_type, OutputType::Array);
+        assert!(nullable_array.nullable);
+        assert!(matches!(
+            nullable_array.structured_schema,
+            Some(StructuredOutputSchema::Array {
+                nullable: true,
+                ..
+            })
+        ));
+
+        let required_array = lower(
+            "records",
+            parse(
+                r#"type: array
+max_bytes: 64
+max_items: 2
+items: { type: boolean }
+"#,
+            ),
+        );
+        assert!(!required_array.nullable);
+
+        let nested = parse(
+            r#"type: [array, "null"]
+max_bytes: 512
+max_items: 2
+items:
+  type: [object, "null"]
+  max_bytes: 128
+  fields:
+    identifier:
+      required: false
+      schema: { type: [string, "null"], maxLength: 16 }
+"#,
+        );
+        let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+        validate_authored_output("parents", &nested, &mut nodes)
+            .expect("a nested union-typed structured output validates");
+
+        for retired in [
+            concat!(
+                "type: object\n",
+                "nullable: true\n",
+                "max_bytes: 64\n",
+                "fields:\n",
+                "  active:\n",
+                "    required: true\n",
+                "    schema: { type: boolean }\n"
+            ),
+            concat!(
+                "type: array\n",
+                "nullable: false\n",
+                "max_bytes: 64\n",
+                "max_items: 2\n",
+                "items: { type: boolean }\n"
+            ),
+        ] {
+            assert!(
+                serde_norway::from_str::<AuthoredOutputDeclaration>(retired).is_err(),
+                "the retired composite `nullable` key must not parse: {retired}"
+            );
+        }
+
+        for null_only in [
+            r#"type: ["null"]
+max_bytes: 64
+fields:
+  active:
+    required: true
+    schema: { type: boolean }
+"#,
+            r#"type: ["null", object]
+max_bytes: 64
+fields:
+  active:
+    required: true
+    schema: { type: boolean }
+"#,
+            r#"type: [array, "null"]
+max_bytes: 64
+fields:
+  active:
+    required: true
+    schema: { type: boolean }
+"#,
+        ] {
+            assert!(
+                serde_norway::from_str::<AuthoredOutputDeclaration>(null_only).is_err(),
+                "only `[<composite>, \"null\"]` is an authored union: {null_only}"
+            );
+        }
     }
 
     #[test]
@@ -533,7 +693,6 @@ items:
         let required_boolean = |max_bytes| {
             format!(
                 r#"type: object
-nullable: false
 max_bytes: {max_bytes}
 fields:
   active:
@@ -552,7 +711,6 @@ fields:
         let array = |max_bytes| {
             format!(
                 r#"type: array
-nullable: false
 max_bytes: {max_bytes}
 max_items: 1
 items: {{ type: boolean }}
@@ -566,14 +724,12 @@ items: {{ type: boolean }}
         validate(&array(2)).expect("the empty-array encoding bound validates");
 
         let nested = r#"type: object
-nullable: false
 max_bytes: 64
 fields:
   child:
     required: true
     schema:
       type: object
-      nullable: false
       max_bytes: 1
       fields:
         active:
@@ -611,8 +767,9 @@ fields:
 
         fn object_declaration(field_count: usize) -> AuthoredOutputObjectDeclaration {
             AuthoredOutputObjectDeclaration {
-                output_type: AuthoredOutputObjectType::Object,
-                nullable: false,
+                output_type: AuthoredObjectSchemaType::Single(
+                    AuthoredOutputObjectType::Object,
+                ),
                 max_bytes: 65_536,
                 fields: (0..field_count)
                     .map(|index| {
@@ -637,16 +794,18 @@ fields:
             let mut items = boolean_schema();
             for _ in 1..array_nodes {
                 items = AuthoredOutputSchema::Array(AuthoredOutputArrayDeclaration {
-                    output_type: AuthoredOutputArrayType::Array,
-                    nullable: false,
+                    output_type: AuthoredArraySchemaType::Single(
+                        AuthoredOutputArrayType::Array,
+                    ),
                     max_bytes: 65_536,
                     max_items: 1,
                     items: Box::new(items),
                 });
             }
             AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
-                output_type: AuthoredOutputArrayType::Array,
-                nullable: false,
+                output_type: AuthoredArraySchemaType::Single(
+                    AuthoredOutputArrayType::Array,
+                ),
                 max_bytes: 65_536,
                 max_items: 1,
                 items: Box::new(items),
@@ -657,10 +816,13 @@ fields:
         validate_authored_outputs(&maximum_depth)
             .expect("five array nodes plus one leaf fit downstream depth eight");
         let excessive_depth = BTreeMap::from([("nested".to_string(), array_output(6))]);
-        assert!(validate_authored_outputs(&excessive_depth)
-            .expect_err("one more nested node exceeds downstream depth eight")
-            .to_string()
-            .contains("maximum depth of 8"));
+        assert_eq!(
+            validate_authored_outputs(&excessive_depth)
+                .expect_err("one more nested node exceeds downstream depth eight")
+                .to_string(),
+            "outputs.nested.items.items.items.items.items.items schema exceeds the maximum depth of 8",
+            "a recursive depth rejection must name the nested authored path, not just the output"
+        );
 
         let node_budget = |extra_scalars| {
             let mut outputs = (0..7)
@@ -682,8 +844,9 @@ fields:
             BTreeMap::from([(
                 "expanded".to_string(),
                 AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
-                    output_type: AuthoredOutputArrayType::Array,
-                    nullable: false,
+                    output_type: AuthoredArraySchemaType::Single(
+                        AuthoredOutputArrayType::Array,
+                    ),
                     max_bytes: 65_536,
                     max_items: 255,
                     items: Box::new(AuthoredOutputSchema::Object(object_declaration(field_count))),

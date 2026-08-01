@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- BREAKING: a structured output declares nullability the same way at every
+  type. Object and array outputs use `type: [object, "null"]` and
+  `type: ["array", "null"]`, which is what scalar outputs already used, and the
+  separate `nullable:` key they carried is removed. It shipped on composites
+  only, in 0.16.0, and never applied to scalars, so one grammar had two ways to
+  say the same thing depending on the type in hand. Migration: delete
+  `nullable: true` and pair the declared form with `"null"` in the `type` union;
+  delete `nullable: false` outright, since a form without `"null"` is already
+  non-nullable. An authored project that still carries the key is rejected by
+  `registryctl.authoring.yaml.unknown_field` with the offending pointer and the
+  union syntax to replace it. The `nullable` field on the compiled Registry
+  Relay and Registry Notary contracts is a different, internal wire surface and
+  is unchanged.
+
 ## [0.16.0] - 2026-08-01
 
 ### Removed

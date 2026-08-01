@@ -364,26 +364,28 @@ fn collect_project_authoring_diagnostics(
         }
         let document = match lower_project_integration(&authored, &entities) {
             Ok(document) => document,
-            Err(_) => {
-                diagnostics.push(invalid_diagnostic(
+            Err(error) => {
+                diagnostics.push(cross_file_diagnostic(
                     "registryctl.authoring.integration.invalid",
                     &file,
                     None,
                     "The integration declaration is invalid.",
                     "Correct the integration declaration using the authoring schema.",
                     Some(INTEGRATION_SCHEMA_HINT),
+                    authored_output_addresses(&file, &error),
                 ));
                 continue;
             }
         };
-        if validate_integration(alias, &document).is_err() {
-            diagnostics.push(invalid_diagnostic(
+        if let Err(error) = validate_integration(alias, &document) {
+            diagnostics.push(cross_file_diagnostic(
                 "registryctl.authoring.integration.invalid",
                 &file,
                 None,
                 "The integration declaration is invalid.",
                 "Correct the integration declaration using the authoring schema.",
                 Some(INTEGRATION_SCHEMA_HINT),
+                authored_output_addresses(&file, &error),
             ));
             continue;
         }
@@ -2250,6 +2252,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             return Box::new(path_unsafe(file, None));
         }
         let reserved_fixture_body = error.is_reserved_fixture_body();
+        let retired_nullable_key = error.is_retired_nullable_key();
         let unknown_field = error.keyword() == Some("additionalProperties");
         let syntax = error.is_syntax();
         let schema_code = match T::KIND {
@@ -2268,7 +2271,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
         let mut diagnostic = make_diagnostic(
             if reserved_fixture_body {
                 "registryctl.authoring.fixture.reserved_body_field"
-            } else if unknown_field {
+            } else if retired_nullable_key || unknown_field {
                 "registryctl.authoring.yaml.unknown_field"
             } else if syntax {
                 "registryctl.authoring.yaml.invalid_syntax"
@@ -2280,9 +2283,11 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             line,
             column,
             Some(schema_hint),
-            None,
+            retired_nullable_key.then_some(STRUCTURED_OUTPUT_NULLABLE_UNION_SUGGESTION),
             if reserved_fixture_body {
                 "A fixture body object uses the reserved top-level `file` field without matching the closed file-reference shape."
+            } else if retired_nullable_key {
+                "A structured output declares nullability with the removed `nullable` field."
             } else if unknown_field {
                 "The YAML document contains an unknown field."
             } else if syntax {
@@ -2292,6 +2297,8 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             },
             if reserved_fixture_body {
                 FIXTURE_BODY_FILE_REFERENCE_REMEDIATION
+            } else if retired_nullable_key {
+                STRUCTURED_OUTPUT_NULLABLE_UNION_REMEDIATION
             } else {
                 match kind {
                     "project" => "Correct the project YAML using the project authoring schema. If this project passed with a pre-1.0 Registryctl, create a separate 1.0 project with the `spreadsheet` or `http` template that matches the source, then copy only reviewed authored intent. Registryctl does not migrate or approve the source project.",
@@ -2500,6 +2507,40 @@ fn cross_file_diagnostic(
         diagnostic.addresses = addresses;
     }
     diagnostic
+}
+
+/// Recovers the authored output path that a lowering or semantic failure names.
+///
+/// The recursive output validators thread the authored path through their own
+/// messages (`outputs.parents.items.fields.identifier.schema`), so a malformed
+/// recursive declaration can address its own nested location instead of the
+/// whole document. Only a leading token whose every segment matches the
+/// authored path grammar is recovered, so no other error text reaches an
+/// address, and the rendered diagnostic text stays static either way.
+fn authored_output_addresses(
+    file: &str,
+    error: &anyhow::Error,
+) -> Vec<ProjectAuthoringDiagnosticAddress> {
+    for cause in error.chain() {
+        let message = cause.to_string();
+        let Some(candidate) = message.split_whitespace().next() else {
+            continue;
+        };
+        let segments = candidate.split('.').collect::<Vec<_>>();
+        if segments.len() < 2 || segments[0] != "outputs" {
+            continue;
+        }
+        if segments.iter().all(|segment| {
+            let mut characters = segment.chars();
+            characters
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && characters.all(|rest| rest.is_ascii_alphanumeric() || rest == '_')
+        }) {
+            return vec![diagnostic_address(file, &segments)];
+        }
+    }
+    Vec::new()
 }
 
 fn diagnostic_address(file: &str, segments: &[&str]) -> ProjectAuthoringDiagnosticAddress {
@@ -2720,6 +2761,118 @@ services: {}
                 "parser diagnostic leaked planted scalar {sentinel:?}"
             );
         }
+    }
+
+    #[test]
+    fn retired_composite_nullable_key_names_its_path_and_the_union_syntax() {
+        let document = br#"
+version: 1
+id: example-integration
+revision: 1
+source:
+  product: custom
+  versions: { unverified: [v1] }
+  auth: { type: none }
+  allow: [{ method: GET, path: /records, semantics: read_only }]
+  response: { format: json, max_bytes: 256KiB }
+capability:
+  script: { file: adapter.rhai }
+input:
+  uin: { role: selector, type: string, maxLength: 16 }
+outputs:
+  parents:
+    type: array
+    max_bytes: 1024
+    max_items: 2
+    items:
+      type: object
+      nullable: true
+      max_bytes: 384
+      fields:
+        name: { required: true, schema: { type: string, maxLength: 160 } }
+limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }
+"#;
+        let diagnostic = diagnostic_parse_yaml::<AuthoredIntegrationDocument>(
+            document,
+            "integrations/example/integration.yaml",
+            "integration",
+            INTEGRATION_SCHEMA_HINT,
+        )
+        .expect_err("the retired composite nullable key is rejected");
+
+        assert_eq!(diagnostic.code, "registryctl.authoring.yaml.unknown_field");
+        assert_eq!(
+            diagnostic.cause,
+            "A structured output declares nullability with the removed `nullable` field."
+        );
+        assert_eq!(
+            diagnostic.suggestion,
+            Some("type: [object, \"null\"] for an object output, or type: [array, \"null\"] for an array output")
+        );
+        assert_eq!(
+            diagnostic.remediation,
+            "Remove the `nullable` field and pair the declared form with null in the `type` union, exactly as scalar outputs already do."
+        );
+        assert_eq!(
+            diagnostic
+                .addresses
+                .iter()
+                .map(|address| address.pointer.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/outputs/parents/items/nullable"]
+        );
+    }
+
+    #[test]
+    fn malformed_recursive_output_reports_its_nested_authored_path() {
+        let document = br#"
+version: 1
+id: example-integration
+revision: 1
+source:
+  product: custom
+  versions: { unverified: [v1] }
+  auth: { type: none }
+  allow: [{ method: GET, path: /records, semantics: read_only }]
+  response: { format: json, max_bytes: 256KiB }
+capability:
+  script: { file: adapter.rhai }
+input:
+  uin: { role: selector, type: string, maxLength: 16 }
+outputs:
+  parents:
+    type: array
+    max_bytes: 1024
+    max_items: 2
+    items:
+      type: object
+      max_bytes: 384
+      fields:
+        identifier:
+          required: false
+          schema: { type: string, maxLength: "sixty-four" }
+limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }
+"#;
+        let diagnostic = diagnostic_parse_yaml::<AuthoredIntegrationDocument>(
+            document,
+            "integrations/example/integration.yaml",
+            "integration",
+            INTEGRATION_SCHEMA_HINT,
+        )
+        .expect_err("a malformed nested output schema is rejected");
+
+        assert_eq!(
+            diagnostic.code,
+            "registryctl.authoring.integration.invalid"
+        );
+        assert_eq!(
+            diagnostic
+                .addresses
+                .iter()
+                .map(|address| address.pointer.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/outputs/parents/items/fields/identifier/schema/maxLength"]
+        );
     }
 
     #[test]

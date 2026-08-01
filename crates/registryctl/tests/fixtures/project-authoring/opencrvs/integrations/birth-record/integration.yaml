@@ -48,12 +48,10 @@ outputs:
   place_of_birth: { type: [string, "null"], maxLength: 120 }
   parents:
     type: array
-    nullable: false
     max_bytes: 1024
     max_items: 2
     items:
       type: object
-      nullable: false
       max_bytes: 384
       fields:
         type:

@@ -22,6 +22,7 @@ enum AuthoringDocumentError {
         schema_path: String,
         keyword: &'static str,
         reserved_fixture_body: bool,
+        retired_nullable_key: bool,
         unsafe_authored_path: bool,
         line: Option<usize>,
         column: Option<usize>,
@@ -82,6 +83,16 @@ impl AuthoringDocumentError {
         )
     }
 
+    const fn is_retired_nullable_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Schema {
+                retired_nullable_key: true,
+                ..
+            }
+        )
+    }
+
     const fn is_unsafe_authored_path(&self) -> bool {
         matches!(
             self,
@@ -110,6 +121,17 @@ impl fmt::Display for AuthoringDocumentError {
                 write!(
                     formatter,
                     "authored path must be normalized and cannot traverse"
+                )?;
+                write_safe_location(formatter, self)
+            }
+            Self::Schema {
+                retired_nullable_key: true,
+                ..
+            } => {
+                write!(
+                    formatter,
+                    "structured output nullability must use the type union instead of the \
+                     removed `nullable` field"
                 )?;
                 write_safe_location(formatter, self)
             }
@@ -351,6 +373,7 @@ fn schema_validation_error(
     document: &Value,
     error: jsonschema::ValidationError<'_>,
     instance_path: String,
+    retired_nullable_key: bool,
 ) -> AuthoringDocumentError {
     let schema_path = error.schema_path.to_string();
     let unsafe_authored_path = is_unsafe_authored_path_constraint(kind, &schema_path);
@@ -361,6 +384,7 @@ fn schema_validation_error(
         schema_path,
         keyword: validation_keyword(&error.kind),
         reserved_fixture_body,
+        retired_nullable_key,
         unsafe_authored_path,
         line: None,
         column: None,
@@ -482,6 +506,140 @@ fn project_service_validation_instance_path(document: &Value) -> Option<String> 
     None
 }
 
+/// Where a structured integration output failed, recovered from the collapsed
+/// `#/$defs/output` union.
+struct OutputValidationLocation {
+    instance_path: String,
+    retired_nullable_key: bool,
+}
+
+/// Compiles one `$defs` branch of a published schema as a standalone validator.
+fn definition_branch_validator(
+    definitions: &Value,
+    branch: &str,
+) -> Option<jsonschema::JSONSchema> {
+    let mut branch_schema = definitions.get(branch)?.clone();
+    let branch_object = branch_schema.as_object_mut()?;
+    branch_object.insert(
+        "$schema".to_string(),
+        Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
+    );
+    branch_object.insert("$defs".to_string(), definitions.clone());
+    jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&branch_schema)
+        .ok()
+}
+
+/// Selects the output branch an author intended from the `type` discriminator.
+///
+/// Both the single form and the `[<form>, "null"]` union select the same
+/// branch, so a malformed nullable declaration is still reported against the
+/// structured branch rather than collapsing to the scalar one.
+fn output_declaration_branch<'a>(declaration: &Value, scalar_branch: &'a str) -> &'a str {
+    let discriminator = match declaration.get("type") {
+        Some(Value::String(name)) => Some(name.as_str()),
+        Some(Value::Array(members)) => members.first().and_then(Value::as_str),
+        _ => None,
+    };
+    match discriminator {
+        Some("object") => "outputObject",
+        Some("array") => "outputArray",
+        _ => scalar_branch,
+    }
+}
+
+/// Returns the deepest failing location inside one authored output declaration,
+/// relative to that declaration, or `None` when the declaration is valid.
+fn output_declaration_location(
+    declaration: &Value,
+    definitions: &Value,
+    scalar_branch: &str,
+) -> Option<OutputValidationLocation> {
+    let branch = output_declaration_branch(declaration, scalar_branch);
+    let validator = definition_branch_validator(definitions, branch)?;
+    if validator.is_valid(declaration) {
+        return None;
+    }
+    if let Some(nested) = nested_output_declaration_location(declaration, definitions) {
+        return Some(nested);
+    }
+    if branch != scalar_branch && declaration.get("nullable").is_some() {
+        return Some(OutputValidationLocation {
+            instance_path: "/nullable".to_string(),
+            retired_nullable_key: true,
+        });
+    }
+    Some(OutputValidationLocation {
+        instance_path: most_specific_validation_instance_path(&validator, declaration)
+            .unwrap_or_default(),
+        retired_nullable_key: false,
+    })
+}
+
+/// Descends one level into the recursive object-field and array-item schemas.
+fn nested_output_declaration_location(
+    declaration: &Value,
+    definitions: &Value,
+) -> Option<OutputValidationLocation> {
+    if let Some(fields) = declaration.get("fields").and_then(Value::as_object) {
+        for (field_name, field) in fields {
+            let Some(schema) = field.get("schema") else {
+                continue;
+            };
+            if let Some(nested) =
+                output_declaration_location(schema, definitions, "scalarOutputSchema")
+            {
+                return Some(OutputValidationLocation {
+                    instance_path: format!(
+                        "/fields/{}/schema{}",
+                        escape_json_pointer_segment(field_name),
+                        nested.instance_path
+                    ),
+                    retired_nullable_key: nested.retired_nullable_key,
+                });
+            }
+        }
+    }
+    let items = declaration.get("items")?;
+    let nested = output_declaration_location(items, definitions, "scalarOutputSchema")?;
+    Some(OutputValidationLocation {
+        instance_path: format!("/items{}", nested.instance_path),
+        retired_nullable_key: nested.retired_nullable_key,
+    })
+}
+
+/// Recovers the authored path a collapsed `outputs` union hides.
+///
+/// The published `outputs` map and every nested structured schema are closed
+/// unions, so `jsonschema` reports only the outermost `oneOf` failure. This
+/// re-validates against the branch the author's own `type` discriminator
+/// selects, which restores a path such as
+/// `/outputs/parents/items/fields/identifier/schema`.
+fn integration_output_validation_instance_path(
+    document: &Value,
+) -> Option<OutputValidationLocation> {
+    let outputs = document.get("outputs")?.as_object()?;
+    let root_schema: Value =
+        serde_json::from_str(ProjectSchemaKind::Integration.document()).ok()?;
+    let definitions = root_schema.get("$defs")?.clone();
+    for (name, declaration) in outputs {
+        let Some(location) = output_declaration_location(declaration, &definitions, "scalarOutput")
+        else {
+            continue;
+        };
+        return Some(OutputValidationLocation {
+            instance_path: format!(
+                "/outputs/{}{}",
+                escape_json_pointer_segment(name),
+                location.instance_path
+            ),
+            retired_nullable_key: location.retired_nullable_key,
+        });
+    }
+    None
+}
+
 fn parse_authoring_value(
     bytes: &[u8],
     kind: ProjectSchemaKind,
@@ -503,21 +661,39 @@ fn parse_authoring_value(
         schema_path: String::new(),
         keyword: "schema",
         reserved_fixture_body: false,
+        retired_nullable_key: false,
         unsafe_authored_path: false,
         line: None,
         column: None,
     })?;
     if let Err(mut errors) = validator.validate(&value) {
         let error = errors.next().expect("schema validation returned an error");
-        let collapsed_project_union = kind == ProjectSchemaKind::Project
-            && matches!(&error.kind, ValidationErrorKind::OneOfNotValid);
-        let instance_path = if collapsed_project_union {
+        let collapsed_union = matches!(&error.kind, ValidationErrorKind::OneOfNotValid);
+        let reported_path = error.instance_path.to_string();
+        let collapsed_output_union = kind == ProjectSchemaKind::Integration
+            && collapsed_union
+            && (reported_path == "/outputs" || reported_path.starts_with("/outputs/"));
+        let output_location =
+            collapsed_output_union.then(|| integration_output_validation_instance_path(&value));
+        let retired_nullable_key = output_location
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|location| location.retired_nullable_key);
+        let instance_path = if kind == ProjectSchemaKind::Project && collapsed_union {
             project_service_validation_instance_path(&value)
         } else {
-            None
+            output_location
+                .flatten()
+                .map(|location| location.instance_path)
         }
-        .unwrap_or_else(|| error.instance_path.to_string());
-        return Err(schema_validation_error(kind, &value, error, instance_path));
+        .unwrap_or(reported_path);
+        return Err(schema_validation_error(
+            kind,
+            &value,
+            error,
+            instance_path,
+            retired_nullable_key,
+        ));
     }
     Ok(value)
 }
@@ -578,6 +754,7 @@ fn assert_current_authoring_value_reaches_typed_model(
             schema_path: String::new(),
             keyword: "schema",
             reserved_fixture_body: false,
+            retired_nullable_key: false,
             unsafe_authored_path: false,
             line: None,
             column: None,
@@ -586,7 +763,7 @@ fn assert_current_authoring_value_reaches_typed_model(
         .map_err(|mut errors| {
             let error = errors.next().expect("schema validation returned an error");
             let instance_path = error.instance_path.to_string();
-            schema_validation_error(kind, &value, error, instance_path)
+            schema_validation_error(kind, &value, error, instance_path, false)
         })?;
     match kind {
         ProjectSchemaKind::Project => {

@@ -38,12 +38,12 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1829,
-    "reference_count": 506,
+    "path_count": 1835,
+    "reference_count": 508,
     "by_schema": {
       "project": 220,
       "environment": 213,
-      "integration": 171,
+      "integration": 177,
       "fixture": 63,
       "entity": 35,
       "relay": 593,
@@ -51,24 +51,24 @@
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1458,
+      "property": 1456,
       "map_key": 26,
       "map_value": 48,
-      "array_item": 178,
-      "branch": 112
+      "array_item": 182,
+      "branch": 116
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1179,
+      "internal": 1181,
       "sensitive": 408,
       "secret_reference": 44,
       "redacted_fixture": 51,
-      "structural": 131
+      "structural": 135
     },
     "by_intent_source": {
       "schema_description": 530,
-      "reviewed_override": 266,
-      "structural_taxonomy": 131,
+      "reviewed_override": 264,
+      "structural_taxonomy": 139,
       "reviewed_profile": 902
     },
     "by_intent_profile": {
@@ -41370,6 +41370,368 @@
     {
       "address": {
         "schema": "integration",
+        "pointer": "/$defs/arrayType/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/arrayType/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 2
+        },
+        {
+          "keyword": "minItems",
+          "value": 2
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/arrayType/oneOf/1/prefixItems/0",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/arrayType/oneOf/1/prefixItems/1",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "null"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
         "pointer": "/$defs/capability/oneOf/0",
         "path_kind": "branch"
       },
@@ -48907,6 +49269,368 @@
     {
       "address": {
         "schema": "integration",
+        "pointer": "/$defs/objectType/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/objectType/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 2
+        },
+        {
+          "keyword": "minItems",
+          "value": 2
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/objectType/oneOf/1/prefixItems/0",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/objectType/oneOf/1/prefixItems/1",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "null"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
         "pointer": "/$defs/output/oneOf/0",
         "path_kind": "branch"
       },
@@ -49094,7 +49818,6 @@
           "keyword": "required",
           "value": [
             "type",
-            "nullable",
             "max_bytes",
             "fields"
           ]
@@ -49198,7 +49921,6 @@
           "keyword": "required",
           "value": [
             "type",
-            "nullable",
             "max_bytes",
             "max_items",
             "items"
@@ -49498,18 +50220,19 @@
     {
       "address": {
         "schema": "integration",
-        "pointer": "/$defs/outputArray/properties/nullable",
+        "pointer": "/$defs/outputArray/properties/type",
         "path_kind": "property"
       },
-      "purpose": "Declares whether the complete structured output array may be null.",
+      "purpose": "Selects the array form for a structured integration output, and declares the array nullable by pairing it with null.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
       "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
       "field_type": {
         "schema_types": [
-          "boolean"
+          "array"
         ],
+        "local_reference": "#/$defs/arrayType",
         "composed": false
       },
       "requiredness": "required",
@@ -49577,99 +50300,11 @@
         "knowledge_only",
         "generated_docs_never_load_country_values"
       ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "boolean"
-        }
-      ]
-    },
-    {
-      "address": {
+      "constraints": [],
+      "local_reference": {
         "schema": "integration",
-        "pointer": "/$defs/outputArray/properties/type",
-        "path_kind": "property"
-      },
-      "purpose": "Selects the array form for a structured integration output.",
-      "purpose_source": "reviewed_override",
-      "semantic_owner": "integration_contract",
-      "human_owner": "integration_maintainers",
-      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
-      "field_type": {
-        "schema_types": [],
-        "composed": false
-      },
-      "requiredness": "required",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "no_schema_default"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "internal",
-      "state": "authored",
-      "products": [
-        "registryctl",
-        "relay",
-        "notary",
-        "editor",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "cross_file_semantic",
-        "fixture_execution",
-        "product_build"
-      ],
-      "diagnostic": "registryctl.authoring.integration.invalid",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "rebuild_project",
-      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
-      "consumers": [
-        "registryctl_authoring",
-        "registry_relay",
-        "registry_notary",
-        "editor_tooling",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "editor_schemas",
-        "project_build",
-        "relay_config",
-        "notary_config",
-        "fixture_report",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "security",
-        "privacy",
-        "relay",
-        "notary",
-        "compatibility",
-        "documentation",
-        "testing"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values"
-      ],
-      "constraints": [
-        {
-          "keyword": "const",
-          "value": "array"
-        }
-      ]
+        "pointer": "/$defs/arrayType"
+      }
     },
     {
       "address": {
@@ -50069,18 +50704,19 @@
     {
       "address": {
         "schema": "integration",
-        "pointer": "/$defs/outputObject/properties/nullable",
+        "pointer": "/$defs/outputObject/properties/type",
         "path_kind": "property"
       },
-      "purpose": "Declares whether the complete structured output object may be null.",
+      "purpose": "Selects the closed object form for a structured integration output, and declares the object nullable by pairing it with null.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
       "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
       "field_type": {
         "schema_types": [
-          "boolean"
+          "array"
         ],
+        "local_reference": "#/$defs/objectType",
         "composed": false
       },
       "requiredness": "required",
@@ -50148,99 +50784,11 @@
         "knowledge_only",
         "generated_docs_never_load_country_values"
       ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "boolean"
-        }
-      ]
-    },
-    {
-      "address": {
+      "constraints": [],
+      "local_reference": {
         "schema": "integration",
-        "pointer": "/$defs/outputObject/properties/type",
-        "path_kind": "property"
-      },
-      "purpose": "Selects the closed object form for a structured integration output.",
-      "purpose_source": "reviewed_override",
-      "semantic_owner": "integration_contract",
-      "human_owner": "integration_maintainers",
-      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
-      "field_type": {
-        "schema_types": [],
-        "composed": false
-      },
-      "requiredness": "required",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "no_schema_default"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "internal",
-      "state": "authored",
-      "products": [
-        "registryctl",
-        "relay",
-        "notary",
-        "editor",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "cross_file_semantic",
-        "fixture_execution",
-        "product_build"
-      ],
-      "diagnostic": "registryctl.authoring.integration.invalid",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "rebuild_project",
-      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
-      "consumers": [
-        "registryctl_authoring",
-        "registry_relay",
-        "registry_notary",
-        "editor_tooling",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "editor_schemas",
-        "project_build",
-        "relay_config",
-        "notary_config",
-        "fixture_report",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "security",
-        "privacy",
-        "relay",
-        "notary",
-        "compatibility",
-        "documentation",
-        "testing"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values"
-      ],
-      "constraints": [
-        {
-          "keyword": "const",
-          "value": "object"
-        }
-      ]
+        "pointer": "/$defs/objectType"
+      }
     },
     {
       "address": {
@@ -50608,7 +51156,6 @@
           "keyword": "required",
           "value": [
             "type",
-            "nullable",
             "max_bytes",
             "fields"
           ]
@@ -50712,7 +51259,6 @@
           "keyword": "required",
           "value": [
             "type",
-            "nullable",
             "max_bytes",
             "max_items",
             "items"
