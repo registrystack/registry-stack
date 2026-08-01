@@ -409,6 +409,15 @@ class GateInventoryTest(unittest.TestCase):
                         mutated
                     ),
                 )
+        provenance = self.module.yaml_job_block(workflow, "release-provenance")
+        self.assertIsNotNone(provenance)
+        narrowed = provenance.replace("contents: write", "contents: read", 1)
+        self.assertEqual(
+            ["Final release mutations require the bound draft"],
+            self.module.release_draft_mutation_barrier_violations(
+                workflow.replace(provenance, narrowed, 1)
+            ),
+        )
         for step_name in (
             "Clean retryable final additions and reverify exact staged assets",
             "Sign and upload the complete pre-provenance asset closure",

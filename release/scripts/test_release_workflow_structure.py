@@ -362,7 +362,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn(".draft == true", final_upload[upload_guard:upload])
 
         provenance = document["jobs"]["release-provenance"]
-        self.assertEqual(provenance["permissions"]["contents"], "read")
+        self.assertEqual(provenance["permissions"]["contents"], "write")
         self.assertFalse(provenance["with"]["upload-assets"])
         self.assertNotIn("upload-tag-name", provenance["with"])
 
