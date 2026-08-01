@@ -27,7 +27,6 @@ evaluation_profiles:
   ruleset: education-student-v1
   claim_id: education_student
   subject_id_type: id
-  max_source_observed_age_seconds: 86400
 requirements:
 - id: education_student_requirement
   iri: https://demo.example.gov/requirements/education-student

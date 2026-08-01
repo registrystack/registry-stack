@@ -81,6 +81,12 @@ does not recompute that decision as consumer policy.
 | 21 | Auditor verifies minimized evidence exchange | Governance | Partial | Signed results and audit exist, checkpoints are planned |
 | 22 | Peer audit checkpoint monitoring | Governance | Planned | No checkpoint publisher, Merkle builder, or peer monitor ships yet; you cannot independently verify peer audit checkpoints |
 
+Source-observation age is not a Registry Notary enforced quantity: the only
+Notary freshness control is the federation profile's
+`max_claim_result_age_seconds`, which bounds the age of a Relay consultation
+result, while Registry Relay owns snapshot freshness through
+`max_snapshot_age_ms`.
+
 Each Relay authority uses one Notary authority, with Notary-owned PostgreSQL
 correctness state for production and multi-instance deployment. Wallet-facing
 issuance supports only issuer-initiated pre-authorized code, EdDSA `did:jwk`

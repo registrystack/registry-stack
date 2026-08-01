@@ -168,7 +168,6 @@ Fields of `EvaluationProfileManifest`.
 | `ruleset` | Yes | Public ruleset id. Must be unique and referenced by `registry-notary` offerings. |
 | `claim_id` | Yes | Notary claim id evaluated for the profile. |
 | `subject_id_type` | Yes | Subject id type the profile accepts. |
-| `max_source_observed_age_seconds` | No | Optional public freshness hint. Runtime enforcement is in Registry Notary config. |
 | `evidence_pack` | No | Optional `EvidencePackMetadata` object. Shares its shape with `ecosystem_bindings[].evidence_pack`. See [Ecosystem binding keys](#ecosystem-binding-keys). |
 
 For `EvidenceOfferingAccessManifest` with `kind: registry-notary`:

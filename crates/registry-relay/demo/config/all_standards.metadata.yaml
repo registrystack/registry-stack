@@ -29,17 +29,14 @@ evaluation_profiles:
   ruleset: disability-status-v1
   claim_id: disability_status
   subject_id_type: id
-  max_source_observed_age_seconds: 86400
 - id: social-group-v1
   ruleset: social-group-v1
   claim_id: social_registry_group
   subject_id_type: id
-  max_source_observed_age_seconds: 86400
 - id: farmer-status-v1
   ruleset: farmer-status-v1
   claim_id: farmer_status
   subject_id_type: id
-  max_source_observed_age_seconds: 86400
 requirements:
 - id: disability_status_requirement
   iri: https://demo.example.gov/requirements/disability-status

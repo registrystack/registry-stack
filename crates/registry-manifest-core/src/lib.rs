@@ -567,8 +567,6 @@ pub struct EvaluationProfileManifest {
     pub claim_id: String,
     pub subject_id_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_source_observed_age_seconds: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_pack: Option<EvidencePackMetadata>,
 }
 

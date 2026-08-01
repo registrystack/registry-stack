@@ -72,17 +72,14 @@ evaluation_profiles:
     ruleset: exact-name
     claim_id: exact_name
     subject_id_type: id
-    max_source_observed_age_seconds: 86400
   - id: exact-name-targeted
     ruleset: exact-name-targeted
     claim_id: exact_name_targeted
     subject_id_type: id
-    max_source_observed_age_seconds: 86400
   - id: hidden-name
     ruleset: hidden-name
     claim_id: hidden_name
     subject_id_type: id
-    max_source_observed_age_seconds: 86400
 ecosystem_bindings:
   - id: baseline-dpi/v1
     version: v1

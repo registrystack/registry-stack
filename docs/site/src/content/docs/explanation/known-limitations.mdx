@@ -137,6 +137,11 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C
   [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope).
   Relay no longer issues signed response credentials or hosts issuer DID documents.
+- Notary bounds consultation age, not source-observation age: Source-observation age is not a
+  Notary-enforced quantity. Notary consultation and issuance provenance retain only the
+  consultation `acquired_at` timestamp, the only Notary freshness control is the federation
+  profile's `max_claim_result_age_seconds` (which bounds consultation-result age), and Registry
+  Relay owns snapshot freshness through `max_snapshot_age_ms`.
 - Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
   returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
   non-swappable changes require a service restart.

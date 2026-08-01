@@ -27,7 +27,6 @@ evaluation_profiles:
   ruleset: benefits-person-v1
   claim_id: benefits_person
   subject_id_type: id
-  max_source_observed_age_seconds: 86400
 requirements:
 - id: benefits_person_requirement
   iri: https://demo.example.gov/requirements/benefits-person

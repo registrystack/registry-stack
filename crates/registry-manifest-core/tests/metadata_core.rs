@@ -2117,7 +2117,6 @@ evaluation_profiles:
     ruleset: age-eligibility-v1
     claim_id: age_eligibility
     subject_id_type: national_id
-    max_source_observed_age_seconds: 86400
 requirements:
   - id: age_requirement
     title: Age requirement
@@ -2172,6 +2171,37 @@ fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
     assert_eq!(
         catalog["evidence_offerings"][0]["access"]["ruleset"],
         json!("age-eligibility-v1")
+    );
+}
+
+#[test]
+fn evaluation_profile_rejects_removed_source_observed_age_field() {
+    let error = serde_yaml_ng::from_str::<MetadataManifest>(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: removed-source-age
+  base_url: https://registry.example.test
+  title: Removed Source Age
+  publisher:
+    name: Example Registry
+evaluation_profiles:
+  - id: age_eligibility_profile
+    ruleset: age-eligibility-v1
+    claim_id: age_eligibility
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+datasets: []
+codelists: []
+"#,
+    )
+    .expect_err("source-observation age is not a manifest field");
+
+    assert!(
+        error
+            .to_string()
+            .contains("max_source_observed_age_seconds"),
+        "the rejection must name the removed key; got: {error}"
     );
 }
 
