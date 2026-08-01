@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.16.1
+
+- Registry Notary has no user-visible changes relative to the v0.16.0
+  candidate. The immutable v0.16.0 tag workflow failed before any job or public
+  write, so install only v0.16.1. No final v0.16.0 images, assets, or
+  documentation were published.
+
 ## 0.16.0
 
 - BREAKING: The `self_attested` evidence mode is removed. Every configured

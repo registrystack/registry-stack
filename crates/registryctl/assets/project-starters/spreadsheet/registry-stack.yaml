@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: spreadsheet
-  release: 0.16.0
-  content_digest: sha256:b7e8256a2832431cd3e24dd033854e628065573c60a34d5362c73260fdc8cb94
+  release: 0.16.1
+  content_digest: sha256:697ab2d94a0dee860f1e11b9ff2316bbd585bf9343823d3097463aaa8279ad03
 
 registry:
   id: fictional-public-works-registry

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.16.1
+
+- Registry Relay has no user-visible changes relative to the v0.16.0
+  candidate. The immutable v0.16.0 tag workflow failed before any job or public
+  write, so install only v0.16.1. No final v0.16.0 images, assets, or
+  documentation were published.
+
 ## 0.16.0
 
 - Operators can start Relay directly from a verified Config Bundle using
