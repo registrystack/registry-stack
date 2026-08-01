@@ -71,6 +71,21 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(document["jobs"]["attest"]["permissions"]["id-token"], "write")
 
+    def test_only_internal_pre_oidc_reverification_accepts_current_run(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        reverify = next(
+            step
+            for step in document["jobs"]["attest"]["steps"]
+            if step.get("name") == "Reverify all bytes before requesting OIDC"
+        )
+
+        self.assertEqual(text.count("--allow-current-run-in-progress"), 1)
+        self.assertIn("--allow-current-run-in-progress", reverify["run"])
+        self.assertNotIn(
+            "--allow-current-run-in-progress",
+            workflow("release.yml")[0],
+        )
+
     def test_canonical_build_timeout_covers_uncached_follow_on_work(self) -> None:
         _, document = workflow("release-candidate.yml")
         self.assertGreaterEqual(
@@ -628,6 +643,11 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("trusted-canary-run.json", text)
         self.assertIn('event: "repository_dispatch"', text)
         self.assertIn('path: ".github/workflows/release-candidate.yml"', text)
+        trusted_candidate = text.split(
+            "> canary/trusted-candidate-run.json", 1
+        )[0].rsplit("jq -n", 1)[1]
+        self.assertIn('status: "completed"', trusted_candidate)
+        self.assertIn('conclusion: "success"', trusted_candidate)
 
     def test_canary_seals_complete_security_evidence(self) -> None:
         _, document = workflow("release-canary.yml")
@@ -673,7 +693,13 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         for command, required in (
             (
                 "verify-candidate",
-                ("--manifest", "--bundle", "--bundle-root", "--promotion"),
+                (
+                    "--manifest",
+                    "--bundle",
+                    "--bundle-root",
+                    "--promotion",
+                    "--allow-current-run-in-progress",
+                ),
             ),
             (
                 "verify-tag-binding",
@@ -699,6 +725,11 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             )
             for flag in required:
                 self.assertIn(flag, result.stdout)
+            if command == "verify-tag-binding":
+                self.assertNotIn(
+                    "--allow-current-run-in-progress",
+                    result.stdout,
+                )
 
 
 if __name__ == "__main__":

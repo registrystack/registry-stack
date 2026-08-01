@@ -273,6 +273,7 @@ jobs:
               event: "repository_dispatch",
               head_sha: $head_sha,
               path: ".github/workflows/release-candidate.yml",
+              status: "completed",
               conclusion: "success",
               created_at: $created_at
             }' > canary/trusted-candidate-run.json
