@@ -235,6 +235,15 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   summary only when operators need more context, and keep credentials and private keys out of both
   fields. `startup_fail` and `readiness_fail` gates are never waivable; a waiver naming one is
   rejected. Waiver references and summaries appear only in the restricted posture tier.
+- Relay: expect `relay.aggregates.privacy_budget_untracked` to warn under `hosted_lab`,
+  `production`, and `evidence_grade` (the `local` profile binds no gates) when a `personal`,
+  `confidential`, or `secret` dataset carries a dataset-level aggregate configured with
+  `access.aggregate_only_execution: true`. Aggregate routes apply per-result minimum cell-size
+  suppression but track no longitudinal query budget; this is a documented, accepted limitation,
+  not a misconfiguration to fix. Leaving the warning active is a legitimate steady state and
+  keeps the posture honest. Record a deployment waiver naming the finding only if your review
+  process needs a dated acknowledgement, and expect to re-issue it: every waiver carries a
+  mandatory expiry. See [Known limitations and non-guarantees](../../explanation/known-limitations/).
 - Relay: use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`)
   only to assert controls that live outside the process and cannot be observed by it. Each flag
   defaults to `false`.

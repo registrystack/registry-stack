@@ -584,6 +584,13 @@ fn log_deployment_boot_findings(evaluation: &crate::deployment::GateEvaluation) 
                 code = "deployment.profile_undeclared",
                 "deployment profile is undeclared; no profile gates bind"
             );
+        } else if finding.id == "relay.aggregates.privacy_budget_untracked" {
+            tracing::warn!(
+                code = "deployment.privacy_budget_untracked",
+                finding = %finding.id,
+                action = "leave the warning active, or record a dated acknowledgement with a deployment waiver naming this finding; see explanation/known-limitations, \"Aggregates are not privacy-budgeted\"",
+                "aggregate routes on a sensitive dataset apply per-result minimum cell-size suppression but track no longitudinal privacy budget"
+            );
         }
     }
 }
@@ -4739,6 +4746,96 @@ datasets: []
         serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
     }
 
+    /// A dataset with `sensitivity` classification carrying one dataset-level
+    /// aggregate with `access.aggregate_only_execution: true` (the only
+    /// aggregate level the query routes serve), plus `extra` (typically a
+    /// `deployment:` stanza) appended at the top level.
+    fn sensitive_aggregate_dataset_config_yaml(sensitivity: &str, extra: &str) -> String {
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets:
+  - id: sensitive_ds
+    title: "Sensitive Dataset"
+    description: "desc"
+    owner: "owner"
+    sensitivity: {sensitivity}
+    access_rights: restricted
+    update_frequency: daily
+    tables:
+      - id: t1
+        source:
+          type: file
+          path: "data/t1.csv"
+        refresh:
+          mode: manual
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+            - name: region_code
+              type: string
+              nullable: true
+    aggregates:
+      - id: agg1
+        title: "Records by region"
+        description: "test aggregate"
+        source_entity: record
+        default_group_by:
+          - region_code
+        dimensions:
+          - id: region_code
+            label: Region
+            field: region_code
+        indicators:
+          - id: record_count
+            label: Records
+            function: count
+            column: id
+            unit_measure: records
+        disclosure_control:
+          min_group_size: 2
+          suppression: omit
+        access:
+          aggregate_only_execution: true
+    entities:
+      - name: record
+        table: t1
+        fields:
+          - name: id
+            from: record_id
+          - name: region_code
+        access:
+          metadata_scope: "sensitive_ds:metadata"
+          aggregate_scope: "sensitive_ds:aggregate"
+          read_scope: "sensitive_ds:rows"
+        api:
+          default_limit: 10
+          max_limit: 100
+          require_purpose_header: true
+{extra}
+"#
+        )
+    }
+
+    fn parse_sensitive_aggregate_dataset_config(sensitivity: &str, extra: &str) -> Config {
+        serde_saphyr::from_str(&sensitive_aggregate_dataset_config_yaml(sensitivity, extra))
+            .expect("config parses")
+    }
+
     fn consultation_deployment_config_yaml(extra: &str) -> String {
         format!(
             r#"
@@ -5344,6 +5441,66 @@ deployment:
         assert!(
             !rendered.contains("deployment.profile_undeclared"),
             "no undeclared-profile line expected: {rendered}"
+        );
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_is_loud_in_the_boot_log() {
+        let config = parse_sensitive_aggregate_dataset_config(
+            "personal",
+            "deployment:\n  profile: production",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect(
+            "an aggregate-only-execution finding on a sensitive dataset must not block startup",
+        );
+        assert!(
+            rendered.contains("deployment.privacy_budget_untracked"),
+            "expected deployment.privacy_budget_untracked in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.aggregates.privacy_budget_untracked"),
+            "expected the finding id in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("known-limitations"),
+            "expected a known-limitations reference in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn public_sensitivity_keeps_the_privacy_budget_boot_log_quiet() {
+        let config = parse_sensitive_aggregate_dataset_config(
+            "public",
+            "deployment:\n  profile: production",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a public-sensitivity dataset must not block startup");
+        assert!(
+            !rendered.contains("deployment.privacy_budget_untracked"),
+            "no privacy-budget line expected for a public-sensitivity dataset: {rendered}"
+        );
+    }
+
+    #[test]
+    fn waived_privacy_budget_finding_shows_the_generic_gate_waived_line_only() {
+        let config = parse_sensitive_aggregate_dataset_config(
+            "personal",
+            "deployment:\n  profile: production\n  waivers:\n    - finding: relay.aggregates.privacy_budget_untracked\n      reference: OPS-TEST-PRIVACY-BUDGET\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a waived privacy-budget finding must not block startup");
+        assert!(
+            rendered.contains("deployment.gate_waived"),
+            "expected deployment.gate_waived in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.aggregates.privacy_budget_untracked"),
+            "expected the waived finding id in boot log: {rendered}"
+        );
+        assert!(
+            !rendered.contains("deployment.privacy_budget_untracked"),
+            "the dedicated privacy-budget line must not appear once waived: {rendered}"
         );
     }
 

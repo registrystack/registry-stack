@@ -15,6 +15,13 @@
   minimum-disclosure assertions carry explicit output schemas and limits.
   The OpenAPI contract documents the scalar-only claim bundle and
   top-level-only claim selection.
+- A dataset classified `personal`, `confidential`, or `secret` with a
+  dataset-level `access.aggregate_only_execution` aggregate now raises the
+  `relay.aggregates.privacy_budget_untracked` deployment finding (warn at
+  every bound profile) and a dedicated boot-log warning, surfacing that
+  aggregate routes track no longitudinal privacy budget. The warning may be
+  left active as an accepted-limitation signal or acknowledged with a
+  deployment waiver naming the finding.
 
 ## 0.16.3 - 2026-08-01
 

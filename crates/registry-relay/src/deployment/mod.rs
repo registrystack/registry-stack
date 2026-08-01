@@ -35,7 +35,9 @@ use registry_platform_ops::{
     DeploymentWaiver, GateSeverity, DEFAULT_AUDIT_ACK_MAX_AGE,
 };
 
-use crate::config::{AuditSinkConfig, AuthMode, Config};
+use crate::config::{
+    AggregateConfig, AuditSinkConfig, AuthMode, Config, DatasetConfig, Sensitivity,
+};
 
 const AUDIT_ACK_CURSOR_READ_TIMEOUT: Duration = Duration::from_millis(500);
 static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -103,6 +105,18 @@ pub struct DeploymentFacts {
     /// The cursor is fresh and its watermark equals the current keyed chain
     /// tail (health `ok`). False for every other observation.
     pub audit_ack_health_ok: bool,
+    /// A dataset classified `personal`, `confidential`, or `secret` has a
+    /// dataset-level aggregate configured with
+    /// `access.aggregate_only_execution: true`. Dataset-level declarations
+    /// are the only ones the aggregate query routes serve; table-level and
+    /// entity-level declarations have no runtime route and do not raise the
+    /// finding. Aggregate routes apply per-result minimum cell-size
+    /// suppression (`disclosure_control.min_cell_size`) but track no
+    /// longitudinal query budget: `query_budget.tracked` is always false.
+    /// This is a documented,
+    /// accepted limitation, not a fixable misconfiguration; see "Aggregates
+    /// are not privacy-budgeted" in the known-limitations page.
+    pub sensitive_aggregate_only_execution: bool,
 }
 
 /// One gate in the relay catalog.
@@ -242,6 +256,21 @@ const GATES: &[Gate] = &[
         hosted_lab: None,
         production: Some(FindingError),
         evidence_grade: Some(ReadinessFail),
+    },
+    Gate {
+        id: "relay.aggregates.privacy_budget_untracked",
+        condition: |facts| facts.sensitive_aggregate_only_execution,
+        // Relay aggregate routes apply per-result minimum cell-size
+        // suppression but track no longitudinal query budget across repeated aggregate
+        // queries. This is a documented, accepted limitation ("Aggregates are
+        // not privacy-budgeted" in the known-limitations page), not a fixable
+        // misconfiguration, so it warns at every bound profile rather than
+        // blocking startup or readiness even at evidence_grade. A deployment
+        // waiver naming this finding records the operator's acknowledgement
+        // of the limitation.
+        hosted_lab: Some(FindingWarn),
+        production: Some(FindingWarn),
+        evidence_grade: Some(FindingWarn),
     },
 ];
 
@@ -535,7 +564,34 @@ pub fn facts_from_config_with_ack_observation(
         ) || config.deployment.evidence.audit_offhost_shipping,
         audit_ack_cursor_configured: config.deployment.evidence.audit_ack_cursor_path.is_some(),
         audit_ack_health_ok: observation.health == AckHealth::Ok,
+        sensitive_aggregate_only_execution: sensitive_aggregate_only_execution(config),
     }
+}
+
+/// A dataset classified `personal`, `confidential`, or `secret` has a
+/// dataset-level aggregate-only-execution aggregate. Only dataset-level
+/// declarations are considered: the aggregate query routes resolve aggregates
+/// through `AggregateQueryEngine::aggregate_config`, which reads
+/// `dataset.aggregates` alone, so table-level and entity-level declarations
+/// have no runtime route and expose no privacy-budget surface.
+fn sensitive_aggregate_only_execution(config: &Config) -> bool {
+    config.datasets.iter().any(|dataset| {
+        matches!(
+            dataset.sensitivity,
+            Sensitivity::Personal | Sensitivity::Confidential | Sensitivity::Secret
+        ) && dataset_has_aggregate_only_execution(dataset)
+    })
+}
+
+fn dataset_has_aggregate_only_execution(dataset: &DatasetConfig) -> bool {
+    dataset.aggregates.iter().any(aggregate_only_execution)
+}
+
+fn aggregate_only_execution(aggregate: &AggregateConfig) -> bool {
+    aggregate
+        .access
+        .as_ref()
+        .is_some_and(|access| access.aggregate_only_execution)
 }
 
 /// Read the operator's audit off-host ack cursor and evaluate its freshness.
@@ -696,6 +752,7 @@ mod tests {
             audit_shipping_target_configured: false,
             audit_ack_cursor_configured: false,
             audit_ack_health_ok: true,
+            sensitive_aggregate_only_execution: false,
         }
     }
 
@@ -786,6 +843,7 @@ mod tests {
             audit_shipping_target_configured: true,
             audit_ack_cursor_configured: true,
             audit_ack_health_ok: false,
+            sensitive_aggregate_only_execution: true,
         };
         let evaluation = evaluate(None, &facts, &[], TODAY);
         assert_eq!(finding_ids(&evaluation), vec![PROFILE_UNDECLARED]);
@@ -1441,6 +1499,240 @@ datasets: []
         // Only a genuine signed bundle clears the gate.
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleFile).config_unsigned);
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleEndpoint).config_unsigned);
+    }
+
+    /// Builds a config with one `datasets:` entry parsed from `dataset_yaml`
+    /// (a single already-indented list item), reusing `minimal_config`'s
+    /// server/catalog/auth/audit scaffolding.
+    fn config_with_dataset(dataset_yaml: &str) -> Config {
+        let yaml = format!(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets:
+{dataset_yaml}
+"#
+        );
+        serde_saphyr::from_str(&yaml).expect("config parses")
+    }
+
+    fn dataset_with_dataset_level_aggregate(
+        sensitivity: &str,
+        aggregate_only_execution: bool,
+    ) -> String {
+        format!(
+            r#"  - id: ds1
+    title: "DS"
+    description: "desc"
+    owner: "owner"
+    sensitivity: {sensitivity}
+    access_rights: restricted
+    update_frequency: daily
+    aggregates:
+      - id: agg1
+        description: "test aggregate"
+        disclosure_control: {{}}
+        access:
+          aggregate_only_execution: {aggregate_only_execution}
+"#
+        )
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_fires_for_personal_confidential_secret() {
+        for sensitivity in ["personal", "confidential", "secret"] {
+            let config =
+                config_with_dataset(&dataset_with_dataset_level_aggregate(sensitivity, true));
+            assert!(
+                facts_from_config(&config, ConfigSource::LocalFile)
+                    .sensitive_aggregate_only_execution,
+                "expected the fact to fire for sensitivity {sensitivity}"
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_does_not_fire_for_public_or_internal() {
+        for sensitivity in ["public", "internal"] {
+            let config =
+                config_with_dataset(&dataset_with_dataset_level_aggregate(sensitivity, true));
+            assert!(
+                !facts_from_config(&config, ConfigSource::LocalFile)
+                    .sensitive_aggregate_only_execution,
+                "did not expect the fact to fire for sensitivity {sensitivity}"
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_requires_the_access_flag() {
+        let config = config_with_dataset(&dataset_with_dataset_level_aggregate("personal", false));
+        assert!(
+            !facts_from_config(&config, ConfigSource::LocalFile).sensitive_aggregate_only_execution
+        );
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_false_when_dataset_has_no_aggregates() {
+        let config = config_with_dataset(
+            r#"  - id: ds1
+    title: "DS"
+    description: "desc"
+    owner: "owner"
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+"#,
+        );
+        assert!(
+            !facts_from_config(&config, ConfigSource::LocalFile).sensitive_aggregate_only_execution
+        );
+    }
+
+    /// Table-level aggregate declarations parse and validate, but the
+    /// aggregate query routes resolve only `dataset.aggregates`
+    /// (`AggregateQueryEngine::aggregate_config`), so an unqueryable
+    /// declaration must not prompt an operator to waive a finding about a
+    /// route that does not exist.
+    #[test]
+    fn sensitive_aggregate_only_execution_ignores_table_level_aggregate() {
+        let config = config_with_dataset(
+            r#"  - id: ds1
+    title: "DS"
+    description: "desc"
+    owner: "owner"
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: daily
+    tables:
+      - id: t1
+        source:
+          type: file
+          path: "data/t1.csv"
+        schema:
+          fields: []
+        aggregates:
+          - id: agg1
+            description: "test aggregate"
+            disclosure_control: {}
+            access:
+              aggregate_only_execution: true
+"#,
+        );
+        assert!(
+            !facts_from_config(&config, ConfigSource::LocalFile).sensitive_aggregate_only_execution
+        );
+    }
+
+    /// Entity-level aggregate declarations have no runtime query route either;
+    /// see the table-level test above.
+    #[test]
+    fn sensitive_aggregate_only_execution_ignores_entity_level_aggregate() {
+        let config = config_with_dataset(
+            r#"  - id: ds1
+    title: "DS"
+    description: "desc"
+    owner: "owner"
+    sensitivity: secret
+    access_rights: restricted
+    update_frequency: daily
+    entities:
+      - name: e1
+        table: t1
+        access:
+          metadata_scope: "ds1:metadata"
+          aggregate_scope: "ds1:aggregate"
+          read_scope: "ds1:rows"
+        api:
+          default_limit: 10
+          max_limit: 100
+        aggregates:
+          - id: agg1
+            description: "test aggregate"
+            disclosure_control: {}
+            access:
+              aggregate_only_execution: true
+"#,
+        );
+        assert!(
+            !facts_from_config(&config, ConfigSource::LocalFile).sensitive_aggregate_only_execution
+        );
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_escalates_as_finding_warn_everywhere() {
+        let facts = DeploymentFacts {
+            sensitive_aggregate_only_execution: true,
+            ..clean_facts()
+        };
+        let id = "relay.aggregates.privacy_budget_untracked";
+        for profile in [
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate(Some(profile), &facts, &[], TODAY);
+            assert_eq!(
+                finding(&evaluation, id).severity,
+                FindingWarn,
+                "unexpected severity under {profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_silent_when_clean() {
+        let id = "relay.aggregates.privacy_budget_untracked";
+        for profile in [
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate(Some(profile), &clean_facts(), &[], TODAY);
+            assert!(
+                !finding_ids(&evaluation).contains(&id.to_string()),
+                "unexpected finding under {profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_unbound_under_local() {
+        let facts = DeploymentFacts {
+            sensitive_aggregate_only_execution: true,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(Some(DeploymentProfile::Local), &facts, &[], TODAY);
+        assert!(evaluation.findings.is_empty());
+    }
+
+    #[test]
+    fn sensitive_aggregate_only_execution_waiver_suppresses_finding() {
+        let facts = DeploymentFacts {
+            sensitive_aggregate_only_execution: true,
+            ..clean_facts()
+        };
+        let id = "relay.aggregates.privacy_budget_untracked";
+        let waivers = [WaiverInput {
+            finding: id.to_string(),
+            reference: "OPS-TEST-PRIVACY-BUDGET".to_string(),
+            summary: Some("Accepted risk: no longitudinal privacy budget".to_string()),
+            expires: FUTURE.to_string(),
+        }];
+        let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
+        assert_eq!(
+            finding(&evaluation, id).status,
+            DeploymentFindingStatus::Waived
+        );
     }
 
     #[test]
