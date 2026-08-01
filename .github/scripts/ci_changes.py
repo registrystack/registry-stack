@@ -421,13 +421,14 @@ def classify(
         }
         for path in paths
     )
+    # Rebuild immutable history only when archive inputs or assembly semantics
+    # change. Publication workflows and this classifier do not alter archived
+    # bytes; their focused tests cover those contracts without replaying every
+    # historical docset.
     docs_archives = any(
         path
         in {
-            ".github/scripts/ci_changes.py",
             ".github/workflows/ci.yml",
-            ".github/workflows/docs-pages.yml",
-            ".github/workflows/release.yml",
             "docs/site/astro.config.mjs",
             "docs/site/package-lock.json",
             "docs/site/package.json",
