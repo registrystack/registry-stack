@@ -17,6 +17,13 @@ import { getDocset, loadDocsets } from './docsets.mjs';
 const run = promisify(execFile);
 const sha256Pattern = /^[0-9a-f]{64}$/;
 
+function isLockBackedDocset(docset) {
+  return (
+    docset.status === 'archived' ||
+    (docset.status === 'draft' && docset.availability === 'failed')
+  );
+}
+
 export async function loadArchiveLock({
   lockPath = resolve(process.cwd(), 'src/data/archive-lock.yaml'),
 } = {}) {
@@ -36,15 +43,15 @@ export function validateArchiveLock(lock, docsets) {
     return errors;
   }
   const expectedIds = docsets.docsets
-    .filter((docset) => docset.status === 'archived')
+    .filter(isLockBackedDocset)
     .map((docset) => docset.id)
     .sort();
   const actualIds = Object.keys(lock.archives).sort();
   for (const missing of expectedIds.filter((id) => !actualIds.includes(id))) {
-    errors.push(`archive-lock.yaml is missing archived docset ${missing}`);
+    errors.push(`archive-lock.yaml is missing lock-backed docset ${missing}`);
   }
   for (const unexpected of actualIds.filter((id) => !expectedIds.includes(id))) {
-    errors.push(`archive-lock.yaml contains non-archived docset ${unexpected}`);
+    errors.push(`archive-lock.yaml contains non-lock-backed docset ${unexpected}`);
   }
   for (const id of actualIds) {
     const entry = lock.archives[id];
