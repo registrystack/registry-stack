@@ -201,7 +201,8 @@ jobs:
     name: Build Linux payload, private images, and docs once
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Covers an uncached canonical compile plus image, docs, and journey work.
+    timeout-minutes: 90
     permissions:
       actions: read
       contents: read

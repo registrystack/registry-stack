@@ -71,6 +71,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(document["jobs"]["attest"]["permissions"]["id-token"], "write")
 
+    def test_canonical_build_timeout_covers_uncached_follow_on_work(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        self.assertGreaterEqual(
+            document["jobs"]["build-canonical"]["timeout-minutes"], 90
+        )
+
     def test_uses_one_compact_candidate_and_no_removed_ceremony(self) -> None:
         text, _ = workflow("release-candidate.yml")
         self.assertIn("release-candidate-manifest.json", text)
