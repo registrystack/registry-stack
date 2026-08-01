@@ -1,0 +1,306 @@
+model {
+  extend registryStack.relay {
+    server = container 'Relay server' {
+      technology 'Rust and Axum'
+      description 'Public and consultation APIs in the Registry Relay process'
+
+      metadata {
+        evidence 'crates/registry-relay/src/server.rs'
+      }
+
+      access = component 'Authentication and governed access' {
+        technology 'Rust modules'
+        description 'Authenticates principals and applies scope, purpose, and policy gates'
+
+        metadata {
+          evidence 'crates/registry-relay/src/auth/middleware.rs'
+        }
+      }
+
+      protectedRead = component 'Protected read pipeline' {
+        technology 'Rust modules'
+        description 'Binds trusted filters, executes typed queries, minimizes, and redacts output'
+
+        metadata {
+          evidence 'crates/registry-relay/src/api/entity.rs'
+        }
+
+        entityRoute = codeElement 'Entity collection handler' {
+          technology 'Rust function'
+          description 'Symbol: api::entity::entity_collection'
+
+          metadata {
+            evidence 'crates/registry-relay/src/api/entity.rs'
+            symbol 'entity_collection'
+          }
+        }
+
+        governedAccess = codeElement 'Governed read access' {
+          technology 'Rust function'
+          description 'Symbol: require_governed_read_access'
+
+          metadata {
+            evidence 'crates/registry-relay/src/api/governed.rs'
+            symbol 'require_governed_read_access'
+          }
+        }
+
+        principalBinding = codeElement 'Principal filter binding' {
+          technology 'Rust function'
+          description 'Symbol: bind_principal_required_filters'
+
+          metadata {
+            evidence 'crates/registry-relay/src/query/mod.rs'
+            symbol 'bind_principal_required_filters'
+          }
+        }
+
+        queryEngine = codeElement 'Entity query engine' {
+          technology 'Rust type'
+          description 'Symbol: EntityQueryEngine'
+
+          metadata {
+            evidence 'crates/registry-relay/src/query/mod.rs'
+            symbol 'EntityQueryEngine'
+          }
+        }
+
+        requiredFilterGate = codeElement 'Required-filter gate' {
+          technology 'Rust function'
+          description 'Symbol: validate_required_filter_gate'
+
+          metadata {
+            evidence 'crates/registry-relay/src/query/mod.rs'
+            symbol 'validate_required_filter_gate'
+          }
+        }
+      }
+
+      sourceExecution = component 'Source adaptation and execution' {
+        technology 'Rust modules'
+        description 'Executes reviewed source plans and typed adapters'
+
+        metadata {
+          evidence 'crates/registry-relay/src/source_plan/mod.rs'
+        }
+      }
+
+      consultation = component 'Consultation runtime' {
+        technology 'Rust modules'
+        description 'Executes compiler-pinned Notary consultations'
+
+        metadata {
+          evidence 'crates/registry-relay/src/consultation/executor.rs'
+        }
+      }
+
+      audit = component 'Audit pipeline' {
+        technology 'Rust modules'
+        description 'Pseudonymizes sensitive audit values and emits audit records'
+
+        metadata {
+          evidence 'crates/registry-relay/src/audit/mod.rs'
+        }
+      }
+    }
+
+    correctnessState = dataStore 'Relay correctness state' {
+      technology 'PostgreSQL'
+      description 'Consultation, quota, fencing, materialization, and keyring state'
+
+      metadata {
+        evidence 'crates/registry-relay/src/state_plane/mod.rs'
+      }
+    }
+  }
+
+  caller .reads registryStack.relay.server 'Calls the protected data API' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-relay/openapi/registry-relay.openapi.json'
+    }
+  }
+  registryStack.relay.server .verifiesWith identityProvider
+    'May verify an OpenID Connect credential' {
+    #optional
+    technology 'OpenID Connect'
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+  registryStack.relay.server .reads registrySource 'Executes the reviewed source contract' {
+    technology 'Configured source adapter'
+
+    metadata {
+      evidence 'REQ-ARC-G-006'
+      owner 'registry-relay'
+    }
+  }
+  registryStack.relay.server .persists registryStack.relay.correctnessState
+    'Persists Relay correctness state' {
+    technology 'PostgreSQL protocol'
+
+    metadata {
+      evidence 'crates/registry-relay/src/state_plane/mod.rs'
+    }
+  }
+  registryStack.relay.server .audits auditDestination 'Emits protected-read audit records' {
+    technology 'Configured audit sink'
+
+    metadata {
+      evidence 'crates/registry-relay/src/audit/mod.rs'
+    }
+  }
+  registryStack.notary .consults registryStack.relay.server
+    'Calls the compiler-pinned consultation API' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/relay_client.rs'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+
+  caller .authenticates registryStack.relay.server.access
+    'Presents configured authentication and purpose context' {
+    technology 'HTTP headers'
+
+    metadata {
+      evidence 'crates/registry-relay/src/auth/middleware.rs'
+    }
+  }
+  registryStack.relay.server.access .verifiesWith identityProvider
+    'May verify an OpenID Connect credential' {
+    #optional
+    technology 'OpenID Connect'
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+  registryStack.relay.server.access .authorizes registryStack.relay.server.protectedRead
+    'Passes an authenticated, governed request' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead .invokes
+    registryStack.relay.server.sourceExecution 'Executes a typed source query' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.sourceExecution .reads registrySource
+    'Reads through the configured source adapter' {
+    technology 'Configured source adapter'
+
+    metadata {
+      evidence 'crates/registry-relay/src/source_plan/mod.rs'
+      owner 'registry-relay'
+    }
+  }
+  registryStack.notary .consults registryStack.relay.server.consultation
+    'Requests compiler-pinned typed inputs' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/relay_client.rs'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+  registryStack.relay.server.consultation .invokes
+    registryStack.relay.server.sourceExecution 'Executes the activated consultation plan' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/consultation/executor.rs'
+    }
+  }
+  registryStack.relay.server.consultation .persists registryStack.relay.correctnessState
+    'Persists consultation correctness state' {
+    technology 'PostgreSQL protocol'
+
+    metadata {
+      evidence 'crates/registry-relay/src/state_plane/consultation.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead .audits registryStack.relay.server.audit
+    'Attaches minimized protected-read audit context' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.consultation .audits registryStack.relay.server.audit
+    'Attaches consultation audit context' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/consultation/audit.rs'
+    }
+  }
+  registryStack.relay.server.audit .audits auditDestination
+    'Pseudonymizes sensitive values and emits the audit record' {
+    technology 'Configured audit sink'
+
+    metadata {
+      evidence 'crates/registry-relay/src/audit/mod.rs'
+    }
+  }
+
+  registryStack.relay.server.protectedRead.entityRoute .invokes
+    registryStack.relay.server.protectedRead.governedAccess
+    'Evaluates configured purpose and policy gates' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead.entityRoute .invokes
+    registryStack.relay.server.protectedRead.principalBinding
+    'Binds gateway-derived principal filters' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead.entityRoute .invokes
+    registryStack.relay.server.protectedRead.queryEngine 'Validates and executes the query' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/api/entity.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead.principalBinding .authorizes
+    registryStack.relay.server.protectedRead.requiredFilterGate
+    'Supplies only gateway-derived principal bindings' {
+    technology 'Rust values'
+
+    metadata {
+      evidence 'crates/registry-relay/src/query/mod.rs'
+    }
+  }
+  registryStack.relay.server.protectedRead.queryEngine .authorizes
+    registryStack.relay.server.protectedRead.requiredFilterGate
+    'Enforces required filters before query execution' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-relay/src/query/mod.rs'
+    }
+  }
+}

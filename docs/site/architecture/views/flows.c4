@@ -1,0 +1,45 @@
+views {
+  dynamic view protectedRegistryApi {
+    #softwareSystemDynamicView
+
+    title 'Protected Registry API'
+    description 'Authorization, source access, minimization, and audit boundaries for a Relay read.'
+
+    caller -> registryStack.relay 'Presents configured authentication and purpose context'
+    registryStack.relay -> registrySource 'Executes an authorized, declared source read'
+    registryStack.relay -> auditDestination
+      'Emits an audit record with sensitive principal and trust values pseudonymized'
+    registryStack.relay -> caller 'Returns only declared fields or a public denial'
+  }
+
+  dynamic view registryBackedIssuance {
+    #softwareSystemDynamicView
+
+    title 'Registry-backed evidence and issuance'
+    description 'A Relay-backed evaluation whose exact provenance is required before issuance.'
+
+    caller -> registryStack.notary
+      'Requests a registry-backed evaluation with configured authorization and purpose'
+    registryStack.notary -> registryStack.relay 'Executes the compiler-pinned consultation'
+    registryStack.relay -> registrySource 'Adapts and reads the reviewed source contract'
+    registryStack.relay -> registryStack.notary
+      'Returns declared typed outputs and exact execution provenance'
+    registryStack.notary -> auditDestination 'Records the evaluation and issuance trail'
+    registryStack.notary -> evidenceConsumer
+      'Issues only from an eligible stored Relay-backed evaluation'
+    evidenceConsumer -> decisionOwner 'Applies external decision and action policy'
+  }
+
+  dynamic view delegatedEvaluation {
+    #softwareSystemDynamicView
+
+    title 'Inbound delegated evaluation'
+    description 'Signed source-free evaluation from a static peer; replay separation is deployment topology, not a runtime isolation gate.'
+
+    peerNotary -> registryStack.notary
+      'Sends a signed, purpose-bound source-free evaluation request'
+    registryStack.notary -> auditDestination 'Records the inbound delegated evaluation'
+    registryStack.notary -> peerNotary
+      'Returns a signed evaluation result, never a credential'
+  }
+}

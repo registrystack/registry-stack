@@ -1,0 +1,14 @@
+views {
+  deployment view singleNodeDeployment {
+    #deploymentView
+
+    title 'Single-node production target'
+    description 'Documented target topology with public edge, private runtime, separate product state, signing, audit, and optional OIDC.'
+
+    include singleNode.**
+
+    exclude
+      singleNode.institution.applicationHost.runtime.relay ->
+        singleNode.institution.applicationHost.runtime.notary
+  }
+}

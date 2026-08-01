@@ -1,0 +1,141 @@
+specification {
+  color siteBlue rgb(0, 0, 145)
+  color siteInk rgb(22, 22, 22)
+  color siteBody rgb(58, 58, 58)
+  color siteMuted rgb(106, 106, 106)
+  color siteRule rgb(229, 229, 229)
+
+  tag formalProduct
+  tag runtimeService
+  tag offline
+  tag external
+  tag adopter
+  tag tool
+  tag decisionBoundary
+  tag staticTrust
+  tag optional
+  tag portfolioView
+  tag systemContextView
+  tag containerView
+  tag componentView
+  tag codeView
+  tag softwareSystemDynamicView
+  tag deploymentView
+  tag targetTopology
+  tag dataStore
+
+  element boundary {
+    style {
+      color siteRule
+      shape rectangle
+    }
+  }
+
+  element softwareSystem {
+    style {
+      color siteBlue
+      shape rectangle
+    }
+  }
+
+  element offlineApplication {
+    style {
+      color siteBlue
+      shape rectangle
+    }
+  }
+
+  element supportingLibrary {
+    style {
+      color siteBody
+      shape rectangle
+    }
+  }
+
+  element container {
+    style {
+      color siteBlue
+      shape rectangle
+    }
+  }
+
+  element dataStore {
+    #dataStore
+
+    style {
+      color siteBlue
+      shape storage
+    }
+  }
+
+  element component {
+    style {
+      color siteBody
+      shape rectangle
+    }
+  }
+
+  element codeElement {
+    style {
+      color siteMuted
+      shape rectangle
+    }
+  }
+
+  element tool {
+    style {
+      color siteBody
+      shape rectangle
+    }
+  }
+
+  element actor {
+    style {
+      color siteInk
+      shape person
+    }
+  }
+
+  element externalSystem {
+    style {
+      color siteMuted
+      shape rectangle
+    }
+  }
+
+  element adopterProject {
+    style {
+      color siteMuted
+      shape rectangle
+    }
+  }
+
+  relationship provides
+  relationship describes
+  relationship compiles
+  relationship prepares
+  relationship reads
+  relationship consults
+  relationship evaluates
+  relationship issues
+  relationship delegates {
+    line dashed
+  }
+  relationship audits
+  relationship verifiesWith
+  relationship returns
+  relationship informs
+  relationship uses
+  relationship authenticates
+  relationship authorizes
+  relationship invokes
+  relationship persists
+  relationship signsWith
+
+  deploymentNode environment
+  deploymentNode trustBoundary
+  deploymentNode host
+  deploymentNode network
+  deploymentNode state
+  deploymentNode external
+}

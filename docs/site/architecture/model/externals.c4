@@ -1,0 +1,94 @@
+model {
+  caller = externalSystem 'Caller system' {
+    #external
+
+    description 'Technical client that invokes Relay or Notary'
+
+    metadata {
+      evidence 'docs/site/src/content/docs/explanation/architecture.mdx'
+    }
+  }
+
+  evidenceConsumer = externalSystem 'Evidence consumer' {
+    #external
+
+    description 'System that uses returned evidence under its own policy'
+
+    metadata {
+      evidence 'docs/site/src/content/docs/explanation/architecture.mdx'
+    }
+  }
+
+  decisionOwner = actor 'Decision owner' {
+    #external, #decisionBoundary
+
+    description 'Accountable authority for requirements, eligibility, workflow, and action'
+
+    metadata {
+      evidence 'docs/site/src/content/docs/explanation/architecture.mdx'
+    }
+  }
+
+  registrySource = externalSystem 'Registry source' {
+    #external
+
+    description 'Authoritative source system that retains operational records'
+
+    metadata {
+      evidence 'REQ-ARC-G-001,REQ-ARC-G-002,REQ-ARC-G-006'
+    }
+  }
+
+  identityProvider = externalSystem 'Identity provider' {
+    #external, #optional
+
+    description 'Optional issuer for an OpenID Connect deployment'
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+    }
+  }
+
+  keyProvider = externalSystem 'Signing provider' {
+    #external
+
+    description 'Configured provider for Notary signing key operations'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/signing/providers.rs'
+    }
+  }
+
+  auditDestination = externalSystem 'Audit pipeline' {
+    #external
+
+    description 'Configured audit sink or operator-owned shipping pipeline'
+
+    metadata {
+      evidence 'crates/registry-platform-audit/src/lib.rs'
+    }
+  }
+
+  peerNotary = externalSystem 'Trusted peer Notary' {
+    #external, #staticTrust
+
+    description 'Peer allowed to call the local inbound federation endpoint'
+
+    metadata {
+      evidence 'REQ-ARC-G-009'
+      replayScope 'peer-scoped'
+      runtimeIsolationGate 'absent'
+      trustDiscovery 'static-config'
+    }
+  }
+
+  reverseProxy = externalSystem 'Institutional reverse proxy' {
+    #external
+
+    description 'Deployment-owned public TLS, request admission, and front rate limiting'
+
+    metadata {
+      evidence 'docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx'
+    }
+  }
+}

@@ -1,0 +1,351 @@
+model {
+  extend registryStack.notary {
+    server = container 'Notary server' {
+      technology 'Rust and Axum'
+      description 'Evaluation, disclosure, issuance, and inbound federation APIs'
+
+      metadata {
+        evidence 'crates/registry-notary-server/src/standalone.rs'
+      }
+
+      access = component 'Authentication and access gates' {
+        technology 'Rust modules'
+        description 'Authenticates principals and applies scope, purpose, and access checks'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/runtime/access.rs'
+        }
+      }
+
+      evaluation = component 'Evaluation runtime' {
+        technology 'Rust modules'
+        description 'Evaluates claim graphs and records exact execution provenance'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/runtime/evaluation.rs'
+        }
+      }
+
+      relayClient = component 'Relay consultation client' {
+        technology 'Rust module'
+        description 'Verifies profiles and executes compiler-pinned Relay consultations'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/relay_client.rs'
+        }
+      }
+
+      issuance = component 'Credential issuance' {
+        technology 'Rust modules'
+        description 'Checks stored provenance before issuing a supported credential'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/api/credentials.rs'
+        }
+
+        issueCredential = codeElement 'Credential route handler' {
+          technology 'Rust async function'
+          description 'Symbol: issue_credential'
+
+          metadata {
+            evidence 'crates/registry-notary-server/src/api/credentials.rs'
+            symbol 'issue_credential'
+          }
+        }
+
+        profileSelection = codeElement 'Credential profile selection' {
+          technology 'Rust function'
+          description 'Symbol: credential_profile_for'
+
+          metadata {
+            evidence 'crates/registry-notary-server/src/runtime/render.rs'
+            symbol 'credential_profile_for'
+          }
+        }
+
+        provenanceGate = codeElement 'Exact-provenance gate' {
+          technology 'Rust function'
+          description 'Symbol: require_issuable_evaluation_provenance'
+
+          metadata {
+            evidence 'crates/registry-notary-server/src/runtime/render.rs'
+            symbol 'require_issuable_evaluation_provenance'
+          }
+        }
+
+        sdJwtIssue = codeElement 'SD-JWT VC issuer' {
+          technology 'Rust async function'
+          description 'Symbol: sd_jwt::issue'
+
+          metadata {
+            evidence 'crates/registry-notary-core/src/sd_jwt.rs'
+            symbol 'issue'
+          }
+        }
+      }
+
+      federation = component 'Inbound federation endpoint' {
+        technology 'Rust and Axum'
+        description 'Authenticates static peers and returns signed source-free evaluations'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/federation/mod.rs'
+        }
+      }
+
+      audit = component 'Audit pipeline' {
+        technology 'Rust modules'
+        description 'Emits evaluation, federation, denial, and issuance audit records'
+
+        metadata {
+          evidence 'crates/registry-notary-server/src/standalone/assembly.rs'
+        }
+      }
+    }
+
+    correctnessState = dataStore 'Notary correctness state' {
+      technology 'PostgreSQL'
+      description 'Transaction, replay, evaluation, issuance, and credential status state'
+
+      metadata {
+        evidence 'crates/registry-notary-server/src/state_plane/mod.rs'
+      }
+    }
+  }
+
+  caller .evaluates registryStack.notary.server 'Calls the evaluation or issuance API' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'products/notary/openapi/registry-notary.openapi.json'
+    }
+  }
+  registryStack.notary.server .verifiesWith identityProvider
+    'May verify an OpenID Connect credential' {
+    #optional
+    technology 'OpenID Connect'
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+  registryStack.notary.server .consults registryStack.relay.server
+    'Executes a compiler-pinned consultation' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/relay_client.rs'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+  registryStack.notary.server .consults registryStack.relay
+    'Executes a compiler-pinned consultation' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/relay_client.rs'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+  registryStack.notary.server .persists registryStack.notary.correctnessState
+    'Persists Notary correctness state' {
+    technology 'PostgreSQL protocol'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/state_plane/mod.rs'
+    }
+  }
+  registryStack.notary.server .issues evidenceConsumer 'Returns a supported credential' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      delegatedEvaluation 'forbidden'
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+      provenance 'exact-relay-backed'
+      sourceFreeEvaluation 'forbidden'
+    }
+  }
+  registryStack.notary.server .uses keyProvider 'Uses configured signing key operations' {
+    technology 'Configured signing provider'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/signing/providers.rs'
+    }
+  }
+  registryStack.notary.server .audits auditDestination
+    'Emits evaluation and issuance audit records' {
+    technology 'Configured audit sink'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/assembly.rs'
+    }
+  }
+  peerNotary .delegates registryStack.notary.server
+    'Calls the signed source-free federation endpoint' {
+    #staticTrust
+    technology 'HTTPS and signed JSON'
+
+    metadata {
+      credentialIssuance 'forbidden'
+      evidence 'crates/registry-notary-server/src/federation/mod.rs'
+      registryBackedClaims 'forbidden'
+      replayScope 'peer-scoped'
+      runtimeIsolationGate 'absent'
+      trustDiscovery 'static-config'
+    }
+  }
+
+  caller .authenticates registryStack.notary.server.access
+    'Presents configured authentication and purpose context' {
+    technology 'HTTP headers'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/access.rs'
+    }
+  }
+  registryStack.notary.server.access .verifiesWith identityProvider
+    'May verify an OpenID Connect credential' {
+    #optional
+    technology 'OpenID Connect'
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+  registryStack.notary.server.access .authorizes registryStack.notary.server.evaluation
+    'Passes an authenticated evaluation request' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/access.rs'
+    }
+  }
+  registryStack.notary.server.access .authorizes registryStack.notary.server.issuance
+    'Passes an authenticated issuance request' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+  registryStack.notary.server.evaluation .consults registryStack.notary.server.relayClient
+    'Requests exact compiler-pinned inputs' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/consultation.rs'
+    }
+  }
+  registryStack.notary.server.relayClient .consults registryStack.relay.server
+    'Executes the verified Relay profile' {
+    technology 'HTTPS and JSON'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/relay_client.rs'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+  registryStack.notary.server.evaluation .persists registryStack.notary.correctnessState
+    'Stores the evaluation and exact issuance provenance' {
+    technology 'PostgreSQL protocol'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/store.rs'
+    }
+  }
+  registryStack.notary.server.issuance .persists registryStack.notary.correctnessState
+    'Reads stored evaluation state and records issuance status' {
+    technology 'PostgreSQL protocol'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/store.rs'
+    }
+  }
+  registryStack.notary.server.issuance .signsWith keyProvider
+    'Requests a configured signing operation after provenance checks' {
+    technology 'Signing provider interface'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+  peerNotary .delegates registryStack.notary.server.federation
+    'Sends a signed source-free evaluation request' {
+    #staticTrust
+    technology 'HTTPS and signed JSON'
+
+    metadata {
+      credentialIssuance 'forbidden'
+      evidence 'crates/registry-notary-server/src/federation/mod.rs'
+      registryBackedClaims 'forbidden'
+      replayScope 'peer-scoped'
+      runtimeIsolationGate 'absent'
+      trustDiscovery 'static-config'
+    }
+  }
+  registryStack.notary.server.evaluation .audits registryStack.notary.server.audit
+    'Attaches evaluation audit context' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/runtime/evaluation.rs'
+    }
+  }
+  registryStack.notary.server.issuance .audits registryStack.notary.server.audit
+    'Attaches issuance or denial audit context' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+  registryStack.notary.server.federation .audits registryStack.notary.server.audit
+    'Attaches inbound federation audit context' {
+    technology 'In-process Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/federation/audit.rs'
+    }
+  }
+  registryStack.notary.server.audit .audits auditDestination
+    'Emits the audit record' {
+    technology 'Configured audit sink'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/assembly.rs'
+    }
+  }
+
+  registryStack.notary.server.issuance.issueCredential .invokes
+    registryStack.notary.server.issuance.profileSelection
+    'Selects an allowed credential profile' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+  registryStack.notary.server.issuance.issueCredential .authorizes
+    registryStack.notary.server.issuance.provenanceGate
+    'Fails closed unless stored Relay provenance is exact' {
+    technology 'Rust call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+  registryStack.notary.server.issuance.issueCredential .invokes
+    registryStack.notary.server.issuance.sdJwtIssue
+    'Issues only after provenance and policy checks pass' {
+    technology 'Rust async call'
+
+    metadata {
+      evidence 'crates/registry-notary-server/src/api/credentials.rs'
+    }
+  }
+}

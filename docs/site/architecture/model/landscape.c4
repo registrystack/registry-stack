@@ -1,0 +1,87 @@
+model {
+  registryStack = boundary 'Formal Registry Stack' {
+    metadata {
+      evidence 'docs/site/src/content/docs/spec/rs-arc-g.mdx'
+      invariant 'RS-ARC-G'
+      owner 'registry-stack'
+    }
+
+    platform = supportingLibrary 'Registry Platform' {
+      #formalProduct, #offline
+
+      description 'Shared Rust security and operational primitives; not a runtime service'
+
+      metadata {
+        evidence 'REQ-ARC-G-005'
+        runtime 'false'
+        sourceRepo 'registry-platform'
+      }
+    }
+
+    manifest = offlineApplication 'Registry Manifest' {
+      #formalProduct, #offline
+
+      description 'Offline metadata compiler and portable contracts'
+
+      metadata {
+        evidence 'REQ-ARC-G-001,REQ-ARC-G-002'
+        productionDataAccess 'forbidden'
+        runtime 'false'
+        sourceRepo 'registry-manifest'
+      }
+    }
+
+    relay = softwareSystem 'Registry Relay' {
+      #formalProduct, #runtimeService
+
+      description 'Protected reads, source adaptation, and compiler-pinned consultations'
+
+      metadata {
+        decisionOwner 'false'
+        evidence 'REQ-ARC-G-003,REQ-ARC-G-006,REQ-ARC-G-007'
+        runtime 'true'
+        sourceAccessOwner 'true'
+        sourceRepo 'registry-relay'
+      }
+    }
+
+    notary = softwareSystem 'Registry Notary' {
+      #formalProduct, #runtimeService
+
+      description 'Claim evaluation, disclosure, credential issuance, and static-peer federation'
+
+      metadata {
+        decisionOwner 'false'
+        evidence 'REQ-ARC-G-007,REQ-ARC-G-009,REQ-ARC-G-012,REQ-ARC-G-013'
+        registrySourceAccess 'forbidden'
+        runtime 'true'
+        sourceRepo 'registry-notary'
+      }
+    }
+  }
+
+  registryctl = tool 'registryctl' {
+    #tool, #offline
+
+    description 'Adopter and operator command-line tooling; not a formal product'
+
+    metadata {
+      evidence 'crates/registryctl/src/main.rs'
+      formalProduct 'false'
+      sourceRepo 'registry-stack'
+    }
+  }
+
+  solmaraLab = adopterProject 'Solmara Lab' {
+    #external, #adopter
+
+    description 'External adopter demo outside the formal product boundary'
+
+    metadata {
+      evidence 'docs/site/src/content/docs/spec/rs-arc-g.mdx'
+      formalProduct 'false'
+      runtimeEvidence 'release-specific'
+      sourceRepo 'solmara-lab'
+    }
+  }
+}

@@ -23,6 +23,33 @@ npm run dev
 npm run check
 ```
 
+## Explore the architecture model
+
+`architecture/` contains an experimental LikeC4 model of the stable cross-product architecture.
+It includes complete context-to-code zoom paths for Registry Relay and Registry Notary, plus
+portfolio, dynamic, and deployment views.
+The model supplements the narrative pages and existing accessible SVGs. It is not published with
+the Starlight site. Its [review contract](architecture/README.md) defines the C4 scope, evidence
+requirements, executable checks, visual review, and maintainer sign-off.
+
+Start the local explorer:
+
+```sh
+npm run architecture:dev
+```
+
+Validate the model, evidence references, source hygiene, C4 scope, and cross-product boundary
+invariants:
+
+```sh
+npm run check:architecture
+```
+
+LikeC4 is pinned to `1.38.1` to preserve the repository's Node.js 22.12.0 contract.
+The Playwright override selects the first release that fixes
+[GHSA-7mvr-c777-76hp](https://github.com/advisories/GHSA-7mvr-c777-76hp).
+The pilot does not use Playwright-based image exports.
+
 The check command validates frontmatter, generated data, Markdown structure,
 prose style, OpenAPI snapshots, SVG accessibility, Astro types, the static
 build, and generated Redoc API pages. It checks the current site only. Published

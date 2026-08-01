@@ -1,0 +1,30 @@
+views {
+  view index {
+    #portfolioView
+
+    title 'Registry Stack portfolio and ownership'
+    description 'Formal products, shared tooling, the adopter boundary, and external decision ownership.'
+
+    include
+      registryStack,
+      registryStack.*,
+      registryctl,
+      solmaraLab,
+      evidenceConsumer,
+      decisionOwner
+
+    exclude * -> *
+
+    include
+      registryStack.platform -> registryStack.relay,
+      registryStack.platform -> registryStack.notary,
+      registryStack.manifest -> registryStack.relay,
+      registryStack.notary -> registryStack.relay,
+      registryctl -> registryStack.manifest,
+      solmaraLab -> registryStack.relay,
+      solmaraLab -> registryStack.notary,
+      evidenceConsumer -> decisionOwner
+
+    autoLayout LeftRight
+  }
+}

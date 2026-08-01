@@ -1,0 +1,70 @@
+deployment {
+  environment singleNode 'Single-node production target' {
+    #targetTopology
+
+    metadata {
+      evidence 'docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx'
+    }
+
+    trustBoundary institution 'Institution-operated boundary' {
+      host edge 'Public edge host or service' {
+        edgeProxy = instanceOf reverseProxy
+      }
+
+      host applicationHost 'Single application host' {
+        network runtime 'Private runtime network' {
+          relay = instanceOf registryStack.relay.server
+          notary = instanceOf registryStack.notary.server
+        }
+
+        network data 'Private data and state network' {
+          sourceMount = state 'Registry source mount or private binding'
+          relayState = instanceOf registryStack.relay.correctnessState
+          notaryState = instanceOf registryStack.notary.correctnessState
+        }
+      }
+
+      trustBoundary services 'Institution-managed dependencies' {
+        signing = instanceOf keyProvider
+        audit = instanceOf auditDestination
+        identity = instanceOf identityProvider
+      }
+
+      edge.edgeProxy -> applicationHost.runtime.relay 'Forwards public Relay traffic' {
+        metadata {
+          evidence 'docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx'
+        }
+      }
+      edge.edgeProxy -> applicationHost.runtime.notary 'Forwards public Notary traffic' {
+        metadata {
+          evidence 'docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx'
+        }
+      }
+
+      applicationHost.runtime.relay -> applicationHost.data.sourceMount
+        'Reads the reviewed source binding' {
+        metadata {
+          evidence 'REQ-ARC-G-006'
+        }
+      }
+      applicationHost.runtime.relay -> applicationHost.data.relayState
+        'Persists consultation correctness state' {
+        metadata {
+          evidence 'docs/site/src/content/docs/operate/retention-and-persistent-state.mdx'
+        }
+      }
+      applicationHost.runtime.notary -> applicationHost.data.notaryState
+        'Persists transaction, replay, evaluation, issuance, and status correctness state' {
+        metadata {
+          evidence 'REQ-ARC-G-013'
+        }
+      }
+      applicationHost.runtime.notary -> applicationHost.runtime.relay
+        'Executes a compiler-pinned consultation over the private runtime network' {
+        metadata {
+          evidence 'crates/registry-notary-server/src/relay_client.rs'
+        }
+      }
+    }
+  }
+}

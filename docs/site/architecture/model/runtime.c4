@@ -1,0 +1,161 @@
+model {
+  registryStack.platform .provides registryStack.relay 'Supplies shared primitives' {
+    metadata {
+      evidence 'REQ-ARC-G-005'
+    }
+  }
+  registryStack.platform .provides registryStack.notary 'Supplies shared primitives' {
+    metadata {
+      evidence 'REQ-ARC-G-005'
+    }
+  }
+
+  registryStack.manifest .describes registryStack.relay 'Provides a static discovery bundle' {
+    metadata {
+      authorization 'none'
+      evidence 'REQ-ARC-G-001,REQ-ARC-G-002,REQ-ARC-G-010'
+      productionData 'none'
+    }
+  }
+
+  registryctl .compiles registryStack.manifest 'Validates and builds portable project inputs' {
+    metadata {
+      evidence 'crates/registryctl/src/main.rs'
+    }
+  }
+  registryctl .prepares registryStack.relay 'Builds and verifies Relay configuration inputs' {
+    metadata {
+      evidence 'crates/registryctl/src/main.rs'
+    }
+  }
+  registryctl .prepares registryStack.notary 'Builds and verifies Notary configuration inputs' {
+    metadata {
+      evidence 'crates/registryctl/src/main.rs'
+    }
+  }
+
+  caller .reads registryStack.relay 'Requests a protected read' {
+    metadata {
+      evidence 'crates/registry-relay/openapi/registry-relay.openapi.json'
+    }
+  }
+  caller .evaluates registryStack.notary 'Requests a claim evaluation' {
+    metadata {
+      evidence 'products/notary/openapi/registry-notary.openapi.json'
+    }
+  }
+
+  registryStack.relay .verifiesWith identityProvider 'May verify credentials against an OIDC issuer' {
+    #optional
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+  registryStack.notary .verifiesWith identityProvider 'May verify credentials against an OIDC issuer' {
+    #optional
+
+    metadata {
+      evidence 'crates/registry-platform-oidc/src/lib.rs'
+      optional 'true'
+    }
+  }
+
+  registryStack.relay .reads registrySource 'Adapts and reads an authorized source contract' {
+    metadata {
+      evidence 'REQ-ARC-G-006'
+      owner 'registry-relay'
+      result 'declared-typed-output'
+    }
+  }
+
+  registryStack.notary .consults registryStack.relay 'Executes a compiler-pinned consultation' {
+    metadata {
+      evidence 'REQ-ARC-G-012,REQ-ARC-G-013'
+      executionProvenance 'exact'
+      registrySourceCredential 'forbidden'
+    }
+  }
+
+  registryStack.relay .returns registryStack.notary
+    'Returns declared typed outputs and exact execution provenance' {
+    metadata {
+      evidence 'REQ-ARC-G-012'
+      executionProvenance 'exact'
+    }
+  }
+
+  registryStack.relay .returns caller 'Returns declared fields or a public denial' {
+    metadata {
+      evidence 'docs/site/src/content/docs/spec/rs-pr-relay.mdx'
+    }
+  }
+
+  registryStack.notary .issues evidenceConsumer 'Issues a supported credential' {
+    metadata {
+      delegatedEvaluation 'forbidden'
+      evidence 'REQ-ARC-G-012'
+      provenance 'exact-relay-backed'
+      sourceFreeEvaluation 'forbidden'
+    }
+  }
+
+  peerNotary .delegates registryStack.notary 'Requests signed source-free delegated evaluation' {
+    #staticTrust
+
+    metadata {
+      credentialIssuance 'forbidden'
+      evidence 'crates/registry-notary-server/src/federation/mod.rs'
+      registryBackedClaims 'forbidden'
+      replayScope 'peer-scoped'
+      runtimeIsolationGate 'absent'
+      trustDiscovery 'static-config'
+    }
+  }
+
+  registryStack.notary .returns peerNotary 'Returns a signed evaluation result, never a credential' {
+    #staticTrust
+
+    metadata {
+      credentialIssuance 'forbidden'
+      evidence 'crates/registry-notary-server/src/federation/mod.rs'
+    }
+  }
+
+  registryStack.relay .audits auditDestination 'Emits protected-read audit records' {
+    metadata {
+      evidence 'crates/registry-relay/tests/audit_record.rs'
+      sensitiveValues 'pseudonymized'
+    }
+  }
+  registryStack.notary .audits auditDestination 'Emits evaluation and issuance audit records' {
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/assembly.rs'
+    }
+  }
+  registryStack.notary .uses keyProvider 'Uses configured signing keys' {
+    metadata {
+      evidence 'crates/registry-notary-server/src/standalone/signing/providers.rs'
+    }
+  }
+
+  evidenceConsumer .informs decisionOwner 'Supplies evidence for an accountable decision' {
+    metadata {
+      evidence 'docs/site/src/content/docs/explanation/architecture.mdx'
+    }
+  }
+
+  solmaraLab .uses registryStack.relay 'Consumes a release-qualified Relay image' {
+    metadata {
+      evidence 'docs/site/src/content/docs/spec/rs-arc-g.mdx'
+      runtimeEvidence 'release-specific'
+    }
+  }
+  solmaraLab .uses registryStack.notary 'Consumes a release-qualified Notary image' {
+    metadata {
+      evidence 'docs/site/src/content/docs/spec/rs-arc-g.mdx'
+      runtimeEvidence 'release-specific'
+    }
+  }
+}

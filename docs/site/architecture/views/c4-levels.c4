@@ -1,0 +1,209 @@
+views {
+  view relayContainers of registryStack.relay {
+    #containerView
+
+    title 'Container diagram for Registry Relay'
+    description 'The Relay server process, correctness store, and external runtime dependencies.'
+
+    include
+      registryStack.relay.*,
+      caller,
+      registrySource,
+      registryStack.notary,
+      identityProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> registryStack.relay.server,
+      registryStack.relay.server -> registrySource,
+      registryStack.relay.server -> registryStack.relay.correctnessState,
+      registryStack.notary -> registryStack.relay.server,
+      registryStack.relay.server -> identityProvider,
+      registryStack.relay.server -> auditDestination
+
+    autoLayout LeftRight
+  }
+
+  view relayContext of registryStack.relay {
+    #systemContextView
+
+    title 'System context diagram for Registry Relay'
+    description 'People and software systems that interact with Registry Relay.'
+
+    include
+      caller,
+      registryStack.manifest,
+      registryStack.relay,
+      registryStack.notary,
+      registrySource,
+      identityProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> registryStack.relay,
+      registryStack.manifest -> registryStack.relay,
+      registryStack.notary -> registryStack.relay,
+      registryStack.relay -> registrySource,
+      registryStack.relay -> identityProvider,
+      registryStack.relay -> auditDestination
+
+    autoLayout LeftRight
+  }
+
+  view relayComponents of registryStack.relay.server {
+    #componentView
+
+    title 'Component diagram for the Relay server'
+    description 'Security and execution components inside the Registry Relay process.'
+
+    include
+      *,
+      caller,
+      registrySource,
+      registryStack.notary,
+      registryStack.relay.correctnessState,
+      identityProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> access,
+      access -> identityProvider,
+      access -> protectedRead,
+      protectedRead -> sourceExecution,
+      sourceExecution -> registrySource,
+      registryStack.notary -> consultation,
+      consultation -> sourceExecution,
+      consultation -> registryStack.relay.correctnessState,
+      protectedRead -> audit,
+      consultation -> audit,
+      audit -> auditDestination
+
+    autoLayout LeftRight
+  }
+
+  view relayProtectedReadCode of registryStack.relay.server.protectedRead {
+    #codeView
+
+    title 'Code diagram for the Relay protected-read component'
+    description 'Selected Rust structures that preserve governed and principal-bound query gates.'
+
+    include *
+
+    autoLayout LeftRight
+  }
+
+  view notaryContainers of registryStack.notary {
+    #containerView
+
+    title 'Container diagram for Registry Notary'
+    description 'The Notary server process, correctness store, and external runtime dependencies.'
+
+    include
+      registryStack.notary.*,
+      caller,
+      evidenceConsumer,
+      registryStack.relay,
+      peerNotary,
+      identityProvider,
+      keyProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> registryStack.notary.server,
+      registryStack.notary.server -> evidenceConsumer,
+      registryStack.notary.server -> registryStack.relay,
+      registryStack.notary.server -> registryStack.notary.correctnessState,
+      registryStack.notary.server -> identityProvider,
+      registryStack.notary.server -> keyProvider,
+      registryStack.notary.server -> auditDestination,
+      peerNotary -> registryStack.notary.server
+
+    autoLayout TopBottom
+  }
+
+  view notaryContext of registryStack.notary {
+    #systemContextView
+
+    title 'System context diagram for Registry Notary'
+    description 'People and software systems that interact with Registry Notary.'
+
+    include
+      caller,
+      evidenceConsumer,
+      registryStack.notary,
+      registryStack.relay,
+      peerNotary,
+      identityProvider,
+      keyProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> registryStack.notary,
+      registryStack.notary -> registryStack.relay,
+      registryStack.notary -> evidenceConsumer,
+      registryStack.notary -> identityProvider,
+      registryStack.notary -> keyProvider,
+      registryStack.notary -> auditDestination,
+      peerNotary -> registryStack.notary
+
+    autoLayout LeftRight
+  }
+
+  view notaryComponents of registryStack.notary.server {
+    #componentView
+
+    title 'Component diagram for the Notary server'
+    description 'Security, evaluation, consultation, issuance, federation, and audit components.'
+
+    include
+      *,
+      caller,
+      registryStack.relay.server,
+      registryStack.notary.correctnessState,
+      peerNotary,
+      identityProvider,
+      keyProvider,
+      auditDestination
+
+    exclude * -> *
+
+    include
+      caller -> access,
+      access -> identityProvider,
+      access -> evaluation,
+      access -> issuance,
+      evaluation -> relayClient,
+      relayClient -> registryStack.relay.server,
+      evaluation -> registryStack.notary.correctnessState,
+      issuance -> registryStack.notary.correctnessState,
+      issuance -> keyProvider,
+      peerNotary -> federation,
+      evaluation -> audit,
+      issuance -> audit,
+      federation -> audit,
+      audit -> auditDestination
+
+    autoLayout LeftRight
+  }
+
+  view notaryIssuanceCode of registryStack.notary.server.issuance {
+    #codeView
+
+    title 'Code diagram for the Notary credential-issuance component'
+    description 'Selected Rust functions that gate credential issuance on exact stored provenance.'
+
+    include *
+
+    autoLayout LeftRight
+  }
+}

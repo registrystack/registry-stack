@@ -85,6 +85,18 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertFalse(outputs["docs_archives"])
 
+    def test_architecture_model_changes_run_docs_checks(self) -> None:
+        for path in (
+            "docs/site/architecture/likec4.config.json",
+            "docs/site/architecture/model/runtime.c4",
+            "docs/site/architecture/tests/architecture-model.test.mjs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertFalse(outputs["rust"])
+                self.assertTrue(outputs["docs"])
+                self.assertFalse(outputs["docs_archives"])
+
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
         current_content = classify(
             self.workspace,
