@@ -261,3 +261,76 @@ test('contrastRatio throws rather than returning NaN for an unscoreable color', 
   assert.throws(() => contrastRatio('#0000', DIAGRAM_SURFACE), /#0000/);
   assert.ok(Number.isFinite(contrastRatio('#abc', DIAGRAM_SURFACE)), '#rgb shorthand stays supported');
 });
+
+test('shorthand and long spellings of one color resolve to one entry', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text fill="#000">short</text>
+    <text fill="#000000">long</text>
+  </svg>`;
+  assert.deepEqual(extractTextFillColors(svg).colors, ['#000000']);
+});
+
+test('shorthand white on a dark chip is reverse text, not a 1:1 failure', () => {
+  // #fff and #ffffff paint the same pixels. Comparing the authored spelling
+  // against DIAGRAM_SURFACE by equality missed the shorthand, so a legible
+  // diagram was rejected at 1:1 against a canvas it never sits on.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <rect x="0" y="0" width="10" height="10" fill="#000091"/>
+    <text fill="#fff">DCI-NATIVE</text>
+  </svg>`;
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
+});
+
+test('a class rule beats a presentation fill attribute, as CSS applies it', () => {
+  // A `fill` attribute is a presentation attribute, not an inline style: any
+  // matching CSS rule outranks it. Preferring the attribute scored a color the
+  // reader never sees and let the rendered low-contrast text through.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.faint { fill: #cccccc; }</style>
+    <text class="faint" fill="#161616">rendered faint</text>
+  </svg>`;
+  assert.deepEqual(extractTextFillColors(svg).colors, ['#cccccc']);
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /#cccccc/);
+});
+
+test('a presentation fill still beats a fill inherited from an enclosing group', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <g fill="#cccccc"><text fill="#161616">legible</text></g>
+  </svg>`;
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
+});
+
+test('a tspan fill override is scored, not masked by its parent text fill', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text fill="#161616">legible <tspan fill="#cccccc">faint</tspan></text>
+  </svg>`;
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1, 'the tspan paints the glyphs the reader sees');
+  assert.match(errors[0], /#cccccc/);
+});
+
+test('a tspan with no fill of its own is neither rescored nor counted unresolved', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text fill="#161616">legible <tspan>same color</tspan></text>
+  </svg>`;
+  const { colors, unresolved } = extractTextFillColors(svg);
+  assert.deepEqual(colors, ['#161616']);
+  assert.equal(unresolved, 0, 'the tspan inherits a fill its parent already resolved');
+});
+
+test('a white tspan is scored against the chip its text sits on', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <rect x="0" y="0" width="10" height="10" fill="#000091"/>
+    <text fill="#161616"><tspan fill="#ffffff">reverse</tspan></text>
+  </svg>`;
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
+});

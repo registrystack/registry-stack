@@ -42,12 +42,18 @@ export function isScoreableColor(value) {
   return SCOREABLE_HEX_RE.test(value);
 }
 
-// Hex spellings are lowercased so `#FFF` and `#fff` dedupe to one entry.
+// Scoreable hex is normalized to lowercase six-digit form, so `#FFF`, `#fff`,
+// and `#ffffff` are one color. They paint identical pixels, and reverse text is
+// detected by comparing against DIAGRAM_SURFACE for equality: leaving the
+// shorthand unexpanded made `fill="#fff"` on a dark chip miss that test and get
+// scored 1:1 against a canvas it never sits on, failing a legible diagram.
+// A message therefore quotes the expanded spelling rather than the authored
+// one; the color is still the one in the file.
 // Anything else is kept exactly as authored: it is never scored, only
 // reported, and the report is only useful if it quotes the string the author
 // can find in the file.
 function normalizeColor(value) {
-  return isScoreableColor(value) ? value.toLowerCase() : value;
+  return isScoreableColor(value) ? expandHex(value.toLowerCase()) : value;
 }
 
 function expandHex(hex) {
@@ -128,12 +134,12 @@ function attrValue(tag, name) {
   return match ? match[1] : null;
 }
 
-// Resolves the effective fill color of every <text> element in an SVG,
-// walking <g fill="..."> ancestry and class-based fills from a <style>
+// Resolves the effective fill color of every <text> and <tspan> element in an
+// SVG, walking <g fill="..."> ancestry and class-based fills from a <style>
 // block. Returns { colors, unresolved, reverseText }: `colors` are fills
 // actually used to paint text (deduplicated), `unresolved` counts <text>
-// elements whose fill could not be determined (no inline fill, no matching
-// class, no enclosing <g fill>), and `reverseText` holds the backdrop fill
+// elements whose fill could not be determined (no class rule, no fill
+// attribute, no enclosing <g fill>), and `reverseText` holds the backdrop fill
 // behind each <text> painted in the surface color, one entry per element,
 // null when no shape precedes it.
 export function extractTextFillColors(svgText) {
@@ -144,7 +150,7 @@ export function extractTextFillColors(svgText) {
   // so the scanned string would still hold what the removal was meant to drop.
   // Tracking the region here needs no rewriting and cannot resurrect a tag.
   const tokenRe =
-    /<style\b[^>]*>|<\/style>|<g\b[^>]*>|<\/g>|<text\b[^>]*>|<(?:rect|circle|ellipse|polygon|path)\b[^>]*>/g;
+    /<style\b[^>]*>|<\/style>|<g\b[^>]*>|<\/g>|<(?:text|tspan)\b[^>]*>|<(?:rect|circle|ellipse|polygon|path)\b[^>]*>/g;
   const gFillStack = [];
   const colors = new Set();
   const reverseText = [];
@@ -173,15 +179,17 @@ export function extractTextFillColors(svgText) {
       gFillStack.push(attrValue(tag, 'fill') ?? inherited);
       continue;
     }
-    if (!tag.startsWith('<text')) {
+    if (!tag.startsWith('<text') && !tag.startsWith('<tspan')) {
       // A drawn shape. Remembered so reverse text can be scored against the
       // chip it is painted on rather than against the canvas.
       const shapeFill = attrValue(tag, 'fill');
       if (shapeFill) lastShapeFill = normalizeColor(shapeFill);
       continue;
     }
-    // <text ...>
-    const inlineFill = attrValue(tag, 'fill');
+    // <text ...> or <tspan ...>. A tspan paints the glyphs it wraps, so a fill
+    // it declares is what the reader sees, not the parent text's fill.
+    const isTspan = tag.startsWith('<tspan');
+    const presentationFill = attrValue(tag, 'fill');
     const classAttr = attrValue(tag, 'class');
     // The winning class is the one whose rule appears last, not the one named
     // first in the class attribute; `class="safe danger"` and `class="danger
@@ -195,7 +203,13 @@ export function extractTextFillColors(svgText) {
           ?.color
       : undefined;
     const inheritedFill = gFillStack[gFillStack.length - 1] ?? null;
-    const resolved = inlineFill ?? classFill ?? inheritedFill;
+    // `fill` on an element is a presentation attribute, not an inline style, so
+    // any matching CSS rule outranks it. Reading the attribute first scored a
+    // color the reader never sees and let the rendered text through unmeasured.
+    // A tspan without a fill of its own inherits the fill its parent <text>
+    // already resolved and recorded, so it is skipped rather than rescored or
+    // counted unresolved.
+    const resolved = classFill ?? presentationFill ?? (isTspan ? null : inheritedFill);
     if (resolved) {
       const color = normalizeColor(resolved);
       colors.add(color);
@@ -204,7 +218,7 @@ export function extractTextFillColors(svgText) {
       // canvas. Document order stands in for geometry: in these diagrams a
       // chip is always drawn immediately before the label that sits on it.
       if (color === DIAGRAM_SURFACE) reverseText.push(lastShapeFill);
-    } else {
+    } else if (!isTspan) {
       unresolved += 1;
     }
   }
