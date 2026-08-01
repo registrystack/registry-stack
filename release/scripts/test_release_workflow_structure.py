@@ -92,7 +92,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
 
-    def test_reuses_cargo_cache_and_keeps_candidate_for_seven_days(self) -> None:
+    def test_reuses_cache_with_seven_day_validity_and_storage_margin(self) -> None:
         text, document = workflow("release-candidate.yml")
         cache = next(
             step
@@ -101,6 +101,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("registry-stack-release-${{ runner.os }}-", cache["with"]["restore-keys"])
         self.assertIn('created_at} + 7 days', text)
+        final_upload = next(
+            step
+            for step in document["jobs"]["assemble"]["steps"]
+            if step.get("name") == "Upload one candidate manifest and bundle"
+        )
+        self.assertEqual(final_upload["with"]["retention-days"], 8)
         self.assertNotIn("Rehearse forced 1.x release-lock runtime contract", text)
 
     def test_only_pre_oidc_reverification_accepts_the_current_run(self) -> None:
@@ -142,7 +148,15 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
 
     def test_binds_an_annotated_tag_to_exact_candidate_and_main_revisions(self) -> None:
-        text, _ = workflow("release.yml")
+        text, document = workflow("release.yml")
+        identity = next(
+            step
+            for step in document["jobs"]["verify"]["steps"]
+            if step.get("name") == "Resolve exact tag identity"
+        )
+        self.assertEqual(identity["env"]["RELEASE_TAG"], "${{ inputs.tag }}")
+        self.assertNotIn("${{ inputs.tag }}", identity["run"])
+        self.assertIn('"${tag%%.*}" != v0', identity["run"])
         self.assertIn('git cat-file -t "refs/tags/${tag}"', text)
         self.assertIn("git merge-base --is-ancestor", text)
         self.assertIn("promotion_revision", text)
@@ -183,13 +197,107 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("require-image-tag-absent", promotion)
 
     def test_preserves_exact_draft_binding_without_overwriting_assets(self) -> None:
-        text, _ = workflow("release.yml")
+        text, document = workflow("release.yml")
         self.assertIn("Reconcile bound draft and upload exact staged inventory", text)
         self.assertIn("registry-stack-release-candidate-v2 manifest_sha256:", text)
         self.assertIn(".draft == true", text)
         self.assertIn(".prerelease == false", text)
         self.assertNotIn("--prerelease", text)
         self.assertNotIn("--clobber", text)
+        tagged_checkout = next(
+            step
+            for step in document["jobs"]["stage-draft"]["steps"]
+            if step.get("name") == "Checkout exact tagged product source"
+        )
+        self.assertEqual(
+            tagged_checkout["with"]["ref"],
+            "${{ needs.verify.outputs.source_sha }}",
+        )
+        stage = step_run(
+            document,
+            "stage-draft",
+            "Reconcile bound draft and upload exact staged inventory",
+        )
+        self.assertIn(
+            'cp "product-source/release/notes/${tag}.md"',
+            stage,
+        )
+
+    def test_recovers_only_the_closed_final_asset_roster(self) -> None:
+        _, document = workflow("release.yml")
+        stage = step_run(
+            document,
+            "stage-draft",
+            "Reconcile bound draft and upload exact staged inventory",
+        )
+        promote = step_run(
+            document,
+            "promote-images",
+            "Reconcile exact staged draft before first public image write",
+        )
+        finalize = step_run(
+            document,
+            "finalize-assets",
+            "Clean retryable final additions and reverify exact staged assets",
+        )
+        retryable_names = (
+            '"registryctl-${tag}-image-lock.json"',
+            "SHA256SUMS",
+            '"registry-stack-${tag}-SHA256SUMS.sigstore.json"',
+        )
+        retryable_roster = stage[
+            stage.index("printf '%s\\n'") : stage.index(
+                "> contract/retryable-final-assets"
+            )
+        ]
+        roster_lines = {
+            line.strip().removesuffix("\\").strip()
+            for line in retryable_roster.splitlines()[1:]
+            if line.strip() and not line.lstrip().startswith("}")
+        }
+        self.assertEqual(roster_lines, set(retryable_names))
+        for name in retryable_names:
+            self.assertNotIn(name, finalize)
+        self.assertLess(
+            stage.index('"${RUNNER_TEMP}/staged-draft.json" >/dev/null'),
+            stage.index("> contract/retryable-final-assets"),
+        )
+        self.assertIn("cat contract/expected-staged-assets", stage)
+        self.assertIn("cat contract/retryable-final-assets", stage)
+        self.assertIn("contract/allowed-staged-assets", stage)
+        self.assertIn("[[ -s contract/unexpected-staged-assets ]]", stage)
+        self.assertLess(
+            promote.index("contract/draft-release.json >/dev/null"),
+            promote.index("comm -23"),
+        )
+        self.assertIn("contract/observed-assets", promote)
+        self.assertIn("contract/retryable-final-assets", promote)
+        self.assertIn("diff -u contract/expected-assets contract/actual-assets", promote)
+        self.assertLess(
+            finalize.index("require_bound_draft\n"),
+            finalize.index("cat contract/retryable-final-assets"),
+        )
+        self.assertLess(
+            finalize.index("require_bound_draft\n"),
+            finalize.index("gh api --method DELETE"),
+        )
+
+    def test_rechecks_candidate_immediately_before_public_image_access(self) -> None:
+        text, document = workflow("release.yml")
+        expiry = text.index(
+            "Recheck candidate expiry immediately before registry login"
+        )
+        login = text.index("Log in for exact candidate promotion", expiry)
+        copy = text.index('crane copy "${candidate_ref}" "${final_ref}"', login)
+        self.assertLess(expiry, login)
+        self.assertLess(login, copy)
+        expiry_run = step_run(
+            document,
+            "promote-images",
+            "Recheck candidate expiry immediately before registry login",
+        )
+        self.assertIn(".validity.expires_at", expiry_run)
+        self.assertNotIn("verify-candidate", expiry_run)
 
     def test_signs_one_checksum_closure_without_beta_only_ceremony(self) -> None:
         text, _ = workflow("release.yml")

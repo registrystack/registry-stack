@@ -867,7 +867,7 @@ jobs:
             candidate/release-candidate-manifest.json
             candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 8
 
   attest:
     name: Reverify and attest candidate

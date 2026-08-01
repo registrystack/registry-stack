@@ -335,7 +335,7 @@ class GateInventoryTest(unittest.TestCase):
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
-        mutated = workflow.replace("retention-days: 7", "retention-days: 8", 1)
+        mutated = workflow.replace("retention-days: 8", "retention-days: 7", 1)
         self.assertEqual(
             ["Candidate artifact retention"],
             self.module.artifact_retention_violations(mutated),

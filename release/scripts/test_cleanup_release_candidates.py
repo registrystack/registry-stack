@@ -50,8 +50,8 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         client = FakeClient(
             {
                 "registry-notary-candidate": [
-                    version(1, "2026-07-18T11:59:59Z", ["candidate-old"]),
-                    version(2, "2026-07-18T12:00:00Z", ["candidate-boundary"]),
+                    version(1, "2026-07-17T11:59:59Z", ["candidate-old"]),
+                    version(2, "2026-07-17T12:00:00Z", ["candidate-boundary"]),
                 ]
             }
         )
@@ -65,6 +65,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self.assertEqual([1], [item["version_id"] for item in result["actions"]])
         self.assertEqual("would_delete", result["actions"][0]["action"])
         self.assertTrue(result["dry_run"])
+        self.assertEqual(8, result["retention_days"])
 
     def test_apply_deletes_expired_versions_from_both_candidates(self) -> None:
         client = FakeClient(
