@@ -321,6 +321,18 @@ export async function buildDocsetArchive(docset, {
       ['astro', 'build', '--outDir', rootOutDir],
       rootEnv,
     );
+    if (indexable) {
+      // Pagefind's directory walk follows filesystem enumeration order, which
+      // changes document numbering and content-hashed index chunks across
+      // builders. Preserve Starlight's search UI and page markers, then replace
+      // only its generated index with the canonical URL-sorted builder.
+      await rm(resolve(rootOutDir, 'pagefind'), { recursive: true, force: true });
+      await runCommand(
+        'node',
+        ['scripts/build-production-search.mjs', '--dist-root', rootOutDir],
+        rootEnv,
+      );
+    }
     await runCommand(
       'npx',
       ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)],
