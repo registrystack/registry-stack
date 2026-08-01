@@ -300,6 +300,7 @@ jobs:
         env:
           CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
           REGISTRYCTL_BIN: ${{ github.workspace }}/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64
+          REGISTRYCTL_TUTORIAL_RUNTIME_MODE: authoring
           REGISTRYCTL_RELEASED_DOCS_ARCHIVE: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
           REGISTRYCTL_RELEASED_DOCS_ROOT: ${{ runner.temp }}/candidate-released-docs/version
         run: |

@@ -49,6 +49,7 @@ EVIDENCE_DIR="${REGISTRYCTL_TUTORIAL_EVIDENCE_DIR:-}"
 RETAINED_PROJECT="${REGISTRYCTL_TUTORIAL_PROJECT_DIR:-}"
 RETAINED_OAUTH_PROJECT="${REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR:-}"
 RUNNER_MODE="source"
+TUTORIAL_RUNTIME_MODE="${REGISTRYCTL_TUTORIAL_RUNTIME_MODE:-}"
 REPORT_ROOT="$WORK_ROOT/reports"
 REGISTRYCTL_VERSION="unknown"
 ACTIVE_DEV_PROJECT=""
@@ -192,9 +193,28 @@ if [[ -n "$REGISTRYCTL_BIN" ]]; then
 		printf 'REGISTRYCTL_BIN must be an absolute installed-binary path: %s\n' "$REGISTRYCTL_BIN" >&2
 		exit 1
 	fi
-	RUNNER_MODE="sealed"
+	TUTORIAL_RUNTIME_MODE="${TUTORIAL_RUNTIME_MODE:-sealed}"
+	case "$TUTORIAL_RUNTIME_MODE" in
+		authoring)
+			RUNNER_MODE="source"
+			;;
+		sealed)
+			RUNNER_MODE="sealed"
+			;;
+		*)
+			printf 'REGISTRYCTL_TUTORIAL_RUNTIME_MODE must be authoring or sealed: %s\n' \
+				"$TUTORIAL_RUNTIME_MODE" >&2
+			exit 1
+			;;
+	esac
 	printf 'using the explicitly installed Registryctl binary\n'
 else
+	TUTORIAL_RUNTIME_MODE="${TUTORIAL_RUNTIME_MODE:-authoring}"
+	if [[ "$TUTORIAL_RUNTIME_MODE" != "authoring" ]]; then
+		printf 'source Registryctl tutorials support only authoring runtime mode: %s\n' \
+			"$TUTORIAL_RUNTIME_MODE" >&2
+		exit 1
+	fi
 	if ! command -v cargo >/dev/null 2>&1; then
 		printf 'required tool not on PATH: cargo\n' >&2
 		exit 1
@@ -211,6 +231,7 @@ else
 		cargo build --locked --profile "$BUILD_PROFILE" -p registryctl
 	REGISTRYCTL_BIN="$TARGET_DIR/$BUILD_PROFILE/registryctl"
 fi
+printf 'tutorial runtime proof mode: %s\n' "$TUTORIAL_RUNTIME_MODE"
 if [[ ! -x "$REGISTRYCTL_BIN" ]]; then
 	printf 'Registryctl binary is not executable: %s\n' "$REGISTRYCTL_BIN" >&2
 	exit 1
