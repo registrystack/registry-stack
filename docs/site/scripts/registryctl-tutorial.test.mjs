@@ -446,10 +446,12 @@ test('current reader pages keep public starters and current command roots', () =
   ];
   const currentText = pages.join('\n');
 
-  assert.match(currentText, /tag="v<major>\.<minor>\.<patch>"/);
-  assert.match(currentText, /registryctl-\$\{tag\}-install\.sh/);
+  assert.match(
+    currentText,
+    /curl -fsSL https:\/\/docs\.registrystack\.org\/install\.sh \| bash/,
+  );
   assert.match(currentText, /release\/VERIFY\.md/);
-  assert.match(currentText, /quick installation path trusts GitHub and TLS/);
+  assert.match(currentText, /quick installation path trusts Registry Docs hosting, GitHub, and TLS/);
   assert.match(currentText, /--template http/);
   assert.match(currentText, /--template spreadsheet/);
   assert.match(currentText, /registryctl dev smoke/);
@@ -457,7 +459,7 @@ test('current reader pages keep public starters and current command roots', () =
   assert.match(currentText, /registryctl build/);
   assert.doesNotMatch(
     currentText,
-    /registryctl (?:preflight|start|stop|restart|smoke|add notary)|init --from|test --live|Bruno/,
+    /tag="v<major>|installer=|curl --proto|releases\/download\/.*install\.sh|bash "\$installer"|registryctl (?:preflight|start|stop|restart|smoke|add notary)|init --from|test --live|Bruno/,
   );
   assert.doesNotMatch(currentText, /TODO:|Evidence:/);
 });

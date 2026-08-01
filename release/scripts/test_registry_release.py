@@ -609,11 +609,13 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("exactly the same bit-for-bit result", text)
         self.assertIn(".github/workflows/release.yml", text)
 
-    def test_registryctl_installer_uses_the_versioned_release_asset(self) -> None:
+    def test_registryctl_quick_installer_uses_the_stable_docs_url(self) -> None:
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
 
-        self.assertIn("registryctl-${tag}-install.sh", text)
-        self.assertIn('bash "./registryctl-${tag}-install.sh"', text)
+        self.assertIn(
+            "curl -fsSL https://docs.registrystack.org/install.sh | bash",
+            text,
+        )
         self.assertNotIn("raw.githubusercontent.com", text)
 
     def test_release_image_packaging_uses_release_dockerfiles(self) -> None:

@@ -33,26 +33,17 @@ first run.
 
 ## Before you start
 
-Choose an exact published 1.x tag from the
-[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
-download its installer:
+Install the latest released Registryctl:
 
 ```sh
-tag="v<major>.<minor>.<patch>"
-installer="registryctl-${tag}-install.sh"
-curl --proto '=https' --tlsv1.2 --fail --location \
-  --output "$installer" \
-  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
+curl -fsSL https://docs.registrystack.org/install.sh | bash
 ```
 
-This quick installation path trusts GitHub and TLS. The installer verifies the
-Registryctl binary and its matching signed release lock against the release
-checksums. When your acceptance process requires publisher authentication,
-follow `release/VERIFY.md` from the same tag before running the installer.
-
-```sh
-bash "$installer"
-```
+This quick installation path trusts Registry Docs hosting, GitHub, and TLS.
+The installer verifies the Registryctl binary and its matching signed release lock against the
+release checksums.
+When your acceptance process requires publisher authentication, use the tag-frozen
+`release/VERIFY.md` linked by the installer instead of this quick path.
 
 A successful 1.0 installer ends with the installed binary and signed release
 lock paths, followed by the spreadsheet `Try it` commands. If your shell cannot

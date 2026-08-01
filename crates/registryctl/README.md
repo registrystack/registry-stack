@@ -3,18 +3,17 @@
 `registryctl` is the adopter CLI for authoring, testing, reviewing, developing,
 and packaging Registry Stack projects.
 
-Install a pinned release without cloning the repository:
+Install the latest released version without cloning the repository:
 
 ```sh
-tag=vX.Y.Z
-curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
-bash "./registryctl-${tag}-install.sh"
+curl -fsSL https://docs.registrystack.org/install.sh | bash
 ```
 
-The quick installer trusts GitHub and TLS, then verifies downloaded artifacts
-against the release checksums. Use [`release/VERIFY.md`](../../release/VERIFY.md)
-when you need to authenticate release signatures and provenance before
-installation.
+The stable URL serves the installer from the latest promoted Registry Stack
+documentation release. The quick installer trusts Registry Docs hosting,
+GitHub, and TLS, then verifies downloaded artifacts against the release
+checksums. Use [`release/VERIFY.md`](../../release/VERIFY.md) when you need to
+authenticate release signatures and provenance before installation.
 
 ## Newcomer workflow
 
