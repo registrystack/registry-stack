@@ -245,12 +245,20 @@ test('Pages authenticates an exact release before build and smokes one assembled
   const docsBuild = workflow.indexOf('Build protected main at /dev/');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
   const rootStaging = workflow.indexOf('npm run stage:production-docsets');
+  const llmsCheck = workflow.indexOf('Verify current machine-readable documentation');
+  const assembledCheck = workflow.indexOf('Verify assembled documentation tree');
   const localSmoke = workflow.indexOf('npm run smoke:deployment');
   const upload = workflow.indexOf('actions/upload-pages-artifact');
   const liveSmoke = workflow.lastIndexOf('smoke-docs-deployment.mjs');
   assert.ok(dispatchValidation >= 0);
   assert.ok(dispatchValidation < docsBuild);
   assert.ok(rootStaging > archiveAssembly);
+  assert.ok(llmsCheck > rootStaging);
+  assert.match(
+    workflow.slice(llmsCheck, assembledCheck),
+    /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/dev/,
+  );
+  assert.match(workflow.slice(llmsCheck, assembledCheck), /DOCS_PUBLIC_BASE: \/dev\//);
   assert.ok(localSmoke > rootStaging);
   assert.ok(upload > localSmoke);
   assert.ok(liveSmoke > upload);
