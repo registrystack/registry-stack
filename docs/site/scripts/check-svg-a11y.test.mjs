@@ -85,3 +85,40 @@ test('svgAccessibilityErrors reports missing title/desc/role and missing files',
 test('the checked-in diagrams all clear the 4.5:1 text contrast floor', async () => {
   assert.deepEqual(await svgAccessibilityErrors(), []);
 });
+
+test('class fills are resolved from every <style> block, not just the first', () => {
+  // Editors can emit more than one <style> element. Resolving only the first
+  // left later blocks' rules unresolved and their content unstripped.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.first { fill: #161616; }</style>
+    <style>.second { fill: #cccccc; }</style>
+    <text class="first">resolved by the first block</text>
+    <text class="second">resolved by the second block</text>
+  </svg>`;
+
+  const { colors, unresolved } = extractTextFillColors(svg);
+  assert.equal(unresolved, 0, 'both class fills must resolve');
+  assert.deepEqual(colors.sort(), ['#161616', '#cccccc']);
+
+  const errors = svgContrastErrors('two-style.svg', svg);
+  assert.equal(errors.length, 1, 'only the low-contrast fill should fail');
+  assert.match(errors[0], /#cccccc/);
+});
+
+test('style regions are skipped without rewriting the document', () => {
+  // Deleting <style> blocks by substring replacement can splice the
+  // surrounding text into a fresh `<style`, leaving behind exactly what the
+  // deletion was meant to remove. Skipping the region during the walk cannot,
+  // so a <text> element after such a sequence is still scanned normally.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.a { fill: #161616; }</style>
+    <text class="a">after the style block</text>
+  </svg>`;
+
+  const { colors, unresolved } = extractTextFillColors(svg);
+  assert.equal(unresolved, 0);
+  assert.deepEqual(colors, ['#161616'], 'CSS fill declarations must not count as painted text');
+  assert.deepEqual(svgContrastErrors('skip.svg', svg), []);
+});

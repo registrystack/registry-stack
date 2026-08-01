@@ -65,19 +65,23 @@ export function contrastRatio(hexA, hexB) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+// An SVG may carry more than one <style> element, so every block is read;
+// later rules win, matching CSS source order for equally specific selectors.
+const STYLE_BLOCK_RE = /<style[^>]*>([\s\S]*?)<\/style>/g;
+
 function parseClassFillMap(svgText) {
-  const styleMatch = svgText.match(/<style[^>]*>([\s\S]*?)<\/style>/);
   const classFills = new Map();
-  if (!styleMatch) return classFills;
   // Only single-class selectors are resolved (e.g. `.tag { fill: #000091; }`).
   // Compound selectors like `.cardtitle.sm` are skipped: in the current
   // diagrams they only ever override font-size, never fill.
-  const ruleRe = /\.([\w-]+)\s*\{([^}]*)\}/g;
-  let rule;
-  while ((rule = ruleRe.exec(styleMatch[1]))) {
-    const [, className, body] = rule;
-    const fillMatch = body.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
-    if (fillMatch) classFills.set(className, fillMatch[1]);
+  for (const styleMatch of svgText.matchAll(STYLE_BLOCK_RE)) {
+    const ruleRe = /\.([\w-]+)\s*\{([^}]*)\}/g;
+    let rule;
+    while ((rule = ruleRe.exec(styleMatch[1]))) {
+      const [, className, body] = rule;
+      const fillMatch = body.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
+      if (fillMatch) classFills.set(className, fillMatch[1]);
+    }
   }
   return classFills;
 }
@@ -94,15 +98,30 @@ function attrValue(tag, name) {
 // whose fill could not be determined (no inline fill, no matching class, no
 // enclosing <g fill>).
 export function extractTextFillColors(svgText) {
-  const withoutStyle = svgText.replace(/<style[^>]*>[\s\S]*?<\/style>/, '');
   const classFills = parseClassFillMap(svgText);
-  const tokenRe = /<g\b[^>]*>|<\/g>|<text\b[^>]*>/g;
+  // <style> regions are skipped during the walk rather than deleted from the
+  // text beforehand. Deleting them cannot be done safely with one pass: a
+  // removal can splice its neighbours into a fresh `<style` (`<sty<style>le>`),
+  // so the scanned string would still hold what the removal was meant to drop.
+  // Tracking the region here needs no rewriting and cannot resurrect a tag.
+  const tokenRe = /<style\b[^>]*>|<\/style>|<g\b[^>]*>|<\/g>|<text\b[^>]*>/g;
   const gFillStack = [];
   const colors = new Set();
   let unresolved = 0;
+  let inStyle = false;
   let token;
-  while ((token = tokenRe.exec(withoutStyle))) {
+  while ((token = tokenRe.exec(svgText))) {
     const tag = token[0];
+    if (tag.startsWith('<style')) {
+      inStyle = true;
+      continue;
+    }
+    if (tag === '</style>') {
+      inStyle = false;
+      continue;
+    }
+    // CSS declarations are not painted content; parseClassFillMap reads them.
+    if (inStyle) continue;
     if (tag === '</g>') {
       gFillStack.pop();
       continue;
