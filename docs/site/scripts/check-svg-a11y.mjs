@@ -134,6 +134,19 @@ function attrValue(tag, name) {
   return match ? match[1] : null;
 }
 
+// The `fill` an inline `style` attribute declares, or null if it declares none.
+// This is a real inline style, so it outranks both a class rule and the `fill`
+// presentation attribute. As in a stylesheet rule, the last declaration wins.
+function inlineStyleFill(tag) {
+  const style = attrValue(tag, 'style');
+  if (!style) return null;
+  let fill = null;
+  for (const declaration of style.matchAll(/(?:^|;)\s*fill:\s*([^;]+)/g)) {
+    fill = declaration[1].trim();
+  }
+  return fill;
+}
+
 // Resolves the effective fill color of every <text> and <tspan> element in an
 // SVG, walking <g fill="..."> ancestry and class-based fills from a <style>
 // block. Returns { colors, unresolved, reverseText }: `colors` are fills
@@ -154,7 +167,13 @@ export function extractTextFillColors(svgText) {
   const gFillStack = [];
   const colors = new Set();
   const reverseText = [];
-  let lastShapeFill = null;
+  // The fill of the shape drawn immediately before the current element, and the
+  // backdrop the enclosing <text> claimed from it. Only the element directly
+  // after a shape may claim that shape: a single "last shape seen" carried
+  // forward let an unrelated earlier swatch stand in as the backdrop for a
+  // stray label anywhere later in the document.
+  let precedingShapeFill = null;
+  let textBackdrop = null;
   let unresolved = 0;
   let inStyle = false;
   let token;
@@ -181,14 +200,23 @@ export function extractTextFillColors(svgText) {
     }
     if (!tag.startsWith('<text') && !tag.startsWith('<tspan')) {
       // A drawn shape. Remembered so reverse text can be scored against the
-      // chip it is painted on rather than against the canvas.
+      // chip it is painted on rather than against the canvas. A shape with no
+      // fill of its own still displaces the previous one: it is what the next
+      // element actually follows.
       const shapeFill = attrValue(tag, 'fill');
-      if (shapeFill) lastShapeFill = normalizeColor(shapeFill);
+      precedingShapeFill = shapeFill ? normalizeColor(shapeFill) : null;
       continue;
     }
     // <text ...> or <tspan ...>. A tspan paints the glyphs it wraps, so a fill
     // it declares is what the reader sees, not the parent text's fill.
     const isTspan = tag.startsWith('<tspan');
+    if (!isTspan) {
+      // A <text> claims the shape it directly follows, and consumes it, so a
+      // sibling label further along cannot claim the same shape. A <tspan> sits
+      // on whatever its enclosing <text> sits on, so it reuses that backdrop.
+      textBackdrop = precedingShapeFill;
+      precedingShapeFill = null;
+    }
     const presentationFill = attrValue(tag, 'fill');
     const classAttr = attrValue(tag, 'class');
     // The winning class is the one whose rule appears last, not the one named
@@ -203,21 +231,24 @@ export function extractTextFillColors(svgText) {
           ?.color
       : undefined;
     const inheritedFill = gFillStack[gFillStack.length - 1] ?? null;
-    // `fill` on an element is a presentation attribute, not an inline style, so
-    // any matching CSS rule outranks it. Reading the attribute first scored a
+    // Author-level precedence, strongest first: an inline `style` fill, then a
+    // class rule, then the `fill` presentation attribute, then a fill inherited
+    // from an enclosing <g>. `fill` on the element is a presentation attribute
+    // rather than an inline style, so reading it ahead of a class rule scored a
     // color the reader never sees and let the rendered text through unmeasured.
     // A tspan without a fill of its own inherits the fill its parent <text>
     // already resolved and recorded, so it is skipped rather than rescored or
     // counted unresolved.
-    const resolved = classFill ?? presentationFill ?? (isTspan ? null : inheritedFill);
+    const resolved =
+      inlineStyleFill(tag) ?? classFill ?? presentationFill ?? (isTspan ? null : inheritedFill);
     if (resolved) {
       const color = normalizeColor(resolved);
       colors.add(color);
       // Reverse text is only legible against the shape it is painted on, so
       // the backdrop is captured per element rather than scored against the
-      // canvas. Document order stands in for geometry: in these diagrams a
+      // canvas. Document adjacency stands in for geometry: in these diagrams a
       // chip is always drawn immediately before the label that sits on it.
-      if (color === DIAGRAM_SURFACE) reverseText.push(lastShapeFill);
+      if (color === DIAGRAM_SURFACE) reverseText.push(textBackdrop);
     } else if (!isTspan) {
       unresolved += 1;
     }

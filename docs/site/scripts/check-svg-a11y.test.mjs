@@ -334,3 +334,48 @@ test('a white tspan is scored against the chip its text sits on', () => {
   </svg>`;
   assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
 });
+
+test('an inline style fill beats both a class rule and a presentation attribute', () => {
+  // Inline style is the highest author-level declaration: it outranks a class
+  // rule, which in turn outranks the `fill` presentation attribute.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.safe { fill: #161616; }</style>
+    <text class="safe" fill="#161616" style="fill:#cccccc">rendered faint</text>
+  </svg>`;
+  assert.deepEqual(extractTextFillColors(svg).colors, ['#cccccc']);
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /#cccccc/);
+});
+
+test('an inline style declaring fill twice resolves to the last declaration', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text style="fill:#161616;font-size:12px;fill:#cccccc">overridden</text>
+  </svg>`;
+  assert.deepEqual(extractTextFillColors(svg).colors, ['#cccccc']);
+});
+
+test('an inline style without a fill falls through to the class rule', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.safe { fill: #161616; }</style>
+    <text class="safe" style="font-size:12px">legible</text>
+  </svg>`;
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
+});
+
+test('reverse text is not scored against a shape it does not immediately follow', () => {
+  // A single global "last shape seen" let an unrelated earlier swatch stand in
+  // as a backdrop for a stray white label anywhere later in the document.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <rect x="0" y="0" width="10" height="10" fill="#000091"/>
+    <text fill="#ffffff">on the chip</text>
+    <text fill="#ffffff">stray, on the canvas</text>
+  </svg>`;
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1, 'only the label adjacent to the chip has a backdrop');
+  assert.match(errors[0], /no shape/);
+});
