@@ -4018,22 +4018,33 @@ fn validate_release_profile_expressions(
     {
         let _ = has_expression;
         if let Some(conditions) = profile.release_conditions.as_ref() {
-            compile_release_expression(dataset, entity, profile, &conditions.expression.cel)?;
+            compile_release_expression(
+                dataset,
+                entity,
+                profile,
+                "release_conditions",
+                &conditions.expression.cel,
+            )?;
         }
         for claim in &profile.claims {
             if let Some(expression) = claim.expression.as_ref() {
-                compile_release_expression(dataset, entity, profile, &expression.cel)?;
+                compile_release_expression(dataset, entity, profile, &claim.name, &expression.cel)?;
             }
         }
         Ok(())
     }
 }
 
+/// `location` addresses the failing expression inside the profile: the claim
+/// name for a claim expression, or the literal `release_conditions` for the
+/// release predicate, so an operator can find the field without the value or
+/// the expression text ever reaching the log.
 #[cfg(feature = "attribute-release")]
 fn compile_release_expression(
     dataset: &DatasetConfig,
     entity: &EntityConfig,
     profile: &AttributeReleaseProfile,
+    location: &str,
     cel: &str,
 ) -> Result<(), ConfigError> {
     if cel.is_empty() || cel.len() > 4096 {
@@ -4042,6 +4053,7 @@ fn compile_release_expression(
             dataset_id = %dataset.id,
             entity = %entity.name,
             profile_id = %profile.id,
+            expression = %location,
             "attribute_release_profiles CEL expression must contain between one and 4096 bytes"
         );
         return Err(ConfigError::ValidationError);
@@ -4052,8 +4064,9 @@ fn compile_release_expression(
             dataset_id = %dataset.id,
             entity = %entity.name,
             profile_id = %profile.id,
+            expression = %location,
             error = %err,
-            "attribute_release_profiles CEL expression failed to compile"
+            "attribute_release_profiles CEL expression failed to validate"
         );
         ConfigError::ValidationError
     })

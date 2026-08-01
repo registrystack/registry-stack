@@ -508,6 +508,20 @@ registry row, never a raw or hashed subject value. A `source` block
 only when the profile sets `response.include_source_metadata: true`; it is
 absent by default.
 
+Claim values are scalar-only: a string, a number, or a boolean. A claim whose
+projected or computed value is an object or an array is unavailable — an
+optional claim is omitted and a required claim denies the release through the
+collapsed `release.subject_denied` below — and the structured content never
+reaches the body. A claim expression that always produces a structured value
+(a top-level list or map literal, or a `map()`/`filter()` comprehension) is
+rejected at configuration validation and by `registryctl check`, before the
+route ever serves. A shape only some rows produce is caught at resolve time
+and logged once per profile version and claim as
+`attribute_release.claim.non_scalar_value`, a value-free operator signal
+carrying the profile id, version, claim name, and JSON type tag. Structured
+claim values belong to Registry Evidence, whose signed, minimum-disclosure
+assertions carry explicit output schemas and limits.
+
 Every denial after profile resolution collapses to one public code, so a
 caller cannot distinguish "no such subject" from "subject exists but was
 denied":

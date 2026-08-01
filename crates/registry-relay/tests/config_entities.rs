@@ -783,6 +783,20 @@ fn release_profile_rejects_invalid_cel_expression() {
 
 #[cfg(feature = "attribute-release")]
 #[test]
+fn release_profile_rejects_statically_structured_cel_shape() {
+    // A top-level list literal always produces a non-scalar value, which the
+    // scalar-only claim contract can never release, so the profile fails at
+    // config load instead of resolving ambiguously in production.
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: municipality\n                expression:\n                  cel: \"[source.municipality_code]\"\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("structured CEL shape rejected");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
 fn release_profile_cel_may_reference_only_projected_source() {
     let profile = valid_release_profile().replace(
         "              - name: municipality\n                source_field: municipality_code\n",

@@ -1184,7 +1184,7 @@
             "type": "array"
           },
           "claim_names": {
-            "description": "Names of all claims that may be returned by this profile.",
+            "description": "Top-level names of all claims that may be returned by this profile. Every released value is a scalar (string, number, or boolean).",
             "items": {
               "type": "string"
             },
@@ -1268,7 +1268,7 @@
         "description": "Request body for resolving an attribute release profile against one subject.",
         "properties": {
           "claims": {
-            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); duplicate or over-bound arrays are rejected (400); any explicit subset must include every required claim; any unknown claim name is denied.",
+            "description": "Optional subset of claim names to return. Entries are whole top-level claim names; there is no sub-selection inside a claim value. Absent means the profile default set; an empty array is rejected (400); duplicate or over-bound arrays are rejected (400); any explicit subset must include every required claim; any unknown claim name is denied.",
             "items": {
               "type": "string"
             },
@@ -1314,8 +1314,14 @@
         "description": "Resolved attribute release claim bundle. Contains only the approved, minimised claims for the matched subject. Never includes raw source rows, subject identifiers outside released claims, or private source internals.",
         "properties": {
           "claims": {
-            "additionalProperties": true,
-            "description": "Released claim bundle. Keys are claim names; values are the projected or computed claim values.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Released claim bundle. Keys are top-level claim names; values are scalar-only in v1 (string, number, or boolean). Structured object or array values are never released: a claim whose projected or computed value is not a scalar is treated as unavailable, so a required claim of that shape denies the release and an optional one is omitted. Claim selection is by top-level claim name only; there is no sub-selection inside a claim value.",
             "type": "object"
           },
           "profile_id": {

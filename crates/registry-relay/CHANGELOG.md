@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- BREAKING: Attribute-release claim values are scalar-only: a string, a
+  number, or a boolean. The stable v0.15.0 contract accepted arbitrary JSON
+  claim values; a claim whose projected or computed value is an object or an
+  array is now treated as unavailable instead of being released, so a
+  required claim of that shape denies the release and an optional one is
+  omitted, with a value-free warning naming the profile, version, and claim.
+  A claim expression that always produces a list or map (a top-level literal
+  or a `map()`/`filter()` comprehension) is rejected at configuration
+  validation and by `registryctl check`. Profiles that need structured
+  values should model them in Registry Evidence, whose signed,
+  minimum-disclosure assertions carry explicit output schemas and limits.
+  The OpenAPI contract documents the scalar-only claim bundle and
+  top-level-only claim selection.
+
 ## 0.16.3 - 2026-08-01
 
 - No user-visible Registry Relay changes. The v0.16.2 workflow stopped at an

@@ -5299,7 +5299,9 @@ fn attribute_release_profile_schema() -> Value {
             },
             "claim_names": {
                 "type": "array",
-                "description": "Names of all claims that may be returned by this profile.",
+                "description": "Top-level names of all claims that may be returned by this \
+                                profile. Every released value is a scalar (string, number, or \
+                                boolean).",
                 "items": { "type": "string" }
             },
             "required_claims": {
@@ -5349,11 +5351,12 @@ fn attribute_release_resolve_request_schema() -> Value {
             },
             "claims": {
                 "type": ["array", "null"],
-                "description": "Optional subset of claim names to return. Absent means the \
-                                profile default set; an empty array is rejected (400); \
-                                duplicate or over-bound arrays are rejected (400); any \
-                                explicit subset must include every required claim; any unknown \
-                                claim name is denied.",
+                "description": "Optional subset of claim names to return. Entries are whole \
+                                top-level claim names; there is no sub-selection inside a claim \
+                                value. Absent means the profile default set; an empty array is \
+                                rejected (400); duplicate or over-bound arrays are rejected \
+                                (400); any explicit subset must include every required claim; \
+                                any unknown claim name is denied.",
                 "items": { "type": "string" },
                 "minItems": 1,
                 "maxItems": MAX_ATTRIBUTE_RELEASE_CLAIMS,
@@ -5384,9 +5387,15 @@ fn attribute_release_resolve_response_schema() -> Value {
             },
             "claims": {
                 "type": "object",
-                "description": "Released claim bundle. Keys are claim names; values are the \
-                                projected or computed claim values.",
-                "additionalProperties": true
+                "description": "Released claim bundle. Keys are top-level claim names; values \
+                                are scalar-only in v1 (string, number, or boolean). Structured \
+                                object or array values are never released: a claim whose \
+                                projected or computed value is not a scalar is treated as \
+                                unavailable, so a required claim of that shape denies the \
+                                release and an optional one is omitted. Claim selection is by \
+                                top-level claim name only; there is no sub-selection inside a \
+                                claim value.",
+                "additionalProperties": { "type": ["string", "number", "boolean"] }
             },
             "source": {
                 "type": "object",
@@ -6521,6 +6530,15 @@ mod tests {
             json!(MAX_ATTRIBUTE_RELEASE_CLAIMS)
         );
         assert_eq!(claims_schema["uniqueItems"], true);
+
+        // Released claim values are scalar-only in v1. The contract must not
+        // advertise structured values the runtime never releases.
+        assert_eq!(
+            schemas["AttributeReleaseResolveResponse"]["properties"]["claims"]
+                ["additionalProperties"]["type"],
+            json!(["string", "number", "boolean"]),
+            "released claim values must document the scalar-only contract"
+        );
 
         // Required fields on AttributeReleaseProfile schema
         let profile_required = &schemas["AttributeReleaseProfile"]["required"];
