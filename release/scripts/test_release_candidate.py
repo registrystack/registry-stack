@@ -91,7 +91,7 @@ def security_evidence_members() -> dict[str, bytes]:
                 "artifacts": [],
                 "source": {
                     "type": "image",
-                    "target": {"userInput": image_ref},
+                    "metadata": {"userInput": image_ref},
                 },
             }
         )
@@ -1345,6 +1345,14 @@ class ReleaseCandidateTest(TestCase):
         spdx["documentDescribes"] = []
         unbound_spdx["image-sbom/postgresql.spdx.json"] = json_bytes(spdx)
 
+        unbound_syft = dict(base)
+        syft = json.loads(unbound_syft["syft/registry-notary.syft.json"])
+        syft["source"]["metadata"]["userInput"] = (
+            "ghcr.io/registrystack/registry-notary-candidate@sha256:"
+            + "9" * 64
+        )
+        unbound_syft["syft/registry-notary.syft.json"] = json_bytes(syft)
+
         incomplete_verdict = dict(base)
         verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
         verdict["subjects"].remove("postgresql-runtime")
@@ -1359,6 +1367,7 @@ class ReleaseCandidateTest(TestCase):
             (invalid_digest, "PostgreSQL digest is not canonical or immutable"),
             (unreviewed_digest, "does not match the reviewed release image"),
             (unbound_spdx, "PostgreSQL SPDX subject is not bound"),
+            (unbound_syft, "registry-notary.syft.json.*is not bound"),
             (incomplete_verdict, "does not cover every runtime"),
             (substituted_scan, "does not match its scan payload"),
         ):
