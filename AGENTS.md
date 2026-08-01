@@ -44,6 +44,13 @@ cargo check --locked --workspace --all-targets
 cargo test --locked -p <changed-crate>   # then the workspace if platform crates changed
 ```
 
+In Codex-managed worktrees, invoke Cargo through `scripts/cargo-codex`. The
+wrapper disables incremental compilation and development/test debug info, then
+normalizes worktree paths for the shared bounded `sccache`. During iteration,
+run crate-scoped checks and tests. Run workspace-wide check, clippy, and tests
+once before finalizing when the changed trust boundary requires them. Do not use
+`--all-features` unless the change specifically requires it.
+
 Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 --workspace --all-targets`, `cargo clippy --workspace --all-targets --
 -D warnings`, `cargo test --locked --workspace`, the full `cargo deny check`
