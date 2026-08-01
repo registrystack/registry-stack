@@ -485,7 +485,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
-      contents: read
+      contents: write
       packages: write
     steps:
       - name: Checkout protected promotion workflow
