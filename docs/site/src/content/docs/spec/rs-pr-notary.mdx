@@ -288,8 +288,14 @@ registry-backed claims.
 REQ-PR-NOTARY-041: A deployment authority MUST pair one Registry Notary
 authority with one Registry Relay authority. Notary MUST own the PostgreSQL
 correctness state used for its transactions, pre-authorized codes, proof replay,
-evaluations, audit, and credential status. Explicit in-memory state MAY be used
-only for local single-process development.
+evaluations, and credential status. Explicit in-memory state MAY be used
+only for local single-process development. Audit records are not part of that
+PostgreSQL state: audit correctness is owned by the hash-chained audit pipeline
+that writes to the configured sink (REQ-PR-NOTARY-020, REQ-PR-NOTARY-021), and
+sink retention and off-host shipping are operator responsibilities surfaced
+through the deployment evidence gates. Restoring the Notary PostgreSQL database
+therefore MUST NOT be treated as restoring audit history, and active-active
+replicas sharing that schema do not thereby share one ordered audit state.
 
 ## 9. Delegated (federated) evaluation
 
