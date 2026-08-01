@@ -2517,6 +2517,13 @@ fn cross_file_diagnostic(
 /// whole document. Only a leading token whose every segment matches the
 /// authored path grammar is recovered, so no other error text reaches an
 /// address, and the rendered diagnostic text stays static either way.
+///
+/// The validators punctuate that leading token two ways: `outputs.parents.
+/// maxLength is required` ends the path at a space, while `outputs.parents:
+/// structured outputs require capability.script` ends it at a colon. The
+/// trailing punctuation is stripped before the grammar check, because leaving
+/// it on made every colon-punctuated message fail the check and fall back to a
+/// whole-document diagnostic.
 fn authored_output_addresses(
     file: &str,
     error: &anyhow::Error,
@@ -2526,6 +2533,7 @@ fn authored_output_addresses(
         let Some(candidate) = message.split_whitespace().next() else {
             continue;
         };
+        let candidate = candidate.trim_end_matches([':', ',', '.']);
         let segments = candidate.split('.').collect::<Vec<_>>();
         if segments.len() < 2 || segments[0] != "outputs" {
             continue;
@@ -2873,6 +2881,38 @@ limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }
                 .collect::<Vec<_>>(),
             vec!["/outputs/parents/items/fields/identifier/schema/maxLength"]
         );
+    }
+
+    fn recovered_pointers(message: &str) -> Vec<String> {
+        authored_output_addresses(
+            "integrations/example/integration.yaml",
+            &anyhow::anyhow!("{message}"),
+        )
+        .into_iter()
+        .map(|address| address.pointer)
+        .collect()
+    }
+
+    #[test]
+    fn an_output_path_followed_by_a_colon_still_recovers_its_address() {
+        assert_eq!(
+            recovered_pointers("outputs.parents: structured outputs require capability.script"),
+            vec!["/outputs/parents".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_output_path_followed_by_a_space_recovers_the_same_address() {
+        assert_eq!(
+            recovered_pointers("outputs.parents.maxLength is required"),
+            vec!["/outputs/parents/maxLength".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_message_that_names_no_output_path_recovers_nothing() {
+        assert!(recovered_pointers("capability.script is required").is_empty());
+        assert!(recovered_pointers("outputs: at least one output is required").is_empty());
     }
 
     #[test]

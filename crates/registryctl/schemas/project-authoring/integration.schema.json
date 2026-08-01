@@ -67,7 +67,7 @@
       "outputs": {
         "active": { "type": "boolean" },
         "parents": {
-          "type": ["array", "null"],
+          "type": "array",
           "max_bytes": 4096,
           "max_items": 2,
           "items": {

@@ -2504,3 +2504,54 @@ fn authored_array_layers(nodes: usize) -> Value {
     }
     schema
 }
+
+/// The `examples` block of each authoring schema is what an implementer copies
+/// first, so it has to satisfy the schema it illustrates. Nothing validated it
+/// before: the documentation pipeline only records whether examples are
+/// present. This does not judge what an example declares, only that the
+/// declaration is well formed; an example that is valid but says the wrong
+/// thing is still a reading problem.
+#[test]
+fn every_published_authoring_schema_example_validates_against_its_own_schema() {
+    let mut checked = 0_usize;
+    for entry in
+        std::fs::read_dir(schema_root()).expect("the authoring schema directory is readable")
+    {
+        let path = entry
+            .expect("each schema directory entry is readable")
+            .path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("each schema file has a UTF-8 name")
+            .to_string();
+        let document: Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{name} is readable")),
+        )
+        .unwrap_or_else(|error| panic!("{name} is valid JSON: {error}"));
+        let Some(examples) = document.get("examples").and_then(Value::as_array) else {
+            continue;
+        };
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&document)
+            .unwrap_or_else(|error| panic!("{name} compiles as a schema: {error}"));
+        for (index, example) in examples.iter().enumerate() {
+            if let Err(errors) = validator.validate(example) {
+                let report = errors
+                    .map(|error| format!("  {}: {error}", error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                panic!("{name} example {index} does not satisfy {name}:\n{report}");
+            }
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 5,
+        "expected every published authoring schema to keep its example, found {checked}"
+    );
+}
