@@ -32,12 +32,10 @@ source of secrets.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
-{/* TODO[evidence]: Add a release-tagged Registry Ops Posture v1 JSON Schema source link after
-    the waiver definitions and shared portable metadata constraints merge. The earlier pinned
-    schema predates those definitions and is not evidence for this draft revision. */}
-Portable structural validation is defined by the in-tree draft schema; release-tagged source
-evidence for this revision is pending. This specification defines the operational meaning,
-semantic producer validation, and evolution rules that JSON Schema alone does not express.
+Portable structural validation is defined by the schema at
+`crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json`, which is a draft
+until the 1.0 schema freeze. This specification defines the operational meaning, semantic
+producer validation, and evolution rules that JSON Schema alone does not express.
 
 ## Version history
 
@@ -278,13 +276,25 @@ handles omissions as unreported, and does not elevate posture observations into 
 This specification is `verified`: its document shape, examples, component pairing, and tier
 filter are shipped in Registry Platform and exercised by contract tests.
 
-- Release-tagged source evidence for the v1 JSON Schema's waiver definitions and shared portable
-  metadata constraints is pending. The source pack will be linked after those changes merge.
+- `crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json` is the portable
+  structural contract (Section 2). Its `deployment_waiver` and `deployment_finding_waiver`
+  definitions share the `waiver_reference` and `waiver_summary` constraints, and the schema
+  records that acceptance does not replace `validate_deployment_waiver_metadata` (Section 5).
+- `validate_deployment_waiver_metadata` in `crates/registry-platform-ops/src/lib.rs` is the
+  semantic producer validation the schema cannot express, with unit tests for accepted
+  references, rejected or overlong references, rejected summaries, and explicit-null summaries.
+- `crates/registry-platform-ops/tests/posture_profile_gates_contract.rs` holds the contract
+  tests that keep the schema and the runtime validator aligned: the shared structural metadata
+  contract across both waiver definitions, the reference-prefix and summary contracts, rejection
+  of unknown profiles or severities and of missing waiver expiry, and the default filter dropping
+  waiver metadata from profile-gate fields (Sections 5 and 6).
 - The [posture contract tests](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/tests/posture_contract.rs)
   validate both examples, the default allowlist projection, the sensitive fixture, and exclusion
   of restricted fields from default output (Sections 3, 4, and 6).
-- The checked-in restricted Relay posture fixture and Registry Relay admin tests validate
-  per-resource last-good state, tier filtering, and the live producer shape (Sections 4 and 6).
+- The checked-in fixtures under `crates/registry-platform-ops/fixtures/posture/`, including
+  `registry-relay.restricted-posture.valid.json` and `default-redacted.posture.valid.json`, and
+  the Registry Relay admin tests validate per-resource last-good state, tier filtering, and the
+  live producer shape (Sections 4 and 6).
 - The [Registry Relay admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-relay/src/api/admin.rs)
   and [Registry Notary admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-notary-server/src/api/admin.rs)
   select the requested tier and return the shared posture document (Sections 1, 4, and 6).

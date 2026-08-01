@@ -321,11 +321,19 @@ These terms classify a documentation page so a reader, human or AI agent, can te
 
 ## Evidence
 
-This specification is `verified`: the definitions are distilled from published reference material a reader can inspect, per RS-DOC REQ-DOC-014.
+This specification is `verified` because its definitions are not only definitions: most entries carry a behavioral claim about a shipped surface, and each such claim is anchored to the code, schema, or configuration that fixes it, per RS-DOC REQ-DOC-014.
 
-- The [glossary](../../reference/glossary/) is the friendlier reference form of this vocabulary and the source these definitions distill. RS-TERMS is authoritative where the two disagree.
-- The [standards register](../../reference/standards/) records each external standard mapped in Section 3, with its adoption mode and the products that use it.
-- The architecture specification [RS-ARC-G](../rs-arc-g/) is the referent for the layer vocabulary in Section 6: each layer names a component or surface defined there.
+- The four product names in Section 1 map to the crate directories in this workspace: `crates/registry-relay`, `crates/registry-notary*`, `crates/registry-manifest-core` and `crates/registry-manifest-cli`, and `crates/registry-platform-*`.
+- The SD-JWT VC media type is the `FORMAT_SD_JWT_VC` constant in `crates/registry-notary-core/src/model.rs`, fixed to `application/dc+sd-jwt`. The OID4VCI profile boundary is the `"support": "not_full_issuer"` capability emitted from `crates/registry-notary-server/src/runtime/evaluation.rs` and asserted in `crates/registry-notary-server/src/runtime/tests/catalog.rs`.
+- The JWKS term names a real unauthenticated route: `crates/registry-notary-server/src/api.rs` mounts `/.well-known/evidence/jwks.json`.
+- Static-peer federation is the router in `crates/registry-notary-server/src/federation/mod.rs`, which mounts only `POST /federation/v1/evaluations` and resolves callers through the configured peer map.
+- The Cargo feature names used by the crosswalk, OGC, and SP DCI entries are the `[features]` table in `crates/registry-relay/Cargo.toml`: `crosswalk-runtime`, `standards-cel-mapping`, `ogcapi-features`, `ogcapi-records`, `ogcapi-edr`, and `spdci-api-standards`.
+- The SDMX media type is the `SDMX_JSON` constant in `crates/registry-relay/src/api/aggregates/format.rs`, and the aggregate response fields are built in `crates/registry-relay/src/api/aggregates/response.rs`.
+- The Evidence Gateway, PDP, PEP, PDP gate, ODRL enforcement profile, stable PDP denial code, and fail-closed entries are defined by `crates/registry-platform-pdp/src/lib.rs`, which carries the `registry-evidence-gateway-pdp/v1` profile and the `pdp.*` codes, and enforced from `crates/registry-relay/src/api/governed.rs`.
+- The metadata manifest, runtime binding, and static discovery bundle entries are fixed by `crates/registry-manifest-core/src/lib.rs`: the `registry-manifest/v1` schema-version gate, the `RUNTIME_ONLY_KEYS` exclusion list, and the `render_*` functions that emit the bundle.
+- The Registry Stack project-authoring vocabulary (project, service, records service, evidence service, integration, entity, consultation, output, claim, environment) is the released authoring contract under `crates/registryctl/schemas/project-authoring/`, whose `project.schema.json` carries the `integrations`, `entities`, and `services` collections and the `service`, `recordsService`, `evidenceService`, `consultations`, and `claimValue` definitions.
+- The documentation declaration terms in Section 6 are enforced by `docs/site/src/content.config.ts` and `docs/site/scripts/check-doc-frontmatter.mjs`, which accept only the listed `layer` and `audience` values. The claim-level and adoption-mode vocabularies are the `claim_level` and `adoption_mode` fields of `docs/site/src/data/standards.yaml`.
+- The [glossary](../../reference/glossary/) and the [standards register](../../reference/standards/) corroborate the same vocabulary in reference form; RS-TERMS is authoritative where it and the glossary disagree. [RS-ARC-G](../rs-arc-g/) is the referent for the layer vocabulary in Section 6: each layer names a component or surface defined there.
 
 ## Next
 

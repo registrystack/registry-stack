@@ -232,12 +232,17 @@ Conformance to this specification does not imply conformance to any external sta
 
 ## Evidence
 
-This specification is `verified`: it is distilled from published artifacts a reader can inspect, per RS-DOC REQ-DOC-014.
+This specification is `verified`: its load-bearing invariants are anchored to workspace source, a test, or a generated machine contract a reader can open, per RS-DOC REQ-DOC-014. The ownership boundaries (REQ-ARC-G-006, REQ-ARC-G-007) and the descriptive-metadata rule (REQ-ARC-G-010) allocate authority between components rather than assert a runtime behavior, so they are substantiated by the anchors for the invariants they divide.
 
-- The [boundary map](../../map/boundaries-and-map/) records each component's boundaries with their source citations. It is the primary distillation source for the components (Section 3) and the invariants (Section 5).
-- The [architecture overview](../../explanation/architecture/) gives the narrative data and contract flow that Section 4 makes precise.
-- The [Registry Relay](../../reference/apis/registry-relay/) and [Registry Notary](../../reference/apis/registry-notary/) API references show the runtime surfaces named in Section 3.
-- The [standards register](../../reference/standards/) records the adoption mode for each standard listed in `standards_referenced`.
+- The metadata layer's purity and the runtime-binding exclusion are enforced by `RUNTIME_ONLY_KEYS` and `is_runtime_only_key` in `crates/registry-manifest-core/src/lib.rs`, exercised by `runtime_only_manifest_fields_are_rejected_before_unknown_fields_are_ignored` and `runtime_only_rejection_covers_representative_product_configs` in `crates/registry-manifest-core/tests/metadata_core.rs` (REQ-ARC-G-001, REQ-ARC-G-002).
+- The generated `docs/site/openapi/registry-relay.openapi.json` document carries no `put`, `patch`, or `delete` operation on any path, which is the machine-contract form of the read-only consultation boundary (REQ-ARC-G-003).
+- The audit envelope primitive is `AuditEnvelope` in `crates/registry-platform-audit/src/lib.rs`, with its hash-chained sink helpers; Registry Relay composes it in `crates/registry-relay/src/audit/mod.rs` (REQ-ARC-G-004, REQ-ARC-G-005).
+- The credential format constant is `FORMAT_SD_JWT_VC` in `crates/registry-notary-core/src/model.rs`, fixed to `application/dc+sd-jwt` (REQ-ARC-G-008).
+- Static-peer delegated evaluation is the router in `crates/registry-notary-server/src/federation/mod.rs`, which mounts only `POST /federation/v1/evaluations` and resolves callers through the configured `peers_by_issuer` map; `crates/registry-notary-server/tests/standalone_http/federation.rs` exercises the inbound path (REQ-ARC-G-009).
+- The supported Evidence Gateway PDP profile `registry-evidence-gateway-pdp/v1` and its stable `pdp.*` denial codes are defined in `crates/registry-platform-pdp/src/lib.rs` and enforced from `crates/registry-relay/src/api/governed.rs` (REQ-ARC-G-011).
+- The retained issuance provenance is `StoredIssuanceProvenance` in `crates/registry-notary-core/src/model.rs`: `StoredIssuanceClaimProvenance` holds the exact compiler pin per claim and its `execution_binding`, a deterministic SHA-256 commitment cross-binding that pin to its Relay execution record and claim result provenance, while `StoredIssuanceConsultationProvenance` keeps one record per unique consultation. Records missing those bindings are documented there as readable but not credential-issuable (REQ-ARC-G-012).
+- The Notary-owned correctness state is the PostgreSQL state plane under `crates/registry-notary-server/src/state_plane/`, whose module documentation records that it owns installation and attestation for that schema (REQ-ARC-G-013).
+- The [boundary map](../../map/boundaries-and-map/) and the [architecture overview](../../explanation/architecture/) corroborate the component boundaries (Section 3) and the narrative data and contract flow (Section 4); the [standards register](../../reference/standards/) records the adoption mode for each standard listed in `standards_referenced`.
 
 ## Next
 
