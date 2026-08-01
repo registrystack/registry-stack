@@ -331,6 +331,7 @@ class ReleaseCandidateTest(TestCase):
             "event": "repository_dispatch",
             "head_sha": SOURCE_SHA,
             "path": ".github/workflows/release-candidate.yml",
+            "status": "completed",
             "conclusion": "success",
             "created_at": (self.now - timedelta(hours=2)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
@@ -1077,6 +1078,7 @@ class ReleaseCandidateTest(TestCase):
             "event": "repository_dispatch",
             "head_sha": workflow_revision,
             "path": ".github/workflows/release-candidate.yml",
+            "status": "completed",
             "conclusion": "success",
             "created_at": (self.now - timedelta(hours=2)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
@@ -1109,6 +1111,73 @@ class ReleaseCandidateTest(TestCase):
             self.module.validate_candidate_manifest(
                 mismatched,
                 now=self.now,
+            )
+
+    def test_v2_candidate_allows_only_current_in_progress_run_before_oidc(
+        self,
+    ) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        run["status"] = "in_progress"
+        run["conclusion"] = None
+        arguments = {
+            "bundle_path": bundle_path,
+            "bundle_root": bundle_root,
+            "expected_source_sha": SOURCE_SHA,
+            "expected_workflow_revision": SOURCE_SHA,
+            "expected_version": "1.2.3",
+            "expected_release_id": "beta-20",
+            "expected_run_id": 123,
+            "expected_run_attempt": 2,
+            "now": self.now,
+            "workflow_run_metadata": run,
+        }
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "trusted workflow run status mismatch",
+        ):
+            self.module.validate_candidate_manifest(candidate, **arguments)
+
+        self.module.validate_candidate_manifest(
+            candidate,
+            allow_current_run_in_progress=True,
+            **arguments,
+        )
+
+        for field, value in (
+            ("status", "queued"),
+            ("conclusion", "success"),
+        ):
+            changed = dict(run)
+            changed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(
+                    self.module.CandidateError,
+                    f"trusted workflow run {field} mismatch",
+                ):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        allow_current_run_in_progress=True,
+                        **(arguments | {"workflow_run_metadata": changed}),
+                    )
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "cannot authorize promotion",
+        ):
+            self.module.validate_candidate_manifest(
+                candidate,
+                promotion=True,
+                allow_current_run_in_progress=True,
+                **arguments,
+            )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "requires trusted workflow-run metadata",
+        ):
+            self.module.validate_candidate_manifest(
+                candidate,
+                allow_current_run_in_progress=True,
             )
 
     def test_v2_schema_and_runtime_require_one_named_security_evidence_payload(

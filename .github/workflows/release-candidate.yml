@@ -933,7 +933,8 @@ jobs:
             --release-id "${{ needs.validate.outputs.release_id }}" \
             --run-id "${GITHUB_RUN_ID}" \
             --run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --trusted-run-metadata candidate/trusted-run.json
+            --trusted-run-metadata candidate/trusted-run.json \
+            --allow-current-run-in-progress
 
       - name: Attest manifest and bundle after re-verification
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
