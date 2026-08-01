@@ -127,6 +127,16 @@ body {
   background: var(--registry-surface);
 }
 
+/* Diagram SVGs in public/images/ are authored with a fixed light palette
+   (ink/body/muted text on a white or transparent canvas), so they lose all
+   contrast if they inherit --registry-surface's dark-theme value. Pin them to
+   a literal white surface in both themes instead of theme-aware SVG internals
+   or dark variants; the border above already frames them the same way it
+   does in light mode, so no extra padding or radius is introduced here. */
+.sl-markdown-content img[src*='/images/'][src$='.svg'] {
+  background: #ffffff;
+}
+
 .registry-header {
   display: grid;
   grid-template-rows: 60px;
