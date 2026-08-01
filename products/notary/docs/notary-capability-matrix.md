@@ -81,11 +81,15 @@ does not recompute that decision as consumer policy.
 | 21 | Auditor verifies minimized evidence exchange | Governance | Partial | Signed results and audit exist, checkpoints are planned |
 | 22 | Peer audit checkpoint monitoring | Governance | Planned | No checkpoint publisher, Merkle builder, or peer monitor ships yet; you cannot independently verify peer audit checkpoints |
 
-Source-observation age is not a Registry Notary enforced quantity: the only
-Notary freshness control is the federation profile's
-`max_claim_result_age_seconds`, which bounds the age of a Relay consultation
-result, while Registry Relay owns snapshot freshness through
-`max_snapshot_age_ms`.
+Source-observation age is not a Registry Notary enforced quantity. The
+federation profile's `max_claim_result_age_seconds` bounds the age of a Relay
+consultation result rather than the age of the observation behind it, and
+Registry Relay owns snapshot freshness through `max_snapshot_age_ms`. Notary
+does enforce age bounds for other purposes, including
+`subject_access.token_policy.max_auth_age_seconds` and
+`max_evaluation_age_seconds` on subject-access flows and
+`oid4vci.proof.max_age_seconds` on wallet proofs, but none of them bound
+source-observation age either.
 
 Each Relay authority uses one Notary authority, with Notary-owned PostgreSQL
 correctness state for production and multi-instance deployment. Wallet-facing
