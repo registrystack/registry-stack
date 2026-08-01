@@ -47,6 +47,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.0 | 2026-07-13 | draft | Removed direct registry source connectors and sidecars. Registry-backed claims now consume compiler-pinned Relay consultations. |
 | 0.3.0 | 2026-07-19 | draft | Restricted OID4VCI to registry-backed issuer-initiated pre-authorized code, and defined algorithm, transaction-code, status, topology, and unsupported-profile boundaries. |
 | 0.4.0 | 2026-07-30 | draft | Required every claim and federation profile to use compiler-pinned Relay evidence and renamed subject-access modes. |
+| 0.5.0 | 2026-08-01 | draft | Excluded audit from REQ-PR-NOTARY-041's Notary-owned PostgreSQL correctness state: audit correctness is owned by the audit pipeline instead, so restoring the PostgreSQL database MUST NOT be treated as restoring audit history and active-active replicas sharing that schema do not thereby share one ordered audit state. |
 
 ## 1. Scope and references
 
@@ -290,10 +291,11 @@ authority with one Registry Relay authority. Notary MUST own the PostgreSQL
 correctness state used for its transactions, pre-authorized codes, proof replay,
 evaluations, and credential status. Explicit in-memory state MAY be used
 only for local single-process development. Audit records are not part of that
-PostgreSQL state: audit correctness is owned by the hash-chained audit pipeline
-that writes to the configured sink (REQ-PR-NOTARY-020, REQ-PR-NOTARY-021), and
-sink retention and off-host shipping are operator responsibilities surfaced
-through the deployment evidence gates. Restoring the Notary PostgreSQL database
+PostgreSQL state: audit correctness is owned by the audit pipeline instead. That
+pipeline hash-chains its records, and it MUST emit every evaluated request to the
+configured sink and fail the request when it cannot (REQ-PR-NOTARY-020,
+REQ-PR-NOTARY-021). Sink retention and off-host shipping are operator
+responsibilities surfaced through the deployment evidence gates. Restoring the Notary PostgreSQL database
 therefore MUST NOT be treated as restoring audit history, and active-active
 replicas sharing that schema do not thereby share one ordered audit state.
 
