@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: dhis2-tracker
-  release: 0.16.2
-  content_digest: sha256:091d2506d1c55d3dfcef89387c9dd1d919897954331ee654b86ed08fb1ae299d
+  release: 0.16.3
+  content_digest: sha256:be906adb76e387518906b1db31a435139d132c4471ea1f4387bcaf6c0de456c3
 registry: { id: fictional-health-registry }
 integrations:
   health-record: { file: integrations/health-record/integration.yaml }

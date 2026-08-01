@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.16.3 - 2026-08-01
+
+- No user-visible Registry Relay changes. The v0.16.2 workflow stopped at an
+  unpublished draft before public image promotion. Install v0.16.3.
+
 ## 0.16.2 - 2026-08-01
 
 - No user-visible Registry Relay changes. This release fixes forward from the
