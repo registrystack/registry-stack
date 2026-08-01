@@ -101,8 +101,15 @@ function parseClassFillMap(svgText) {
     let rule;
     while ((rule = ruleRe.exec(styleMatch[1]))) {
       const [, className, body] = rule;
-      const fillMatch = body.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
-      if (fillMatch) classFills.set(className, fillMatch[1]);
+      // A rule may declare fill more than once. CSS paints the last
+      // declaration, so reading the first would score a color the reader never
+      // sees, and it fails in the dangerous direction: a legible fill written
+      // ahead of an illegible one would hide the illegible one from the gate.
+      let effectiveFill = null;
+      for (const declaration of body.matchAll(/fill:\s*(#[0-9a-fA-F]{3,8})/g)) {
+        effectiveFill = declaration[1];
+      }
+      if (effectiveFill) classFills.set(className, effectiveFill);
     }
   }
   return classFills;

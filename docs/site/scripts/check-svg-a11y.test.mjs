@@ -158,6 +158,37 @@ test('a translucent black fill is not scored as opaque black', () => {
   assert.deepEqual(svgContrastErrors('fixture.svg', svg).length, 1);
 });
 
+test('the last fill declaration in a rule wins, as CSS applies it', () => {
+  // A rule may declare fill more than once; the browser paints the last one.
+  // Reading the first would score a color the reader never sees, and the
+  // failure direction that matters is a legible fill masking an illegible one.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.label { fill: #161616; fill: #cccccc; }</style>
+    <text class="label">overridden</text>
+  </svg>`;
+
+  const { colors } = extractTextFillColors(svg);
+  assert.deepEqual(colors, ['#cccccc'], 'the effective fill is the last declaration');
+
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1, '#cccccc on white is 1.61:1 and must be reported');
+  assert.match(errors[0], /#cccccc/);
+});
+
+test('a later rule still overrides an earlier one for the same class', () => {
+  // Guards the sibling precedence rule while the within-rule fix is made:
+  // equally specific selectors resolve in source order, last wins.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.label { fill: #cccccc; }</style>
+    <style>.label { fill: #161616; }</style>
+    <text class="label">overridden</text>
+  </svg>`;
+  assert.deepEqual(extractTextFillColors(svg).colors, ['#161616']);
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
+});
+
 test('contrastRatio throws rather than returning NaN for an unscoreable color', () => {
   assert.throws(() => contrastRatio('white', DIAGRAM_SURFACE), /white/);
   assert.throws(() => contrastRatio('#0000', DIAGRAM_SURFACE), /#0000/);
