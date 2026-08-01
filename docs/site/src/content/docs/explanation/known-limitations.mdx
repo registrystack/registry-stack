@@ -139,9 +139,12 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   Relay no longer issues signed response credentials or hosts issuer DID documents.
 - Notary bounds consultation age, not source-observation age: Source-observation age is not a
   Notary-enforced quantity. Notary consultation and issuance provenance retain only the
-  consultation `acquired_at` timestamp, the only Notary freshness control is the federation
-  profile's `max_claim_result_age_seconds` (which bounds consultation-result age), and Registry
-  Relay owns snapshot freshness through `max_snapshot_age_ms`.
+  consultation `acquired_at` timestamp, the federation profile's `max_claim_result_age_seconds`
+  bounds consultation-result age rather than the age of the observation behind it, and Registry
+  Relay owns snapshot freshness through `max_snapshot_age_ms`. Notary does enforce age bounds for
+  other purposes, including `subject_access.token_policy.max_auth_age_seconds` and
+  `max_evaluation_age_seconds` on subject-access flows and `oid4vci.proof.max_age_seconds` on
+  wallet proofs, but none of them bound source-observation age either.
 - Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
   returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
   non-swappable changes require a service restart.
