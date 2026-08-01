@@ -38,10 +38,10 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1835,
-    "reference_count": 508,
+    "path_count": 1838,
+    "reference_count": 509,
     "by_schema": {
-      "project": 220,
+      "project": 223,
       "environment": 213,
       "integration": 177,
       "fixture": 63,
@@ -51,24 +51,24 @@
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1456,
+      "property": 1455,
       "map_key": 26,
       "map_value": 48,
-      "array_item": 182,
-      "branch": 116
+      "array_item": 184,
+      "branch": 118
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1181,
+      "internal": 1182,
       "sensitive": 408,
       "secret_reference": 44,
       "redacted_fixture": 51,
-      "structural": 135
+      "structural": 137
     },
     "by_intent_source": {
       "schema_description": 530,
-      "reviewed_override": 264,
-      "structural_taxonomy": 139,
+      "reviewed_override": 263,
+      "structural_taxonomy": 143,
       "reviewed_profile": 902
     },
     "by_intent_profile": {
@@ -541,102 +541,19 @@
     {
       "address": {
         "schema": "project",
-        "pointer": "/$defs/claimValue/properties/nullable",
+        "pointer": "/$defs/claimValue/properties/type",
         "path_kind": "property"
       },
-      "purpose": "States whether the claim value may be null.",
+      "purpose": "Declares the boolean, integer, string, or date type of a claim value, paired with null when the claim value may be null.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
       "field_type": {
         "schema_types": [
-          "boolean"
+          "array"
         ],
-        "composed": false
-      },
-      "requiredness": "optional",
-      "null_behavior": "rejected",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "no_schema_default"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "internal",
-      "state": "authored",
-      "products": [
-        "registryctl",
-        "relay",
-        "notary",
-        "editor",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "cross_file_semantic",
-        "product_build"
-      ],
-      "diagnostic": "registryctl.authoring.project.invalid",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "rebuild_project",
-      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
-      "consumers": [
-        "registryctl_authoring",
-        "registry_relay",
-        "registry_notary",
-        "editor_tooling",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "editor_schemas",
-        "project_build",
-        "relay_config",
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "security",
-        "privacy",
-        "relay",
-        "notary",
-        "compatibility",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values"
-      ],
-      "constraints": [
-        {
-          "keyword": "type",
-          "value": "boolean"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "project",
-        "pointer": "/$defs/claimValue/properties/type",
-        "path_kind": "property"
-      },
-      "purpose": "Declares the boolean, integer, string, or date type of a claim value.",
-      "purpose_source": "reviewed_override",
-      "semantic_owner": "authoring_contract",
-      "human_owner": "registry_maintainers",
-      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
-      "field_type": {
-        "schema_types": [],
+        "local_reference": "#/$defs/claimValueType",
         "composed": false
       },
       "requiredness": "required",
@@ -701,6 +618,90 @@
         "knowledge_only",
         "generated_docs_never_load_country_values"
       ],
+      "constraints": [],
+      "local_reference": {
+        "schema": "project",
+        "pointer": "/$defs/claimValueType"
+      }
+    },
+    {
+      "address": {
+        "schema": "project",
+        "pointer": "/$defs/claimValueType/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.project.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
       "constraints": [
         {
           "keyword": "enum",
@@ -710,6 +711,280 @@
             "string",
             "date"
           ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "project",
+        "pointer": "/$defs/claimValueType/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.project.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 2
+        },
+        {
+          "keyword": "minItems",
+          "value": 2
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        },
+        {
+          "keyword": "uniqueItems",
+          "value": true
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "project",
+        "pointer": "/$defs/claimValueType/oneOf/1/prefixItems/0",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.project.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "enum",
+          "value": [
+            "boolean",
+            "integer",
+            "string",
+            "date"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "project",
+        "pointer": "/$defs/claimValueType/oneOf/1/prefixItems/1",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.project.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "const",
+          "value": "null"
         }
       ]
     },

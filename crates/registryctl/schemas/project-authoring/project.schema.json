@@ -536,7 +536,24 @@
     "claimValue": {
       "description": "Explicit claim value type, nullability, and encoded-size bound for a claim derived from declared Relay consultation outputs.",
       "type": "object", "additionalProperties": false, "required": ["type"],
-      "properties": { "type": {"x-registry-field": "property", "enum": ["boolean", "integer", "string", "date"] }, "nullable": {"x-registry-field": "property", "type": "boolean" }, "max_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 } }
+      "properties": { "type": {"x-registry-field": "property", "$ref": "#/$defs/claimValueType" }, "max_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 } }
+    },
+    "claimValueType": {
+      "description": "Supported claim value type, optionally paired with null for a nullable claim value.",
+      "oneOf": [
+        {"x-registry-field": "branch", "enum": ["boolean", "integer", "string", "date"] },
+        {
+          "x-registry-field": "branch",
+          "type": "array",
+          "prefixItems": [
+            {"x-registry-field": "array_item", "enum": ["boolean", "integer", "string", "date"] },
+            {"x-registry-field": "array_item", "const": "null" }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true
+        }
+      ]
     }
   }
 }

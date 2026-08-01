@@ -598,6 +598,62 @@ fields:
     }
 
     #[test]
+    fn claim_value_nullability_uses_the_one_scalar_type_union_idiom() {
+        fn parse(source: &str) -> ClaimValueDeclaration {
+            serde_norway::from_str(source).expect("claim value parses")
+        }
+
+        let nullable = parse(r#"{ type: [string, "null"], max_bytes: 64 }"#);
+        assert_eq!(nullable.value_type.form(), ClaimValueType::String);
+        assert!(nullable.value_type.nullable());
+        assert_eq!(
+            serde_json::to_value(&nullable).expect("claim value serializes"),
+            json!({ "type": ["string", "null"], "max_bytes": 64 })
+        );
+
+        let required = parse("{ type: string, max_bytes: 64 }");
+        assert_eq!(required.value_type.form(), ClaimValueType::String);
+        assert!(!required.value_type.nullable());
+        assert_eq!(
+            serde_json::to_value(&required).expect("claim value serializes"),
+            json!({ "type": "string", "max_bytes": 64 })
+        );
+
+        let date = parse("{ type: date }");
+        assert_eq!(date.value_type.form(), ClaimValueType::Date);
+        assert!(!date.value_type.nullable());
+
+        let nullable_date = parse(r#"{ type: [date, "null"] }"#);
+        assert_eq!(nullable_date.value_type.form(), ClaimValueType::Date);
+        assert!(nullable_date.value_type.nullable());
+
+        for retired in [
+            "{ type: string, nullable: true, max_bytes: 64 }",
+            "{ type: string, nullable: false, max_bytes: 64 }",
+        ] {
+            assert!(
+                serde_norway::from_str::<ClaimValueDeclaration>(retired).is_err(),
+                "the retired claim value `nullable` key must not parse: {retired}"
+            );
+        }
+
+        for rejected in [
+            r#"{ type: ["null"] }"#,
+            "{ type: [string, string] }",
+            r#"{ type: ["null", string] }"#,
+            r#"{ type: [object, "null"] }"#,
+            "{ type: object }",
+            "{ type: array }",
+            "{ type: presence }",
+        ] {
+            assert!(
+                serde_norway::from_str::<ClaimValueDeclaration>(rejected).is_err(),
+                "only a claim value type or `[<type>, \"null\"]` is authored: {rejected}"
+            );
+        }
+    }
+
+    #[test]
     fn authored_output_count_preserves_the_generic_non_notary_limit() {
         fn boolean_output() -> AuthoredOutputDeclaration {
             AuthoredOutputDeclaration::Scalar(AuthoredScalarOutputDeclaration {

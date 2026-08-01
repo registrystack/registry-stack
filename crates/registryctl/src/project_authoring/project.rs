@@ -889,7 +889,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:48143e77caf603c743f0f80e4a2215dff5f4e7e17053a38de401d9f438ccdbd4";
+    "sha256:0a7311fdc93c81dae30d0f33cf0c4fa61dda65ddf9e7f26232e03856f75603da";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -1791,7 +1791,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
             }
             if let Some(value) = &claim.value {
-                if value.value_type == OutputType::String {
+                if value.value_type.form() == ClaimValueType::String {
                     let Some(max_bytes) = value.max_bytes else {
                         bail!("string claim value contracts require max_bytes");
                     };
@@ -1804,7 +1804,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                         );
                     }
                 }
-                if value.value_type != OutputType::String && value.max_bytes.is_some() {
+                if value.value_type.form() != ClaimValueType::String && value.max_bytes.is_some() {
                     bail!("only string claim value contracts may declare max_bytes");
                 }
             }

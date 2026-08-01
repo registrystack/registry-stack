@@ -2252,7 +2252,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             return Box::new(path_unsafe(file, None));
         }
         let reserved_fixture_body = error.is_reserved_fixture_body();
-        let retired_nullable_key = error.is_retired_nullable_key();
+        let retired_nullable_key = error.retired_nullable_key();
         let unknown_field = error.keyword() == Some("additionalProperties");
         let syntax = error.is_syntax();
         let schema_code = match T::KIND {
@@ -2271,7 +2271,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
         let mut diagnostic = make_diagnostic(
             if reserved_fixture_body {
                 "registryctl.authoring.fixture.reserved_body_field"
-            } else if retired_nullable_key || unknown_field {
+            } else if retired_nullable_key.is_some() || unknown_field {
                 "registryctl.authoring.yaml.unknown_field"
             } else if syntax {
                 "registryctl.authoring.yaml.invalid_syntax"
@@ -2283,11 +2283,11 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             line,
             column,
             Some(schema_hint),
-            retired_nullable_key.then_some(STRUCTURED_OUTPUT_NULLABLE_UNION_SUGGESTION),
+            retired_nullable_key.map(RetiredNullableSurface::suggestion),
             if reserved_fixture_body {
                 "A fixture body object uses the reserved top-level `file` field without matching the closed file-reference shape."
-            } else if retired_nullable_key {
-                "A structured output declares nullability with the removed `nullable` field."
+            } else if let Some(surface) = retired_nullable_key {
+                surface.cause()
             } else if unknown_field {
                 "The YAML document contains an unknown field."
             } else if syntax {
@@ -2297,8 +2297,8 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             },
             if reserved_fixture_body {
                 FIXTURE_BODY_FILE_REFERENCE_REMEDIATION
-            } else if retired_nullable_key {
-                STRUCTURED_OUTPUT_NULLABLE_UNION_REMEDIATION
+            } else if let Some(surface) = retired_nullable_key {
+                surface.remediation()
             } else {
                 match kind {
                     "project" => "Correct the project YAML using the project authoring schema. If this project passed with a pre-1.0 Registryctl, create a separate 1.0 project with the `spreadsheet` or `http` template that matches the source, then copy only reviewed authored intent. Registryctl does not migrate or approve the source project.",
@@ -2828,6 +2828,69 @@ limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }
                 .map(|address| address.pointer.as_str())
                 .collect::<Vec<_>>(),
             vec!["/outputs/parents/items/nullable"]
+        );
+    }
+
+    #[test]
+    fn retired_claim_value_nullable_key_names_its_path_and_the_union_syntax() {
+        let document = br#"
+version: 1
+registry:
+  id: fictional-household-authority
+integrations:
+  eligibility:
+    file: integrations/eligibility/integration.yaml
+services:
+  household-eligibility:
+    kind: evidence
+    version: 1
+    purpose: household-support-screening
+    legal_basis: public-service-delivery
+    consent: not_required
+    access:
+      scopes: ["evidence:household:read"]
+    consultations:
+      household:
+        integration: eligibility
+        input:
+          household_reference: request.target.identifiers.household_reference
+    claims:
+      household-category:
+        output: household.category
+        value:
+          type: string
+          nullable: true
+          max_bytes: 64
+        disclosure: value
+"#;
+        let diagnostic = diagnostic_parse_yaml::<RegistryProject>(
+            document,
+            PROJECT_FILE,
+            "project",
+            PROJECT_SCHEMA_HINT,
+        )
+        .expect_err("the retired claim value nullable key is rejected");
+
+        assert_eq!(diagnostic.code, "registryctl.authoring.yaml.unknown_field");
+        assert_eq!(
+            diagnostic.cause,
+            "A claim value declares nullability with the removed `nullable` field."
+        );
+        assert_eq!(
+            diagnostic.suggestion,
+            Some("type: [string, \"null\"] for a nullable claim value, or type: string for a non-nullable one")
+        );
+        assert_eq!(
+            diagnostic.remediation,
+            "Remove the `nullable` field and pair the declared type with null in the `type` union, exactly as scalar outputs already do."
+        );
+        assert_eq!(
+            diagnostic
+                .addresses
+                .iter()
+                .map(|address| address.pointer.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/services/household-eligibility/claims/household-category/value/nullable"]
         );
     }
 

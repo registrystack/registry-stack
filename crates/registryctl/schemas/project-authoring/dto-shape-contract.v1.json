@@ -24,6 +24,34 @@
             },
             "type": "object"
           },
+          "AuthoredNullType": {
+            "description": "The `\"null\"` member of an authored composite `type` union.",
+            "enum": [
+              "null"
+            ],
+            "type": "string"
+          },
+          "AuthoredNullableType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimValueType"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/ClaimValueType"
+                  },
+                  {
+                    "$ref": "#/$defs/AuthoredNullType"
+                  }
+                ],
+                "type": "array"
+              }
+            ],
+            "description": "The one authored nullability idiom, shared with `AuthoredSchemaType`.\n\nScalar, object, array, and claim-value declarations all express nullability\nas the JSON-Schema-native `type` union `[<form>, \"null\"]`. The tuple arm\nmakes the two-member form/null order part of the type rather than a runtime\nrule."
+          },
           "ClaimDeclaration": {
             "additionalProperties": false,
             "properties": {
@@ -73,18 +101,24 @@
                   "null"
                 ]
               },
-              "nullable": {
-                "default": false,
-                "type": "boolean"
-              },
               "type": {
-                "$ref": "#/$defs/OutputType"
+                "$ref": "#/$defs/AuthoredNullableType"
               }
             },
             "required": [
               "type"
             ],
             "type": "object"
+          },
+          "ClaimValueType": {
+            "description": "The types a claim value may take. Structured outputs are consulted through\nRelay but are never disclosed as a claim value, so `object`, `array`, and\n`presence` are absent by construction.",
+            "enum": [
+              "boolean",
+              "integer",
+              "string",
+              "date"
+            ],
+            "type": "string"
           },
           "ConsentDeclaration": {
             "enum": [
@@ -2529,26 +2563,6 @@
       "rust_type": "AuthoredIntegrationDocument",
       "schema": {
         "$defs": {
-          "AuthoredArraySchemaType": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AuthoredOutputArrayType"
-              },
-              {
-                "maxItems": 2,
-                "minItems": 2,
-                "prefixItems": [
-                  {
-                    "$ref": "#/$defs/AuthoredOutputArrayType"
-                  },
-                  {
-                    "$ref": "#/$defs/AuthoredNullType"
-                  }
-                ],
-                "type": "array"
-              }
-            ]
-          },
           "AuthoredByteSize": {
             "anyOf": [
               {
@@ -2926,7 +2940,7 @@
             ],
             "type": "string"
           },
-          "AuthoredObjectSchemaType": {
+          "AuthoredNullableType": {
             "anyOf": [
               {
                 "$ref": "#/$defs/AuthoredOutputObjectType"
@@ -2945,7 +2959,28 @@
                 "type": "array"
               }
             ],
-            "description": "The one authored nullability idiom, shared with `AuthoredSchemaType`.\n\nScalar, object, and array declarations all express nullability as the\nJSON-Schema-native `type` union `[<form>, \"null\"]`. The tuple arm makes the\ntwo-member scalar/null order part of the type rather than a runtime rule."
+            "description": "The one authored nullability idiom, shared with `AuthoredSchemaType`.\n\nScalar, object, array, and claim-value declarations all express nullability\nas the JSON-Schema-native `type` union `[<form>, \"null\"]`. The tuple arm\nmakes the two-member form/null order part of the type rather than a runtime\nrule."
+          },
+          "AuthoredNullableType2": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredOutputArrayType"
+              },
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/AuthoredOutputArrayType"
+                  },
+                  {
+                    "$ref": "#/$defs/AuthoredNullType"
+                  }
+                ],
+                "type": "array"
+              }
+            ],
+            "description": "The one authored nullability idiom, shared with `AuthoredSchemaType`.\n\nScalar, object, array, and claim-value declarations all express nullability\nas the JSON-Schema-native `type` union `[<form>, \"null\"]`. The tuple arm\nmakes the two-member form/null order part of the type rather than a runtime\nrule."
           },
           "AuthoredOutputArrayDeclaration": {
             "additionalProperties": false,
@@ -2965,7 +3000,7 @@
                 "type": "integer"
               },
               "type": {
-                "$ref": "#/$defs/AuthoredArraySchemaType"
+                "$ref": "#/$defs/AuthoredNullableType2"
               }
             },
             "required": [
@@ -3010,7 +3045,7 @@
                 "type": "integer"
               },
               "type": {
-                "$ref": "#/$defs/AuthoredObjectSchemaType"
+                "$ref": "#/$defs/AuthoredNullableType"
               }
             },
             "required": [

@@ -96,6 +96,10 @@
     { "schema": "project", "pointer": "/$defs/consultations/additionalProperties", "path_kind": "map_value" },
     { "schema": "project", "pointer": "/$defs/consultations/additionalProperties/properties/input/propertyNames", "path_kind": "map_key" },
     { "schema": "project", "pointer": "/$defs/consultations/additionalProperties/properties/input/additionalProperties", "path_kind": "map_value" },
+    { "schema": "project", "pointer": "/$defs/claimValueType/oneOf/0", "path_kind": "branch" },
+    { "schema": "project", "pointer": "/$defs/claimValueType/oneOf/1", "path_kind": "branch" },
+    { "schema": "project", "pointer": "/$defs/claimValueType/oneOf/1/prefixItems/0", "path_kind": "array_item" },
+    { "schema": "project", "pointer": "/$defs/claimValueType/oneOf/1/prefixItems/1", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/properties/integrations/propertyNames", "path_kind": "map_key" },
     { "schema": "environment", "pointer": "/properties/integrations/additionalProperties", "path_kind": "map_value" },
     { "schema": "environment", "pointer": "/properties/entities/propertyNames", "path_kind": "map_key" },
@@ -893,12 +897,7 @@
     {
       "schema": "project",
       "pointer": "/$defs/claimValue/properties/type",
-      "purpose": "Declares the boolean, integer, string, or date type of a claim value."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/claimValue/properties/nullable",
-      "purpose": "States whether the claim value may be null."
+      "purpose": "Declares the boolean, integer, string, or date type of a claim value, paired with null when the claim value may be null."
     },
     {
       "schema": "project",

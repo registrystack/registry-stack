@@ -21,6 +21,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   union syntax to replace it. The `nullable` field on the compiled Registry
   Relay and Registry Notary contracts is a different, internal wire surface and
   is unchanged.
+- BREAKING: a claim value declares nullability with its `type` union, the same
+  way scalar outputs, structured outputs, and entity fields already do. Write
+  `type: [string, "null"]` for a nullable claim value and `type: string` for a
+  required one, and the separate `nullable:` key is removed. It shipped with
+  the project authoring workflow in 0.10.0 and was the last place on the
+  authored surface that spelled nullability a second way. Migration: delete
+  `nullable: true` and pair the declared type with `"null"` in the `type`
+  union; delete `nullable: false` outright, since a type without `"null"` is
+  already non-nullable. An authored project that still carries the key is
+  rejected by `registryctl.authoring.yaml.unknown_field` with the offending
+  pointer and the union syntax to replace it. The `nullable` field on the
+  compiled Registry Relay and Registry Notary contracts is a different,
+  internal wire surface and is unchanged.
 
 ## [0.16.0] - 2026-08-01
 

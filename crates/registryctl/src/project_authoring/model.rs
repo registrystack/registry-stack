@@ -1043,11 +1043,22 @@ enum ClaimEvidence {
 #[serde(deny_unknown_fields)]
 struct ClaimValueDeclaration {
     #[serde(rename = "type")]
-    value_type: OutputType,
-    #[serde(default)]
-    nullable: bool,
+    value_type: AuthoredNullableType<ClaimValueType>,
     #[serde(default)]
     max_bytes: Option<u32>,
+}
+
+/// The types a claim value may take. Structured outputs are consulted through
+/// Relay but are never disclosed as a claim value, so `object`, `array`, and
+/// `presence` are absent by construction.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ClaimValueType {
+    Boolean,
+    Integer,
+    String,
+    Date,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]

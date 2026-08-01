@@ -421,22 +421,31 @@ enum AuthoredOutputObjectType {
 
 /// The one authored nullability idiom, shared with `AuthoredSchemaType`.
 ///
-/// Scalar, object, and array declarations all express nullability as the
-/// JSON-Schema-native `type` union `[<form>, "null"]`. The tuple arm makes the
-/// two-member scalar/null order part of the type rather than a runtime rule.
+/// Scalar, object, array, and claim-value declarations all express nullability
+/// as the JSON-Schema-native `type` union `[<form>, "null"]`. The tuple arm
+/// makes the two-member form/null order part of the type rather than a runtime
+/// rule.
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
-enum AuthoredObjectSchemaType {
-    Single(AuthoredOutputObjectType),
-    Nullable((AuthoredOutputObjectType, AuthoredNullType)),
+enum AuthoredNullableType<T> {
+    Single(T),
+    Nullable((T, AuthoredNullType)),
 }
 
-impl AuthoredObjectSchemaType {
+impl<T: Copy> AuthoredNullableType<T> {
     const fn nullable(&self) -> bool {
         matches!(self, Self::Nullable(_))
     }
+
+    const fn form(&self) -> T {
+        match self {
+            Self::Single(form) | Self::Nullable((form, _)) => *form,
+        }
+    }
 }
+
+type AuthoredObjectSchemaType = AuthoredNullableType<AuthoredOutputObjectType>;
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
@@ -462,19 +471,7 @@ enum AuthoredOutputArrayType {
     Array,
 }
 
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-enum AuthoredArraySchemaType {
-    Single(AuthoredOutputArrayType),
-    Nullable((AuthoredOutputArrayType, AuthoredNullType)),
-}
-
-impl AuthoredArraySchemaType {
-    const fn nullable(&self) -> bool {
-        matches!(self, Self::Nullable(_))
-    }
-}
+type AuthoredArraySchemaType = AuthoredNullableType<AuthoredOutputArrayType>;
 
 /// The `"null"` member of an authored composite `type` union.
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -484,9 +481,53 @@ enum AuthoredNullType {
     Null,
 }
 
+/// The authored surface an unknown `nullable` key was found on.
+///
+/// Both surfaces retired the key in favour of the `type` union, so a document
+/// that still carries it is answered with the union syntax that replaces it
+/// rather than with a generic whole-document schema failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetiredNullableSurface {
+    StructuredOutput,
+    ClaimValue,
+}
+
+impl RetiredNullableSurface {
+    const fn suggestion(self) -> &'static str {
+        match self {
+            Self::StructuredOutput => STRUCTURED_OUTPUT_NULLABLE_UNION_SUGGESTION,
+            Self::ClaimValue => CLAIM_VALUE_NULLABLE_UNION_SUGGESTION,
+        }
+    }
+
+    const fn cause(self) -> &'static str {
+        match self {
+            Self::StructuredOutput => STRUCTURED_OUTPUT_NULLABLE_UNION_CAUSE,
+            Self::ClaimValue => CLAIM_VALUE_NULLABLE_UNION_CAUSE,
+        }
+    }
+
+    const fn remediation(self) -> &'static str {
+        match self {
+            Self::StructuredOutput => STRUCTURED_OUTPUT_NULLABLE_UNION_REMEDIATION,
+            Self::ClaimValue => CLAIM_VALUE_NULLABLE_UNION_REMEDIATION,
+        }
+    }
+}
+
 const STRUCTURED_OUTPUT_NULLABLE_UNION_SUGGESTION: &str = "type: [object, \"null\"] for an object output, or type: [array, \"null\"] for an array output";
 
+const STRUCTURED_OUTPUT_NULLABLE_UNION_CAUSE: &str =
+    "A structured output declares nullability with the removed `nullable` field.";
+
 const STRUCTURED_OUTPUT_NULLABLE_UNION_REMEDIATION: &str = "Remove the `nullable` field and pair the declared form with null in the `type` union, exactly as scalar outputs already do.";
+
+const CLAIM_VALUE_NULLABLE_UNION_SUGGESTION: &str = "type: [string, \"null\"] for a nullable claim value, or type: string for a non-nullable one";
+
+const CLAIM_VALUE_NULLABLE_UNION_CAUSE: &str =
+    "A claim value declares nullability with the removed `nullable` field.";
+
+const CLAIM_VALUE_NULLABLE_UNION_REMEDIATION: &str = "Remove the `nullable` field and pair the declared type with null in the `type` union, exactly as scalar outputs already do.";
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
