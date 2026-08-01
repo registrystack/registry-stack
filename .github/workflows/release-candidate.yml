@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Validate request, source, CI, canary, and destinations
+      - name: Validate request, source, CI, and destinations
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,7 +82,7 @@ jobs:
           fi
           workflow_revision="${GITHUB_SHA}"
           if [[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]; then
-            echo "source_sha must equal the canaried workflow revision" >&2
+            echo "source_sha must equal the protected workflow revision" >&2
             exit 1
           fi
           git fetch --force origin refs/heads/main:refs/remotes/origin/main
@@ -104,15 +104,6 @@ jobs:
             echo "Protected-main CI has no successful push run for source" >&2
             exit 1
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-canary.yml/runs?branch=main&status=success&per_page=100" \
-            > "${RUNNER_TEMP}/canary-runs.json"
-          python3 release/scripts/release_candidate.py select-canary \
-            --metadata "${RUNNER_TEMP}/canary-runs.json" \
-            --workflow-revision "${workflow_revision}" \
-            --output "${RUNNER_TEMP}/canary-run.json"
-          python3 release/scripts/release_candidate.py verify-canary \
-            --metadata "${RUNNER_TEMP}/canary-run.json" \
-            --workflow-revision "${workflow_revision}"
           tag="v${REQUEST_VERSION}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
               >/dev/null 2>&1; then
@@ -217,7 +208,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Restore exact-key Cargo cache
+      - name: Restore reusable Cargo cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
         with:
           path: |
@@ -225,6 +216,8 @@ jobs:
             .cargo-home/git
             target
           key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh') }}
+          restore-keys: |
+            registry-stack-release-${{ runner.os }}-
 
       - name: Build canonical Linux payload once
         run: |
@@ -234,13 +227,6 @@ jobs:
           release/scripts/registry-release verify-registryctl-binary-version \
             "dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
             --version "${{ needs.validate.outputs.version }}"
-
-      # This forces the v1 payload/schema/runtime renderer through the real
-      # generator on every candidate, including the final 0.x train before
-      # v1.0. The authenticated installer and public-image lifecycle remain
-      # tag-only because their exact identities do not exist before tagging.
-      - name: Rehearse forced 1.x release-lock runtime contract
-        run: release/scripts/check-runtime-contract-parity.sh
 
       - name: Set up Docker Buildx
         id: buildx
@@ -759,7 +745,7 @@ jobs:
           tag="${{ needs.validate.outputs.tag }}"
           bundle="candidate/registry-stack-${tag}-candidate.tar.gz"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          expires_at="$(date -u -d "${created_at} + 24 hours" +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(date -u -d "${created_at} + 7 days" +%Y-%m-%dT%H:%M:%SZ)"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf "${bundle}" -C candidate/bundle-root .
           payloads="$(

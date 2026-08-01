@@ -7,7 +7,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -85,45 +84,6 @@ def load_registry_release():
 
 
 class RegistryReleaseTest(TestCase):
-    def test_recent_canary_lookup_uses_the_workflow_filename(self) -> None:
-        registry_release = load_registry_release()
-        revision = "b" * 40
-        response = {
-            "workflow_runs": [
-                {
-                    "id": 456,
-                    "run_attempt": 1,
-                    "event": "workflow_dispatch",
-                    "head_sha": revision,
-                    "path": ".github/workflows/release-canary.yml",
-                    "conclusion": "success",
-                    "updated_at": datetime.now(timezone.utc).strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    ),
-                }
-            ]
-        }
-        with mock.patch.object(
-            registry_release,
-            "run_checked",
-            return_value=json.dumps(response),
-        ) as run_checked:
-            selected = registry_release.recent_canary_for_revision(
-                repository="registrystack/registry-stack",
-                workflow_revision=revision,
-            )
-
-        self.assertEqual(456, selected["id"])
-        endpoint = run_checked.call_args.args[0][2]
-        self.assertIn(
-            "actions/workflows/release-canary.yml/runs",
-            endpoint,
-        )
-        self.assertNotIn(
-            "actions/workflows/.github/workflows/release-canary.yml/runs",
-            endpoint,
-        )
-
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -602,12 +562,13 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("automated test suite", text)
         self.assertIn("change proposal or pull request", text)
 
-    def test_contributing_documents_repeatable_build_policy(self) -> None:
+    def test_contributing_documents_proportional_repeatability_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
         self.assertIn("Repeatable Builds And Generated Outputs", text)
-        self.assertIn("exactly the same bit-for-bit result", text)
-        self.assertIn(".github/workflows/release.yml", text)
+        self.assertIn("built once from an exact protected-main commit", text)
+        self.assertIn(".github/workflows/release-candidate.yml", text)
+        self.assertIn("not a\nduplicate build in every ordinary Beta", text)
 
     def test_registryctl_installer_uses_the_versioned_release_asset(self) -> None:
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
@@ -1776,250 +1737,6 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("does not match immutable lock", publish_script)
         self.assertIn("--require-registry-docs-archive", publish_script)
         self.assertIn("--require-registryctl-installer", publish_script)
-
-    def legacy_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
-        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
-            encoding="utf-8"
-        )
-        receipt_step = workflow[
-            workflow.index(
-                "      - name: Create closed candidate receipt"
-            ) : workflow.index(
-                "      - name: Create compact candidate telemetry evidence"
-            )
-        ]
-
-        self.assertIn('/actions/runs/${GITHUB_RUN_ID}"', receipt_step)
-        self.assertIn('.status == "in_progress"', receipt_step)
-        self.assertIn(".conclusion == null", receipt_step)
-        self.assertNotIn('.conclusion == "success"', receipt_step)
-
-    def legacy_candidate_promotion_has_closed_no_rebuild_publish_gates(self) -> None:
-        path = ROOT / ".github/workflows/release.yml"
-        text = path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(text)
-        verification = workflow["jobs"]["verify-candidate"]
-        publish_images = workflow["jobs"]["publish-images"]
-        reconcile = workflow["jobs"]["reconcile"]
-        extended = workflow["jobs"]["extended-proof"]
-        verification_script = "\n".join(
-            step.get("run", "")
-            for step in verification["steps"]
-            if isinstance(step, dict)
-        )
-        source_verification = next(
-            step["run"]
-            for step in workflow["jobs"]["verify"]["steps"]
-            if step.get("name") == "Validate tag source without rebuilding"
-        )
-        publish_script = "\n".join(
-            step.get("run", "")
-            for step in publish_images["steps"]
-            if isinstance(step, dict)
-        )
-        reconcile_script = "\n".join(
-            step.get("run", "") for step in reconcile["steps"] if isinstance(step, dict)
-        )
-
-        self.assertNotIn("write", verification["permissions"].values())
-        self.assertIn("--release-id", verification_script)
-        self.assertIn(
-            "mapfile -t records < <(jq -c '.artifacts[]' \"${receipt}\")",
-            verification_script,
-        )
-        self.assertNotIn("${#records[@]}", verification_script)
-        self.assertIn(
-            'if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then\n'
-            '  test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
-            '    "${{ steps.release.outputs.tag_target }}"',
-            source_verification,
-        )
-        self.assertEqual("read", publish_images["permissions"]["contents"])
-        self.assertEqual("write", publish_images["permissions"]["packages"])
-        self.assertNotIn("id-token", publish_images["permissions"])
-        self.assertIn("releases/tags/${tag}", publish_script)
-        self.assertIn("packages/container/${name}/versions", publish_script)
-        self.assertIn(r"awk '/^HTTP\//", publish_script)
-        self.assertNotIn(r"awk '/^HTTP\\//", publish_script)
-        self.assertLess(
-            publish_script.index("release_status"),
-            publish_script.index('crane copy "${staging}" "${public}"'),
-        )
-        self.assertNotRegex(
-            text,
-            r"(?m)^\s+release/scripts/build-release-(?:binaries|image)\.sh\b",
-        )
-        self.assertIn("release-provenance", reconcile["needs"])
-        self.assertIn("slsa-verifier verify-artifact", reconcile_script)
-        self.assertIn("verify-slsa-subjects", reconcile_script)
-        self.assertIn("reconcile", extended["needs"])
-        self.assertNotRegex(text, r"(?m)^\s*git (?:push|tag|update-ref)\b")
-
-    def legacy_release_workflow_removes_for_each_ref_record_separators(self) -> None:
-        workflow = yaml.safe_load(
-            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        )
-        scripts = [
-            step["run"]
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if "git for-each-ref --format='%(contents)'" in step.get("run", "")
-        ]
-
-        self.assertEqual(2, len(scripts))
-        for script in scripts:
-            self.assertIn('message.endswith("\\n")', script)
-            self.assertIn("message[:-1]", script)
-
-    def legacy_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
-        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
-            encoding="utf-8"
-        )
-        candidate_workflow = yaml.safe_load(candidate)
-        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("Generate release file SBOMs", workflow)
-        self.assertIn("dist/binary-sbom", workflow)
-        self.assertIn("dist/image-binary-sbom", candidate)
-        self.assertIn("image-input-${asset}.spdx.json", candidate)
-        self.assertIn("bind-spdx-file-subject", workflow)
-        self.assertIn("bind-spdx-file-subject", candidate)
-        self.assertIn("render-registryctl-image-lock", workflow)
-        self.assertIn("verify-registryctl-image-lock-release-version", workflow)
-        self.assertIn(
-            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
-            workflow,
-        )
-        self.assertIn(
-            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
-            candidate,
-        )
-        self.assertIn(
-            '"${payload}/dist/images/postgresql.digest"',
-            workflow,
-        )
-        self.assertIn(
-            'crane digest "${candidate_postgresql}"',
-            workflow,
-        )
-        self.assertIn("verify-registryctl-binary-version", candidate)
-        self.assertLess(
-            candidate.index("Verify built registryctl binary version"),
-            candidate.index("Upload exact Build A artifact"),
-        )
-        self.assertLess(
-            candidate.index("Verify native registryctl binary version"),
-            candidate.index("Upload exact platform artifact"),
-        )
-        self.assertIn("--require-registryctl-image-lock", workflow)
-        self.assertIn("--require-registryctl-installer", workflow)
-        self.assertIn(
-            "registryctl-${{ needs.verify.outputs.tag }}-image-lock.json", workflow
-        )
-        self.assertIn(
-            'installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"',
-            candidate,
-        )
-        self.assertIn(
-            'cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"',
-            candidate,
-        )
-        self.assertIn("Run exact first-country release-form journey before sealing", candidate)
-        self.assertIn("first-country-release-form.py run", candidate)
-        self.assertIn("first-country-release-form.py verify", candidate)
-        self.assertIn("first-country-release-form.py verify", workflow)
-        self.assertIn("verify-cli-platforms:", candidate)
-        self.assertIn("runner: macos-14", candidate)
-        self.assertIn("runner: ubuntu-24.04-arm", candidate)
-        self.assertIn(
-            "verify-cli-platforms",
-            candidate_workflow["jobs"]["attest-candidate"]["needs"],
-        )
-        self.assertLess(
-            candidate.index("render-registryctl-image-lock"),
-            candidate.index("Run exact first-country release-form journey before sealing"),
-        )
-        self.assertLess(
-            candidate.index("Run exact first-country release-form journey before sealing"),
-            candidate.index("Upload exact candidate payload"),
-        )
-        self.assertLess(
-            workflow.index("first-country-release-form.py verify"),
-            workflow.index("Build fail-closed prewrite promotion state"),
-        )
-        self.assertLess(
-            workflow.index("Stage exact candidate release files"),
-            workflow.index("Render tag-bound image lock and checksums"),
-        )
-        self.assertLess(
-            workflow.index("Render tag-bound image lock and checksums"),
-            workflow.index("Generate release file SBOMs"),
-        )
-        self.assertIn("Generate digest-bound binary SBOMs", backfill)
-        self.assertIn("dist/staged/binary-sbom", backfill)
-        self.assertIn("--binary-sbom-dir", backfill)
-
-    def legacy_capsule_backfill_resolves_manifest_for_requested_tag(self) -> None:
-        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('version="${TAG#v}"', backfill)
-        self.assertIn("if (( major > 0 || minor >= 9 )); then", backfill)
-        self.assertIn("--require-registryctl-image-lock", backfill)
-        self.assertIn(
-            'glob.glob("release-source/release/manifests/registry-stack-*.yaml")',
-            backfill,
-        )
-        self.assertIn("expected exactly one release manifest for {version}", backfill)
-        self.assertEqual(2, backfill.count('"${RELEASE_MANIFEST}"'))
-        self.assertNotIn(
-            "release-source/release/manifests/registry-stack-beta-6.yaml", backfill
-        )
-
-    def legacy_capsule_backfill_privileged_job_uses_protected_tooling(
-        self,
-    ) -> None:
-        workflow_path = ROOT / ".github/workflows/release-capsule-backfill.yml"
-        backfill = workflow_path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(backfill)
-        steps = workflow["jobs"]["backfill"]["steps"]
-        triggers = workflow.get("on", workflow.get(True))
-
-        self.assertEqual(
-            {
-                "repository_dispatch": {
-                    "types": ["release-capsule-backfill"],
-                }
-            },
-            triggers,
-        )
-        self.assertNotIn("workflow_dispatch:", backfill)
-        self.assertNotIn("${{ inputs.", backfill)
-        self.assertIn("github.event.client_payload.tag", backfill)
-
-        generator_checkout = next(
-            step
-            for step in steps
-            if step.get("name") == "Checkout protected capsule tooling"
-        )
-        self.assertEqual(
-            "${{ github.sha }}",
-            generator_checkout["with"]["ref"],
-        )
-        self.assertFalse(generator_checkout["with"]["persist-credentials"])
-
-        release_checkout = next(
-            step for step in steps if step.get("name") == "Checkout release source"
-        )
-        self.assertEqual(
-            "${{ github.event.client_payload.tag }}",
-            release_checkout["with"]["ref"],
-        )
-        self.assertFalse(release_checkout["with"]["persist-credentials"])
 
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")

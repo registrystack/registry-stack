@@ -2736,53 +2736,6 @@ def verify_absent_image_destinations(images: list[dict[str, Any]]) -> None:
             )
 
 
-def recent_canary_for_revision(
-    *,
-    repository: str,
-    workflow_revision: str,
-) -> dict[str, Any]:
-    document = json.loads(
-        run_checked(
-            [
-                "gh",
-                "api",
-                f"repos/{repository}/actions/workflows/"
-                f"{Path(release_candidate.CANARY_WORKFLOW_PATH).name}/runs"
-                "?branch=main&status=success&per_page=100",
-            ]
-        )
-    )
-    runs = document.get("workflow_runs") if isinstance(document, dict) else None
-    if not isinstance(runs, list):
-        raise ReleasePlanError("release canary workflow-run response is malformed")
-    candidates: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for value in runs:
-        if not isinstance(value, dict) or value.get("head_sha") != workflow_revision:
-            continue
-        try:
-            run = release_candidate.canary_run_from_json(value)
-            release_candidate.validate_canary_run(
-                run,
-                workflow_revision=workflow_revision,
-            )
-            candidates.append(run)
-        except release_candidate.CandidateError as exc:
-            errors.append(str(exc))
-    if not candidates:
-        detail = f": {'; '.join(errors)}" if errors else ""
-        raise ReleasePlanError(
-            "no successful release canary for the exact workflow revision "
-            f"within the preceding 24 hours{detail}"
-        )
-    return max(
-        candidates,
-        key=lambda run: release_candidate.parse_timestamp(
-            run["completed_at"], "canary completed_at"
-        ),
-    )
-
-
 def verify_candidate_run(
     repo: Path,
     *,
@@ -3290,10 +3243,6 @@ def verify_candidate_for_tag(
             workflow_revision=workflow_revision,
             protected_main_sha=remote_main,
         )
-        canary = recent_canary_for_revision(
-            repository=repository,
-            workflow_revision=workflow_revision,
-        )
         tag = release["tag"]
         verify_absent_tag_and_release(
             context["repo"],
@@ -3304,6 +3253,11 @@ def verify_candidate_for_tag(
         command = (
             f"git tag -a {shlex.quote(tag)} {shlex.quote(source_sha)} "
             f"-m {shlex.quote(binding.rstrip())}"
+        )
+        release_command = (
+            "gh workflow run release.yml "
+            f"--repo {shlex.quote(repository)} --ref main "
+            f"-f {shlex.quote(f'tag={tag}')}"
         )
         plan = {
             "schema_version": "registry-release.candidate-verification.v2",
@@ -3323,21 +3277,11 @@ def verify_candidate_for_tag(
                     "manifest_sha256"
                 ],
             },
-            "canary": {
-                "run_id": canary["id"],
-                "run_attempt": canary["run_attempt"],
-                "completed_at": canary["completed_at"],
-            },
             "checks": [
                 passed_check(
                     "source-ancestry",
                     f"candidate source {source_sha} is reachable from protected main "
                     f"{remote_main}",
-                ),
-                passed_check(
-                    "workflow-canary",
-                    f"workflow revision {workflow_revision} passed canary run "
-                    f"{canary['id']}/{canary['run_attempt']} within 24 hours",
                 ),
                 passed_check(
                     "public-destinations",
@@ -3346,11 +3290,15 @@ def verify_candidate_for_tag(
                 ),
             ],
             "tag_command": command,
+            "release_command": release_command,
         }
         emit_release_plan(plan, plan_output)
         print(
-            "Candidate verification passed. Run this exact annotated-tag command:\n"
-            f"{command}",
+            "Candidate verification passed. Run the annotated-tag command, push "
+            "that tag, then dispatch publication from protected main:\n"
+            f"{command}\n"
+            f"git push origin {shlex.quote(f'refs/tags/{tag}')}\n"
+            f"{release_command}",
             file=sys.stderr,
         )
     except (

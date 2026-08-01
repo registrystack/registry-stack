@@ -164,14 +164,14 @@ If you cannot run a relevant check, say which command was skipped and why.
 
 ## Repeatable Builds And Generated Outputs
 
-Release builds and generated repository outputs MUST be repeatable from the
-same source commit and lockfiles with exactly the same bit-for-bit result.
-Release binaries are built from the verified release tag, the pinned Rust
-builder image, and locked Cargo dependencies in `.github/workflows/release.yml`.
-The workflow records SHA256 manifests for binary outputs, image input binaries,
-image evidence, and release capsules, then reconciles published release assets
-against the generated files. Public repeatable-build evidence for release
-binaries is recorded in [`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
+Release candidates are built once from an exact protected-main commit, a pinned
+Rust builder image, and locked Cargo dependencies in
+`.github/workflows/release-candidate.yml`. The candidate records SHA256 hashes,
+OCI digests, SBOMs, and scan evidence before publication promotes the exact
+bytes. Independent repeatability exercises are scheduled assurance work, not a
+duplicate build in every ordinary Beta transaction. Public repeatable-build
+evidence is recorded in
+[`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
 
 Generated documentation data and checked-in generated snapshots must be produced
 by the documented generator commands, such as `npm run generate` under

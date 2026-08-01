@@ -14,10 +14,10 @@ audit records, without turning the registry into a shared database.
 This repository is the monorepo source of truth for Registry Stack product code,
 release manifests, and docs.
 
-> **Status:** The current source implements the unreleased Registry Stack 1.0
-> command and deployment cutover. Review it in the development documentation.
-> Adopters should use matching released Registryctl, signed release lock, and
-> documentation artifacts.
+> **Status:** Registry Stack is pre-1.0 Beta software for self-hosted
+> institutional pilots. APIs and deployment contracts may still change.
+> Adopters should use matching release artifacts and documentation for one
+> version.
 
 ## Start Here
 
@@ -118,8 +118,8 @@ The GitHub Actions workflow in `.github/workflows/ci.yml` is the reference for
 the current pull request gate.
 
 Major new functionality must include automated tests with the change proposal.
-Release builds and generated repository outputs are required to be repeatable
-bit-for-bit from the same source commit and lockfiles. See
+Release candidates are built from exact protected-main source and lockfiles.
+Independent repeatability exercises run outside ordinary Beta publication. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the formal test and repeatability
 policies.
 
@@ -139,10 +139,10 @@ Release evidence lives in:
 - `release/conformance/`
 - `release/scripts/`
 
-Release assets are published with SHA256 checksums, keyless cosign signatures,
-and release-level SLSA provenance for tag-triggered releases produced by the
-current workflow. See [release/VERIFY.md](release/VERIFY.md) for verification
-commands and [release/REPEATABLE-BUILDS.md](release/REPEATABLE-BUILDS.md) for
+Release assets are published with an authenticated SHA256 checksum chain. The
+exact candidate manifest and bundle are attested and verified before promotion.
+See [release/VERIFY.md](release/VERIFY.md) for verification commands and
+[release/REPEATABLE-BUILDS.md](release/REPEATABLE-BUILDS.md) for asynchronous
 repeatable-build evidence.
 
 ## Support And Contribution

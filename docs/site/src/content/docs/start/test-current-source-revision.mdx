@@ -109,8 +109,10 @@ Stack checkout or downloading released Registry Stack artifacts:
 4. Removes the temporary projects and evaluation-only approval material.
 
 It does not run `registryctl dev`.
-Exact released images, the signed release lock, and disposable runtime smoke
-checks remain part of the release-candidate and tag workflow.
+Exact candidate images and the maintained authoring smoke remain part of the
+release-candidate workflow.
+The Beta publication workflow promotes those exact image digests and verifies
+the signed public checksum inventory.
 
 A successful run ends with:
 
@@ -122,11 +124,12 @@ The pass result proves that the current tutorial authoring journeys ran against
 the recorded checkout.
 It does not prove release authenticity, reproducible image digests, provenance,
 production fitness, or external acceptance.
-Exact runtime proof remains part of the release-candidate and tag workflow.
+Broader runtime, repeatability, and external acceptance proofs remain 1.0
+readiness or asynchronous assurance work.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The source gate reports a missing command | A prerequisite is absent from `PATH` | Install the named prerequisite, then rerun the gate from the pinned checkout |
-| A source-built local runtime command reports a missing lock | Runtime image identity is outside this source authoring procedure | Use a verified released binary and its matching released lock, or run the release-candidate workflow |
+| A source-built local runtime command reports a missing image identity | Runtime image identity is outside this source authoring procedure | Use a verified released binary and its matching image lock, or run the release-candidate workflow |

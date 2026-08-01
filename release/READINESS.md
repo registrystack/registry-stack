@@ -5,6 +5,10 @@ ready for a stable release. "Stable" means both semver API stability
 commitments and a production security posture suitable for government
 deployments that self-host the stack.
 
+This is a 1.0 milestone checklist, not the gate for an ordinary pre-1.0 Beta.
+The proportional Beta release path is documented in
+[`OPERATIONS.md`](OPERATIONS.md).
+
 An item is complete when its evidence link exists and has been reviewed, not
 when the underlying work merges. Evidence is a link: a doc in this repository,
 a CI run, a published report, or a closed issue.
@@ -91,11 +95,12 @@ what we could not find ourselves.
 
 ## 6. Supply chain and provenance
 
-Current release assets use a signed checksum chain and tag-bound SLSA
-provenance ([`VERIFY.md`](VERIFY.md)). Scheduled repeatable-build evidence and
-its 30-day OpenSSF claim boundary are documented in
-[`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md); open tracking issues:
-GH#122, GH#123, GH#127, GH#128, GH#129.
+Current Beta releases verify an attested private candidate before promotion and
+publish a signed checksum chain for the exact public inventory
+([`VERIFY.md`](VERIFY.md)). Scheduled repeatable-build evidence and its 30-day
+OpenSSF claim boundary remain asynchronous 1.0 evidence documented in
+[`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md); open tracking issues: GH#122,
+GH#123, GH#127, GH#128, GH#129.
 
 - [x] SBOM published per release. Evidence:
       [release workflow](../.github/workflows/release.yml) publishes one

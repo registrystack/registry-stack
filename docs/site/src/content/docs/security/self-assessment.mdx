@@ -62,7 +62,7 @@ Software guarantees include:
 - Hash-chained audit records emitted by runtime services.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
-  and tag-bound release provenance.
+  and attestations for the exact candidate manifest and bundle.
 
 Operator responsibilities include:
 
@@ -92,15 +92,16 @@ Development evidence:
 - Release validation checks source tag matching, source-ref ancestry, default
   branch reachability, and manifest consistency.
 - Current GitHub Release payloads are covered by one keyless Sigstore-signed
-  `SHA256SUMS` file. Tag-triggered releases also publish release-level SLSA
-  provenance. The public verification process is documented in
+  `SHA256SUMS` file. The protected-main publication workflow verifies the
+  candidate attestations before promotion. The public verification process is documented in
   [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 Known release-integrity gaps:
 
 - OCI image signatures are not yet published for root monorepo releases.
-- Existing releases produced before the provenance workflow change may not
-  include release-level SLSA provenance assets.
+- Ordinary Beta releases do not publish a second generic SLSA provenance
+  asset. Candidate attestations and the signed checksum closure cover the
+  current Beta provenance boundary.
 - Public claims about signing are scoped to the release asset or product
   surface that actually performs signing.
 
@@ -122,5 +123,5 @@ Primary public evidence:
 - [Registry Notary API reference](../../reference/apis/registry-notary/)
 - [Registry Relay API reference](../../reference/apis/registry-relay/)
 - GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
-  security evidence, image lock, release manifest, and provenance
+  security evidence, image lock, release manifest, and candidate attestations
 - [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)

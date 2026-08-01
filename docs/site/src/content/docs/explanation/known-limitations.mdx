@@ -227,9 +227,10 @@ Read the full security boundary in the [security model](../../spec/rs-sec-g/).
 
 These concern how releases are signed and what that signing currently covers.
 
-- Partial release signing: GitHub Release assets are signed with keyless cosign and, when
-  tag-triggered, carry SLSA provenance.
-  However, OCI image signatures are not yet published, and Git version tags are not yet
+- Partial release signing: One keyless cosign bundle authenticates the public
+  `SHA256SUMS` inventory, and GitHub artifact attestations authenticate the
+  candidate manifest and bundle.
+  OCI image signatures are not yet published, and Git version tags are not yet
   cryptographically signed (GPG, SSH, or Sigstore).
   The `v0.8.0` prerelease was published before release-asset signing and does not currently
   include cosign signatures.

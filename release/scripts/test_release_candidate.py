@@ -1462,9 +1462,9 @@ class ReleaseCandidateTest(TestCase):
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
         too_long = copy.deepcopy(candidate)
         too_long["validity"]["expires_at"] = (
-            self.now + timedelta(hours=24, minutes=1)
+            self.now + timedelta(days=7, minutes=1)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with self.assertRaisesRegex(self.module.CandidateError, "24 hours"):
+        with self.assertRaisesRegex(self.module.CandidateError, "7 days"):
             self.module.validate_candidate_manifest(too_long, now=self.now)
 
         expired = copy.deepcopy(candidate)

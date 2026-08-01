@@ -29,56 +29,39 @@ documented outbound-network and credential boundaries.
 
 ## Verifying release signatures and provenance
 
-Registry Stack release assets are signed by the release workflow with keyless
-Sigstore cosign. Keyless signing does not use a long-lived project private key
-or a project-hosted public key file. The signing certificate is issued from the
-GitHub Actions OIDC identity for
-`registrystack/registry-stack/.github/workflows/release.yml`, and the public
-verification material is the `.pem` certificate, `.sig` signature, Fulcio root,
-and Rekor transparency-log entry used by cosign.
+Current Beta releases use an attested candidate and one signed checksum chain.
+The candidate workflow attests the exact candidate manifest and bundle. The
+publication workflow verifies those attestations and the source binding before
+promotion, then keyless-signs `SHA256SUMS`. Every public payload listed in that
+file is authenticated by the checksum signature.
 
-Tag-triggered releases produced by the current release workflow also publish a
-release-level SLSA provenance asset named
-`registry-stack-${tag}-release-provenance.intoto.jsonl`. Earlier releases may
-include cosign signatures without SLSA provenance.
+Keyless signing does not use a long-lived project private key. The signing
+certificate comes from the GitHub Actions OIDC identity for the publication
+workflow on protected `main`.
 
-For each signed release asset, download three files from the GitHub Release:
-
-- The asset, for example `registryctl-v0.16.2-linux-amd64`
-- The matching signature, for example `registryctl-v0.16.2-linux-amd64.sig`
-- The matching certificate, for example `registryctl-v0.16.2-linux-amd64.pem`
-
-Then verify the asset:
-
-```bash
-asset=registryctl-v0.16.2-linux-amd64
-
-cosign verify-blob \
-  --certificate "${asset}.pem" \
-  --signature "${asset}.sig" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/v[0-9]+[.][0-9]+[.][0-9]+.*$' \
-  "${asset}"
-```
-
-If a release asset does not have matching `.sig` and `.pem` files, treat that
-asset as unsigned. The `v0.8.0` prerelease was published before release-asset
-signing was added and does not currently include cosign signature assets.
-
-For releases with SLSA provenance, download the provenance asset and verify the
-artifact against the release tag:
+After downloading a release, verify the checksum bundle and then the covered
+payloads:
 
 ```bash
 tag=v0.16.2
-asset=registryctl-${tag}-linux-amd64
-provenance=registry-stack-${tag}-release-provenance.intoto.jsonl
+bundle="registry-stack-${tag}-SHA256SUMS.sigstore.json"
 
-slsa-verifier verify-artifact "${asset}" \
-  --provenance-path "${provenance}" \
-  --source-uri github.com/registrystack/registry-stack \
-  --source-tag "${tag}"
+cosign verify-blob SHA256SUMS \
+  --bundle "${bundle}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity \
+    "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main"
+
+sha256sum --check --strict SHA256SUMS
 ```
 
-Important Git version tags are not yet cryptographically signed with GPG, SSH,
-or Sigstore. The current signed-release control covers GitHub Release assets and
-release-level SLSA provenance; signed Git tags remain a separate hardening item.
+Ordinary Beta releases do not publish a second generic SLSA provenance asset.
+Earlier releases may instead use per-file `.sig` and `.pem` pairs or a generic
+SLSA provenance file. Follow the `release/VERIFY.md` committed at the release's
+tag rather than applying the current asset contract to historical releases.
+
+Important Git version tags are annotated but are not yet cryptographically
+signed with GPG, SSH, or Sigstore. The publication workflow checks the exact tag
+and candidate binding; the signed public control covers `SHA256SUMS` and every
+payload it lists. See [`release/VERIFY.md`](release/VERIFY.md) for the complete
+verification procedure.

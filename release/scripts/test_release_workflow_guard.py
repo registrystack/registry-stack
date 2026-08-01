@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -102,6 +104,95 @@ class ReleaseWorkflowGuardTests(unittest.TestCase):
                         malformed,
                         tag="v1.2.3",
                     )
+
+    def test_image_tag_reconciliation_reports_absent_or_exact_digest_present(
+        self,
+    ) -> None:
+        digest = "sha256:" + "a" * 64
+        version = {
+            "name": digest,
+            "metadata": {"container": {"tags": ["v1.2.3"]}},
+        }
+        self.assertEqual(
+            self.module.reconcile_image_tag(
+                [[version]],
+                tag="v1.2.4",
+                expected_digest=digest,
+            ),
+            "absent",
+        )
+        self.assertEqual(
+            self.module.reconcile_image_tag(
+                [[version]],
+                tag="v1.2.3",
+                expected_digest=digest,
+            ),
+            "present",
+        )
+
+    def test_image_tag_reconciliation_rejects_mismatch_or_ambiguity(self) -> None:
+        expected = "sha256:" + "a" * 64
+        version = {
+            "name": "sha256:" + "b" * 64,
+            "metadata": {"container": {"tags": ["v1.2.3"]}},
+        }
+        with self.assertRaisesRegex(self.module.GuardError, "does not match"):
+            self.module.reconcile_image_tag(
+                [[version]],
+                tag="v1.2.3",
+                expected_digest=expected,
+            )
+        with self.assertRaisesRegex(self.module.GuardError, "multiple"):
+            self.module.reconcile_image_tag(
+                [[version, dict(version)]],
+                tag="v1.2.3",
+                expected_digest=expected,
+            )
+
+    def test_image_tag_reconciliation_rejects_malformed_inputs(self) -> None:
+        digest = "sha256:" + "a" * 64
+        version = {
+            "name": digest,
+            "metadata": {"container": {"tags": ["v1.2.3"]}},
+        }
+        for tag, expected, document in [
+            ("1.2.3", digest, [[version]]),
+            ("v1.2.3", "sha256:" + "A" * 64, [[version]]),
+            (
+                "v1.2.3",
+                digest,
+                [[{**version, "name": "not-a-digest"}]],
+            ),
+            ("v1.2.3", digest, [[{"metadata": {}}]]),
+        ]:
+            with self.subTest(tag=tag, expected=expected, document=document):
+                with self.assertRaises(self.module.GuardError):
+                    self.module.reconcile_image_tag(
+                        document,
+                        tag=tag,
+                        expected_digest=expected,
+                    )
+
+    def test_image_tag_reconciliation_command_prints_result(self) -> None:
+        digest = "sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            metadata = Path(temporary) / "metadata.json"
+            metadata.write_text("[]", encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = self.module.main(
+                    [
+                        "reconcile-image-tag",
+                        "--metadata",
+                        str(metadata),
+                        "--tag",
+                        "v1.2.3",
+                        "--expected-digest",
+                        digest,
+                    ]
+                )
+        self.assertEqual(status, 0)
+        self.assertEqual(output.getvalue(), "absent\n")
 
 
 if __name__ == "__main__":

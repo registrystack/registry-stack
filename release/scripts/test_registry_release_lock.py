@@ -663,43 +663,34 @@ class RegistryReleaseLockTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate JSON member"):
                 release_lock.read_json(path)
 
-    def test_release_workflow_pins_cosign_v3_and_checksums_final_lock(self) -> None:
+    def test_beta_release_signs_one_checksum_closure(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(
             encoding="utf-8"
         )
         install = workflow.index("cosign-release: v3.0.4")
-        lock_sign = workflow.index(
-            "contract/registry-release-lock.payload.json", install
-        )
-        lock_verify = workflow.index(
-            "cosign verify-blob contract/registry-release-lock.payload.json",
-            lock_sign,
-        )
-        assemble = workflow.index(
-            "--output release-assets/registry-release-lock.v1.json", lock_sign
-        )
+        image_lock = workflow.index("name: Render the final image lock", install)
         checksum = workflow.index(
-            "find . -maxdepth 1 -type f ! -name SHA256SUMS", assemble
+            "find . -maxdepth 1 -type f ! -name SHA256SUMS", image_lock
         )
         checksum_sign = workflow.index(
             "registry-stack-${{ needs.verify.outputs.tag }}-SHA256SUMS.sigstore.json",
             checksum,
         )
-        self.assertLess(install, lock_sign)
-        self.assertLess(lock_sign, lock_verify)
-        self.assertLess(lock_verify, assemble)
-        self.assertLess(assemble, checksum)
+        checksum_verify = workflow.index("cosign verify-blob draft/SHA256SUMS")
+        self.assertLess(install, image_lock)
+        self.assertLess(image_lock, checksum)
         self.assertLess(checksum, checksum_sign)
-        verification = workflow[lock_verify:assemble]
+        self.assertLess(checksum_sign, checksum_verify)
         self.assertIn(
-            ".github/workflows/release.yml@refs/tags/${tag}",
-            workflow[lock_sign:assemble],
+            ".github/workflows/release.yml@refs/heads/main",
+            workflow[checksum_sign:checksum_verify],
         )
-        self.assertIn("--certificate-identity", verification)
+        self.assertIn("--certificate-identity", workflow[checksum_verify:])
         self.assertIn(
             "https://token.actions.githubusercontent.com",
-            verification,
+            workflow[checksum_verify:],
         )
+        self.assertNotIn("registry-release-lock.v1.json", workflow)
 
     def test_release_workflow_resolves_platform_manifests_and_retries_finalization(
         self,
@@ -740,22 +731,17 @@ class RegistryReleaseLockTests(unittest.TestCase):
             workflow[cleanup:delete],
         )
 
-        render = workflow.index("Render the final P to T image lock")
+        render = workflow.index("Render the final image lock")
         inspect = workflow.index('crane manifest "${image_ref}"', render)
         image_lock_compare = workflow.index(
             'select(.kind == "image-lock" and .name == $name)',
             inspect,
         )
-        create = workflow.index("registry_release_lock.py create-payload", inspect)
+        checksum = workflow.index("Sign and upload the checksum closure", inspect)
         self.assertLess(render, inspect)
         self.assertLess(inspect, image_lock_compare)
-        self.assertLess(image_lock_compare, create)
-        for argument in [
-            "--relay-image-index",
-            "--notary-image-index",
-            "--postgresql-image-index",
-        ]:
-            self.assertIn(argument, workflow[create:])
+        self.assertLess(image_lock_compare, checksum)
+        self.assertNotIn("registry_release_lock.py create-payload", workflow)
         publish = workflow.index("- name: Publish immutable release")
         dispatch = workflow.index("\n  dispatch-docs:", publish)
         self.assertIn(

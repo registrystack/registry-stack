@@ -34,7 +34,7 @@ POSTGRESQL_REF_PATH = (
     Path(__file__).resolve().parent.parent / "registryctl-postgresql-image.ref"
 )
 MAX_PROMOTION_AGE = timedelta(hours=72)
-V2_MAX_PROMOTION_AGE = timedelta(hours=24)
+V2_MAX_PROMOTION_AGE = timedelta(days=7)
 MAX_CANARY_AGE = timedelta(hours=24)
 MAX_RETENTION = timedelta(days=7)
 GRYPE_VERSION = "0.114.0"
@@ -1008,7 +1008,7 @@ def validate_candidate_manifest(
     lifetime = expires_at - created_at
     if lifetime <= timedelta(0) or lifetime > V2_MAX_PROMOTION_AGE:
         raise CandidateError(
-            "candidate validity must be positive and no longer than 24 hours"
+            "candidate validity must be positive and no longer than 7 days"
         )
     current = now or datetime.now(timezone.utc)
     if created_at > current + timedelta(minutes=5):
