@@ -122,3 +122,44 @@ test('style regions are skipped without rewriting the document', () => {
   assert.deepEqual(colors, ['#161616'], 'CSS fill declarations must not count as painted text');
   assert.deepEqual(svgContrastErrors('skip.svg', svg), []);
 });
+
+test('fills that cannot be scored are reported, never treated as passing', () => {
+  // A non-finite ratio compares false against the threshold, so an unparsed
+  // fill used to slip through the gate silently. Each of these is a valid SVG
+  // paint value that the hex math cannot score.
+  const unscoreable = [
+    ['white', 'named color'],
+    ['rgb(255,255,255)', 'functional notation'],
+    ['currentColor', 'keyword'],
+    ['none', 'invisible text'],
+    ['#0000', 'four-digit hex carrying alpha'],
+    ['#00000080', 'eight-digit hex carrying alpha'],
+  ];
+
+  for (const [fill, why] of unscoreable) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+      <title>t</title><desc>d</desc>
+      <text fill="${fill}">${why}</text>
+    </svg>`;
+    const errors = svgContrastErrors('fixture.svg', svg);
+    assert.equal(errors.length, 1, `${fill} (${why}) must produce exactly one error`);
+    assert.match(errors[0], /cannot be scored/, `${fill} must be reported as unscoreable`);
+    assert.ok(errors[0].includes(fill), `the error must name the offending value, got: ${errors[0]}`);
+  }
+});
+
+test('a translucent black fill is not scored as opaque black', () => {
+  // #00000080 truncated to its first six digits reads as pure black and would
+  // score 21:1, the maximum, despite being half transparent.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text fill="#00000080">half transparent</text>
+  </svg>`;
+  assert.deepEqual(svgContrastErrors('fixture.svg', svg).length, 1);
+});
+
+test('contrastRatio throws rather than returning NaN for an unscoreable color', () => {
+  assert.throws(() => contrastRatio('white', DIAGRAM_SURFACE), /white/);
+  assert.throws(() => contrastRatio('#0000', DIAGRAM_SURFACE), /#0000/);
+  assert.ok(Number.isFinite(contrastRatio('#abc', DIAGRAM_SURFACE)), '#rgb shorthand stays supported');
+});

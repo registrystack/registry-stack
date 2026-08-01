@@ -31,12 +31,31 @@ const expected = new Set([
 export const DIAGRAM_SURFACE = '#ffffff';
 export const MIN_TEXT_CONTRAST = 4.5;
 
+// Only #rgb and #rrggbb are scoreable. SVG accepts far more (named colors,
+// rgb()/hsl() functions, `none`, and hex forms carrying an alpha channel), but
+// scoring those would mean shipping a color database and compositing rules.
+// They are reported instead of guessed: the earlier code produced NaN for them,
+// and NaN < 4.5 is false, so unreadable text passed the gate in silence.
+const SCOREABLE_HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+export function isScoreableColor(value) {
+  return SCOREABLE_HEX_RE.test(value);
+}
+
+// Hex spellings are lowercased so `#FFF` and `#fff` dedupe to one entry.
+// Anything else is kept exactly as authored: it is never scored, only
+// reported, and the report is only useful if it quotes the string the author
+// can find in the file.
+function normalizeColor(value) {
+  return isScoreableColor(value) ? value.toLowerCase() : value;
+}
+
 function expandHex(hex) {
   const value = hex.slice(1);
   if (value.length === 3) {
     return `#${[...value].map((c) => c + c).join('')}`;
   }
-  return `#${value.slice(0, 6)}`;
+  return `#${value}`;
 }
 
 function srgbChannelToLinear(channel) {
@@ -45,6 +64,9 @@ function srgbChannelToLinear(channel) {
 }
 
 function relativeLuminance(hex) {
+  if (!isScoreableColor(hex)) {
+    throw new TypeError(`cannot compute luminance for unsupported color ${hex}`);
+  }
   const normalized = expandHex(hex);
   const r = parseInt(normalized.slice(1, 3), 16);
   const g = parseInt(normalized.slice(3, 5), 16);
@@ -140,7 +162,7 @@ export function extractTextFillColors(svgText) {
     const inheritedFill = gFillStack[gFillStack.length - 1] ?? null;
     const resolved = inlineFill ?? classFill ?? inheritedFill;
     if (resolved) {
-      colors.add(resolved.toLowerCase());
+      colors.add(normalizeColor(resolved));
     } else {
       unresolved += 1;
     }
@@ -161,6 +183,13 @@ export function svgContrastErrors(fileLabel, svgText) {
     errors.push(`${fileLabel} has ${unresolved} <text> element(s) with no resolvable fill color`);
   }
   for (const color of colors) {
+    if (!isScoreableColor(color)) {
+      errors.push(
+        `${fileLabel} text fill ${color} cannot be scored: only #rgb and #rrggbb are supported, ` +
+          `so express it as an opaque hex color`,
+      );
+      continue;
+    }
     // White text in these diagrams is always reverse text on a colored chip
     // (for example a #000091 rect), never painted on the diagram canvas, so
     // measuring it against DIAGRAM_SURFACE would report a false failure.
