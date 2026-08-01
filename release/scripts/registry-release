@@ -2740,7 +2740,7 @@ def recent_canary_for_revision(
                 "gh",
                 "api",
                 f"repos/{repository}/actions/workflows/"
-                f"{release_candidate.CANARY_WORKFLOW_PATH}/runs"
+                f"{Path(release_candidate.CANARY_WORKFLOW_PATH).name}/runs"
                 "?branch=main&status=success&per_page=100",
             ]
         )

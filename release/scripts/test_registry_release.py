@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -84,6 +85,45 @@ def load_registry_release():
 
 
 class RegistryReleaseTest(TestCase):
+    def test_recent_canary_lookup_uses_the_workflow_filename(self) -> None:
+        registry_release = load_registry_release()
+        revision = "b" * 40
+        response = {
+            "workflow_runs": [
+                {
+                    "id": 456,
+                    "run_attempt": 1,
+                    "event": "workflow_dispatch",
+                    "head_sha": revision,
+                    "path": ".github/workflows/release-canary.yml",
+                    "conclusion": "success",
+                    "updated_at": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                }
+            ]
+        }
+        with mock.patch.object(
+            registry_release,
+            "run_checked",
+            return_value=json.dumps(response),
+        ) as run_checked:
+            selected = registry_release.recent_canary_for_revision(
+                repository="registrystack/registry-stack",
+                workflow_revision=revision,
+            )
+
+        self.assertEqual(456, selected["id"])
+        endpoint = run_checked.call_args.args[0][2]
+        self.assertIn(
+            "actions/workflows/release-canary.yml/runs",
+            endpoint,
+        )
+        self.assertNotIn(
+            "actions/workflows/.github/workflows/release-canary.yml/runs",
+            endpoint,
+        )
+
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
