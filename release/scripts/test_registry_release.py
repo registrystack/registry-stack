@@ -2265,7 +2265,7 @@ class RegistryReleaseTest(TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("missing archived docset v0.8.0", result.stderr)
+        self.assertIn("missing lock-backed docset v0.8.0", result.stderr)
 
     def test_validate_docsets_accepts_historical_and_dual_tree_archive_locks(
         self,
