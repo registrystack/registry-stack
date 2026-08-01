@@ -658,12 +658,15 @@ def _validate_image_report(
     report_kind: str,
 ) -> None:
     source = document.get("source")
-    target = source.get("target") if isinstance(source, dict) else None
+    source_details_key = "metadata" if report_kind == "syft" else "target"
+    source_details = (
+        source.get(source_details_key) if isinstance(source, dict) else None
+    )
     if (
         not isinstance(source, dict)
         or source.get("type") != "image"
-        or not isinstance(target, dict)
-        or target.get("userInput") != expected_ref
+        or not isinstance(source_details, dict)
+        or source_details.get("userInput") != expected_ref
     ):
         raise CandidateError(
             f"security evidence member {name!r} is not bound to {expected_ref}"
