@@ -13,6 +13,8 @@ const docsets = {
   docsets: [
     { id: 'latest', status: 'current' },
     { id: 'v1.0.0', status: 'archived' },
+    { id: 'v0.16.0', status: 'draft', availability: 'failed' },
+    { id: 'v1.1.0', status: 'draft', availability: 'candidate' },
   ],
 };
 
@@ -24,6 +26,10 @@ function lock(overrides = {}) {
         bundle_sha256: digest,
         tree_sha256: 'b'.repeat(64),
       },
+      'v0.16.0': {
+        bundle_sha256: 'c'.repeat(64),
+        tree_sha256: 'd'.repeat(64),
+      },
     },
     ...overrides,
   };
@@ -33,7 +39,7 @@ test('validates exact archived docset coverage and digest shapes', () => {
   assert.deepEqual(validateArchiveLock(lock(), docsets), []);
   assert.match(
     validateArchiveLock(lock({ archives: {} }), docsets).join('\n'),
-    /missing archived docset v1.0.0/,
+    /missing lock-backed docset v1.0.0/,
   );
   assert.match(
     validateArchiveLock(
@@ -45,11 +51,24 @@ test('validates exact archived docset coverage and digest shapes', () => {
       }),
       docsets,
     ).join('\n'),
-    /contains non-archived docset latest/,
+    /contains non-lock-backed docset latest/,
+  );
+  assert.match(
+    validateArchiveLock(
+      lock({
+        archives: {
+          ...lock().archives,
+          'v1.1.0': { bundle_sha256: digest, tree_sha256: digest },
+        },
+      }),
+      docsets,
+    ).join('\n'),
+    /contains non-lock-backed docset v1.1.0/,
   );
   assert.deepEqual(
     validateArchiveLock(lock({
       archives: {
+        ...lock().archives,
         'v1.0.0': {
           bundle_sha256: digest,
           root_tree_sha256: 'b'.repeat(64),

@@ -658,12 +658,15 @@ def _validate_image_report(
     report_kind: str,
 ) -> None:
     source = document.get("source")
-    target = source.get("target") if isinstance(source, dict) else None
+    source_details_key = "metadata" if report_kind == "syft" else "target"
+    source_details = (
+        source.get(source_details_key) if isinstance(source, dict) else None
+    )
     if (
         not isinstance(source, dict)
         or source.get("type") != "image"
-        or not isinstance(target, dict)
-        or target.get("userInput") != expected_ref
+        or not isinstance(source_details, dict)
+        or source_details.get("userInput") != expected_ref
     ):
         raise CandidateError(
             f"security evidence member {name!r} is not bound to {expected_ref}"
@@ -942,8 +945,18 @@ def validate_candidate_manifest(
     now: datetime | None = None,
     promotion: bool = False,
     workflow_run_metadata: dict[str, Any] | None = None,
+    allow_current_run_in_progress: bool = False,
 ) -> dict[str, Any]:
-    """Validate the closed, promotion-only v2 candidate manifest."""
+    """Validate the closed v2 candidate manifest and its workflow binding."""
+
+    if allow_current_run_in_progress and promotion:
+        raise CandidateError(
+            "current in-progress run metadata cannot authorize promotion"
+        )
+    if allow_current_run_in_progress and workflow_run_metadata is None:
+        raise CandidateError(
+            "current in-progress run verification requires trusted workflow-run metadata"
+        )
 
     manifest = require_object(document, "manifest", V2_TOP_LEVEL_FIELDS)
     if manifest["schema_version"] != V2_SCHEMA_VERSION:
@@ -1017,6 +1030,7 @@ def validate_candidate_manifest(
                 "event",
                 "head_sha",
                 "path",
+                "status",
                 "conclusion",
                 "created_at",
             },
@@ -1030,7 +1044,12 @@ def validate_candidate_manifest(
             "event": "repository_dispatch",
             "head_sha": workflow_revision,
             "path": WORKFLOW_PATH,
-            "conclusion": "success",
+            "status": (
+                "in_progress" if allow_current_run_in_progress else "completed"
+            ),
+            "conclusion": (
+                None if allow_current_run_in_progress else "success"
+            ),
         }
         for field, expected in expectations.items():
             if trusted_run[field] != expected:
@@ -1763,6 +1782,7 @@ def validate_receipt(
                 "event",
                 "head_sha",
                 "path",
+                "status",
                 "conclusion",
                 "created_at",
             },
@@ -1776,6 +1796,7 @@ def validate_receipt(
             "event": "repository_dispatch",
             "head_sha": source_sha,
             "path": WORKFLOW_PATH,
+            "status": "completed",
             "conclusion": "success",
         }
         for field, expected in workflow_run_expectations.items():
@@ -1968,6 +1989,7 @@ def workflow_run_from_json(document: Any) -> dict[str, Any]:
         "event",
         "head_sha",
         "path",
+        "status",
         "conclusion",
         "created_at",
     }
@@ -2255,6 +2277,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_candidate.add_argument("--run-attempt", type=int)
     verify_candidate.add_argument("--promotion", action="store_true")
     verify_candidate.add_argument(
+        "--allow-current-run-in-progress",
+        action="store_true",
+        help=(
+            "allow only the current in-progress candidate run during its "
+            "internal pre-OIDC re-verification"
+        ),
+    )
+    verify_candidate.add_argument(
         "--trusted-run-metadata", dest="workflow_run_metadata", type=Path
     )
 
@@ -2395,6 +2425,9 @@ def main(argv: list[str] | None = None) -> int:
                     workflow_run_from_json(read_json(args.workflow_run_metadata))
                     if args.workflow_run_metadata
                     else None
+                ),
+                allow_current_run_in_progress=(
+                    args.allow_current_run_in_progress
                 ),
             )
             print(

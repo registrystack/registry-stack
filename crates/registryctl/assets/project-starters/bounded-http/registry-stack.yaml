@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: http
-  release: 0.16.0
-  content_digest: sha256:86b344f8481f7a57fd2a9ae833c44344d0bbec5a2a500fff66bc82b9d0d579cf
+  release: 0.16.2
+  content_digest: sha256:f38293e4a9dde186eaafda4c5066518232e492167feb06f6ef2e6396aa837194
 
 registry:
   id: fictional-citizen-registry

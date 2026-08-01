@@ -552,10 +552,17 @@ def validate_docsets(
         print("error: docsets.yaml docsets must be a list", file=sys.stderr)
         return 1
 
-    archived_ids = sorted(
+    lock_backed_ids = sorted(
         str(docset.get("id", ""))
         for docset in docsets
-        if isinstance(docset, dict) and docset.get("status") == "archived"
+        if isinstance(docset, dict)
+        and (
+            docset.get("status") == "archived"
+            or (
+                docset.get("status") == "draft"
+                and docset.get("availability") == "failed"
+            )
+        )
     )
     if not isinstance(archive_lock, dict):
         errors.append("archive-lock.yaml must contain an object")
@@ -572,10 +579,10 @@ def validate_docsets(
         else:
             archive_entries = candidate_entries
     locked_ids = sorted(str(docset_id) for docset_id in archive_entries)
-    for docset_id in sorted(set(archived_ids) - set(locked_ids)):
-        errors.append(f"archive-lock.yaml is missing archived docset {docset_id}")
-    for docset_id in sorted(set(locked_ids) - set(archived_ids)):
-        errors.append(f"archive-lock.yaml contains non-archived docset {docset_id}")
+    for docset_id in sorted(set(lock_backed_ids) - set(locked_ids)):
+        errors.append(f"archive-lock.yaml is missing lock-backed docset {docset_id}")
+    for docset_id in sorted(set(locked_ids) - set(lock_backed_ids)):
+        errors.append(f"archive-lock.yaml contains non-lock-backed docset {docset_id}")
     for docset_id, entry in sorted(archive_entries.items()):
         if not isinstance(entry, dict):
             errors.append(f"archive-lock.yaml {docset_id} entry must be an object")
@@ -2740,7 +2747,7 @@ def recent_canary_for_revision(
                 "gh",
                 "api",
                 f"repos/{repository}/actions/workflows/"
-                f"{release_candidate.CANARY_WORKFLOW_PATH}/runs"
+                f"{Path(release_candidate.CANARY_WORKFLOW_PATH).name}/runs"
                 "?branch=main&status=success&per_page=100",
             ]
         )

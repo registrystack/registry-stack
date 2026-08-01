@@ -91,7 +91,7 @@ def security_evidence_members() -> dict[str, bytes]:
                 "artifacts": [],
                 "source": {
                     "type": "image",
-                    "target": {"userInput": image_ref},
+                    "metadata": {"userInput": image_ref},
                 },
             }
         )
@@ -331,6 +331,7 @@ class ReleaseCandidateTest(TestCase):
             "event": "repository_dispatch",
             "head_sha": SOURCE_SHA,
             "path": ".github/workflows/release-candidate.yml",
+            "status": "completed",
             "conclusion": "success",
             "created_at": (self.now - timedelta(hours=2)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
@@ -1077,6 +1078,7 @@ class ReleaseCandidateTest(TestCase):
             "event": "repository_dispatch",
             "head_sha": workflow_revision,
             "path": ".github/workflows/release-candidate.yml",
+            "status": "completed",
             "conclusion": "success",
             "created_at": (self.now - timedelta(hours=2)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
@@ -1109,6 +1111,73 @@ class ReleaseCandidateTest(TestCase):
             self.module.validate_candidate_manifest(
                 mismatched,
                 now=self.now,
+            )
+
+    def test_v2_candidate_allows_only_current_in_progress_run_before_oidc(
+        self,
+    ) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        run["status"] = "in_progress"
+        run["conclusion"] = None
+        arguments = {
+            "bundle_path": bundle_path,
+            "bundle_root": bundle_root,
+            "expected_source_sha": SOURCE_SHA,
+            "expected_workflow_revision": SOURCE_SHA,
+            "expected_version": "1.2.3",
+            "expected_release_id": "beta-20",
+            "expected_run_id": 123,
+            "expected_run_attempt": 2,
+            "now": self.now,
+            "workflow_run_metadata": run,
+        }
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "trusted workflow run status mismatch",
+        ):
+            self.module.validate_candidate_manifest(candidate, **arguments)
+
+        self.module.validate_candidate_manifest(
+            candidate,
+            allow_current_run_in_progress=True,
+            **arguments,
+        )
+
+        for field, value in (
+            ("status", "queued"),
+            ("conclusion", "success"),
+        ):
+            changed = dict(run)
+            changed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(
+                    self.module.CandidateError,
+                    f"trusted workflow run {field} mismatch",
+                ):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        allow_current_run_in_progress=True,
+                        **(arguments | {"workflow_run_metadata": changed}),
+                    )
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "cannot authorize promotion",
+        ):
+            self.module.validate_candidate_manifest(
+                candidate,
+                promotion=True,
+                allow_current_run_in_progress=True,
+                **arguments,
+            )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "requires trusted workflow-run metadata",
+        ):
+            self.module.validate_candidate_manifest(
+                candidate,
+                allow_current_run_in_progress=True,
             )
 
     def test_v2_schema_and_runtime_require_one_named_security_evidence_payload(
@@ -1276,6 +1345,14 @@ class ReleaseCandidateTest(TestCase):
         spdx["documentDescribes"] = []
         unbound_spdx["image-sbom/postgresql.spdx.json"] = json_bytes(spdx)
 
+        unbound_syft = dict(base)
+        syft = json.loads(unbound_syft["syft/registry-notary.syft.json"])
+        syft["source"]["metadata"]["userInput"] = (
+            "ghcr.io/registrystack/registry-notary-candidate@sha256:"
+            + "9" * 64
+        )
+        unbound_syft["syft/registry-notary.syft.json"] = json_bytes(syft)
+
         incomplete_verdict = dict(base)
         verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
         verdict["subjects"].remove("postgresql-runtime")
@@ -1290,6 +1367,7 @@ class ReleaseCandidateTest(TestCase):
             (invalid_digest, "PostgreSQL digest is not canonical or immutable"),
             (unreviewed_digest, "does not match the reviewed release image"),
             (unbound_spdx, "PostgreSQL SPDX subject is not bound"),
+            (unbound_syft, "registry-notary.syft.json.*is not bound"),
             (incomplete_verdict, "does not cover every runtime"),
             (substituted_scan, "does not match its scan payload"),
         ):

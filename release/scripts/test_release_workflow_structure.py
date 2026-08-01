@@ -71,6 +71,21 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(document["jobs"]["attest"]["permissions"]["id-token"], "write")
 
+    def test_only_internal_pre_oidc_reverification_accepts_current_run(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        reverify = next(
+            step
+            for step in document["jobs"]["attest"]["steps"]
+            if step.get("name") == "Reverify all bytes before requesting OIDC"
+        )
+
+        self.assertEqual(text.count("--allow-current-run-in-progress"), 1)
+        self.assertIn("--allow-current-run-in-progress", reverify["run"])
+        self.assertNotIn(
+            "--allow-current-run-in-progress",
+            workflow("release.yml")[0],
+        )
+
     def test_canonical_build_timeout_covers_uncached_follow_on_work(self) -> None:
         _, document = workflow("release-candidate.yml")
         self.assertGreaterEqual(
@@ -208,6 +223,10 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             {"actions": "read", "contents": "write"},
         )
         self.assertEqual(
+            document["jobs"]["promote-images"]["permissions"],
+            {"actions": "read", "contents": "write", "packages": "write"},
+        )
+        self.assertEqual(
             document["jobs"]["dispatch-docs"]["permissions"],
             {"actions": "write"},
         )
@@ -266,6 +285,12 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn(".name == $title", text)
         self.assertIn("contains($marker)", text)
+        self.assertIn('gh release view "${tag}"', text)
+        self.assertNotIn("/releases/tags/", text)
+        self.assertIn(
+            'repos/${GITHUB_REPOSITORY}/releases/${release_id}',
+            text,
+        )
 
     def test_public_image_promotion_is_fail_closed_and_burns_the_version(
         self,
@@ -275,7 +300,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         combined = candidate + release
         self.assertEqual(
             combined.count("release_workflow_guard.py http-status"),
-            3,
+            1,
         )
         self.assertNotIn("awk '/^HTTP", combined)
         self.assertNotIn("sed -E 's#^ghcr", combined)
@@ -312,6 +337,16 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotIn("--expected-digest", verify)
 
+        stage = next(
+            step["run"]
+            for step in document["jobs"]["stage-draft"]["steps"]
+            if step.get("name")
+            == "Reconcile bound draft and upload exact staged inventory"
+        )
+        self.assertIn("2>\"${release_view_error}\"", stage)
+        self.assertIn("elif grep -Fxq 'release not found'", stage)
+        self.assertIn('cat "${release_view_error}" >&2', stage)
+
     def test_every_final_release_mutation_requires_the_exact_bound_draft(
         self,
     ) -> None:
@@ -347,7 +382,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn(".draft == true", final_upload[upload_guard:upload])
 
         provenance = document["jobs"]["release-provenance"]
-        self.assertEqual(provenance["permissions"]["contents"], "read")
+        self.assertEqual(provenance["permissions"]["contents"], "write")
         self.assertFalse(provenance["with"]["upload-assets"])
         self.assertNotIn("upload-tag-name", provenance["with"])
 
@@ -628,6 +663,11 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("trusted-canary-run.json", text)
         self.assertIn('event: "repository_dispatch"', text)
         self.assertIn('path: ".github/workflows/release-candidate.yml"', text)
+        trusted_candidate = text.split(
+            "> canary/trusted-candidate-run.json", 1
+        )[0].rsplit("jq -n", 1)[1]
+        self.assertIn('status: "completed"', trusted_candidate)
+        self.assertIn('conclusion: "success"', trusted_candidate)
 
     def test_canary_seals_complete_security_evidence(self) -> None:
         _, document = workflow("release-canary.yml")
@@ -673,7 +713,13 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         for command, required in (
             (
                 "verify-candidate",
-                ("--manifest", "--bundle", "--bundle-root", "--promotion"),
+                (
+                    "--manifest",
+                    "--bundle",
+                    "--bundle-root",
+                    "--promotion",
+                    "--allow-current-run-in-progress",
+                ),
             ),
             (
                 "verify-tag-binding",
@@ -699,6 +745,11 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             )
             for flag in required:
                 self.assertIn(flag, result.stdout)
+            if command == "verify-tag-binding":
+                self.assertNotIn(
+                    "--allow-current-run-in-progress",
+                    result.stdout,
+                )
 
 
 if __name__ == "__main__":

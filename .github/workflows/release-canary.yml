@@ -69,7 +69,7 @@ jobs:
               > "${evidence_root}/image-sbom/${name}.spdx.json"
             jq -n \
               --arg image_ref "${image_ref}" \
-              '{artifacts:[],source:{type:"image",target:{userInput:$image_ref}}}' \
+              '{artifacts:[],source:{type:"image",metadata:{userInput:$image_ref}}}' \
               > "${evidence_root}/syft/${name}.syft.json"
             jq -n \
               --arg image_ref "${image_ref}" \
@@ -273,6 +273,7 @@ jobs:
               event: "repository_dispatch",
               head_sha: $head_sha,
               path: ".github/workflows/release-candidate.yml",
+              status: "completed",
               conclusion: "success",
               created_at: $created_at
             }' > canary/trusted-candidate-run.json

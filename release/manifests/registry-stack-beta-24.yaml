@@ -1,0 +1,33 @@
+stack:
+  release: beta-24
+  version: 0.16.1
+  source_repo: registrystack/registry-stack
+  source_tag: v0.16.1
+
+artifacts:
+  registry-notary: 0.16.1
+  registry-notary-cel-worker: 0.16.1
+  registry-relay: 0.16.1
+  registry-relay-rhai-worker: 0.16.1
+  registry-manifest-cli: 0.16.1
+  registryctl: 0.16.1
+  registryctl-image-lock: 0.16.1
+  registryctl-installer: 0.16.1
+  registry-docs: 0.16.1
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1d44ec735fdc8a7c719264b339574371e8330337
+    status: tested external input
+
+warnings:
+  - code: prior-tag-publication-failed
+    classification: failed-train-recorded
+    detail: The immutable v0.16.0 tag exists, but its workflow failed during startup before any job or public write. No v0.16.0 GitHub Release, final images, assets, or documentation were published. This release fixes forward without retagging; install only v0.16.1.
+  - code: hosted-publication-held
+    classification: hosted-gate-held
+    detail: Source beta may ship; hosted/public announcement remains held until Solmara Lab is atomically repinned to the published v0.16.1 digests and its adopter smoke passes.
+  - code: solmara-adopter-repin-pending
+    classification: adopter-gate-pending
+    detail: Solmara Lab consumes released images and will be repinned and validated only after immutable v0.16.1 digests exist.

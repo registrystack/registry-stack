@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.16.2 - 2026-08-01
+
+- No user-visible Registry Relay changes. This release fixes forward from the
+  v0.16.1 tag workflow, which stopped after creating an unpublished empty
+  draft. Install v0.16.2; no final v0.16.1 images, assets, or documentation
+  were published.
+
+## 0.16.1 - 2026-08-01
+
+- No user-visible Registry Relay changes. This release fixes forward from the
+  v0.16.0 tag workflow, which failed before any job or public write. Install
+  v0.16.1; no final v0.16.0 images, assets, or documentation were published.
+
 ## 0.16.0 - 2026-08-01
 
 - Relay can now start directly from a signed Config Bundle with the complete
