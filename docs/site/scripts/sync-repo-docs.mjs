@@ -28,6 +28,7 @@ import {
   loadDocsets,
   selectedDocsetId,
 } from './docsets.mjs';
+import { retryGitFetch } from './git-fetch-retry.mjs';
 
 const run = promisify(execFile);
 
@@ -76,15 +77,24 @@ async function resolveSource(repoId, repo) {
   return { path: cachePath, mode: 'clone' };
 }
 
-// Shallow-clone a single pinned commit. Idempotent: re-clones into a fresh dir.
-async function cloneAtRef(repoId, remote, ref, dest) {
+// Shallow-clone a single pinned commit. Idempotent: re-clones into a fresh
+// dir. Only the network `git fetch` is retried (via retryGitFetch): init and
+// remote-add are local and effectively instantaneous, and checkout only runs
+// once the fetch has actually populated FETCH_HEAD, so retrying the fetch
+// alone is the smallest safe unit. `run` and `retryOptions` are test seams;
+// production callers should leave them at their defaults.
+export async function cloneAtRef(repoId, remote, ref, dest, { run: runGit = run, retryOptions = {} } = {}) {
   await rm(dest, { recursive: true, force: true });
   await mkdir(dest, { recursive: true });
   try {
-    await run('git', ['init', '--quiet'], { cwd: dest });
-    await run('git', ['remote', 'add', 'origin', remote], { cwd: dest });
-    await run('git', ['fetch', '--quiet', '--depth', '1', 'origin', ref], { cwd: dest });
-    await run('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dest });
+    await runGit('git', ['init', '--quiet'], { cwd: dest });
+    await runGit('git', ['remote', 'add', 'origin', remote], { cwd: dest });
+    await retryGitFetch(
+      `${repoId}: fetch ${ref} from ${remote}`,
+      () => runGit('git', ['fetch', '--quiet', '--depth', '1', 'origin', ref], { cwd: dest }),
+      retryOptions,
+    );
+    await runGit('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dest });
   } catch (error) {
     fail(`${repoId}: failed to clone ${remote} at ${ref}: ${error.message}`);
   }

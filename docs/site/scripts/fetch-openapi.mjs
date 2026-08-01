@@ -19,6 +19,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { access } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import YAML from 'yaml';
 import {
@@ -28,6 +29,7 @@ import {
   selectedDocsetId,
   usesCheckedOutCandidate,
 } from './docsets.mjs';
+import { retryGitFetch } from './git-fetch-retry.mjs';
 
 const run = promisify(execFile);
 
@@ -80,15 +82,27 @@ async function specFromLocal(localPath, ref, specPath) {
 }
 
 // Shallow-clone a single pinned commit, then read the spec from the worktree.
-async function specFromClone(repoId, remote, ref, specPath) {
-  const dest = join(cacheRoot, `${repoId}-openapi`);
+// Only the network `git fetch` is retried (via retryGitFetch): init and
+// remote-add are local and effectively instantaneous, and checkout only runs
+// once the fetch has actually populated FETCH_HEAD, so retrying the fetch
+// alone is the smallest safe unit. `run`, `retryOptions`, and `dest` are test
+// seams; production callers should leave them at their defaults.
+export async function specFromClone(repoId, remote, ref, specPath, {
+  run: runGit = run,
+  retryOptions = {},
+  dest = join(cacheRoot, `${repoId}-openapi`),
+} = {}) {
   await rm(dest, { recursive: true, force: true });
   await mkdir(dest, { recursive: true });
   try {
-    await run('git', ['init', '--quiet'], { cwd: dest });
-    await run('git', ['remote', 'add', 'origin', remote], { cwd: dest });
-    await run('git', ['fetch', '--quiet', '--depth', '1', 'origin', ref], { cwd: dest });
-    await run('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dest });
+    await runGit('git', ['init', '--quiet'], { cwd: dest });
+    await runGit('git', ['remote', 'add', 'origin', remote], { cwd: dest });
+    await retryGitFetch(
+      `${repoId}: fetch ${ref} from ${remote}`,
+      () => runGit('git', ['fetch', '--quiet', '--depth', '1', 'origin', ref], { cwd: dest }),
+      retryOptions,
+    );
+    await runGit('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dest });
   } catch (error) {
     fail(`${repoId}: failed to clone ${remote} at ${ref} for the OpenAPI spec: ${error.message}`);
   }
@@ -161,4 +175,8 @@ async function main() {
   console.log(`Fetched ${written} OpenAPI spec(s) at pinned refs.`);
 }
 
-await main();
+// Run the pipeline only when invoked directly, so tests can import the pure
+// helpers above without triggering a full clone-and-fetch run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

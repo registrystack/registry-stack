@@ -5,9 +5,13 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   applyDocsetMetadataOverrides,
+  cloneAtRef,
   frontmatterBlock,
   stripPageTypeBanner,
   validateLastReviewed,
@@ -278,4 +282,40 @@ test('marks source-reviewed generated pages current', () => {
   });
 
   assert.match(fm, /status: current/);
+});
+
+// cloneAtRef retries only the network `git fetch` step (never the surrounding
+// init/remote-add/checkout) via scripts/git-fetch-retry.mjs. These tests fake
+// the git executor so they run offline and instantly; the retry-and-stderr-
+// bounding policy itself is covered exhaustively in git-fetch-retry.test.mjs.
+
+test('cloneAtRef retries a transient fetch failure and succeeds within the retry budget', async () => {
+  const dest = await mkdtemp(join(tmpdir(), 'sync-repo-docs-test-'));
+  try {
+    let fetchCalls = 0;
+    const invoked = [];
+    const fakeRun = async (command, args) => {
+      invoked.push(args[0]);
+      if (args[0] === 'fetch') {
+        fetchCalls += 1;
+        if (fetchCalls < 2) {
+          const error = new Error('Command failed: git fetch --quiet --depth 1 origin deadbeef');
+          error.stderr = 'fatal: the remote end hung up unexpectedly';
+          throw error;
+        }
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    await cloneAtRef('demo-repo', 'https://example.test/demo.git', 'deadbeef', dest, {
+      run: fakeRun,
+      retryOptions: { sleep: async () => {} },
+    });
+
+    assert.equal(fetchCalls, 2);
+    // init and remote-add each ran once; only fetch (the network step) retried.
+    assert.deepEqual(invoked, ['init', 'remote', 'fetch', 'fetch', 'checkout']);
+  } finally {
+    await rm(dest, { recursive: true, force: true });
+  }
 });
