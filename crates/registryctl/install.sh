@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-default_version="v0.16.1"
+default_version="v0.16.2"
 script_name="${BASH_SOURCE[0]:-}"
 script_name="${script_name##*/}"
 filename_version=""

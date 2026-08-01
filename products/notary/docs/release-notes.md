@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.16.2
+
+- Registry Notary has no user-visible changes relative to the v0.16.0 and
+  v0.16.1 candidates. The immutable v0.16.1 tag workflow stopped after
+  creating an unpublished empty draft, so install only v0.16.2. No final
+  v0.16.1 images, assets, or documentation were published.
+
 ## 0.16.1
 
 - Registry Notary has no user-visible changes relative to the v0.16.0
