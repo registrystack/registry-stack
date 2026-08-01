@@ -7,6 +7,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- BREAKING: `evaluation_profiles[].max_source_observed_age_seconds` is removed
+  from the metadata manifest schema. The field configured nothing: no runtime
+  read it, and nothing in Registry Notary or Registry Relay bounded
+  source-observation age from it. Because the schema rejects unknown keys, a
+  manifest that still carries the key now fails `validate`, `render`, and
+  `publish` with an error naming the key. Migration: delete the key. Nothing
+  replaces it. Notary bounds consultation-result age through the federation
+  profile's `max_claim_result_age_seconds`, and Registry Relay owns snapshot
+  freshness through `max_snapshot_age_ms`. The identically named key inside
+  `evidence_pack.policy.freshness` is a different, unvalidated field and is
+  unaffected.
+
 ## [0.16.0] - 2026-08-01
 
 - No user-visible Registry Manifest changes.

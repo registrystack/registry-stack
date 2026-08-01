@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: `evaluation_profiles[].max_source_observed_age_seconds` is removed.
+  It configured nothing, and the schema rejects unknown keys, so a manifest that
+  still carries it fails validation. Delete the key; nothing replaces it.
+
 ## 0.16.0
 
 - Registry Manifest has no user-visible changes in this release.

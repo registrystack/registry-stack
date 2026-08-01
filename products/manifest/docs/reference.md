@@ -323,6 +323,13 @@ field to an incompatible type, or making previously valid V1 manifests invalid e
 for validation bugs, security fixes, or the unknown-key rejection this section
 describes.
 
+That rule takes effect at `v1.0.0`, with the rest of the compatibility promise in
+[`api-stability`](../../../docs/site/src/content/docs/reference/api-stability.mdx).
+Before `v1.0.0` a minor release may break the schema without a new schema version,
+announced as a `BREAKING:` entry with migration steps in `CHANGELOG.md`. The
+unknown-key rejection named above was one such change; removing an optional field
+that configured nothing is another. Neither is a precedent for after `v1.0.0`.
+
 ## Publish output artifacts
 
 Source:
