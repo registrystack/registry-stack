@@ -1603,8 +1603,7 @@ def release_draft_mutation_barrier_violations(
         'crane copy "${candidate_ref}" "${final_ref}"',
     )
     if (
-        "contents: read" not in provenance
-        or "contents: write" in provenance
+        "contents: write" not in provenance
         or "upload-assets: false" not in provenance
         or "upload-assets: true" in provenance
         or cleanup_loop < 0
