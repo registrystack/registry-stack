@@ -123,6 +123,40 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("--jq .visibility", text)
         self.assertIn(")\" = private", text)
 
+    def test_candidate_oras_publisher_is_directly_checksum_pinned(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        assemble = document["jobs"]["assemble"]
+        install = next(
+            step
+            for step in assemble["steps"]
+            if step.get("name") == "Install pinned candidate inspection tools"
+        )
+
+        self.assertNotIn("oras-project/setup-oras", text)
+        self.assertEqual(document["env"]["ORAS_VERSION"], "v1.3.2")
+        self.assertEqual(
+            document["env"]["ORAS_LINUX_AMD64_SHA256"],
+            "9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf",
+        )
+        self.assertIn(
+            "https://github.com/oras-project/oras/releases/download/"
+            "${STEP_ORAS_VERSION}/oras_${oras_version}_linux_amd64.tar.gz",
+            install["run"],
+        )
+        self.assertIn(
+            'echo "${STEP_ORAS_SHA256}  ${RUNNER_TEMP}/tools/oras.tar.gz" \\\n'
+            "  | sha256sum --check --strict",
+            install["run"],
+        )
+
+        verify = text.index(
+            "Verify local image layouts before package credentials are used"
+        )
+        publish = text.index("oras cp --from-oci-layout")
+        scan = text.index("Verify and scan exact candidate images")
+        self.assertLess(verify, publish)
+        self.assertLess(publish, scan)
+
     def test_tag_lookup_accepts_only_git_explicit_absence_status(self) -> None:
         _, document = workflow("release-candidate.yml")
         validation = next(
