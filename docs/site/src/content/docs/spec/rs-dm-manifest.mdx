@@ -43,6 +43,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.0 | 2026-06-20 | draft | Added governed evidence gateway metadata, policy id/hash binding, ODRL enforcement profile validation, and the runtime PDP boundary. |
 | 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
 | 0.3.0 | 2026-07-07 | draft | Corrected REQ-DM-MANIFEST-007 to require a unique `(id, version)` pair rather than independently unique `id` and `version` values, corrected the REQ-DM-MANIFEST-002 runtime-only-key example, renamed the static discovery bundle consistently, and rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time (issue #249, issue #285). |
+| 0.4.0 | 2026-08-01 | draft | Scoped REQ-DM-MANIFEST-013's new-schema-version obligation to `v1.0.0` and later, matching the pre-1.0 rule in the API stability reference, and recorded the two pre-1.0 schema breaks that shipped under it. |
 
 ## 1. Scope and references
 
@@ -151,6 +152,8 @@ The digest inventory describes the bundle that was published, not the history of
 The manifest and its generated formats carry a versioned compatibility promise: a schema version names the exact field set a reader accepts, and the schema evolves through Registry Manifest releases, not through keys an individual producer adds on its own.
 
 REQ-DM-MANIFEST-013: The `registry-manifest/v1` manifest and its generated `*/v1` formats MUST reject a key that is not modeled at its nesting depth, at parse time, and MUST name the offending key by its dotted field path in the resulting error. A reader MUST NOT silently drop or ignore a field it does not recognize. Extending the schema, including adding an optional field to an existing object, requires a Registry Manifest code change; a producer MUST NOT rely on an unmodeled key being tolerated. Fields modeled to carry arbitrary JSON, such as the governed evidence pack's `source_basis`, `semantic_profile`, and `evidence_envelope`, or an ecosystem binding's `vocabulary` and related envelope fields, remain the modeled surface for producer-specific content. A breaking change, including removing or renaming a required field or changing the meaning or type of an existing field, MUST still carry a new schema version.
+
+That schema-version obligation takes effect at `v1.0.0`, with the rest of the compatibility promise recorded in [API stability](../../reference/api-stability/). Before `v1.0.0`, a minor release MAY break the schema without a new schema version, and each such break MUST be announced as a `BREAKING:` entry with migration steps in the Registry Manifest changelog. Two have shipped under that rule: the unknown-key rejection this requirement describes, and the removal of the optional `evaluation_profiles[].max_source_observed_age_seconds` key, which configured nothing.
 
 ## 11. Limitations
 
