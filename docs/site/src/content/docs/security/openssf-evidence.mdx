@@ -24,18 +24,18 @@ procedure to authenticate a current release.
 | --- | --- | --- |
 | Are current release payloads signed? | Yes. One keyless Sigstore bundle authenticates `SHA256SUMS`, which covers every public payload. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Are release Git tags signed? | No. The annotated tag binds a candidate run, attempt, and manifest hash, but the Git tag object is not cryptographically signed. | [Release operations](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md) |
-| Is release provenance published? | Yes. The tag workflow publishes a SLSA provenance envelope for the checksum-covered payload subject set. | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
+| Is release provenance published? | Yes. GitHub artifact attestations authenticate the candidate manifest and bundle, and the signed checksum chain authenticates the public payloads. | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
 | Are published builds repeatable? | A weekly clean proof covers canonical Linux amd64 binaries plus image configuration and ordered layers. The OpenSSF justification is current only while an applicable successful proof is no older than 30 days. | [Repeatable build evidence](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
 
 ## Current release evidence chain
 
 The candidate workflow builds each shipped artifact once, publishes candidate
 images only to private packages, scans exact image digests, and seals one
-24-hour candidate manifest and bundle.
+seven-day candidate manifest and bundle.
 The annotated tag binds that manifest to the candidate run and attempt.
 
-The tag workflow verifies the candidate and reconciles the complete draft
-GitHub Release before a public write.
+The protected-main publication workflow verifies the tag and candidate, then
+reconciles the complete draft GitHub Release before a public write.
 It promotes image manifests at the same digests, publishes the draft, and
 dispatches authenticated documentation promotion.
 
@@ -43,14 +43,14 @@ Current public security assets include:
 
 - `SHA256SUMS`.
 - One `registry-stack-vX.Y.Z-SHA256SUMS.sigstore.json` bundle.
-- One tag-bound release provenance envelope.
 - One consolidated SPDX JSON software bill of materials (SBOM).
 - One checksum-covered security-evidence archive.
 - One checksum-covered Registryctl image lock.
 - One compact release manifest recording candidate and promotion identity.
 
-Current releases do not publish per-file signature and certificate pairs,
-release capsules, candidate telemetry, or intermediate receipt parts.
+Current releases do not publish a second generic SLSA provenance envelope,
+per-file signature and certificate pairs, release capsules, candidate
+telemetry, or intermediate receipt parts.
 
 ## Scorecard
 
@@ -99,13 +99,14 @@ version-pinned baseline map.
 | Token permissions | Read-only build and verification jobs; package, release, signing, and Pages permissions are separated | Implemented |
 | Release artifacts | Signed checksums, consolidated SPDX SBOM, security archive, image lock, and release manifest | Implemented by the current workflow |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
-| Provenance | Candidate build attestations and tag-bound release payload provenance | Implemented by the current workflow |
+| Provenance | Candidate build attestations and a signed public checksum closure | Implemented by the current workflows |
 
 ## Historical releases
 
 Historical release assets remain immutable.
 Earlier releases may contain per-file `.sig` and `.pem` pairs, capsules,
-candidate receipts, separate digest files, multiple SBOMs, or no provenance.
+candidate receipts, separate digest files, multiple SBOMs, generic SLSA
+provenance, or no provenance.
 Use the verification document committed at the selected tag and do not infer
 current guarantees from an older inventory.
 `v0.8.0` remains unsigned.

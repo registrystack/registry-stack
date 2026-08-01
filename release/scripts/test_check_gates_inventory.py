@@ -371,9 +371,11 @@ class GateInventoryTest(unittest.TestCase):
         self.assertIsNotNone(publish)
         for marker in (
             "name: Reconcile exact staged draft before first public image write",
-            "name: Burn version on first exact digest promotion",
-            "require-image-tag-absent",
-            "irreversible version burn",
+            "name: Reconcile exact image digests",
+            "reconcile-image-tag",
+            '--expected-digest "${digest}"',
+            'if [[ "${state}" == absent ]]; then',
+            'test "${state}" = present',
             'test "$(crane digest "${final_ref}")" = "${digest}"',
         ):
             with self.subTest(marker=marker):
@@ -394,9 +396,7 @@ class GateInventoryTest(unittest.TestCase):
         for marker in (
             "name: Clean retryable final additions and reverify exact staged assets",
             "contract/final-upload-release.json",
-            "upload-assets: false",
-            "name: Upload provenance to the exact bound draft",
-            "if: steps.release_state.outputs.release_state == 'draft'",
+            "name: Sign and upload the checksum closure",
             "name: Classify exact bound draft or published release",
             "name: Recheck complete signed release and exact public images",
             "name: Publish immutable release",
@@ -409,19 +409,9 @@ class GateInventoryTest(unittest.TestCase):
                         mutated
                     ),
                 )
-        provenance = self.module.yaml_job_block(workflow, "release-provenance")
-        self.assertIsNotNone(provenance)
-        narrowed = provenance.replace("contents: write", "contents: read", 1)
-        self.assertEqual(
-            ["Final release mutations require the bound draft"],
-            self.module.release_draft_mutation_barrier_violations(
-                workflow.replace(provenance, narrowed, 1)
-            ),
-        )
         for step_name in (
             "Clean retryable final additions and reverify exact staged assets",
-            "Sign and upload the complete pre-provenance asset closure",
-            "Upload provenance to the exact bound draft",
+            "Sign and upload the checksum closure",
             "Classify exact bound draft or published release",
             "Recheck complete signed release and exact public images",
             "Publish immutable release",

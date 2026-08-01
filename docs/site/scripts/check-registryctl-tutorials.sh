@@ -5,9 +5,8 @@
 # This gate builds Registryctl from the checked-out source unless
 # REGISTRYCTL_BIN selects exact candidate or released bytes. It proves the
 # init, test, check, build, and disposable development smoke contract. The
-# tag-triggered release workflow separately exercises the exact installer,
-# signed release lock, doctor, release-bound runtime sequence, and governed
-# deployment.
+# release-candidate workflow runs the exact candidate binary and archived docs
+# through the maintained authoring journeys before publication.
 
 set -euo pipefail
 

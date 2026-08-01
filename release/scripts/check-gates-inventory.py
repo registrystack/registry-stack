@@ -388,548 +388,18 @@ RELEASE_SECURITY_POLICY_PATHS = (
     "release/scripts/verify_latest_published_release.py",
 )
 
-REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    (
-        "Candidate-bound annotated tag promotion",
-        ".github/workflows/release.yml",
-        (
-            'push:\n    tags:\n      - "v*"',
-            "name: Verify candidate-bound release tag",
-            "name: Parse exact annotated-tag candidate binding",
-            'for field in ("run_id", "run_attempt", "receipt_sha256"):',
-            "name: Validate tag source without rebuilding",
-            'test "$(git rev-parse refs/remotes/origin/main)" = \\',
-        ),
-    ),
-    (
-        "Tag-target documentation evidence link gate",
-        ".github/workflows/release.yml",
-        (
-            "name: Verify documentation evidence links",
-            "npm run check:evidence-links --",
-            '--source-ref "${{ steps.release.outputs.tag_target }}"',
-        ),
-    ),
-    (
-        "Immutable documentation archive publication",
-        ".github/workflows/release.yml",
-        (
-            "docs-archive:\n    name: Build immutable release docs archive",
-            "name: Build and verify the tag-bound docs bundle",
-            "npm run build:archive",
-            "--verify-lock",
-            "name: Download unprivileged docs archive",
-            "does not match immutable lock",
-            "--require-registry-docs-archive",
-        ),
-    ),
-    (
-        "Exact promotion run attempt and receipt binding",
-        ".github/workflows/release.yml",
-        (
-            "EXPECTED_RUN_ID: ${{ needs.verify.outputs.candidate_run }}",
-            "EXPECTED_RUN_ATTEMPT: ${{ needs.verify.outputs.candidate_attempt }}",
-            'receipt_name="registry-stack-release-candidate-receipt-${EXPECTED_RUN_ID}-${EXPECTED_RUN_ATTEMPT}"',
-            'test "$(sha256sum "${receipt}" | awk \'{print $1}\')" = \\',
-            '--run-id "${EXPECTED_RUN_ID}"',
-            '--run-attempt "${EXPECTED_RUN_ATTEMPT}"',
-            "--trusted-run-metadata promotion/control/trusted-run.json",
-            "verify-tag-binding",
-        ),
-    ),
-    (
-        "Promotion verifier and attestation barrier",
-        ".github/workflows/release.yml",
-        (
-            "name: Download and verify exact candidate attempt",
-            "python3 release/scripts/release_candidate.py verify",
-            'gh attestation verify "${receipt}"',
-            '--signer-workflow "${signer}"',
-            "--source-ref refs/heads/main",
-            "name: Build fail-closed prewrite promotion state",
-            "touch promotion/control/PUBLISH_BARRIER",
-            "test -f promotion/control/PUBLISH_BARRIER",
-        ),
-    ),
-    (
-        "Promotion requires immutable candidate scan proof",
-        "release/scripts/release_candidate.py",
-        (
-            'scans = require_object(receipt["scans"], "scans", {"policy", "immutable_digests"})',
-            'scans != {"policy": "passed", "immutable_digests": True}',
-            "candidate scan policy did not pass on immutable digests",
-        ),
-    ),
-    (
-        "Exact digest image promotion",
-        ".github/workflows/release.yml",
-        (
-            "name: Promote provenance-bearing candidate indexes without rewriting",
-            'staging="${REGISTRY}/${IMAGE_NAMESPACE}/${name}-candidate@${digest}"',
-            'crane copy "${staging}" "${public}"',
-            'test "$(crane digest "${public}")" = "${digest}"',
-            'test "$(crane digest "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}")" = \\',
-        ),
-    ),
-    (
-        "Published candidate receipt and tag-bound evidence",
-        ".github/workflows/release.yml",
-        (
-            "name: Stage exact candidate release files",
-            "candidate-receipt.json",
-            "name: Render tag-bound image lock and checksums",
-            "name: Generate release file SBOMs and release capsule",
-            "name: Sign promoted release evidence",
-            "name: Create immutable GitHub Release",
-            "--verify-tag",
-        ),
-    ),
-    (
-        "Final post-provenance reconciliation",
-        ".github/workflows/release.yml",
-        (
-            "release-provenance:\n    name: Generate tag-bound release provenance",
-            "reconcile:\n    name: Reconcile exact final release inventory",
-            "      - release-provenance",
-            "name: Reconcile exact final inventory after SLSA provenance",
-            "diff -u expected-assets actual-assets",
-            'provenance_sha="$(sha256sum "downloaded/${provenance}"',
-            ".workflow.run_attempt==$attempt",
-        ),
-    ),
-    (
-        "Final SLSA subject verification",
-        ".github/workflows/release.yml",
-        (
-            "SLSA_VERIFIER_VERSION: v2.7.1",
-            "SLSA_VERIFIER_LINUX_AMD64_SHA256:",
-            "name: Install pinned final verification tools",
-            'echo "${STEP_SLSA_SHA256}  ${slsa}" | sha256sum --check --strict',
-            'slsa-verifier verify-artifact "downloaded/${subject_name}"',
-            '--provenance-path "downloaded/${provenance}"',
-            '--source-uri "github.com/${GITHUB_REPOSITORY}"',
-            '--source-tag "${tag}"',
-            "python3 release/scripts/release_candidate.py verify-slsa-subjects",
-            "--contract reconciliation/pre-provenance.json",
-        ),
-    ),
-    (
-        "Promotion reconciliation contract seven-day retention",
-        ".github/workflows/release.yml",
-        (
-            "name: Record exact pre-provenance inventory",
-            "name: Upload exact reconciliation contract",
-            "retention-days: 7",
-        ),
-    ),
-    (
-        "Extended proof dispatch after final reconciliation",
-        ".github/workflows/release.yml",
-        (
-            "extended-proof:\n    name: Schedule extended repeatability proof",
-            "      - reconcile",
-            "if: ${{ needs.verify-candidate.outputs.proof_level == 'extended' }}",
-            "name: Request extended published-tag proof after final reconciliation",
-            "-f event_type=release-repeatability",
-        ),
-    ),
-    (
-        "Promotion workflow timing and runner telemetry",
-        ".github/workflows/release.yml",
-        (
-            "release-telemetry:\n    name: Record promotion telemetry",
-            "      - reconcile",
-            "if: ${{ always() }}",
-            "name: Record queue, wall-clock, and runner occupancy review triggers",
-            'schema_version:"registry-stack.release-promotion-telemetry.v1"',
-            "queue_seconds:",
-            "wall_clock_to_collector_seconds:",
-            "queue_delay_seconds:",
-            "runner_occupancy_seconds:",
-            "completed_runner_seconds:",
-            "wall_clock_budget_seconds:1200",
-            "runner_seconds_budget:8000",
-            "name: Upload seven-day promotion telemetry",
-            "retention-days: 7",
-        ),
-    ),
-    (
-        "Protected release candidate trigger",
-        ".github/workflows/release-candidate.yml",
-        (
-            "repository_dispatch:\n    types:\n      - release_candidate",
-            "name: Validate exact protected-main request",
-            "workflow revision, requested source, and current protected main must be the same exact commit",
-        ),
-    ),
-    (
-        "Release candidate proof-level selection",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Select standard or extended proof level",
-            "python3 release/scripts/select-release-proof-level.py",
-            '--requested "${{ steps.request.outputs.requested_proof_level }}"',
-        ),
-    ),
-    (
-        "Single canonical candidate build with separate repeatability proof",
-        ".github/workflows/release-candidate.yml",
-        (
-            "build-a:\n    name: Build A cached canonical candidate",
-            "name: Restore exact-key Cargo cache",
-            "name: Validate canonical binary inventory",
-        ),
-    ),
-    (
-        "Candidate cache status and peak storage evidence",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Restore exact-key Cargo cache",
-            "steps.cargo-cache.outputs.cache-hit",
-            "exact_key_hit",
-            "name: Start peak-storage sampler",
-            "name: Stop peak-storage sampler",
-            "storage-measurement-a.json",
-            "storage-measurement.json",
-        ),
-    ),
-    (
-        "Compact candidate telemetry evidence transfer",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Create compact candidate telemetry evidence",
-            'schema_version:"registry-stack.release-candidate-telemetry-evidence.v1"',
-            '.builds.a.cargo_cache.mode == "exact-key-restore"',
-            "(.peak_storage_measurements | length == 4)",
-            "name: Upload compact candidate telemetry evidence",
-            "registry-stack-candidate-telemetry-evidence-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}",
-            "path: dist/candidate-telemetry-evidence/evidence.json",
-            "retention-days: 7",
-            "Successful candidate has no compact telemetry evidence",
-            'cache_state="$(jq -c \'.builds.a.cargo_cache\' "${evidence}")"',
-            'storage_evidence="$(jq -c \'.peak_storage_measurements\' "${evidence}")"',
-        ),
-    ),
-    (
-        "Candidate workflow timing and resource telemetry",
-        ".github/workflows/release-candidate.yml",
-        (
-            "candidate-telemetry:\n    name: Record candidate workflow telemetry",
-            "      - verify-candidate",
-            "if: ${{ always() }}",
-            "name: Download cache and peak-storage evidence",
-            "name: Collect candidate wall clock, queue delay, and runner occupancy",
-            "queue_delay_seconds:",
-            "wall_clock_seconds:",
-            "runner_occupancy_seconds:",
-            "completed_runner_occupancy_seconds:",
-            "cache_state:",
-            "peak_storage_evidence:",
-            "name: Upload candidate workflow telemetry",
-            "retention-days: 7",
-        ),
-    ),
-    (
-        "Candidate registryctl release gates",
-        ".github/workflows/release-candidate.yml",
-        (
-            "verify-registryctl-image-lock-release-version",
-            "name: Verify built registryctl binary version",
-            "name: Verify native registryctl binary version",
-            "verify-registryctl-binary-version",
-        ),
-    ),
-    (
-        "Promotion registryctl tag-bound image lock",
-        ".github/workflows/release.yml",
-        (
-            "name: Render tag-bound image lock and checksums",
-            "render-registryctl-image-lock",
-            '--tag-target "${{ needs.verify.outputs.tag_target }}"',
-            "registryctl-${{ needs.verify.outputs.tag }}-image-lock.json",
-        ),
-    ),
-    (
-        "Private staging package enforcement",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Verify staging packages are private before publication",
-            "name: Build and push provenance-bearing staging images",
-            "name: Verify staging packages remain private",
-            "registry-notary-candidate",
-            "registry-relay-candidate",
-        ),
-    ),
-    (
-        "Immutable candidate scan and advisory gate",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Scan immutable staging digests",
-            'digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"',
-            "scan_sbom() {",
-            '(.matches | type == "array")',
-            ".descriptor.db.built // .descriptor.db.status.built",
-            'test("checksum=sha256%3A[0-9a-fA-F]{64}")',
-            "read_db_metadata() {",
-            "Grype did not emit a complete scan report",
-            "enforcing its complete report through the reviewed advisory policy",
-            "name: Enforce advisory policy",
-            "--syft-report dist/candidate/dist/sbom/registry-notary.syft.json",
-            "--rootfs dist/candidate/dist/rootfs/registry-notary",
-            "--syft-report dist/candidate/dist/sbom/registry-relay.syft.json",
-            "--rootfs dist/candidate/dist/rootfs/registry-relay",
-        ),
-    ),
-    (
-        "Attempt-bound closed candidate receipt",
-        ".github/workflows/release-candidate.yml",
-        (
-            "name: Create closed candidate receipt",
-            '--argjson expected_run_id "${GITHUB_RUN_ID}"',
-            '--argjson expected_run_attempt "${GITHUB_RUN_ATTEMPT}"',
-            '.status == "in_progress" and',
-            ".conclusion == null and",
-            '--argjson run_id "${GITHUB_RUN_ID}"',
-            '--argjson run_attempt "${GITHUB_RUN_ATTEMPT}"',
-            '--run-id "${GITHUB_RUN_ID}"',
-            '--run-attempt "${GITHUB_RUN_ATTEMPT}"',
-            "name: Attest candidate receipt",
-            "name: Upload attempt-bound candidate receipt",
-        ),
-    ),
-    (
-        "Candidate receipt trusted run and attempt binding",
-        "release/scripts/release_candidate.py",
-        (
-            'WORKFLOW_PATH = ".github/workflows/release-candidate.yml"',
-            'run_id = require_positive_integer(workflow["run_id"], "workflow.run_id")',
-            "run_attempt = require_positive_integer(",
-            "promotion requires independently fetched trusted workflow-run metadata",
-            '"run_attempt": run_attempt,',
-        ),
-    ),
-    (
-        "Scheduled protected repeatability trigger",
-        ".github/workflows/release-repeatability.yml",
-        (
-            "schedule:",
-            "repository_dispatch:\n    types: [release-repeatability]",
-            "name: Rebuild published tag",
-        ),
-    ),
-    (
-        "Repeatability published-tag proof",
-        ".github/workflows/release-repeatability.yml",
-        (
-            "name: Verify storage runway",
-            "name: Build canonical Linux payload from clean state",
-            "name: Compare published binary hashes",
-            "name: Compare published image config and layers",
-            "name: Attest repeatability receipt",
-            "name: Refresh durable repeatability evidence",
-        ),
-    ),
-    (
-        "Repeatability seven-day evidence retention",
-        ".github/workflows/release-repeatability.yml",
-        ("name: Upload seven-day repeatability evidence", "retention-days: 7"),
-    ),
-    (
-        "Scheduled protected candidate cleanup trigger",
-        ".github/workflows/release-candidate-cleanup.yml",
-        (
-            "schedule:",
-            "repository_dispatch:\n    types: [release-candidate-cleanup]",
-            "name: Delete expired candidate versions",
-        ),
-    ),
-    (
-        "Candidate cleanup seven-day retention",
-        ".github/workflows/release-candidate-cleanup.yml",
-        (
-            "name: Delete candidate versions older than seven days",
-            "python3 release/scripts/cleanup-release-candidates.py",
-            "retention-days: 7",
-        ),
-    ),
-    (
-        "Candidate cleanup exact package allowlist",
-        "release/scripts/cleanup-release-candidates.py",
-        (
-            'CANDIDATE_PACKAGES = (\n    "registry-notary-candidate",\n'
-            '    "registry-relay-candidate",\n)',
-            "if package in PUBLIC_PACKAGES:",
-            "if package not in CANDIDATE_PACKAGES:",
-        ),
-    ),
-)
-
-ORDERED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, str, str], ...] = (
-    (
-        "Immutable docs archive before first public image write",
-        ".github/workflows/release.yml",
-        "name: Build and verify the tag-bound docs bundle",
-        "name: Promote provenance-bearing candidate indexes without rewriting",
-    ),
-    (
-        "Promotion binding parsed before candidate verification",
-        ".github/workflows/release.yml",
-        "name: Parse exact annotated-tag candidate binding",
-        "name: Download and verify exact candidate attempt",
-    ),
-    (
-        "Candidate verifier before first public image write",
-        ".github/workflows/release.yml",
-        "name: Build fail-closed prewrite promotion state",
-        "name: Promote provenance-bearing candidate indexes without rewriting",
-    ),
-    (
-        "Candidate verifier before GitHub Release write",
-        ".github/workflows/release.yml",
-        "name: Build fail-closed prewrite promotion state",
-        "name: Create immutable GitHub Release",
-    ),
-    (
-        "Exact image promotion before GitHub Release write",
-        ".github/workflows/release.yml",
-        "name: Promote provenance-bearing candidate indexes without rewriting",
-        "name: Create immutable GitHub Release",
-    ),
-    (
-        "SLSA provenance before final reconciliation",
-        ".github/workflows/release.yml",
-        "release-provenance:\n    name: Generate tag-bound release provenance",
-        "reconcile:\n    name: Reconcile exact final release inventory",
-    ),
-    (
-        "Generated provenance before SLSA subject verification",
-        ".github/workflows/release.yml",
-        "release-provenance:\n    name: Generate tag-bound release provenance",
-        'slsa-verifier verify-artifact "downloaded/${subject_name}"',
-    ),
-    (
-        "Final reconciliation before extended proof dispatch",
-        ".github/workflows/release.yml",
-        "reconcile:\n    name: Reconcile exact final release inventory",
-        "extended-proof:\n    name: Schedule extended repeatability proof",
-    ),
-    (
-        "Candidate proof selection before build",
-        ".github/workflows/release-candidate.yml",
-        "name: Select standard or extended proof level",
-        "build-a:\n    name: Build A cached canonical candidate",
-    ),
-    (
-        "Candidate storage preflight before cache restore",
-        ".github/workflows/release-candidate.yml",
-        "name: Storage preflight before cache restore",
-        "name: Restore exact-key Cargo cache",
-    ),
-    (
-        "Candidate storage preflight before platform build",
-        ".github/workflows/release-candidate.yml",
-        "name: Storage preflight before platform build",
-        "name: Build platform payload once",
-    ),
-    (
-        "Candidate staging privacy verified before push",
-        ".github/workflows/release-candidate.yml",
-        "name: Verify staging packages are private before publication",
-        "name: Build and push provenance-bearing staging images",
-    ),
-    (
-        "Candidate registryctl version gate before staging push",
-        ".github/workflows/release-candidate.yml",
-        "name: Verify built registryctl binary version",
-        "name: Build and push provenance-bearing staging images",
-    ),
-    (
-        "Candidate staging privacy rechecked after push",
-        ".github/workflows/release-candidate.yml",
-        "name: Build and push provenance-bearing staging images",
-        "name: Verify staging packages remain private",
-    ),
-    (
-        "Candidate scan before advisory policy",
-        ".github/workflows/release-candidate.yml",
-        "name: Scan immutable staging digests",
-        "name: Enforce advisory policy",
-    ),
-    (
-        "Candidate advisory policy before receipt",
-        ".github/workflows/release-candidate.yml",
-        "name: Enforce advisory policy",
-        "name: Create closed candidate receipt",
-    ),
-    (
-        "Candidate receipt created before attestation",
-        ".github/workflows/release-candidate.yml",
-        "name: Create closed candidate receipt",
-        "name: Attest candidate receipt",
-    ),
-    (
-        "Repeatability storage preflight before expensive rebuild",
-        ".github/workflows/release-repeatability.yml",
-        "name: Verify storage runway",
-        "name: Build canonical Linux payload from clean state",
-    ),
-)
-
-FORBIDDEN_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    (
-        "Promotion cannot rebuild product bytes, write refs, or use branch dispatch",
-        ".github/workflows/release.yml",
-        (
-            "workflow_dispatch:",
-            "git push",
-            "git tag ",
-            "git update-ref",
-            "/git/refs",
-            "cargo build",
-            "docker build",
-            "docker push",
-            "docker/build-push-action@",
-            "buildx build",
-            "run: release/scripts/build-release-binaries.sh",
-            "run: release/scripts/build-release-image.sh",
-        ),
-    ),
-    (
-        "Candidate cannot select branch-controlled workflow code, write refs, or publish",
-        ".github/workflows/release-candidate.yml",
-        (
-            "workflow_dispatch:",
-            "contents: write",
-            "git push",
-            "git update-ref",
-            "crane copy",
-            "gh release create",
-            "gh release upload",
-        ),
-    ),
-    (
-        "Repeatability cannot select branch-controlled workflow code or write refs",
-        ".github/workflows/release-repeatability.yml",
-        ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
-    ),
-    (
-        "Candidate cleanup cannot select branch-controlled workflow code or write refs",
-        ".github/workflows/release-candidate-cleanup.yml",
-        ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
-    ),
-)
-
-# The compact v2 release contract replaced the receipt, capsule, telemetry, and
-# post-publication reconciliation model above. Keep the active inventory close
-# to the generic checkers so CI evaluates the current workflow boundary.
+# The compact v2 release contract is the active release inventory.
 REQUIRED_RELEASE_SECURITY_GATES = (
     (
-        "Candidate-bound annotated tag promotion",
+        "Protected-main candidate-bound annotated tag promotion",
         ".github/workflows/release.yml",
         (
-            'push:\n    tags:\n      - "v*"',
+            "workflow_dispatch:",
+            "tag:",
+            '"${GITHUB_REF}" != refs/heads/main',
             "name: Resolve exact tag identity",
             'if [[ "$(git cat-file -t "refs/tags/${tag}")" != tag ]]; then',
+            "git merge-base --is-ancestor",
             "name: Parse compact candidate binding",
             'for field in ("run_id", "run_attempt", "manifest_sha256"):',
         ),
@@ -942,7 +412,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             'artifact_name="registry-stack-release-candidate-${RUN_ID}-${RUN_ATTEMPT}"',
             "expected_archive_digest=",
             "release-candidate-manifest.json",
-            "name: Verify binding, candidate, attestations, and recent canary",
+            "name: Verify binding, candidate, and attestations",
             "verify-tag-binding",
             "gh attestation verify",
         ),
@@ -959,40 +429,27 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Tag-bound release provenance",
-        ".github/workflows/release.yml",
-        (
-            "release-provenance:",
-            "uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@",
-            "upload-assets: false",
-            "name: Download exact tag-bound release provenance",
-            "name: Upload provenance to the exact bound draft",
-        ),
-    ),
-    (
-        "Draft reconciliation and exact image promotion",
+        "Retryable exact image promotion",
         ".github/workflows/release.yml",
         (
             "promote-images:\n    name: Reconcile staged draft, then promote exact image manifests",
             "name: Reconcile exact staged draft before first public image write",
             "diff -u contract/expected-assets contract/actual-assets",
-            "name: Reverify candidate expiry immediately before registry login",
-            "name: Burn version on first exact digest promotion",
-            "require-image-tag-absent",
+            "name: Reconcile exact image digests",
+            "reconcile-image-tag",
+            '--expected-digest "${digest}"',
+            'if [[ "${state}" == absent ]]; then',
             'crane copy "${candidate_ref}" "${final_ref}"',
             'test "$(crane digest "${final_ref}")" = "${digest}"',
         ),
     ),
     (
-        "Final signed runtime release closure",
+        "Final signed Beta release closure",
         ".github/workflows/release.yml",
         (
-            "finalize-assets:\n    name: Finalize signed assets and prove the released 1.x runtime",
-            "if ((major >= 1)); then",
-            "registry_release_lock.py create-payload",
-            "registry-release-lock.v1.json",
-            "first-country-release-form.py run",
-            "first-country-release-form.tar.gz",
+            "finalize-assets:\n    name: Finalize the signed Beta asset closure",
+            "name: Render the final image lock",
+            "name: Sign and upload the checksum closure",
             "cosign sign-blob --yes",
             "contract/final-upload-release.json",
             "name: Upload final reconciliation contract",
@@ -1004,7 +461,6 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "name: Classify exact bound draft or published release",
             "name: Recheck complete signed release and exact public images",
-            "if: steps.release_state.outputs.release_state == 'draft'",
             "name: Publish immutable release",
             "-F draft=false",
             "-F prerelease=false",
@@ -1039,9 +495,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release-candidate.yml",
         (
             "repository_dispatch:\n    types: [release_candidate]",
-            "name: Validate request, source, CI, canary, and destinations",
+            "name: Validate request, source, CI, and destinations",
             "git merge-base --is-ancestor",
-            "verify-canary",
             "tag_lookup_status=$?",
             'if [[ "${tag_lookup_status}" -ne 2 ]]; then',
             "cannot prove tag ${tag} is absent",
@@ -1053,7 +508,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release-candidate.yml",
         (
             "build-canonical:\n    name: Build Linux payload, private images, and docs once",
-            "name: Restore exact-key Cargo cache",
+            "name: Restore reusable Cargo cache",
+            "restore-keys:",
             "name: Build canonical Linux payload once",
             "name: Build private candidate image layouts once",
             "name: Package exact release docs archive",
@@ -1098,34 +554,6 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Nightly protected release canary",
-        ".github/workflows/release-canary.yml",
-        (
-            "schedule:",
-            "workflow_dispatch:",
-            "name: Exercise dispatch, candidate, advisory, draft, and docs contracts",
-            "verify-canary",
-            "name: Attest canary only after all local checks pass",
-            "name: Run platform-specific release-tool contract",
-        ),
-    ),
-    (
-        "Scheduled 30-day repeatability boundary",
-        ".github/workflows/release-repeatability.yml",
-        (
-            "schedule:",
-            "workflow_dispatch:",
-            "name: Resolve exact published tag",
-            "name: Build canonical Linux payload from clean state",
-            "name: Compare published binary hashes",
-            "name: Compare published image config and layers",
-            "name: Record successful 30-day proof",
-            "silver_claim_valid_through:",
-            "name: Upload 30-day repeatability evidence",
-            "retention-days: 30",
-        ),
-    ),
-    (
         "Scheduled protected candidate cleanup trigger",
         ".github/workflows/release-candidate-cleanup.yml",
         (
@@ -1157,7 +585,7 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "Promotion binding before candidate verification",
         ".github/workflows/release.yml",
         "name: Parse compact candidate binding",
-        "name: Verify binding, candidate, attestations, and recent canary",
+        "name: Verify binding, candidate, and attestations",
     ),
     (
         "Candidate verification before draft creation",
@@ -1169,42 +597,18 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "Draft reconciliation before image promotion",
         ".github/workflows/release.yml",
         "name: Reconcile exact staged draft before first public image write",
-        "name: Burn version on first exact digest promotion",
+        "name: Reconcile exact image digests",
     ),
     (
-        "Exact image promotion before final runtime proof",
+        "Exact image promotion before checksum signing",
         ".github/workflows/release.yml",
-        "name: Burn version on first exact digest promotion",
-        "name: Generate signed 1.x lock and run the clean released runtime",
-    ),
-    (
-        "Final runtime proof before release provenance",
-        ".github/workflows/release.yml",
-        "name: Generate signed 1.x lock and run the clean released runtime",
-        "release-provenance:",
-    ),
-    (
-        "Tag-bound provenance before bound-draft upload",
-        ".github/workflows/release.yml",
-        "release-provenance:",
-        "name: Upload provenance to the exact bound draft",
-    ),
-    (
-        "Bound-draft provenance upload before publication",
-        ".github/workflows/release.yml",
-        "name: Upload provenance to the exact bound draft",
-        "name: Publish immutable release",
-    ),
-    (
-        "Candidate expiry immediately before registry login",
-        ".github/workflows/release.yml",
-        "name: Reverify candidate expiry immediately before registry login",
-        "name: Log in for exact candidate promotion",
+        "name: Reconcile exact image digests",
+        "name: Sign and upload the checksum closure",
     ),
     (
         "Exact image promotion before release publication",
         ".github/workflows/release.yml",
-        "name: Burn version on first exact digest promotion",
+        "name: Reconcile exact image digests",
         "name: Publish immutable release",
     ),
     (
@@ -1247,10 +651,9 @@ ORDERED_RELEASE_SECURITY_GATES = (
 
 FORBIDDEN_RELEASE_SECURITY_GATES = (
     (
-        "Promotion cannot rebuild product bytes, write refs, or use recovery dispatch",
+        "Promotion cannot rebuild product bytes or write refs",
         ".github/workflows/release.yml",
         (
-            "workflow_dispatch:",
             "git push",
             "git tag ",
             "git update-ref",
@@ -1463,7 +866,7 @@ def candidate_attestation_isolation_violations(
 def promotion_first_write_barrier_violations(
     workflow: str | None,
 ) -> list[str]:
-    """Require a fail-closed last-moment check of every public destination."""
+    """Allow only an absent destination or the already-promoted exact digest."""
 
     gate = "Promotion first-write destination barrier"
     if workflow is None:
@@ -1474,36 +877,41 @@ def promotion_first_write_barrier_violations(
     promotion_steps = [
         step
         for step in yaml_step_blocks(publish)
-        if "name: Burn version on first exact digest promotion" in step
+        if "name: Reconcile exact image digests" in step
     ]
     if len(promotion_steps) != 1:
         return [gate]
     promotion_step = promotion_steps[0]
     promotion_required = (
-        "name: Burn version on first exact digest promotion",
+        "name: Reconcile exact image digests",
         "while IFS=$'\\t' read -r candidate_ref digest final_ref; do",
         'test "$(crane digest "${candidate_ref}")" = "${digest}"',
         "gh api --paginate --slurp",
-        "require-image-tag-absent",
-        "irreversible version burn",
+        "reconcile-image-tag",
+        '--expected-digest "${digest}"',
+        'if [[ "${state}" == absent ]]; then',
+        'test "${state}" = present',
         'crane copy "${candidate_ref}" "${final_ref}"',
         'test "$(crane digest "${final_ref}")" = "${digest}"',
         "[.candidate_ref,.digest,.final_ref] | @tsv",
     )
     publish_required = (
         "name: Reconcile exact staged draft before first public image write",
-        "name: Reverify candidate expiry immediately before registry login",
+        "name: Log in for exact candidate promotion",
     )
     source_check = 'test "$(crane digest "${candidate_ref}")" = "${digest}"'
-    absence_check = "require-image-tag-absent"
+    reconcile = "reconcile-image-tag"
+    absent_branch = 'if [[ "${state}" == absent ]]; then'
     first_write = 'crane copy "${candidate_ref}" "${final_ref}"'
     final_check = 'test "$(crane digest "${final_ref}")" = "${digest}"'
     if (
         any(marker not in promotion_step for marker in promotion_required)
         or any(marker not in publish for marker in publish_required)
         or promotion_step.find(source_check)
-        >= promotion_step.find(absence_check)
-        or promotion_step.find(absence_check)
+        >= promotion_step.find(reconcile)
+        or promotion_step.find(reconcile)
+        >= promotion_step.find(absent_branch)
+        or promotion_step.find(absent_branch)
         >= promotion_step.find(first_write)
         or promotion_step.find(first_write)
         >= promotion_step.find(final_check)
@@ -1521,9 +929,8 @@ def release_draft_mutation_barrier_violations(
     if workflow is None:
         return [gate]
     finalize = yaml_job_block(workflow, "finalize-assets")
-    provenance = yaml_job_block(workflow, "release-provenance")
     publish = yaml_job_block(workflow, "publish")
-    if finalize is None or provenance is None or publish is None:
+    if finalize is None or publish is None:
         return [gate]
 
     def step_with(job: str, marker: str) -> str | None:
@@ -1536,11 +943,7 @@ def release_draft_mutation_barrier_violations(
     )
     final_upload = step_with(
         finalize,
-        "name: Sign and upload the complete pre-provenance asset closure",
-    )
-    provenance_upload = step_with(
-        publish,
-        "name: Upload provenance to the exact bound draft",
+        "name: Sign and upload the checksum closure",
     )
     classification = step_with(
         publish,
@@ -1556,7 +959,6 @@ def release_draft_mutation_barrier_violations(
         for step in (
             cleanup,
             final_upload,
-            provenance_upload,
             classification,
             signed_recheck,
             publication,
@@ -1565,7 +967,6 @@ def release_draft_mutation_barrier_violations(
         return [gate]
     assert cleanup is not None
     assert final_upload is not None
-    assert provenance_upload is not None
     assert classification is not None
     assert signed_recheck is not None
     assert publication is not None
@@ -1577,16 +978,6 @@ def release_draft_mutation_barrier_violations(
     final_upload_write = final_upload.find(
         'gh release upload "${tag}" "${additions[@]}"'
     )
-    provenance_delete = provenance_upload.find("gh api --method DELETE")
-    provenance_write = provenance_upload.find(
-        'gh release upload "${tag}" "provenance/${provenance}"'
-    )
-    provenance_guard_offsets = []
-    offset = 0
-    for line in provenance_upload.splitlines(keepends=True):
-        if line.strip() == "require_bound_draft":
-            provenance_guard_offsets.append(offset)
-        offset += len(line)
     publication_state = publication.find("publish-state.json")
     publication_draft = publication.find(".draft == true", publication_state)
     publication_draft_branch = publication.find(
@@ -1603,10 +994,7 @@ def release_draft_mutation_barrier_violations(
         'crane copy "${candidate_ref}" "${final_ref}"',
     )
     if (
-        "contents: write" not in provenance
-        or "upload-assets: false" not in provenance
-        or "upload-assets: true" in provenance
-        or cleanup_loop < 0
+        cleanup_loop < 0
         or cleanup_guard < cleanup_loop
         or cleanup_delete < cleanup_guard
         or ".draft == true" not in cleanup
@@ -1615,26 +1003,6 @@ def release_draft_mutation_barrier_violations(
         or ".draft == true" not in final_upload[
             final_upload_guard:final_upload_write
         ]
-        or len(provenance_guard_offsets) != 2
-        or provenance_delete < 0
-        or (
-            provenance_guard_offsets
-            and provenance_guard_offsets[0] >= provenance_delete
-        )
-        or provenance_write < provenance_delete
-        or (
-            provenance_guard_offsets
-            and provenance_guard_offsets[1] <= provenance_delete
-        )
-        or (
-            provenance_guard_offsets
-            and provenance_guard_offsets[1] >= provenance_write
-        )
-        or ".draft == true" not in provenance_upload
-        or (
-            "if: steps.release_state.outputs.release_state == 'draft'"
-            not in provenance_upload
-        )
         or "id: release_state" not in classification
         or '["draft", (.id | tostring)]' not in classification
         or '["published", (.id | tostring)]' not in classification
