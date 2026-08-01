@@ -54,6 +54,73 @@ test('svgContrastErrors excludes pure white text (reverse text on a colored chip
   assert.deepEqual(svgContrastErrors('fixture.svg', svg), []);
 });
 
+test('white text with no chip behind it is reported, not exempted', () => {
+  // The blanket white exemption used to pass this at 1:1 against the canvas.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <text x="0" y="0" fill="#ffffff">stray label on the canvas</text>
+  </svg>`;
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /reverse text/);
+});
+
+test('white text on a white shape is reported', () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <rect fill="#ffffff" width="10" height="10"/>
+    <text x="0" y="0" fill="#ffffff">invisible</text>
+  </svg>`;
+  assert.equal(svgContrastErrors('fixture.svg', svg).length, 1);
+});
+
+test('white text is scored against the chip it sits on, not the canvas', () => {
+  // #767676 on white is 4.54:1, but white ON #767676 is the same ratio, so a
+  // chip that is too light for reverse text must still fail.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <rect fill="#bbbbbb" width="10" height="10"/>
+    <text x="0" y="0" fill="#ffffff">too light a chip</text>
+  </svg>`;
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1, '#ffffff on #bbbbbb is 1.98:1');
+  assert.match(errors[0], /#bbbbbb/);
+});
+
+test('a non-hex declaration later in the rule wins over an earlier hex one', () => {
+  // Interaction of the last-declaration rule with the unscoreable-color rule:
+  // reading hex declarations only would retain #161616 and miss that the
+  // element actually renders white.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+    <title>t</title><desc>d</desc>
+    <style>.label { fill: #161616; fill: white; }</style>
+    <text class="label">renders white</text>
+  </svg>`;
+  const errors = svgContrastErrors('fixture.svg', svg);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /cannot be scored/);
+  assert.match(errors[0], /white/);
+});
+
+test('multiple classes resolve by stylesheet order, not class-attribute order', () => {
+  // Every selector this parser handles is a single class, so specificity is
+  // equal and the later rule wins regardless of how the names are written.
+  const style = '<style>.safe { fill: #161616; } .danger { fill: #cccccc; }</style>';
+  for (const classAttr of ['safe danger', 'danger safe']) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
+      <title>t</title><desc>d</desc>
+      ${style}
+      <text class="${classAttr}">two classes</text>
+    </svg>`;
+    assert.deepEqual(
+      extractTextFillColors(svg).colors,
+      ['#cccccc'],
+      `class="${classAttr}" must resolve to the later rule`,
+    );
+    assert.equal(svgContrastErrors('fixture.svg', svg).length, 1);
+  }
+});
+
 test('svgContrastErrors flags text that fails the 4.5:1 threshold against the fixed surface', () => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" role="img">
     <title>t</title><desc>d</desc>

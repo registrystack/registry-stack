@@ -92,7 +92,12 @@ export function contrastRatio(hexA, hexB) {
 const STYLE_BLOCK_RE = /<style[^>]*>([\s\S]*?)<\/style>/g;
 
 function parseClassFillMap(svgText) {
+  // className -> { color, order }. `order` is the rule's position across all
+  // <style> blocks, so a text carrying several classes can be resolved the way
+  // CSS resolves it. Every selector handled here is a single class, so all
+  // candidates have equal specificity and source order alone decides.
   const classFills = new Map();
+  let order = 0;
   // Only single-class selectors are resolved (e.g. `.tag { fill: #000091; }`).
   // Compound selectors like `.cardtitle.sm` are skipped: in the current
   // diagrams they only ever override font-size, never fill.
@@ -100,16 +105,19 @@ function parseClassFillMap(svgText) {
     const ruleRe = /\.([\w-]+)\s*\{([^}]*)\}/g;
     let rule;
     while ((rule = ruleRe.exec(styleMatch[1]))) {
+      order += 1;
       const [, className, body] = rule;
       // A rule may declare fill more than once. CSS paints the last
       // declaration, so reading the first would score a color the reader never
       // sees, and it fails in the dangerous direction: a legible fill written
       // ahead of an illegible one would hide the illegible one from the gate.
+      // Any value is captured, not just hex, so that a non-hex override of a
+      // hex fallback reaches the unscoreable check instead of being ignored.
       let effectiveFill = null;
-      for (const declaration of body.matchAll(/fill:\s*(#[0-9a-fA-F]{3,8})/g)) {
-        effectiveFill = declaration[1];
+      for (const declaration of body.matchAll(/fill:\s*([^;}]+)/g)) {
+        effectiveFill = declaration[1].trim();
       }
-      if (effectiveFill) classFills.set(className, effectiveFill);
+      if (effectiveFill) classFills.set(className, { color: effectiveFill, order });
     }
   }
   return classFills;
@@ -122,10 +130,12 @@ function attrValue(tag, name) {
 
 // Resolves the effective fill color of every <text> element in an SVG,
 // walking <g fill="..."> ancestry and class-based fills from a <style>
-// block. Returns { colors, unresolved }: `colors` are hex fills actually
-// used to paint text (deduplicated), `unresolved` counts <text> elements
-// whose fill could not be determined (no inline fill, no matching class, no
-// enclosing <g fill>).
+// block. Returns { colors, unresolved, reverseText }: `colors` are fills
+// actually used to paint text (deduplicated), `unresolved` counts <text>
+// elements whose fill could not be determined (no inline fill, no matching
+// class, no enclosing <g fill>), and `reverseText` holds the backdrop fill
+// behind each <text> painted in the surface color, one entry per element,
+// null when no shape precedes it.
 export function extractTextFillColors(svgText) {
   const classFills = parseClassFillMap(svgText);
   // <style> regions are skipped during the walk rather than deleted from the
@@ -133,9 +143,12 @@ export function extractTextFillColors(svgText) {
   // removal can splice its neighbours into a fresh `<style` (`<sty<style>le>`),
   // so the scanned string would still hold what the removal was meant to drop.
   // Tracking the region here needs no rewriting and cannot resurrect a tag.
-  const tokenRe = /<style\b[^>]*>|<\/style>|<g\b[^>]*>|<\/g>|<text\b[^>]*>/g;
+  const tokenRe =
+    /<style\b[^>]*>|<\/style>|<g\b[^>]*>|<\/g>|<text\b[^>]*>|<(?:rect|circle|ellipse|polygon|path)\b[^>]*>/g;
   const gFillStack = [];
   const colors = new Set();
+  const reverseText = [];
+  let lastShapeFill = null;
   let unresolved = 0;
   let inStyle = false;
   let token;
@@ -160,36 +173,92 @@ export function extractTextFillColors(svgText) {
       gFillStack.push(attrValue(tag, 'fill') ?? inherited);
       continue;
     }
+    if (!tag.startsWith('<text')) {
+      // A drawn shape. Remembered so reverse text can be scored against the
+      // chip it is painted on rather than against the canvas.
+      const shapeFill = attrValue(tag, 'fill');
+      if (shapeFill) lastShapeFill = normalizeColor(shapeFill);
+      continue;
+    }
     // <text ...>
     const inlineFill = attrValue(tag, 'fill');
     const classAttr = attrValue(tag, 'class');
+    // The winning class is the one whose rule appears last, not the one named
+    // first in the class attribute; `class="safe danger"` and `class="danger
+    // safe"` must both resolve to whichever rule the stylesheet declares later.
     const classFill = classAttr
-      ? classAttr.split(/\s+/).map((name) => classFills.get(name)).find(Boolean)
+      ? classAttr
+          .split(/\s+/)
+          .map((name) => classFills.get(name))
+          .filter(Boolean)
+          .reduce((winner, candidate) => (winner && winner.order > candidate.order ? winner : candidate), null)
+          ?.color
       : undefined;
     const inheritedFill = gFillStack[gFillStack.length - 1] ?? null;
     const resolved = inlineFill ?? classFill ?? inheritedFill;
     if (resolved) {
-      colors.add(normalizeColor(resolved));
+      const color = normalizeColor(resolved);
+      colors.add(color);
+      // Reverse text is only legible against the shape it is painted on, so
+      // the backdrop is captured per element rather than scored against the
+      // canvas. Document order stands in for geometry: in these diagrams a
+      // chip is always drawn immediately before the label that sits on it.
+      if (color === DIAGRAM_SURFACE) reverseText.push(lastShapeFill);
     } else {
       unresolved += 1;
     }
   }
-  return { colors: [...colors], unresolved };
+  return { colors: [...colors], unresolved, reverseText };
 }
 
 // Contrast errors for one SVG's text against the fixed diagram surface.
-// Pure white (#ffffff) text is excluded: in the shipped diagrams it is only
-// ever used as reverse text on a small colored chip (e.g. the "DCI-NATIVE"
-// tag on a #000091 rect in registry-country-evidence-mesh.svg), never
-// directly on the diagram's own white/transparent canvas, so it is not
-// actually read against DIAGRAM_SURFACE.
+// Text painted in the surface color is reverse text: it is legible only
+// against the chip it sits on (e.g. the "DCI-NATIVE" tag on a #000091 rect in
+// registry-country-evidence-mesh.svg), so it is scored against that chip
+// instead of against the canvas it would score 1:1 on.
+// Reverse text is legible only against the shape drawn behind it. Document
+// order stands in for geometry: in these diagrams the chip is always drawn
+// immediately before the label that sits on it. That is a convention rather
+// than a layout computation, so a label with no shape before it is reported
+// instead of assumed safe, which is the direction that fails loudly.
+function reverseTextErrors(fileLabel, backdrops) {
+  const errors = [];
+  for (const backdrop of backdrops) {
+    if (backdrop === null) {
+      errors.push(
+        `${fileLabel} paints reverse text in the surface color ${DIAGRAM_SURFACE} with no shape ` +
+          `drawn before it, so nothing establishes a backdrop it can be read against`,
+      );
+      continue;
+    }
+    if (!isScoreableColor(backdrop)) {
+      errors.push(
+        `${fileLabel} paints reverse text on a backdrop ${backdrop} that cannot be scored: ` +
+          `only #rgb and #rrggbb are supported, so express it as an opaque hex color`,
+      );
+      continue;
+    }
+    const ratio = contrastRatio(DIAGRAM_SURFACE, backdrop);
+    if (ratio < MIN_TEXT_CONTRAST) {
+      errors.push(
+        `${fileLabel} reverse text has ${ratio.toFixed(2)}:1 contrast against its backdrop ` +
+          `${backdrop} (needs >= ${MIN_TEXT_CONTRAST}:1)`,
+      );
+    }
+  }
+  return errors;
+}
+
 export function svgContrastErrors(fileLabel, svgText) {
   const errors = [];
-  const { colors, unresolved } = extractTextFillColors(svgText);
+  const { colors, unresolved, reverseText } = extractTextFillColors(svgText);
   if (unresolved > 0) {
     errors.push(`${fileLabel} has ${unresolved} <text> element(s) with no resolvable fill color`);
   }
+  errors.push(...reverseTextErrors(fileLabel, reverseText));
   for (const color of colors) {
+    // Scored above, against its own backdrop rather than the canvas.
+    if (color === DIAGRAM_SURFACE) continue;
     if (!isScoreableColor(color)) {
       errors.push(
         `${fileLabel} text fill ${color} cannot be scored: only #rgb and #rrggbb are supported, ` +
@@ -197,13 +266,6 @@ export function svgContrastErrors(fileLabel, svgText) {
       );
       continue;
     }
-    // White text in these diagrams is always reverse text on a colored chip
-    // (for example a #000091 rect), never painted on the diagram canvas, so
-    // measuring it against DIAGRAM_SURFACE would report a false failure.
-    // Resolving the actual painted rect behind each label would mean
-    // geometric analysis; the tradeoff is that white-on-white text, which no
-    // diagram would intend, goes undetected here.
-    if (color === '#ffffff') continue;
     const ratio = contrastRatio(color, DIAGRAM_SURFACE);
     if (ratio < MIN_TEXT_CONTRAST) {
       errors.push(
