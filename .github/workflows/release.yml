@@ -53,6 +53,8 @@ jobs:
 
       - name: Resolve exact tag identity
         id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -61,9 +63,13 @@ jobs:
             echo "Release publication must be dispatched from protected main" >&2
             exit 1
           fi
-          tag="${{ inputs.tag }}"
+          tag="${RELEASE_TAG}"
           if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Release tag must be canonical vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          if [[ "${tag%%.*}" != v0 ]]; then
+            echo "Beta publication accepts only v0.x.y release tags" >&2
             exit 1
           fi
           git fetch --force origin \
@@ -266,6 +272,15 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Checkout exact tagged product source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          path: product-source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
       - name: Download verified promotion input
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -343,7 +358,7 @@ jobs:
               ) | .id' \
               "${RUNNER_TEMP}/existing-draft.json" >/dev/null
           elif grep -Fxq 'release not found' "${release_view_error}"; then
-            cp "release/notes/${tag}.md" contract/draft-notes.md
+            cp "product-source/release/notes/${tag}.md" contract/draft-notes.md
             printf \
               '\n<!-- registry-stack-release-candidate-v2 manifest_sha256:%s -->\n' \
               "${{ needs.verify.outputs.manifest_sha256 }}" \
@@ -378,12 +393,22 @@ jobs:
              .name == $title and
              ((.body // "") | contains($marker))' \
             "${RUNNER_TEMP}/staged-draft.json" >/dev/null
+          {
+            printf '%s\n' \
+              "registryctl-${tag}-image-lock.json" \
+              SHA256SUMS \
+              "registry-stack-${tag}-SHA256SUMS.sigstore.json"
+          } | sort -u > contract/retryable-final-assets
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
+          {
+            cat contract/expected-staged-assets
+            cat contract/retryable-final-assets
+          } | sort -u > contract/allowed-staged-assets
           jq -r '.assets[].name' "${RUNNER_TEMP}/staged-draft.json" \
             | sort -u > contract/actual-staged-assets
           if ! comm -13 \
-              contract/expected-staged-assets \
+              contract/allowed-staged-assets \
               contract/actual-staged-assets \
               > contract/unexpected-staged-assets; then
             exit 1
@@ -525,7 +550,11 @@ jobs:
           jq -r '.[].name' contract/staged-assets.json \
             | sort > contract/expected-assets
           jq -r '.assets[].name' contract/draft-release.json \
-            | sort > contract/actual-assets
+            | sort > contract/observed-assets
+          comm -23 \
+            contract/observed-assets \
+            contract/retryable-final-assets \
+            > contract/actual-assets
           diff -u contract/expected-assets contract/actual-assets
           mkdir -p draft
           gh release download "${tag}" \
@@ -540,6 +569,20 @@ jobs:
             jq -r '.[] | [.name,.sha256,.size] | @tsv' \
               contract/staged-assets.json
           )
+
+      - name: Recheck candidate expiry immediately before registry login
+        shell: bash
+        run: |
+          set -euo pipefail
+          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}"
+          manifest="${promotion}/release-candidate-manifest.json"
+          expires_at="$(jq -er '.validity.expires_at' "${manifest}")"
+          expires_epoch="$(date -u -d "${expires_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          if (( now_epoch >= expires_epoch )); then
+            echo "Candidate expired before public image promotion" >&2
+            exit 1
+          fi
 
       - name: Log in for exact candidate promotion
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3.4.0
@@ -666,12 +709,6 @@ jobs:
               contract/draft-release.json >/dev/null
           }
           require_bound_draft
-          {
-            printf '%s\n' \
-              "registryctl-${tag}-image-lock.json" \
-              SHA256SUMS \
-              "registry-stack-${tag}-SHA256SUMS.sigstore.json"
-          } | sort -u > contract/retryable-final-assets
           {
             jq -r '.[].name' contract/staged-assets.json
             cat contract/retryable-final-assets

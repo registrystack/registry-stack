@@ -54,7 +54,7 @@ jobs:
           fi
           echo "apply=${apply}" >> "${GITHUB_OUTPUT}"
 
-      - name: Delete candidate versions older than seven days
+      - name: Delete candidate versions older than eight days
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLY: ${{ steps.mode.outputs.apply }}

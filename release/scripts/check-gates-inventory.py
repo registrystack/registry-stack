@@ -539,7 +539,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
             "candidate/release-candidate-manifest.json",
             "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz",
-            "retention-days: 7",
+            "retention-days: 8",
         ),
     ),
     (
@@ -559,7 +559,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "schedule:",
             "repository_dispatch:\n    types: [release-candidate-cleanup]",
-            "name: Delete candidate versions older than seven days",
+            "name: Delete candidate versions older than eight days",
         ),
     ),
     (
@@ -1047,7 +1047,7 @@ def artifact_retention_violations(workflow: str | None) -> list[str]:
     intermediate_steps = [block for block in upload_steps if block not in final_steps]
     if (
         len(final_steps) != 1
-        or "retention-days: 7" not in final_steps[0]
+        or "retention-days: 8" not in final_steps[0]
         or not intermediate_steps
         or any("retention-days: 2" not in block for block in intermediate_steps)
     ):

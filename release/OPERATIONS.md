@@ -158,6 +158,7 @@ release changes or explicitly claims their surface:
 Add one of these controls to the release clock only for a named threat or user
 claim. Record the invariant, owner, duration, and removal condition.
 
-Candidate Actions artifacts and promotion validity are both seven days. The
-candidate cleanup workflow removes older private candidate package versions
-and cannot target public package names.
+Candidate promotion validity is seven days. The final candidate artifact and
+private candidate images are retained for eight days, leaving one day of
+cleanup margin without adding an operator step. Cleanup cannot target public
+package names.
