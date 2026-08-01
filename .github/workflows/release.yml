@@ -214,35 +214,28 @@ jobs:
         run: |
           set -euo pipefail
           manifest=promotion/candidate/release-candidate-manifest.json
-          response="${RUNNER_TEMP}/release-response"
-          if gh api --include --silent \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${{ steps.identity.outputs.tag }}" \
-              >"${response}" 2>&1; then
-            status=200
-          else
-            status="$(
-              python3 release/scripts/release_workflow_guard.py http-status \
-                --response "${response}"
-            )"
-          fi
-          if [[ "${status}" == 200 ]]; then
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${{ steps.identity.outputs.tag }}" \
+          tag="${{ steps.identity.outputs.tag }}"
+          if release_id="$(
+            gh release view "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json databaseId \
+              --jq .databaseId 2>/dev/null
+          )"; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
               > promotion/existing-release.json
             jq -e \
-              --arg tag "${{ steps.identity.outputs.tag }}" \
-              --arg title "RegistryStack ${{ steps.identity.outputs.tag }}" \
+              --argjson release_id "${release_id}" \
+              --arg tag "${tag}" \
+              --arg title "RegistryStack ${tag}" \
               --arg marker \
                 "registry-stack-release-candidate-v2 manifest_sha256:${{ steps.binding.outputs.manifest_sha256 }}" \
-              '.draft == true and
+              '.id == $release_id and
+               .draft == true and
                .prerelease == false and
                .tag_name == $tag and
                .name == $title and
                ((.body // "") | contains($marker))' \
               promotion/existing-release.json >/dev/null
-          elif [[ "${status}" != 404 ]]; then
-            echo "GitHub Release destination is neither absent nor an exact draft" >&2
-            exit 1
           fi
           while IFS=$'\t' read -r final_ref _digest; do
             destination="$(
@@ -340,26 +333,23 @@ jobs:
               '{name:$name,sha256:$sha256,size:$size}'
           done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z) \
             | jq -s 'sort_by(.name)' > contract/staged-assets.json
-          response="${RUNNER_TEMP}/release-response"
-          if gh api --include --silent \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              >"${response}" 2>&1; then
-            status=200
-          else
-            status="$(
-              python3 release/scripts/release_workflow_guard.py http-status \
-                --response "${response}"
-            )"
-          fi
-          if [[ "${status}" == 200 ]]; then
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          release_view_error="${RUNNER_TEMP}/release-view.error"
+          if release_id="$(
+            gh release view "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json databaseId \
+              --jq .databaseId 2>"${release_view_error}"
+          )"; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
               > "${RUNNER_TEMP}/existing-draft.json"
             jq -e \
+              --argjson release_id "${release_id}" \
               --arg tag "${tag}" \
               --arg title "RegistryStack ${tag}" \
               --arg marker \
                 "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
               'select(
+                .id == $release_id and
                 .draft == true and
                 .prerelease == false and
                 .tag_name == $tag and
@@ -367,10 +357,7 @@ jobs:
                 ((.body // "") | contains($marker))
               ) | .id' \
               "${RUNNER_TEMP}/existing-draft.json" >/dev/null
-          elif [[ "${status}" != 404 ]]; then
-            echo "GitHub Release destination is neither absent nor an exact draft" >&2
-            exit 1
-          else
+          elif grep -Fxq 'release not found' "${release_view_error}"; then
             cp "release/notes/${tag}.md" contract/draft-notes.md
             printf \
               '\n<!-- registry-stack-release-candidate-v2 manifest_sha256:%s -->\n' \
@@ -381,9 +368,31 @@ jobs:
               --draft \
               --title "RegistryStack ${tag}" \
               --notes-file contract/draft-notes.md
+          else
+            cat "${release_view_error}" >&2
+            exit 1
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          release_id="$(
+            gh release view "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json databaseId \
+              --jq .databaseId
+          )"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > "${RUNNER_TEMP}/staged-draft.json"
+          jq -e \
+            --arg tag "${tag}" \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            --argjson release_id "${release_id}" \
+            '.id == $release_id and
+             .draft == true and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
+            "${RUNNER_TEMP}/staged-draft.json" >/dev/null
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
           jq -r '.assets[].name' "${RUNNER_TEMP}/staged-draft.json" \
@@ -427,7 +436,7 @@ jobs:
             gh release upload "${tag}" "${additions[@]}" \
               --repo "${GITHUB_REPOSITORY}"
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > "${RUNNER_TEMP}/staged-draft.json"
           while IFS=$'\t' read -r name sha256 size; do
             jq -e \
@@ -446,6 +455,7 @@ jobs:
             jq -r '.[] | [.name,.sha256,.size] | @tsv' \
               contract/staged-assets.json
           )
+          cp "${RUNNER_TEMP}/staged-draft.json" contract/draft-release.json
 
       - name: Upload draft reconciliation contract
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -465,7 +475,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
-      contents: read
+      contents: write
       packages: write
     steps:
       - name: Download verified candidate and draft contract
@@ -501,11 +511,23 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            > contract/draft-release.json
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+            contract/draft-release.json)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            > contract/current-draft-release.json
+          mv contract/current-draft-release.json contract/draft-release.json
           jq -e \
+            --argjson release_id "${release_id}" \
             --arg tag "${tag}" \
-            '.draft == true and .tag_name == $tag' \
+            --arg title "RegistryStack ${tag}" \
+            --arg marker \
+              "registry-stack-release-candidate-v2 manifest_sha256:${{ needs.verify.outputs.manifest_sha256 }}" \
+            '.id == $release_id and
+             .draft == true and
+             .prerelease == false and
+             .tag_name == $tag and
+             .name == $title and
+             ((.body // "") | contains($marker))' \
             contract/draft-release.json >/dev/null
           jq -r '.[].name' contract/staged-assets.json \
             | sort > contract/expected-assets
@@ -654,9 +676,12 @@ jobs:
           version="${{ needs.verify.outputs.version }}"
           major="${version%%.*}"
           mkdir -p release-assets
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+            contract/draft-release.json)"
           require_bound_draft() {
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              > contract/draft-release.json
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              > contract/current-draft-release.json
+            mv contract/current-draft-release.json contract/draft-release.json
             jq -e \
               --arg tag "${tag}" \
               --arg title "RegistryStack ${tag}" \
@@ -909,7 +934,9 @@ jobs:
                   fi
                 done
           )
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+            contract/draft-release.json)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > contract/final-upload-release.json
           jq -e \
             --arg tag "${tag}" \
@@ -999,7 +1026,9 @@ jobs:
           tag="${{ needs.verify.outputs.tag }}"
           # Only this failed-job retry may observe the prior PATCH. A new
           # workflow run still rejects every pre-existing public release.
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+            contract/draft-release.json)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > classified-release.json
           classification="$(
             jq -er \
@@ -1065,8 +1094,9 @@ jobs:
           test -f "provenance/${provenance}"
           test "$(find provenance -maxdepth 1 -type f -printf '%f\n')" = \
             "${provenance}"
+          release_id="${{ steps.release_state.outputs.release_id }}"
           require_bound_draft() {
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
               > provenance-release.json
             jq -e \
               --arg tag "${tag}" \
@@ -1112,7 +1142,7 @@ jobs:
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           manifest=promotion/release-candidate-manifest.json
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_RELEASE_ID}" \
             > release-state.json
           jq -e \
             --argjson release_id "${EXPECTED_RELEASE_ID}" \
@@ -1213,9 +1243,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            > publish-state.json
           release_id="${EXPECTED_RELEASE_ID}"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            > publish-state.json
           jq -e \
             --argjson release_id "${release_id}" \
             --arg release_state "${EXPECTED_RELEASE_STATE}" \
@@ -1241,7 +1271,7 @@ jobs:
               -F draft=false \
               -F prerelease=false >/dev/null
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > published-release.json
           jq -e \
             --argjson release_id "${release_id}" \
