@@ -375,22 +375,44 @@ test('selected released archive builds at the canonical root with release discov
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-released-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
+  const rootOutDir = resolve(root, '.release-docsets/v1.2.3/root');
+  const stalePagefind = resolve(rootOutDir, 'pagefind/stale-index');
 
   await buildDocsetArchive(archivedDocset, {
     docsRoot: root,
     indexable: true,
     stageGeneratedArtifacts: async () => async () => {},
-    runCommand: async (_command, _args, env) => calls.push(env),
+    runCommand: async (command, args, env) => {
+      calls.push({ command, args, env });
+      if (command === 'npx' && args.includes(rootOutDir)) {
+        await mkdir(dirname(stalePagefind), { recursive: true });
+        await writeFile(stalePagefind, 'filesystem-ordered index');
+      }
+      if (command === 'node') {
+        await assert.rejects(readFile(stalePagefind), { code: 'ENOENT' });
+      }
+    },
     applySeo: async () => {},
   });
 
-  assert.equal(calls.length, 4);
-  for (const env of calls.slice(0, -1)) {
+  assert.equal(calls.length, 5);
+  assert.deepEqual(
+    [calls[3].command, calls[3].args],
+    [
+      'node',
+      [
+        'scripts/build-production-search.mjs',
+        '--dist-root',
+        rootOutDir,
+      ],
+    ],
+  );
+  for (const { env } of calls.slice(0, -1)) {
     assert.equal(env.DOCS_BASE, '/');
     assert.equal(env.DOCS_RELEASED_ARCHIVE, 'true');
   }
-  assert.equal(calls.at(-1).DOCS_BASE, '/v/1.2.3/');
-  assert.equal(calls.at(-1).DOCS_RELEASED_ARCHIVE, '');
+  assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
+  assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {
