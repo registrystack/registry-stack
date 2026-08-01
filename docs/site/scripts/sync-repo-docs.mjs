@@ -332,16 +332,16 @@ function validateDocsetOverrides(entry, context, knownStandards, docsets) {
       if (!docset) {
         throw new Error(`${overrideContext} references unknown docset "${docsetId}"`);
       }
-      const isPendingVersionedCandidate =
+      const isVersionedDraftRecord =
         docset.status === 'draft' &&
-        docset.availability === 'candidate' &&
+        ['candidate', 'failed'].includes(docset.availability) &&
         /^v\d+\.\d+\.\d+$/.test(docset.id);
       if (
         docsetId === docsets.current ||
-        (docset.status !== 'archived' && !isPendingVersionedCandidate)
+        (docset.status !== 'archived' && !isVersionedDraftRecord)
       ) {
         throw new Error(
-          `${overrideContext} may reference archived docsets or pending versioned candidates only`,
+          `${overrideContext} may reference archived docsets or versioned draft records only`,
         );
       }
       if (entry.exclude_docsets?.includes(docsetId)) {

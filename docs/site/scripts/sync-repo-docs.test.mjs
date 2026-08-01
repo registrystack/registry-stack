@@ -163,14 +163,7 @@ test('rejects malformed and unknown docset override metadata', () => {
   );
 });
 
-test('accepts frozen metadata for a pending versioned release candidate', () => {
-  const candidateDocsets = {
-    current: 'latest',
-    docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased' },
-      { id: 'v0.15.0', status: 'draft', availability: 'candidate' },
-    ],
-  };
+test('accepts frozen metadata for versioned draft records', () => {
   const manifest = {
     repos: {
       'registry-relay': {
@@ -192,10 +185,19 @@ test('accepts frozen metadata for a pending versioned release candidate', () => 
     },
   };
 
-  assert.equal(
-    validateRepoDocsMetadata(manifest, knownStandards, candidateDocsets),
-    manifest,
-  );
+  for (const availability of ['candidate', 'failed']) {
+    const versionedDraftDocsets = {
+      current: 'latest',
+      docsets: [
+        { id: 'latest', status: 'current', availability: 'unreleased' },
+        { id: 'v0.15.0', status: 'draft', availability },
+      ],
+    };
+    assert.equal(
+      validateRepoDocsMetadata(manifest, knownStandards, versionedDraftDocsets),
+      manifest,
+    );
+  }
 });
 
 test('requires complete metadata for every applicable archived docset', () => {
