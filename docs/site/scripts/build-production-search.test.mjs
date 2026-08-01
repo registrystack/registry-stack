@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { buildProductionSearch } from './build-production-search.mjs';
+import {
+  buildProductionSearch,
+  parseProductionSearchArguments,
+} from './build-production-search.mjs';
 
 async function fixture(t) {
   const docsRoot = await mkdtemp(resolve(tmpdir(), 'registry-production-search-'));
@@ -85,5 +88,37 @@ test('rejects an existing production search destination', async (t) => {
       pagefindModule: fakePagefind([]),
     }),
     /production search destination already exists/,
+  );
+});
+
+test('indexes an explicit archive root', async (t) => {
+  const docsRoot = await fixture(t);
+  const distRoot = resolve(docsRoot, 'archive-root');
+  await rename(resolve(docsRoot, 'dist'), distRoot);
+  const indexed = [];
+
+  const result = await buildProductionSearch({
+    docsRoot,
+    distRoot,
+    pagefindModule: fakePagefind(indexed),
+  });
+
+  assert.equal(result.outputPath, resolve(distRoot, 'pagefind'));
+  assert.deepEqual(indexed.map((page) => page.url), ['/', '/guide/']);
+});
+
+test('parses only the optional archive root argument', () => {
+  assert.deepEqual(parseProductionSearchArguments([]), {});
+  assert.deepEqual(
+    parseProductionSearchArguments(['--dist-root', '/tmp/archive-root']),
+    { distRoot: '/tmp/archive-root' },
+  );
+  assert.throws(
+    () => parseProductionSearchArguments(['--dist-root']),
+    /usage: build-production-search\.mjs/,
+  );
+  assert.throws(
+    () => parseProductionSearchArguments(['--unknown', 'value']),
+    /usage: build-production-search\.mjs/,
   );
 });

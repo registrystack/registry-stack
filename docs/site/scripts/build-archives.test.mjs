@@ -380,17 +380,28 @@ test('selected released archive builds at the canonical root with release discov
     docsRoot: root,
     indexable: true,
     stageGeneratedArtifacts: async () => async () => {},
-    runCommand: async (_command, _args, env) => calls.push(env),
+    runCommand: async (command, args, env) => calls.push({ command, args, env }),
     applySeo: async () => {},
   });
 
-  assert.equal(calls.length, 4);
-  for (const env of calls.slice(0, -1)) {
+  assert.equal(calls.length, 5);
+  assert.deepEqual(
+    [calls[3].command, calls[3].args],
+    [
+      'node',
+      [
+        'scripts/build-production-search.mjs',
+        '--dist-root',
+        resolve(root, '.release-docsets/v1.2.3/root'),
+      ],
+    ],
+  );
+  for (const { env } of calls.slice(0, -1)) {
     assert.equal(env.DOCS_BASE, '/');
     assert.equal(env.DOCS_RELEASED_ARCHIVE, 'true');
   }
-  assert.equal(calls.at(-1).DOCS_BASE, '/v/1.2.3/');
-  assert.equal(calls.at(-1).DOCS_RELEASED_ARCHIVE, '');
+  assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
+  assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {

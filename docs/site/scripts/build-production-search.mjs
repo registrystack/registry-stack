@@ -53,9 +53,10 @@ function rejectPagefindErrors(label, result) {
 
 export async function buildProductionSearch({
   docsRoot = process.cwd(),
+  distRoot = resolve(docsRoot, 'dist'),
   pagefindModule,
 } = {}) {
-  const distRoot = resolve(docsRoot, 'dist');
+  distRoot = resolve(docsRoot, distRoot);
   const outputPath = resolve(distRoot, 'pagefind');
   const distInfo = await existingInfo(distRoot);
   if (!distInfo?.isDirectory() || distInfo.isSymbolicLink()) {
@@ -111,8 +112,18 @@ export async function buildProductionSearch({
   return { pages: pages.length, outputPath };
 }
 
+export function parseProductionSearchArguments(args) {
+  if (args.length === 0) return {};
+  if (args.length === 2 && args[0] === '--dist-root' && args[1]) {
+    return { distRoot: args[1] };
+  }
+  throw new Error('usage: build-production-search.mjs [--dist-root <path>]');
+}
+
 async function main() {
-  const result = await buildProductionSearch();
+  const result = await buildProductionSearch(
+    parseProductionSearchArguments(process.argv.slice(2)),
+  );
   console.log(
     `Generated canonical Pagefind search for ${result.pages} released documentation page(s).`,
   );
