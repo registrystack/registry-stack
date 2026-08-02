@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["cryptography>=42", "requests>=2.31"]
 # ///
-"""Delegated, subject-bound access, end to end, in four requests.
+"""Delegated, subject-bound access, end to end.
 
 An agent needs to know which region one person lives in. It must not be able to
 learn that about anyone else, even if the agent's own code is wrong.
@@ -14,6 +14,9 @@ learn that about anyone else, even if the agent's own code is wrong.
      token carrying both.
   3. The client asks Evidence for evidence, and does not name the person.
   4. The client tries to name a different person, and cannot.
+
+Two further steps show the refusals that hold that shape up: what Mint will not
+issue, and what a token without a delegation cannot reach.
 
 Every request below is printed before it is sent. Run it with:
 

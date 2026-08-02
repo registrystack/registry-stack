@@ -40,6 +40,41 @@ means Evidence reads the selector from those claims and **refuses any request
 that carries selector values of its own**. That refusal is the containment: it
 is not "you named the wrong person", it is "you do not get to name a person".
 
+## The flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Mint as Registry Mint
+    participant Evidence
+    participant Source as Registry source
+
+    Note over Client: Signs a client assertion with its own private key.<br/>The delegation request rides inside that signature.
+    Client->>Mint: POST /token, assertion carrying on_behalf_of
+    Mint->>Mint: Verify the signature against the keys registered for scheduler
+    Mint->>Mint: Check the actor and the subject fields against that registration
+    Mint-->>Client: Access token with evidence_actor and identity.* claims
+
+    Note over Client,Evidence: The person is named nowhere in the request below.
+    Client->>Evidence: POST /v1/evidence, requirement and purpose only
+    Evidence->>Evidence: Match the delegated authority profile
+    Evidence->>Evidence: Read the selector from the token (valueOrigin: authenticated-context)
+    Evidence->>Source: One fixed-authority lookup, for that person only
+    Source-->>Evidence: Registry record
+    Evidence-->>Client: Signed assertion: coarse region, opaque subject binding
+
+    Note over Client,Evidence: The containment, with the same valid token.
+    Client->>Evidence: POST /v1/evidence carrying selector values for someone else
+    Evidence--xClient: 400 invalid_selector
+```
+
+Two properties are visible in the shape of that diagram. Nothing the client
+sends after step 1 names a person, and the only arrow that reaches the registry
+source is the one Evidence draws for the subject its own authority context
+resolved. The final refusal is not a lookup that failed; it is a request that
+was never allowed to describe anybody.
+
 ## The four requests
 
 These are the requests the walkthrough sends, written as curl so they can be
