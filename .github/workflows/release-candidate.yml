@@ -372,7 +372,8 @@ jobs:
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
-            -p registryctl --target "${{ matrix.target }}"
+            -p registryctl -p registry-evidence -p registry-evidencectl \
+            -p registry-mint --target "${{ matrix.target }}"
           mkdir -p platform
           asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/registryctl" "platform/${asset}"
@@ -380,6 +381,12 @@ jobs:
           release/scripts/registry-release verify-registryctl-binary-version \
             "platform/${asset}" \
             --version "${{ needs.validate.outputs.version }}"
+          for evidence_binary in evidence evidencectl mint; do
+            asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${evidence_binary}" \
+              "platform/${asset}"
+            chmod 0755 "platform/${asset}"
+          done
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 

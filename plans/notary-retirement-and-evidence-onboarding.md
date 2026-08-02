@@ -163,7 +163,7 @@ channel; it does not get a parallel one.
       the published assets installs working binaries. Then flip the
       inventory entries from optional to required at a minimum version, the
       way `registryctl-installer` did at v0.14.0.
-- [ ] F4. Platform coverage decision recorded: linux-amd64 is the
+- [x] F4. Platform coverage decision recorded: linux-amd64 is the
       reproducible baseline; registryctl already publishes optional
       macos-arm64 and linux-arm64 assets; decide and record the same
       optional set for the Evidence binaries.
@@ -244,3 +244,10 @@ is parallel; B has no upstream dependencies and is the standing priority
   byte-diffs against products/evidence/generated/. The classifier
   (.github/scripts/ci_changes.py) fires it for registry-evidence,
   registry-evidencectl, and products/evidence/ changes.
+- 2026-08-03: F4 decided and implemented. Platform coverage matches
+  registryctl exactly: linux-amd64 is the required reproducible
+  baseline from the pinned builder; linux-arm64 and macos-arm64 ship
+  as optional native-runner assets from the candidate workflow's
+  build-platforms matrix, which now also builds evidence, evidencectl,
+  and mint. The assemble step and the F2 inventory already accept the
+  per-platform names generically.
