@@ -67,7 +67,7 @@ gates for its area (see Verification), and committed.
       data-driven reference; Operate content from `OPERATOR-CONTRACT.md`;
       Security content from the invariant matrix and test traceability;
       a "Registry Evidence" Configure group.
-- [ ] B2. The Evidence OpenAPI is drift-checked in root CI (confirm an
+- [x] B2. The Evidence OpenAPI is drift-checked in root CI (confirm an
       existing gate or add one).
 - [ ] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
       tightly linked to the frozen contracts so it cannot drift.
@@ -237,3 +237,10 @@ is parallel; B has no upstream dependencies and is the standing priority
   new unit tests. Historical manifests still validate (beta-26 checked).
   The product README documents installation. Next in F: F3 needs a real
   release; F4-F7 are open.
+- 2026-08-03: B2 confirmed done with no new code. Root CI's
+  evidence-contracts job (.github/workflows/ci.yml) runs
+  products/evidence/scripts/check-contracts.sh, which regenerates every
+  Evidence contract including registry-evidence.openapi.json and
+  byte-diffs against products/evidence/generated/. The classifier
+  (.github/scripts/ci_changes.py) fires it for registry-evidence,
+  registry-evidencectl, and products/evidence/ changes.
