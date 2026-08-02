@@ -86,7 +86,17 @@ impl AuditEnvelope {
         Self::new_with_hasher(record, prev_hash, &AuditChainHasher::unkeyed_dev_only())
     }
 
-    fn new_with_hasher(
+    /// Build the next envelope in a chain without writing it anywhere.
+    ///
+    /// [`ChainState::append`] is the usual way to extend a chain and should be
+    /// preferred. This exists for a sink that has to own the chain head itself,
+    /// because it advances the head and claims a place in a pending batch under
+    /// one lock so that a durable write can cover many records at once. Callers
+    /// taking that route are responsible for the ordering [`ChainState`] would
+    /// otherwise guarantee: `prev_hash` must be the previous record's
+    /// `record_hash`, and `hasher` must be the same hasher for the chain's
+    /// whole life.
+    pub fn new_with_hasher(
         record: Value,
         prev_hash: Option<[u8; 32]>,
         hasher: &AuditChainHasher,

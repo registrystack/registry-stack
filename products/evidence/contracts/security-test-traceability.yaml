@@ -110,6 +110,20 @@ entries:
       - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_a_truncated_final_record}
       - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
       - {file: crates/registry-evidence/src/audit.rs, name: same_length_external_mutation_fails_readiness_and_future_appends}
+      - {file: crates/registry-evidence/src/audit.rs, name: appends_rotate_into_sealed_segments_and_the_chain_spans_the_seam}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_restart_after_rotation_continues_from_the_sealed_tail}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_missing_active_segment_recovers_from_the_sealed_tail}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_corrupt_sealed_tail_is_rejected_at_startup}
+      - {file: crates/registry-evidence/src/audit.rs, name: sealed_segment_corruption_passes_startup_and_fails_the_verifier}
+      - {file: crates/registry-evidence/src/audit.rs, name: pathname_replacement_is_rejected_even_when_the_append_would_rotate}
+      - {file: crates/registry-evidence/src/audit.rs, name: an_archived_middle_segment_is_reported_as_missing_not_as_corruption}
+      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_extend_one_keyed_chain_without_forking}
+      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_share_durable_writes}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_failed_durable_write_poisons_the_sink_instead_of_forking_the_chain}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_poisoned_sink_fails_concurrent_waiters_instead_of_hanging_them}
+      - {file: crates/registry-evidence/src/audit.rs, name: readiness_holds_while_appends_are_in_flight}
+      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_fails_on_sealed_segment_corruption}
+      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_reports_an_archived_segment_as_missing_not_corrupt}
   - id: sec-secret-values-rejected-from-bundle
     tests: [{file: crates/registry-evidence/src/config.rs, name: yaml_names_and_secret_references_are_strict}]
   - id: sec-proxy-identity-header-rejected

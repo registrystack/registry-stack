@@ -218,6 +218,34 @@ fn secret_invocations_generate_independent_values() {
     assert_ne!(first_bytes, second_bytes);
 }
 
+/// The Evidence runtime rejects any file-provided secret containing a NUL
+/// byte, and a uniform 32-byte draw carries one about 11.8% of the time. A
+/// generated secret must therefore never contain one, or roughly one project
+/// in five fails at `evidence serve` long after `evidence check` passed.
+#[test]
+fn secret_never_contains_a_nul_byte() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // 64 draws leave under one chance in 3000 of a run where every unfixed
+    // draw happened to be NUL-free.
+    for index in 0..64 {
+        let out = dir.path().join(format!("secret-{index}.key"));
+        let output = evidencectl()
+            .args(["keygen", "secret", "--out"])
+            .arg(&out)
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+
+        let bytes = fs::read(&out).expect("read secret");
+        assert_eq!(bytes.len(), 32);
+        assert!(
+            !bytes.contains(&0),
+            "draw {index} contains a NUL byte the runtime rejects"
+        );
+    }
+}
+
 #[test]
 fn signing_refuses_overwrite_without_force_then_succeeds_with_force() {
     let dir = tempfile::tempdir().expect("tempdir");

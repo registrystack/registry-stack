@@ -420,6 +420,12 @@ fn report(root: &Path, secret_root: &Path, with_mint: bool) {
         secret_root.join("subject-binding-hmac-key").display()
     );
     println!(
+        "  # obtain the source system's own bearer token and write it to {},",
+        secret_root.join("source-bearer-token").display()
+    );
+    println!("  # mode 0600. check, the fixtures and startup all pass without it; the");
+    println!("  # first live request is where a missing token is discovered.");
+    println!(
         "  chmod -R a-w {} && chmod 444 {}",
         root.join(BUNDLE_DIRECTORY).display(),
         root.join(RUNTIME_FILE).display()

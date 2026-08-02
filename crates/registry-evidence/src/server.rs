@@ -124,6 +124,11 @@ fn build_app_with_tracker_at(
     let request_timeout = Duration::from_millis(listener.request_timeout_milliseconds);
     let maximum_concurrent_requests = listener.maximum_concurrent_requests as usize;
     let evaluations = EvaluationTracker::default();
+    // Captured before `runtime` moves into the evidence app's state, so the
+    // metrics registry can sample the same rate limiter the evidence routes
+    // use, on the separate opt-in metrics listener.
+    let rate_limiter = runtime.rate_limiter();
+    let audit = runtime.audit();
     let state = Arc::new(ServerState {
         runtime,
         maximum_request_bytes,
@@ -145,7 +150,7 @@ fn build_app_with_tracker_at(
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(state);
-    let metrics = Arc::new(Metrics::default());
+    let metrics = Arc::new(Metrics::new(rate_limiter, audit));
     (
         response_layers(routes, Arc::clone(&metrics)),
         evaluations,

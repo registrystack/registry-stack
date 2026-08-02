@@ -185,6 +185,18 @@ request-rate scope deliberately excludes purpose, audience, and requirement so
 a caller cannot multiply its budget by varying them. Per-client quotas are a
 gateway responsibility.
 
+Rate limits are tracked per process, in in-process memory, never shared across
+replicas. Running N instances behind a load balancer therefore multiplies
+every configured limit by N; this matters most for the failed-selector budget,
+since that budget is the selector-enumeration defense rather than merely a
+throughput knob. A restart also resets every budget to full, because buckets
+are keyed on an in-memory monotonic clock rather than persisted. Tracked keys
+are bounded at 100,000; a new principal beyond that ceiling is refused with a
+capacity error until entries age out of the prune window. Reaching it requires
+100,000 distinct authenticated principals within the window, so treat it as a
+capacity ceiling worth alerting on rather than a practical denial-of-service
+vector.
+
 The listener request timeout bounds admission, concurrency queueing, and body
 collection. It is not a total evaluation deadline. Once a protected evaluation
 starts, Evidence lets it finish under the separately bounded OIDC and source
@@ -342,6 +354,21 @@ selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
 excluded from logs, metrics, traces, snapshots, panics, and errors.
 
+Audit and operational logging are separate channels and operators must not
+confuse them. The audit chain is the accountability record: durable, complete,
+tamper-evident, and it has no severity levels and no way to turn records off.
+Both records every request writes, the access-attempt event durable before any
+source read and the disclosure-release event durable before response release
+as described above, are pinned by frozen Version 1 security invariants and are
+not configurable. The `tracing` channel is the operational and diagnostic
+record: it has levels, it is buffered and lossy, and it is cheap. The rule for
+operators and integrators is: accountability facts belong in the audit chain
+and never only in tracing, and operational noise belongs in tracing and never
+in the audit chain. If an adopter needs more detail than the frozen audit
+record carries, which some regulators require, the correct shape is a separate
+operational log keyed by the audit record's `eventId`, not a verbosity setting
+on the chain.
+
 The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
 default of `info`. Offline commands print their own result and emit no
@@ -369,81 +396,171 @@ rotation, and chain verification for the selected durable sink. A deployment
 profile may require more reviewed metadata or retention, but it cannot silently
 weaken the native privacy contract.
 
-At process startup the runtime verifies the complete keyed JSONL chain and
-captures the exact audit file identity, length, modification fingerprint, and
-verified tail. Steady-state appends and readiness probes validate that pinned
-identity and fingerprint plus the expected tail and length without rescanning
-the growing file. Any external replacement or modification makes readiness and
-future appends fail closed. A restart performs the complete keyed-chain
-verification again. Operators should also run their governed offline chain
-verification during backup, restore, and incident procedures.
+Exactly one Evidence process may write a given audit path. The sink takes an
+exclusive OS advisory lock on `<auditStorage.path>.lock` at startup; a second
+process pointed at the same path fails at startup with a sink-locked error
+rather than starting and corrupting the chain. The reason is structural, not
+defensive: the audit log is a keyed hash chain whose head is held in process
+memory, so two concurrent writers would interleave records and destroy tamper
+evidence. Deployment shape follows from this: one replica per audit path,
+active/passive rather than active/active. Use a readiness probe and
+restart-on-failure to recover from a crashed writer, never a second concurrent
+replica.
+
+At process startup the runtime recovers the chain head from the newest sealed
+segment, if one exists, by reading only that segment's last record, then fully
+verifies only the active segment from that head. Restart time is therefore
+bounded by the active segment rather than by the volume of retained history:
+it does not grow as sealed segments accumulate. The accepted tradeoff is that
+corruption inside an already sealed segment is not detected at startup; only an
+out-of-band verification pass over the whole audit directory, sealed segments
+included, detects it. Steady-state appends and readiness probes validate the
+active segment's pinned identity and fingerprint plus the expected tail and
+length without rescanning the growing file. Any external replacement or
+modification of the active segment or the lock file makes readiness and future
+appends fail closed. Operators should run that out-of-band verification,
+`evidence verify-audit`, covering every segment, during backup, restore, and
+incident procedures, and on whatever cadence their audit retention policy
+requires; it is what proves sealed history was not tampered with.
 
 ## Audit chain rotation and rollback
 
-`auditStorage.maximumFileBytes` is a hard ceiling. The runtime enforces it when
-it opens the file at startup, before every append, and on every readiness
-probe. A deployment that reaches the ceiling fails closed: appends are refused,
-so evidence requests fail, and readiness reports the service unavailable.
-Version 1 has no online rotation, so the operator must rotate the chain during
-a planned stop before the ceiling is reached.
+`auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a
+total ceiling on the chain. When an append would push the active segment past
+it, the runtime seals the active segment and opens a new one at the configured
+path, online, with no stop and no operator action. A deployment that reaches
+the threshold keeps serving: the next append rotates and continues. Total disk
+consumption is therefore unbounded, and retention, meaning how much sealed
+history stays on disk and for how long, is entirely the operator's
+responsibility; nothing in the runtime deletes or compacts a segment. The one
+exception is a single record larger than `maximumFileBytes` on its own: that
+record can never fit an empty segment, so it fails closed instead of rotating
+forever looking for room it will never find.
 
-Rotation is a stop-and-rename procedure for three reasons. The service holds an
-exclusive advisory lock on `<auditStorage.path>.lock` for its whole life, so no
-second process can write the same chain. The running process pins the open
-audit file by identity and fingerprint, so a rename underneath a running
-process makes readiness and every later append fail closed rather than silently
-continue. Both the audit file and its lock file must stay owner-only mode
-`0600`, singly linked, regular files, so copy-and-truncate, hard links, and
-symlinks are all rejected.
+Segments are named by where they sit in the chain, not by when they were made.
+The active segment, the one still being appended to, is always at the
+configured `<auditStorage.path>`. Each sealed segment is
+`<auditStorage.path>.<sequence>`, where `<sequence>` is an ascending,
+zero-padded, eight-digit number starting at 1, so `evidence.jsonl.00000001`
+precedes `evidence.jsonl.00000002` in both chain order and lexical order.
+`<auditStorage.path>.lock` is unchanged by any of this: it is the writer's
+advisory lock file, never a segment, and carries no chain state.
 
-1. Watch the audit file length against `auditStorage.maximumFileBytes` and
-   schedule the window with headroom. The ceiling is not a rotation trigger; it
-   is an outage.
-2. Stop the service with SIGTERM, which is what a service manager and a
-   container runtime both send, or with Ctrl-C for an interactive process. The
-   server stops accepting connections, finishes the evaluations already
-   admitted, completes their audit writes, and exits successfully.
-   `listener.shutdownGraceMilliseconds` is the operational target for that
-   drain, not a cancellation boundary: an evaluation already inside the runtime
-   is allowed to finish so its audit and signing invariants hold. Confirm the
-   process has exited before continuing, which is also what releases the lock.
-3. Archive the retired chain by rename, preserving owner and mode:
+The chain spans every seam between segments. The chain head lives in the
+running process's memory and survives rotation, so the first record written
+into a new active segment carries the previous segment's last record hash as
+its `prev_hash`, exactly as if no rotation had happened. A sealed segment is
+not an independently verifiable chain that starts at genesis; only the very
+first segment a deployment ever writes does that. Verifying a sealed segment on
+its own, without the head it continued from, cannot succeed and is not a
+supported operation.
 
-   ```sh
-   mv /var/lib/registry-evidence/audit/evidence.jsonl \
-      /var/lib/registry-evidence/audit/evidence-<utc-timestamp>.jsonl
-   ```
+This makes the old stop-and-rename rotation procedure actively dangerous, and
+it must not be used. Renaming the active file to an arbitrary name such as
+`evidence-<utc-timestamp>.jsonl` moves it outside the
+`<auditStorage.path>.<sequence>` namespace the runtime recognizes, so the
+runtime never sees it as a segment of this chain. On restart, startup recovers
+the head from the newest segment still named `<auditStorage.path>.<sequence>`,
+which is now the segment before the one that got renamed away, and begins a new
+active segment continuing from that older head. The renamed-away file and the
+new active segment then both contain a record claiming the same predecessor: a
+silent fork, not a rotation, and the two branches are never reconciled.
 
-   Leave `evidence.jsonl.lock` in place. It carries no chain state.
-4. Record the archived file name, its byte length, its final record hash, and
-   the stop and start times in the operator change record. Each chain file
-   begins at genesis and is independently verifiable, and nothing inside the
-   new file points back at the archived one, so this record is the only link
-   between the retired chain and its successor. Without it the deployment has a
-   gap it cannot later explain.
-5. Start the service again. Startup finds no file at the audit path, creates
-   one with mode `0600`, and begins a new keyed chain at genesis.
-6. Verify before restoring traffic. `GET /ready` must return `200` on the new
-   chain, and the governed offline chain verification must pass over both the
-   archived file and the new file. Retain the archived file under the
-   deployment's audit retention rule.
-7. Roll back by repeating step 2, renaming the archived chain back to the audit
-   path, and starting again. Startup reverifies the complete keyed chain, so a
-   restored file that was modified refuses to start rather than continuing on a
-   forked chain. Never concatenate, merge, or edit chain files, and never
-   restore a chain that a later process has already appended to.
+To archive sealed history, copy or hard-link sealed segments out to cold
+storage, oldest sequence first, and never touch the active segment this way. A
+sealed segment can be copied or hard-linked safely while the service keeps
+running: the runtime opens the newest sealed segment exactly once, at startup,
+to recover the chain head, and never reopens an older sealed segment
+afterward. Do not rename a copy back into the `<auditStorage.path>.<sequence>`
+namespace at a sequence that still has a segment on disk; that would collide
+with, and could overwrite, real chain history. If a sealed segment is removed
+from the audit directory once it has been archived elsewhere, record which
+sequence was removed, its byte length, and its final record hash in the
+operator change record. A removed segment leaves a gap in the sealed sequence,
+and the offline verifier reports that gap explicitly rather than treating it as
+silent history loss, but only if there is a record of what should be there to
+compare against.
 
-Readiness behavior across the window is deliberate. The service is stopped for
-steps 3 and 4, so `/ready` does not answer at all and the operator must drain
-traffic on the stop rather than wait for a readiness signal. After the start it
-returns `200` only once the new chain is opened and verified along with the
-subject-binding key, the signing provider, and every source credential.
+Prefer archiving older sealed segments and leaving the newest one in place. The
+newest sealed segment is what a restart reads to recover the chain head, so
+removing it changes what the next start believes the chain continued from. In
+the ordinary case that is caught: the active segment's first record names a
+predecessor the remaining sealed tail does not match, and startup refuses to
+begin on a fork. In the one case where it is not caught, the newest sealed
+segment and the active segment are both gone, startup recovers from an older
+sealed tail and allocates the next sequence from what is still on disk, so a
+future rotation can seal a different segment under a sequence number the
+archived one already used. Restoring that archive afterward collides with live
+history. If the newest sealed segment must be archived and removed, treat
+restoring it as part of the same procedure rather than optional cleanup.
 
-No event is lost and no record is ambiguous, provided the order above is kept.
-The stop is graceful, so an admitted evaluation writes its disclosure-release
-event before the process exits. The archive is a rename of an already closed
-file, so nothing can be appended to a retired chain. The successor is a new
-file starting at genesis, so no record belongs to two chains.
+Out-of-band verification replays every segment across every seam. It is
+`evidence verify-audit`, and it reads both the audit storage path and the hash
+secret from the same runtime document and file secret provider the serving
+process uses. The command takes no path and no secret flags of its own, only
+the global `--runtime` (equivalently `REGISTRY_EVIDENCE_RUNTIME`), so it can
+never be pointed at an audit chain the deployment does not own and never takes
+a secret on a command line:
+
+```
+evidence --runtime /etc/registry-evidence/runtime.yaml verify-audit
+```
+
+A pass exits zero and prints `segments`, `records`, `sealed-sequence`, `head`,
+and `active-segment`; `sealed-sequence` is the inclusive range of sealed
+segment numbers, or `none` before the first rotation. The counts and the head
+hash carry no request content, so the report is safe to capture into an
+incident record. Any failure exits non-zero.
+
+Run against a running service, the command verifies sealed history only and
+says so in `active-segment`, because reading the active segment while a writer
+may be mid-append would race the write and risk reporting a partially written
+final record as corruption; that is expected and is not itself a finding. To
+prove the active segment too, stop the service first, as under Rollback below.
+A gap in the sealed sequence, for example sequence 3 archived and removed while
+1, 2, and 4 remain, is reported as a distinct missing-segment result naming the
+absent sequence and stating that it is not corruption, so an operator can tell
+deliberate archival apart from tampering. A genuine hash break, in the head
+continuity between two adjacent sealed segments or within one segment's
+records, is reported as chain verification failure and means exactly what it
+always has. The same check is available to governed tooling built on the
+runtime as the library call `verify_audit_chain`, which reports the equivalent
+`first_sequence`, `last_sequence`, and `active_verified` fields directly.
+
+Rollback divides into restoring sealed history and restoring the active
+segment, and only the second needs the service stopped. If a sealed segment was
+archived and removed and needs to come back, copy or hard-link it back to its
+original `<auditStorage.path>.<sequence>` name, unmodified; this is safe to do
+live, for the same reason archiving is, since the runtime does not reopen old
+sealed segments after startup. Restore from a copy whose byte length and final
+record hash match what was recorded when it was archived, and re-run the
+offline verifier afterward to confirm the gap has closed. Restoring or
+replacing the active segment is different, because the running writer pins that
+file by identity and inode: any replacement underneath a live process is
+rejected by the sink's own pinned-identity check, and readiness and the next
+append both fail closed rather than continuing on a file the process no longer
+recognizes. To do it safely, stop the service first, with SIGTERM, which is
+what a service manager and a container runtime both send, or with Ctrl-C for an
+interactive process; the server stops accepting connections, finishes the
+evaluations already admitted, completes their audit writes, and exits
+successfully, and `listener.shutdownGraceMilliseconds` is the operational
+target for that drain rather than a cancellation boundary. Confirm the process
+has exited, which is also what releases the exclusive advisory lock on
+`<auditStorage.path>.lock`; that lock is why only one Evidence process can ever
+write this chain, still held for the writer's whole life, and it is the
+structural reason a second writer is refused rather than merely discouraged.
+With the service stopped, replace the file at `<auditStorage.path>` with the
+restored content, preserving owner and mode `0600`, and start the service
+again. Startup recovers the head from the newest sealed segment's tail as
+always and verifies only the restored active segment against it, which proves
+the restored file continues the chain correctly but proves nothing about sealed
+history; run `evidence verify-audit` over the whole audit directory before
+restoring traffic if the incident could plausibly have touched a sealed segment
+too, while the service is still stopped so the active segment is proven as
+well. Never restore an active segment that a later process has already
+appended to: its first record's `prev_hash` would no longer match the sealed
+tail, and the runtime refuses to start on the resulting fork rather than
+silently accepting it.
 
 ## Metrics reference
 
@@ -544,11 +661,20 @@ a same-pod or same-host collector is the shape that keeps the operator
 boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
 
-The series describe the HTTP boundary only. Version 1 publishes no source-call,
-signing, credential-acquisition, or audit-sink series. A slow or failing
-upstream source is visible only as evidence-request duration and as the problem
-code the boundary returned; audit, signing, and source-credential health are
-reported by `/ready` rather than by telemetry.
+The two request-boundary series above describe the HTTP boundary only. Version
+1 publishes no source-call, signing, credential-acquisition, or audit-sink
+series. A slow or failing upstream source is visible only as evidence-request
+duration and as the problem code the boundary returned; audit, signing, and
+source-credential health are reported by `/ready` rather than by telemetry.
+
+A third series, `evidence_rate_limiter_tracked_keys`, is also published on the
+same listener: a gauge reporting the current number of tracked rate-limit
+keys. It carries none of the four request-boundary labels, since it reports a
+process-wide capacity fact rather than a per-request outcome. Operators should
+alert on it approaching the 100,000-key ceiling described under
+[requester authority and purpose](#requester-authority-and-purpose), since a
+deployment at that ceiling refuses new principals with a capacity error rather
+than degrading gracefully.
 
 ## Startup and readiness
 
@@ -583,7 +709,12 @@ keys appear at the JWKS endpoint. The audit JSONL path must be on storage whose
 append durability, permissions, capacity, backup, restore, retention, and keyed
 chain verification the operator owns.
 
-`evidence check` validates and compiles the complete bundle. Fixture evaluation
+`evidence check` validates and compiles the complete bundle, and resolves and
+validates the mounted audit, subject-binding, and signing secret material
+exactly as startup does, without opening the audit chain. A deployment whose
+secret material startup would refuse, including a signing key whose `kid` does
+not match `signing.activeKeyId`, fails check. Source credentials are not
+resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.
@@ -674,6 +805,116 @@ request, both the bundle and that grant permit
 `application/vnd.registrystack.evidence-unsigned+json`. The keyed audit chain
 records the refusal phase for after-the-fact diagnosis; the caller never sees
 it.
+
+## Measured throughput
+
+One end-to-end measurement is kept in the repository so capacity planning
+starts from a number rather than an estimate. It drives the real router over
+real sockets, and every request in it runs token verification, rate limiting,
+Rhai request preparation, one outbound source call, Rhai extraction, evidence
+construction, Ed25519 signing, and both durable audit appends.
+
+| Measurement | Value |
+|---|---|
+| Sustained rate | 7057 requests/second |
+| Audit appends | 14 115 appends/second (two per request) |
+| Latency p50 / p95 / p99 | 17.89 / 21.37 / 23.03 ms |
+| Non-2xx responses | 0 |
+| Offered concurrency | 128 requests in flight, 128 principals |
+| Window | 10 s measured, after a 3 s unmeasured warm-up |
+| Host | Apple M5 Max, 18 logical cores, macOS 26.4.1, optimized build |
+| Date | 2026-08-03 |
+
+Reproduce with:
+
+```bash
+cargo test --release -p registry-evidence --lib -- \
+  --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second
+```
+
+The row records one run. An independent repeat of it on the same host measured
+6976 requests/second at a p50 of 17.75 ms, so treat the rate as carrying about
+a percent of run-to-run variation rather than as an exact figure. The same
+check passes on an unoptimized build at 3183 requests/second with a p50 of
+40.11 ms.
+
+The measurement is only meaningful if the upstream source is not the thing
+being measured, so the harness serves it from a minimal in-process handler
+returning one constant JSON body and measures that handler's own standalone
+ceiling in the same run, under the same client, worker count, header set, and
+window. That ceiling was 145 273 requests/second, 20.6 times the Evidence
+rate. The check refuses to report a pass or a failure below 5 times, and
+reports the run as inconclusive instead.
+
+Latency here is a closed-loop consequence of the offered concurrency: 128
+requests in flight at 7057 requests/second is about 18 ms each. A deployment
+offering less concurrency sees lower latency and a lower rate. The audit sink
+commits in groups, so its rate rises with the number of appends in flight and
+falls sharply when few are; a deployment that expects high throughput must let
+requests overlap.
+
+The harness lifts four production-meaningful defaults that would otherwise
+become the thing measured, and lifts them only in its own temporary copy of
+the fixture bundle: the per-principal rate limits, `maximumConcurrentRequests`,
+each source's outbound `concurrencyLimit`, and the audit segment's
+`maximumFileBytes`. Those raised values are measurement scaffolding, not a
+recommended deployment posture. Keep the shipped defaults and tune from
+observed traffic.
+
+## Capacity planning
+
+The measured rate above is one host with one constant source. Sizing a real
+deployment is a matter of finding which ceiling binds first, and for most
+deployments it is not Evidence.
+
+Outbound source concurrency binds first whenever the provider is slower than
+the in-process handler used for measurement. Each source's `concurrencyLimit`
+is the number of requests Evidence will have outstanding to that source at
+once, so sustained throughput through it is about `concurrencyLimit` divided by
+the source's round-trip latency. A `concurrencyLimit` of 8 against a provider
+answering in 20 ms sustains roughly 400 requests/second, and Evidence being
+capable of thousands changes nothing about that. The field accepts 1 to 256 and
+has no default: every bundle states it explicitly, because the right value is a
+claim about what the provider tolerates rather than a number Evidence can pick.
+Raising it moves load onto the provider, so raise it against the provider's own
+documented or agreed limit, not against Evidence's spare capacity.
+
+`listener.maximumConcurrentRequests` is the admission ceiling, from 1 to 4096.
+It is a semaphore over evaluations already accepted, not a connection limit and
+not an instant refusal: a request arriving with every slot taken waits for one
+within whatever remains of `listener.requestTimeoutMilliseconds`, and receives
+a `503` problem response only if the budget runs out first. Two sizing errors
+follow from that. Set well below the source concurrency, it leaves provider
+capacity unused, since Evidence will not have enough evaluations in flight to
+keep the source busy. Set far above what the sources can absorb, it does not
+add throughput; it converts overload into queueing, which the caller sees as
+rising latency and then as timeouts. Size it near the total concurrency the
+configured sources can actually sustain, and treat `requestTimeoutMilliseconds`
+as the decision about how long a caller should wait before being turned away.
+
+Two ceilings are not configured fields. Worker threads follow the host's
+available parallelism, so vertical scaling changes the ceiling that CPU-bound
+work, signing and Rhai evaluation, imposes; the runtime document does not carry
+a thread count. Offered concurrency is not yours at all: it is what callers
+send. The levers here bound what is admitted and what is dispatched onward,
+never how much arrives.
+
+Throughput below expectations is therefore diagnosed by finding the binding
+ceiling before changing anything, and the `error` label on
+`evidence_http_requests_total` separates the three rejections: `rate_limited`
+is the per-principal limiter, `service_unavailable` is the request timeout
+budget running out, which under load is normally a request that never got an
+admission slot, and `dependency_unavailable` is the source failing rather than
+merely being slow. A saturated but healthy source produces
+none of those. It appears only as `evidence_http_request_duration_seconds`
+rising while the request count stays flat, because Evidence is waiting on the
+provider and reporting success when the answer arrives; confirming that
+diagnosis needs source latency observed at the provider, which is why the
+`concurrencyLimit` arithmetic above is worth doing before traffic rather than
+after. Because the audit sink commits in groups, a deployment held to few
+requests in flight also pays a higher per-record audit cost than the table
+above, which is a consequence of the low concurrency rather than a separate
+problem to tune.
 
 ## Verification and release limit
 

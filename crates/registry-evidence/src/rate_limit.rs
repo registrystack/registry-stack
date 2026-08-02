@@ -143,6 +143,18 @@ impl EvidenceRateLimiter {
         }
         Ok(())
     }
+
+    /// Total pseudonym keys currently tracked across both maps, toward the
+    /// shared [`MAX_TRACKED_KEYS`] capacity ceiling each map enforces.
+    ///
+    /// Each lock is held only long enough to read `.len()`; no other work
+    /// happens in either critical section, since the request path contends
+    /// on these same locks.
+    pub async fn tracked_key_count(&self) -> usize {
+        let requests_len = self.requests.lock().await.len();
+        let selector_failures_len = self.selector_failures.lock().await.len();
+        requests_len + selector_failures_len
+    }
 }
 
 fn validate_pseudonym_key(key: &str) -> Result<(), RateLimitError> {
@@ -246,6 +258,34 @@ mod tests {
             .check_selector_failure_budget("principal-authority-b")
             .await
             .expect("other authority remains available");
+    }
+
+    #[tokio::test]
+    async fn tracked_key_count_reports_the_total_across_both_maps() {
+        let limiter = limiter();
+        assert_eq!(limiter.tracked_key_count().await, 0);
+
+        limiter
+            .check_request("pseudonym-a")
+            .await
+            .expect("first principal");
+        limiter
+            .check_request("pseudonym-b")
+            .await
+            .expect("second principal");
+        limiter
+            .record_selector_failure("authority-a")
+            .await
+            .expect("first failure");
+
+        assert_eq!(limiter.tracked_key_count().await, 3);
+
+        // Reusing an already-tracked key does not grow the count.
+        limiter
+            .check_request("pseudonym-a")
+            .await
+            .expect("existing principal");
+        assert_eq!(limiter.tracked_key_count().await, 3);
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ use std::{
 };
 
 use chrono::Utc;
+use registry_platform_audit::AuditHashSecret;
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
@@ -65,6 +66,77 @@ pub enum RuntimeInitializationError {
     Source,
     #[error("the Evidence rate limiter could not initialize")]
     RateLimit,
+}
+
+/// Deployment secret material, resolved and validated exactly as service
+/// startup validates it.
+pub struct ValidatedSecretMaterial {
+    pub audit_secret: ProtectedSecret,
+    pub subject_binding_secret: ProtectedSecret,
+    pub signer: EvidenceSigner,
+    pub jwks: JwksDocument,
+}
+
+/// Resolve and validate the audit, subject-binding, and signing secret
+/// material a bundle names, with no side effects: nothing is written and no
+/// audit chain is opened. Startup builds its runtime state from the returned
+/// material, and `check` runs the same validation so a deployment whose
+/// mounted secrets the server would refuse fails check instead of first
+/// start. Source credentials are deliberately not resolved here: readiness
+/// owns them.
+pub async fn validate_secret_material(
+    bundle: &Bundle,
+    secrets: &SecretResolver,
+) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
+    let audit_secret = secrets
+        .resolve(bundle.config.audit.hash_secret_ref.as_str())
+        .map_err(|_| RuntimeInitializationError::Audit)?;
+    AuditHashSecret::new(audit_secret.expose_secret().to_vec())
+        .map_err(|_| RuntimeInitializationError::Audit)?;
+
+    let subject_binding_secret = secrets
+        .resolve(bundle.config.subject_binding.secret_ref.as_str())
+        .map_err(|_| RuntimeInitializationError::Secrets)?;
+    validate_subject_binding_key(
+        subject_binding_secret.expose_secret(),
+        bundle.config.subject_binding.key_version,
+        &bundle.config.service.trust_domain,
+    )
+    .map_err(|_| RuntimeInitializationError::Secrets)?;
+
+    let signing_secret = secrets
+        .resolve(bundle.config.signing.active_key_ref.as_str())
+        .map_err(|_| RuntimeInitializationError::Signing)?;
+    let signing_json = str::from_utf8(signing_secret.expose_secret())
+        .map_err(|_| RuntimeInitializationError::Signing)?;
+    let private_jwk =
+        PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
+    let provider = Arc::new(
+        LocalJwkSigner::new(private_jwk).map_err(|_| RuntimeInitializationError::Signing)?,
+    );
+    let signer = EvidenceSigner::initialize(provider, &bundle.config.signing.active_key_id)
+        .await
+        .map_err(|_| RuntimeInitializationError::Signing)?;
+    let retired = bundle
+        .retired_public_jwks
+        .values()
+        .map(|value| {
+            serde_json::to_string(value)
+                .map_err(|_| RuntimeInitializationError::Signing)
+                .and_then(|json| {
+                    PublicJwk::parse(&json).map_err(|_| RuntimeInitializationError::Signing)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let jwks = jwks_document(signer.public_jwk(), retired)
+        .map_err(|_| RuntimeInitializationError::Signing)?;
+
+    Ok(ValidatedSecretMaterial {
+        audit_secret,
+        subject_binding_secret,
+        signer,
+        jwks,
+    })
 }
 
 /// One safe failure classification for the public HTTP boundary.
@@ -147,11 +219,11 @@ pub struct EvidenceRuntime {
     runtime_revision: String,
     authenticator: Authenticator,
     sources: BTreeMap<String, SourceExecutor>,
-    audit: EvidenceAuditLog,
+    audit: Arc<EvidenceAuditLog>,
     signer: EvidenceSigner,
     jwks: JwksDocument,
     subject_binding_secret: ProtectedSecret,
-    rate_limiter: EvidenceRateLimiter,
+    rate_limiter: Arc<EvidenceRateLimiter>,
 }
 
 impl std::fmt::Debug for EvidenceRuntime {
@@ -200,54 +272,15 @@ impl EvidenceRuntime {
             .map_err(|_| RuntimeInitializationError::Secrets)?,
         );
 
-        let audit_secret = secrets
-            .resolve(bundle.config.audit.hash_secret_ref.as_str())
-            .map_err(|_| RuntimeInitializationError::Audit)?;
+        let material = validate_secret_material(&bundle, &secrets).await?;
         let audit = EvidenceAuditLog::initialize(
             &runtime_config.audit_storage.path,
             runtime_config.audit_storage.maximum_file_bytes,
-            audit_secret.expose_secret().to_vec(),
+            material.audit_secret.expose_secret().to_vec(),
             bundle.config.audit.hash_key_version,
         )
         .await
         .map_err(|_| RuntimeInitializationError::Audit)?;
-
-        let subject_binding_secret = secrets
-            .resolve(bundle.config.subject_binding.secret_ref.as_str())
-            .map_err(|_| RuntimeInitializationError::Secrets)?;
-        validate_subject_binding_key(
-            subject_binding_secret.expose_secret(),
-            bundle.config.subject_binding.key_version,
-            &bundle.config.service.trust_domain,
-        )
-        .map_err(|_| RuntimeInitializationError::Secrets)?;
-
-        let signing_secret = secrets
-            .resolve(bundle.config.signing.active_key_ref.as_str())
-            .map_err(|_| RuntimeInitializationError::Signing)?;
-        let signing_json = str::from_utf8(signing_secret.expose_secret())
-            .map_err(|_| RuntimeInitializationError::Signing)?;
-        let private_jwk =
-            PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
-        let provider = Arc::new(
-            LocalJwkSigner::new(private_jwk).map_err(|_| RuntimeInitializationError::Signing)?,
-        );
-        let signer = EvidenceSigner::initialize(provider, &bundle.config.signing.active_key_id)
-            .await
-            .map_err(|_| RuntimeInitializationError::Signing)?;
-        let retired = bundle
-            .retired_public_jwks
-            .values()
-            .map(|value| {
-                serde_json::to_string(value)
-                    .map_err(|_| RuntimeInitializationError::Signing)
-                    .and_then(|json| {
-                        PublicJwk::parse(&json).map_err(|_| RuntimeInitializationError::Signing)
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let jwks = jwks_document(signer.public_jwk(), retired)
-            .map_err(|_| RuntimeInitializationError::Signing)?;
 
         let mut sources = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
@@ -277,6 +310,7 @@ impl EvidenceRuntime {
             .map_err(|_| RuntimeInitializationError::RateLimit)?,
         })
         .map_err(|_| RuntimeInitializationError::RateLimit)?;
+        let rate_limiter = Arc::new(rate_limiter);
 
         Ok(Self {
             kernel,
@@ -285,10 +319,10 @@ impl EvidenceRuntime {
             authenticator: authenticator_override
                 .unwrap_or_else(|| Authenticator::from_config(&bundle.config.authentication)),
             sources,
-            audit,
-            signer,
-            jwks,
-            subject_binding_secret,
+            audit: Arc::new(audit),
+            signer: material.signer,
+            jwks: material.jwks,
+            subject_binding_secret: material.subject_binding_secret,
             rate_limiter,
         })
     }
@@ -307,6 +341,25 @@ impl EvidenceRuntime {
 
     pub fn jwks(&self) -> &JwksDocument {
         &self.jwks
+    }
+
+    /// The rate limiter whose tracked-key count backs the
+    /// `evidence_rate_limiter_tracked_keys` gauge on the metrics listener.
+    ///
+    /// Returned as a shared handle, independent of this runtime's own
+    /// lifetime, so the metrics listener can hold it and sample it fresh on
+    /// every scrape.
+    pub(crate) fn rate_limiter(&self) -> Arc<EvidenceRateLimiter> {
+        Arc::clone(&self.rate_limiter)
+    }
+
+    /// The audit chain, for the capacity gauge.
+    ///
+    /// Shared for the same reason as the rate limiter: the metrics listener
+    /// samples the chain's on-disk footprint at scrape time rather than
+    /// caching a value taken at startup.
+    pub(crate) fn audit(&self) -> Arc<EvidenceAuditLog> {
+        Arc::clone(&self.audit)
     }
 
     #[cfg(test)]

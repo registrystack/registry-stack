@@ -25,6 +25,8 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("set private secret-root mode");
 
+    stage_reference_secrets(&secret_root);
+
     let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
     let bundle_path = staged.path().join("bundle");
     let bundle_directory = bundle_path.to_str().expect("temporary path is UTF-8");
@@ -66,6 +68,32 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "Evidence fixture passed (",
         " evaluated cases)\n",
     );
+}
+
+/// Stage the platform secrets the reference project's bundle names, with a
+/// signing key generated for this run under the bundle's `activeKeyId`.
+/// Source credentials stay absent: `check` must not resolve them.
+fn stage_reference_secrets(secret_root: &Path) {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+    let write = |name: &str, value: &str| {
+        let path = secret_root.join(name);
+        fs::write(&path, value).expect("write reference secret");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set owner-only secret mode");
+    };
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+    let private_jwk = format!(
+        r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"evidence-signing-2026-01","d":"{}","x":"{}"}}"#,
+        URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+    );
+    write("audit-hmac-key", "audit-hash-secret-32-bytes-minimum-value");
+    write(
+        "subject-binding-hmac-key",
+        "subject-binding-secret-32-bytes-minimum-value",
+    );
+    write("signing-ed25519-private-jwk", &private_jwk);
 }
 
 /// One deployment failure class, with the exact operator text it must produce.
@@ -265,6 +293,60 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
+            case.label
+        );
+    }
+}
+
+/// Secret material the server would refuse at startup must already fail
+/// `check`, with the same fixed operator message startup produces. Each case
+/// stages the complete acceptance secret set and then breaks exactly one
+/// piece of it.
+#[test]
+fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
+    struct SecretFailureCase {
+        label: &'static str,
+        break_secrets: fn(&Deployment),
+        expected: &'static str,
+    }
+    let cases = [
+        SecretFailureCase {
+            label: "signing key kid differs from the bundle's activeKeyId",
+            break_secrets: |deployment| deployment.write_mismatched_signing_key(),
+            expected: "evidence: runtime signing initialization failed\n",
+        },
+        SecretFailureCase {
+            label: "audit hash key below the minimum length",
+            break_secrets: |deployment| deployment.write_secret("audit-hash-key", "short"),
+            expected: "evidence: runtime audit initialization failed\n",
+        },
+        SecretFailureCase {
+            label: "subject binding key missing",
+            break_secrets: |deployment| deployment.remove("secrets/subject-binding-key"),
+            expected: "evidence: runtime secret initialization failed\n",
+        },
+    ];
+
+    for case in cases {
+        let deployment = Deployment::stage("all-definitions");
+        deployment.stage_acceptance_secrets();
+        (case.break_secrets)(&deployment);
+        let output = deployment.check();
+
+        assert!(
+            !output.status.success(),
+            "{}: check accepted secret material the server would refuse",
+            case.label
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{}: check wrote output for a refused deployment",
+            case.label
+        );
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert_eq!(
+            stderr, case.expected,
+            "{}: unexpected diagnostic",
             case.label
         );
     }
@@ -936,6 +1018,20 @@ outboundTls:
         self.write_secret("source-c-username", "synthetic-source-user");
         self.write_secret("source-c-password", "synthetic-source-password");
         self.write_secret("source-d-token", "synthetic-source-token");
+    }
+
+    /// Overwrite the staged signing key with a fresh key whose kid is not
+    /// the bundle's `signing.activeKeyId`.
+    fn write_mismatched_signing_key(&self) {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let private_jwk = format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"not-the-active-key","d":"{}","x":"{}"}}"#,
+            URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+        );
+        self.write_secret("signing-key", &private_jwk);
     }
 
     /// Start `serve` against the sealed deployment.

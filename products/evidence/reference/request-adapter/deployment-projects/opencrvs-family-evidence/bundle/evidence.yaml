@@ -43,11 +43,17 @@ selectorProfiles:
   opencrvs-tracking-id-v1:
     maximumAggregateBytes: 64
     fields:
-      tracking_id: {type: string, minimumBytes: 1, maximumBytes: 64}
+      tracking_id:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
   civil-person-reference-v1:
     maximumAggregateBytes: 128
     fields:
-      person_reference: {type: string, minimumBytes: 1, maximumBytes: 128}
+      person_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
 sources:
   registered-birth-date:
     transport: http-json
@@ -71,11 +77,13 @@ sources:
       method: POST
       path: /events/search
       fixedHeaders:
-        - {name: Accept, value: application/json}
+        - name: Accept
+          value: application/json
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+            - profile: opencrvs-tracking-id-v1
+              fields: [tracking_id]
       prepareScript: adapters/birth-event-prepare.rhai
       adapterParameters:
         selectorRole: subject
@@ -128,11 +136,13 @@ sources:
       method: POST
       path: /events/search
       fixedHeaders:
-        - {name: Accept, value: application/json}
+        - name: Accept
+          value: application/json
       selectorInputs:
         - role: child
           alternatives:
-            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+            - profile: opencrvs-tracking-id-v1
+              fields: [tracking_id]
       prepareScript: adapters/birth-event-prepare.rhai
       adapterParameters:
         selectorRole: child
@@ -210,7 +220,9 @@ requirements:
     source: registered-birth-date
     purposes: [eligibility-assessment]
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
+      - role: subject
+        cardinality: one
+        selectorProfiles: [opencrvs-tracking-id-v1]
     referenceFrameworks: [urn:gov:example:framework:age-of-majority:v1]
     evidenceType: urn:gov:example:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
@@ -220,10 +232,14 @@ requirements:
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+            - profile: opencrvs-tracking-id-v1
+              fields: [tracking_id]
       parameters: {minimum_age_years: 18}
     concepts:
-      - {id: urn:gov:example:concept:adult-status, form: boolean, required: true, constraints: {}}
+      - id: urn:gov:example:concept:adult-status
+        form: boolean
+        required: true
+        constraints: {}
     fixtures: fixtures/adult-status-cases.yaml
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:adult-status]
@@ -233,8 +249,12 @@ requirements:
     source: registered-birth-parents
     purposes: [family-relationship-verification]
     subjectRoles:
-      - {role: child, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
-      - {role: candidate-parent, cardinality: one, selectorProfiles: [civil-person-reference-v1]}
+      - role: child
+        cardinality: one
+        selectorProfiles: [opencrvs-tracking-id-v1]
+      - role: candidate-parent
+        cardinality: one
+        selectorProfiles: [civil-person-reference-v1]
     referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
     evidenceType: urn:gov:example:evidence-type:registered-parent-relationship:v1
     validitySeconds: 86400
@@ -243,16 +263,21 @@ requirements:
       selectorInputs:
         - role: child
           alternatives:
-            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+            - profile: opencrvs-tracking-id-v1
+              fields: [tracking_id]
         - role: candidate-parent
           alternatives:
-            - {profile: civil-person-reference-v1, fields: [person_reference]}
+            - profile: civil-person-reference-v1
+              fields: [person_reference]
       parameters:
         matching_policy: exact-opaque-reference-v1
         candidate_reference_namespace: urn:gov:example:opencrvs:person
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
     concepts:
-      - {id: urn:gov:example:concept:registered-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}
+      - id: urn:gov:example:concept:registered-parent-relationship-confirmed
+        form: boolean
+        required: true
+        constraints: {}
     fixtures: fixtures/registered-parent-relationship-cases.yaml
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:registered-parent-relationship]
@@ -262,7 +287,9 @@ requirements:
     source: registered-birth-parents
     purposes: [family-case-record]
     subjectRoles:
-      - {role: child, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
+      - role: child
+        cardinality: one
+        selectorProfiles: [opencrvs-tracking-id-v1]
     referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
     evidenceType: urn:gov:example:evidence-type:registered-parent-references:v1
     validitySeconds: 86400
@@ -271,7 +298,8 @@ requirements:
       selectorInputs:
         - role: child
           alternatives:
-            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+            - profile: opencrvs-tracking-id-v1
+              fields: [tracking_id]
       parameters:
         reference_namespace: urn:gov:example:opencrvs:person
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
@@ -279,7 +307,10 @@ requirements:
       - id: urn:gov:example:concept:registered-parent-references
         form: entity-reference-list
         required: true
-        constraints: {minimumItems: 1, maximumItems: 2, unique: true}
+        constraints:
+          minimumItems: 1
+          maximumItems: 2
+          unique: true
     fixtures: fixtures/registered-parent-references-cases.yaml
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:registered-parent-references]

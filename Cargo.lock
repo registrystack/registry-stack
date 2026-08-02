@@ -5357,6 +5357,7 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "clap",
+ "criterion",
  "ed25519-dalek",
  "fs2",
  "http",
