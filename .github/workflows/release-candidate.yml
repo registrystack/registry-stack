@@ -680,6 +680,9 @@ jobs:
           installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
           cp crates/registryctl/install.sh "candidate/bundle-root/${installer}"
           chmod 0755 "candidate/bundle-root/${installer}"
+          evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
+          cp crates/registry-evidencectl/install.sh "candidate/bundle-root/${evidencectl_installer}"
+          chmod 0755 "candidate/bundle-root/${evidencectl_installer}"
           for name in registry-notary registry-relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"

@@ -2224,6 +2224,36 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
 
+    def test_validate_accepts_declared_evidence_toolset_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+            )
+            result = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_still_rejects_unknown_artifacts_beside_the_evidence_toolset(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+            )
+            contents = manifest.read_text(encoding="utf-8")
+            contents = contents.replace(
+                "evidencectl-installer:", "registry-lab: '0.17.0'\n  evidencectl-installer:"
+            )
+            manifest.write_text(contents, encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("unexpected registry-lab", rejected.stderr)
+
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3764,6 +3794,7 @@ def write_manifest(
     version: str = "0.8.0",
     include_registryctl_image_lock: bool | None = None,
     include_registryctl_installer: bool | None = None,
+    include_evidence_toolset: bool = False,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
@@ -3794,6 +3825,11 @@ def write_manifest(
         include_registryctl_installer = version_tuple >= (0, 14, 0)
     if include_registryctl_installer:
         artifacts["registryctl-installer"] = version
+    if include_evidence_toolset:
+        artifacts["evidence"] = version
+        artifacts["evidencectl"] = version
+        artifacts["mint"] = version
+        artifacts["evidencectl-installer"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

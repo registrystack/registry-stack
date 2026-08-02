@@ -51,6 +51,13 @@ EXACT_ARTIFACT_INVENTORY = {
 }
 OPTIONAL_EXACT_ARTIFACTS = {
     "registryctl-installer",
+    # The Evidence toolset joins the release channel as optional artifacts
+    # until the first release ships it end to end; then these move into the
+    # exact inventory at a minimum version, like registryctl-installer did.
+    "evidence",
+    "evidencectl",
+    "mint",
+    "evidencectl-installer",
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CURRENT_DOCS_VERSION = "main source (unreleased)"
@@ -418,6 +425,9 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
     ]
+    for evidence_binary in ("evidence", "evidencectl", "mint"):
+        for platform_label in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            optional_binary_names.append(f"{evidence_binary}-{tag}-{platform_label}")
     worker_binary_names = [
         f"registry-relay-rhai-worker-{tag}-linux-amd64",
         f"registry-notary-cel-worker-{tag}-linux-amd64",
@@ -1103,6 +1113,7 @@ def render_capsule(
         expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
         expected_docs_archive_name = f"registry-docs-v{version}.tar.gz"
         expected_installer_name = f"registryctl-v{version}-install.sh"
+        expected_evidencectl_installer_name = f"evidencectl-v{version}-install.sh"
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
@@ -1117,6 +1128,10 @@ def render_capsule(
             if path.name.startswith("registryctl-v") and path.name.endswith("-install.sh") and path.name != expected_installer_name:
                 raise ValueError(
                     f"unexpected registryctl installer filename {path.name}; expected {expected_installer_name}"
+                )
+            if path.name.startswith("evidencectl-v") and path.name.endswith("-install.sh") and path.name != expected_evidencectl_installer_name:
+                raise ValueError(
+                    f"unexpected evidencectl installer filename {path.name}; expected {expected_evidencectl_installer_name}"
                 )
             file_sha256 = verified_binary_sha256(path, checksums)
             sbom = binary_sbom_dir / f"{path.name}.spdx.json"
@@ -1144,6 +1159,9 @@ def render_capsule(
                 release_files.append(file_evidence)
             elif path.name == expected_installer_name:
                 file_evidence["kind"] = "registryctl-installer"
+                release_files.append(file_evidence)
+            elif path.name == expected_evidencectl_installer_name:
+                file_evidence["kind"] = "evidencectl-installer"
                 release_files.append(file_evidence)
             else:
                 binaries.append(file_evidence)

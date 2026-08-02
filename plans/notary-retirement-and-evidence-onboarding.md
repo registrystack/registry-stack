@@ -153,7 +153,7 @@ channel; it does not get a parallel one.
       and `mint` from a release, verifies every artifact against SHA256SUMS,
       refuses unverified installs, has offline tests, and passes shellcheck
       and shfmt.
-- [ ] F2. The three binaries and the installer asset enter the release
+- [x] F2. The three binaries and the installer asset enter the release
       channel: `build-release-binaries.sh` builds and checksums them, the
       candidate workflow stages `evidencectl-<tag>-install.sh`, and the
       artifact inventory in `release/scripts/registry-release` accepts them
@@ -229,3 +229,11 @@ is parallel; B has no upstream dependencies and is the standing priority
   shellcheck and shfmt clean. Found in passing: the rust-result shard
   test in release/scripts/test_registry_release.py is stale on main
   (ci.yml gained evidence-contracts); flagged separately, not fixed here.
+- 2026-08-03: F2 done. build-release-binaries.sh builds and checksums
+  evidence, evidencectl, and mint in the pinned builder; the candidate
+  workflow stages evidencectl-<tag>-install.sh beside the registryctl
+  installer; the registry-release inventory accepts the four artifacts
+  as optional (flip to required at a minimum version is F3), with two
+  new unit tests. Historical manifests still validate (beta-26 checked).
+  The product README documents installation. Next in F: F3 needs a real
+  release; F4-F7 are open.
