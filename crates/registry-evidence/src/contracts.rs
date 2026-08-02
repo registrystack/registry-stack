@@ -15,11 +15,14 @@ use schemars::JsonSchema;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::model::{Evidence, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody};
+use crate::model::{
+    Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
+};
 
 pub const OPENAPI_FILE: &str = "registry-evidence.openapi.json";
 pub const REQUEST_SCHEMA_FILE: &str = "evidence-request-v1.schema.json";
 pub const EVIDENCE_SCHEMA_FILE: &str = "evidence-v1.schema.json";
+pub const DEFINITIONS_SCHEMA_FILE: &str = "evidence-definitions-v1.schema.json";
 pub const JWS_SCHEMA_FILE: &str = "flattened-jws-v1.schema.json";
 pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
@@ -28,6 +31,8 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const REQUEST_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/request-v1.json";
 const EVIDENCE_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json";
+const DEFINITIONS_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/definitions-v1.json";
 const JWS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/flattened-jws-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
@@ -56,6 +61,8 @@ const PROBLEM_VARIANTS: [(&str, u16, &str); 8] = [
 
 static REQUEST_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
 static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
+static DEFINITIONS_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+    OnceLock::new();
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[error("built-in public contract schema failed to initialize")]
@@ -79,19 +86,22 @@ pub enum ContractGenerationError {
 pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationError> {
     let request = request_schema();
     let evidence = evidence_schema();
+    let definitions = definitions_schema();
     let jws = jws_schema();
     let problem = problem_schema();
     let jwks = jwks_schema();
     assert_model_shape::<EvidenceRequest>("EvidenceRequest", &request, true)?;
     assert_model_shape::<Evidence>("Evidence", &evidence, true)?;
+    assert_model_shape::<EvidenceDefinitions>("EvidenceDefinitions", &definitions, true)?;
     assert_model_shape::<FlattenedJws>("FlattenedJws", &jws, false)?;
     assert_model_shape::<ProblemBody>("ProblemBody", &problem, false)?;
     assert_model_shape::<JwksDocument>("JwksDocument", &jwks, false)?;
-    let openapi = openapi_document(&request, &evidence, &jws, &problem, &jwks);
+    let openapi = openapi_document(&request, &evidence, &definitions, &jws, &problem, &jwks);
 
     let values = [
         (REQUEST_SCHEMA_FILE, request),
         (EVIDENCE_SCHEMA_FILE, evidence),
+        (DEFINITIONS_SCHEMA_FILE, definitions),
         (JWS_SCHEMA_FILE, jws),
         (PROBLEM_SCHEMA_FILE, problem),
         (JWKS_SCHEMA_FILE, jwks),
@@ -126,6 +136,13 @@ pub(crate) fn request_contract_accepts(value: &Value) -> Result<bool, ContractVa
 /// Validate a verified JWS payload against the exact generated Version 1 schema.
 pub(crate) fn evidence_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
     contract_validator(&EVIDENCE_VALIDATOR, evidence_schema)
+        .map(|validator| validator.is_valid(value))
+}
+
+/// Validate an outbound discovery response against the exact generated
+/// Version 1 schema.
+pub(crate) fn definitions_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
+    contract_validator(&DEFINITIONS_VALIDATOR, definitions_schema)
         .map(|validator| validator.is_valid(value))
 }
 
@@ -249,6 +266,142 @@ fn request_schema() -> Value {
             }
         },
         "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access."
+    })
+}
+
+fn definitions_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": DEFINITIONS_SCHEMA_ID,
+        "title": "Requester-scoped Evidence definitions Version 1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema", "configurationRevision", "issuedBy", "providedBy", "definitions"
+        ],
+        "properties": {
+            "schema": {"const": "registry.evidence-definitions/v1"},
+            "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+            "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
+            "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
+            "definitions": {
+                "type": "array", "maxItems": 16384, "uniqueItems": true,
+                "items": {"$ref": "#/$defs/definition"}
+            }
+        },
+        "$defs": {
+            "definition": {
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "requirement", "kind", "evidenceType", "purpose",
+                    "referenceFrameworks", "subjects", "concepts"
+                ],
+                "properties": {
+                    "requirement": {"type": "string", "format": "uri", "maxLength": 512},
+                    "kind": {"enum": ["criterion", "information-requirement", "constraint"]},
+                    "evidenceType": {"type": "string", "format": "uri", "maxLength": 512},
+                    "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
+                    "referenceFrameworks": {
+                        "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+                        "items": {"type": "string", "format": "uri", "maxLength": 512}
+                    },
+                    "subjects": {
+                        "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+                        "items": {"$ref": "#/$defs/subject"}
+                    },
+                    "concepts": {
+                        "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+                        "items": {"$ref": "#/$defs/concept"}
+                    }
+                }
+            },
+            "subject": {
+                "type": "object", "additionalProperties": false,
+                "required": ["role", "cardinality", "selector"],
+                "properties": {
+                    "role": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                    "cardinality": {"const": "one"},
+                    "selector": {"$ref": "#/$defs/selector"}
+                }
+            },
+            "selector": {
+                "type": "object", "additionalProperties": false,
+                "required": ["profile", "valueOrigin", "fields"],
+                "properties": {
+                    "profile": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
+                    "valueOrigin": {"enum": ["request", "authenticated-context", "authenticated-grant"]},
+                    "fields": {
+                        "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+                        "items": {"$ref": "#/$defs/selector-field"}
+                    }
+                }
+            },
+            "selector-field": {
+                "oneOf": [
+                    {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["type", "name", "minimumBytes", "maximumBytes"],
+                        "properties": {
+                            "type": {"const": "string"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                            "minimumBytes": {"type": "integer", "minimum": 1, "maximum": 8192},
+                            "maximumBytes": {"type": "integer", "minimum": 1, "maximum": 8192}
+                        }
+                    },
+                    {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["type", "name"],
+                        "properties": {
+                            "type": {"const": "date"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"}
+                        }
+                    },
+                    {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["type", "name", "minimum", "maximum"],
+                        "properties": {
+                            "type": {"const": "integer"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                            "minimum": {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64},
+                            "maximum": {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64}
+                        }
+                    },
+                    {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["type", "name"],
+                        "properties": {
+                            "type": {"const": "boolean"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"}
+                        }
+                    },
+                    {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["type", "name", "scheme", "version", "maximumBytes"],
+                        "properties": {
+                            "type": {"const": "controlled-code"},
+                            "name": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                            "scheme": {"type": "string", "format": "uri", "maxLength": 512},
+                            "version": {"type": "string", "minLength": 1, "maxLength": 128},
+                            "maximumBytes": {"type": "integer", "minimum": 1, "maximum": 8192}
+                        }
+                    }
+                ]
+            },
+            "concept": {
+                "type": "object", "additionalProperties": false,
+                "required": ["id", "form"],
+                "properties": {
+                    "id": {"type": "string", "format": "uri", "maxLength": 512},
+                    "form": {"enum": [
+                        "boolean", "controlled-code", "controlled-category", "bounded-integer",
+                        "bounded-decimal", "date-bucket", "time-bucket",
+                        "audience-scoped-entity-reference", "controlled-code-list",
+                        "entity-reference-list", "reviewed-structured-value"
+                    ]}
+                }
+            }
+        },
+        "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, or unrelated definitions."
     })
 }
 
@@ -603,6 +756,7 @@ fn response_headers(extra: Option<(&str, Value)>) -> Value {
 fn openapi_document(
     request: &Value,
     evidence: &Value,
+    definitions: &Value,
     jws: &Value,
     problem: &Value,
     jwks: &Value,
@@ -629,6 +783,18 @@ fn openapi_document(
             ("bucket", "BucketValue"),
             ("entity-reference", "EntityReferenceValue"),
             ("structured", "StructuredValue"),
+        ],
+    );
+    insert_schema_family(
+        &mut schemas,
+        "EvidenceDefinitions",
+        definitions,
+        &[
+            ("definition", "EvidenceDefinition"),
+            ("subject", "EvidenceDefinitionSubject"),
+            ("selector", "EvidenceDefinitionSelector"),
+            ("selector-field", "EvidenceSelectorField"),
+            ("concept", "EvidenceDefinitionConcept"),
         ],
     );
     insert_schema_family(&mut schemas, "FlattenedJws", jws, &[]);
@@ -741,6 +907,44 @@ fn openapi_document(
                     }
                 }
             },
+            "/v1/evidence-definitions": {
+                "get": {
+                    "operationId": "listEvidenceDefinitions",
+                    "summary": "List the complete Evidence request shapes available to the authenticated caller",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Requester-scoped Evidence definitions",
+                            "headers": response_headers(None),
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EvidenceDefinitions"}}}
+                        },
+                        "400": {
+                            "description": "Malformed discovery request",
+                            "headers": response_headers(None),
+                            "content": problem_content(&["malformed_request"])
+                        },
+                        "401": {
+                            "description": "Authentication failed",
+                            "headers": response_headers(Some(("WWW-Authenticate", json!({
+                                "schema": {"type": "string", "enum": ["Bearer"]}
+                            })))),
+                            "content": problem_content(&["authentication_failed"])
+                        },
+                        "429": {
+                            "description": "Request rate exceeded",
+                            "headers": response_headers(Some(("Retry-After", json!({
+                                "schema": {"type": "string", "enum": ["1"]}
+                            })))),
+                            "content": problem_content(&["rate_limited"])
+                        },
+                        "503": {
+                            "description": "Service temporarily unavailable",
+                            "headers": response_headers(None),
+                            "content": problem_content(&["service_unavailable"])
+                        }
+                    }
+                }
+            },
             "/health": {
                 "get": {
                     "operationId": "getHealth",
@@ -805,6 +1009,7 @@ mod tests {
         for schema in [
             request_schema(),
             evidence_schema(),
+            definitions_schema(),
             jws_schema(),
             problem_schema(),
             jwks_schema(),
@@ -822,6 +1027,7 @@ mod tests {
         let document = openapi_document(
             &request_schema(),
             &evidence_schema(),
+            &definitions_schema(),
             &jws_schema(),
             &problem_schema(),
             &jwks_schema(),
@@ -840,10 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn openapi_has_only_the_four_version_one_routes_and_exact_success_media() {
+    fn openapi_has_only_the_five_version_one_routes_and_exact_success_media() {
         let document = openapi_document(
             &request_schema(),
             &evidence_schema(),
+            &definitions_schema(),
             &jws_schema(),
             &problem_schema(),
             &jwks_schema(),
@@ -855,12 +1062,18 @@ mod tests {
                 "/.well-known/evidence/jwks.json",
                 "/health",
                 "/ready",
-                "/v1/evidence"
+                "/v1/evidence",
+                "/v1/evidence-definitions"
             ]
         );
         assert!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["200"]["content"]
                 ["application/jose+json"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/v1/evidence-definitions"]["get"]["responses"]["200"]["content"]
+                ["application/json"]
                 .is_object()
         );
         assert!(
@@ -959,6 +1172,37 @@ mod tests {
                     "supportedValues": [{
                         "providesValueFor": "urn:example:concept",
                         "value": true
+                    }]
+                }),
+            ),
+            (
+                definitions_schema(),
+                json!({
+                    "schema": "registry.evidence-definitions/v1",
+                    "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+                    "issuedBy": "urn:example:issuer",
+                    "providedBy": "urn:example:provider",
+                    "definitions": [{
+                        "requirement": "urn:example:requirement:v1",
+                        "kind": "criterion",
+                        "evidenceType": "urn:example:evidence-type:v1",
+                        "purpose": "casework",
+                        "referenceFrameworks": ["urn:example:framework:v1"],
+                        "subjects": [{
+                            "role": "subject",
+                            "cardinality": "one",
+                            "selector": {
+                                "profile": "person-v1",
+                                "valueOrigin": "request",
+                                "fields": [{
+                                    "type": "string",
+                                    "name": "record_reference",
+                                    "minimumBytes": 1,
+                                    "maximumBytes": 96
+                                }]
+                            }
+                        }],
+                        "concepts": [{"id": "urn:example:concept", "form": "boolean"}]
                     }]
                 }),
             ),

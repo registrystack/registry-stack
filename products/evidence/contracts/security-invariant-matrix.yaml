@@ -127,6 +127,11 @@ invariants:
     threat: Script injects envelope fields, subject identifiers, selector values, or unsupported claims.
     enforcement: Rhai returns ConceptValueSet only; core owns identifiers, subjects, metadata, decimal serialization, entity-reference HMAC projection, public projection, and JWS.
     negative_test: sec-script-cannot-construct-evidence
+  - id: V1-I26
+    rule: Evidence-definition discovery is authenticated, requester-scoped, and never creates authority or exposes deployment internals.
+    threat: A public catalog, entitlement oracle, or overbroad metadata response reveals unavailable definitions, authority structure, selectors, source plans, or credentials.
+    enforcement: Rust authenticates and rate-limits discovery, projects only complete shapes matching exactly one authority path and valid token-owned selector material through a closed response allowlist, omits unentitled and ambiguous shapes, and performs no provider or evidence-data audit access.
+    negative_test: sec-discovery-requester-scoped
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.

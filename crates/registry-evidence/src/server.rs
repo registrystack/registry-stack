@@ -60,7 +60,7 @@ struct ServerState {
     evaluation_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Build the four-route Version 1 application from one immutable runtime.
+/// Build the five-route Version 1 application from one immutable runtime.
 #[cfg(test)]
 pub(crate) fn build_app(runtime: Arc<EvidenceRuntime>) -> Router {
     build_app_with_tracker(runtime).0
@@ -101,6 +101,7 @@ fn build_app_with_tracker_at(
 
     let routes = Router::new()
         .route("/v1/evidence", post(create_evidence))
+        .route("/v1/evidence-definitions", get(discover_evidence))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .route("/.well-known/evidence/jwks.json", get(jwks))
@@ -340,6 +341,61 @@ async fn create_evidence(
             None => problem_response(ProblemCode::ServiceUnavailable, &operation),
         },
         Err(failure) => runtime_failure_response(failure, &operation),
+    }
+}
+
+async fn discover_evidence(
+    State(state): State<Arc<ServerState>>,
+    request: Request<Body>,
+) -> Response {
+    let operation = operation_id();
+    let started = Instant::now();
+    let access_token = match bearer_token(request.headers()) {
+        Ok(token) => token.to_owned(),
+        Err(code) => return problem_response(code, &operation),
+    };
+    if request.uri().query().is_some() || content_length_exceeds(request.headers(), 0) {
+        return problem_response(ProblemCode::MalformedRequest, &operation);
+    }
+    let admission_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    let _request_slot = match tokio::time::timeout(
+        admission_budget,
+        Arc::clone(&state.request_slots).acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) | Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, &operation)
+        }
+    };
+    let body_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    match tokio::time::timeout(body_budget, to_bytes(request.into_body(), 0)).await {
+        Ok(Ok(body)) if body.is_empty() => {}
+        Ok(Ok(_)) | Ok(Err(_)) => {
+            return problem_response(ProblemCode::MalformedRequest, &operation)
+        }
+        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    }
+    let discovery_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    match tokio::time::timeout(discovery_budget, state.runtime.discover(&access_token)).await {
+        Ok(Ok(definitions)) => {
+            match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &definitions) {
+                Some(response) => response,
+                None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+            }
+        }
+        Ok(Err(failure)) => runtime_failure_response(failure, &operation),
+        Err(_) => problem_response(ProblemCode::ServiceUnavailable, &operation),
     }
 }
 

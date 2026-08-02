@@ -79,6 +79,13 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: ambient_and_diagnostic_capabilities_are_unavailable}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: derivation_decode_is_closed_and_retains_protected_types}
+  - id: sec-discovery-requester-scoped
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: real_router_serves_all_definitions_concurrently_without_crossing_boundaries}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_requires_authentication_and_returns_no_unentitled_definitions}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
   - id: sec-missing-or-writable-bundle-fails
     tests: [{file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}]
   - id: sec-audit-order-and-failure

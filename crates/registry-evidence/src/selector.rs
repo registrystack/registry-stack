@@ -292,6 +292,10 @@ impl MatchedEntitlement {
     pub fn authority_kind(&self) -> AuthorityKind {
         self.authority_kind
     }
+
+    pub(crate) fn subjects(&self) -> &[GrantedSubject] {
+        &self.subjects
+    }
 }
 
 impl fmt::Debug for MatchedEntitlement {
@@ -402,6 +406,53 @@ pub fn resolve_selectors(
         audience: context.evidence_audience().to_owned(),
         subjects,
     })
+}
+
+/// Confirm that selector values owned by the authenticated context or grant
+/// are present and valid before advertising an entitlement. Request-owned
+/// selector values are intentionally not inspected during discovery.
+pub(crate) fn validate_entitlement_context(
+    bundle: &Bundle,
+    context: &AuthenticatedContext,
+    matched: &MatchedEntitlement,
+) -> Result<(), AuthorizationError> {
+    let uses_authenticated_grant = matched
+        .subjects
+        .iter()
+        .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
+    if uses_authenticated_grant
+        && (context.grant_id().is_none()
+            || context.grant_authority() != Some(matched.authority_profile()))
+    {
+        return Err(AuthorizationError::Unauthorized);
+    }
+
+    for grant in &matched.subjects {
+        if grant.value_origin == ValueOrigin::Request {
+            continue;
+        }
+        let profile = bundle
+            .config
+            .selector_profiles
+            .get(&grant.selector_profile)
+            .ok_or(AuthorizationError::Unauthorized)?;
+        let claims = grant
+            .value_claims
+            .as_ref()
+            .ok_or(AuthorizationError::Unauthorized)?;
+        let values = claims
+            .iter()
+            .map(|(field, path)| {
+                let value = context
+                    .claim_path(path)
+                    .and_then(selector_value_from_claim)
+                    .ok_or(AuthorizationError::Selector)?;
+                Ok((field.to_owned(), value))
+            })
+            .collect::<Result<_, AuthorizationError>>()?;
+        validate_values(bundle, profile, &values)?;
+    }
+    Ok(())
 }
 
 /// Resolve exactly one complete entitlement and its complete selector set.

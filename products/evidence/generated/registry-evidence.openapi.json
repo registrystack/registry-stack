@@ -191,6 +191,201 @@
         "title": "Evidence assertion payload Version 1",
         "type": "object"
       },
+      "EvidenceDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDefinitionConcept"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "evidenceType": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "criterion",
+              "information-requirement",
+              "constraint"
+            ],
+            "type": "string"
+          },
+          "purpose": {
+            "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "referenceFrameworks": {
+            "items": {
+              "format": "uri",
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "requirement": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDefinitionSubject"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "requirement",
+          "kind",
+          "evidenceType",
+          "purpose",
+          "referenceFrameworks",
+          "subjects",
+          "concepts"
+        ],
+        "type": "object"
+      },
+      "EvidenceDefinitionConcept": {
+        "additionalProperties": false,
+        "properties": {
+          "form": {
+            "enum": [
+              "boolean",
+              "controlled-code",
+              "controlled-category",
+              "bounded-integer",
+              "bounded-decimal",
+              "date-bucket",
+              "time-bucket",
+              "audience-scoped-entity-reference",
+              "controlled-code-list",
+              "entity-reference-list",
+              "reviewed-structured-value"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "form"
+        ],
+        "type": "object"
+      },
+      "EvidenceDefinitionSelector": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSelectorField"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "profile": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "valueOrigin": {
+            "enum": [
+              "request",
+              "authenticated-context",
+              "authenticated-grant"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "valueOrigin",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "EvidenceDefinitionSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "cardinality": {
+            "enum": [
+              "one"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/EvidenceDefinitionSelector"
+          }
+        },
+        "required": [
+          "role",
+          "cardinality",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "EvidenceDefinitions": {
+        "additionalProperties": false,
+        "properties": {
+          "configurationRevision": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceDefinition"
+            },
+            "maxItems": 16384,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "issuedBy": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "providedBy": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "schema": {
+            "enum": [
+              "registry.evidence-definitions/v1"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "configurationRevision",
+          "issuedBy",
+          "providedBy",
+          "definitions"
+        ],
+        "title": "Requester-scoped Evidence definitions Version 1",
+        "type": "object"
+      },
       "EvidenceProtectedHeader": {
         "additionalProperties": false,
         "properties": {
@@ -298,6 +493,152 @@
           "selector"
         ],
         "type": "object"
+      },
+      "EvidenceSelectorField": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "maximumBytes": {
+                "maximum": 8192,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "minimumBytes": {
+                "maximum": 8192,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "string"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "minimumBytes",
+              "maximumBytes"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "date"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "maximum": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "minimum": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "integer"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "minimum",
+              "maximum"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "boolean"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "maximumBytes": {
+                "maximum": 8192,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "scheme": {
+                "format": "uri",
+                "maxLength": 512,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "controlled-code"
+                ],
+                "type": "string"
+              },
+              "version": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "scheme",
+              "version",
+              "maximumBytes"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "FlattenedJws": {
         "additionalProperties": false,
@@ -1415,6 +1756,272 @@
           }
         ],
         "summary": "Produce signed evidence for one authorized fixed requirement"
+      }
+    },
+    "/v1/evidence-definitions": {
+      "get": {
+        "operationId": "listEvidenceDefinitions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceDefinitions"
+                }
+              }
+            },
+            "description": "Requester-scoped Evidence definitions",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "malformed_request"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            400
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Request is not valid"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/malformed_request"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Malformed discovery request",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication_failed"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            401
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Authentication failed"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/authentication_failed"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Authentication failed",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "schema": {
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate_limited"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            429
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Request rate exceeded"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/rate_limited"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Request rate exceeded",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "schema": {
+                  "enum": [
+                    "1"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service_unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            503
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Service temporarily unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/service_unavailable"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Service temporarily unavailable",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List the complete Evidence request shapes available to the authenticated caller"
       }
     }
   }

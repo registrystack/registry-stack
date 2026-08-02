@@ -1,0 +1,322 @@
+{
+  "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, or unrelated definitions.",
+  "$defs": {
+    "concept": {
+      "additionalProperties": false,
+      "properties": {
+        "form": {
+          "enum": [
+            "boolean",
+            "controlled-code",
+            "controlled-category",
+            "bounded-integer",
+            "bounded-decimal",
+            "date-bucket",
+            "time-bucket",
+            "audience-scoped-entity-reference",
+            "controlled-code-list",
+            "entity-reference-list",
+            "reviewed-structured-value"
+          ]
+        },
+        "id": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "form"
+      ],
+      "type": "object"
+    },
+    "definition": {
+      "additionalProperties": false,
+      "properties": {
+        "concepts": {
+          "items": {
+            "$ref": "#/$defs/concept"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "evidenceType": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "criterion",
+            "information-requirement",
+            "constraint"
+          ]
+        },
+        "purpose": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "referenceFrameworks": {
+          "items": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requirement": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/subject"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "requirement",
+        "kind",
+        "evidenceType",
+        "purpose",
+        "referenceFrameworks",
+        "subjects",
+        "concepts"
+      ],
+      "type": "object"
+    },
+    "selector": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/selector-field"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "profile": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        "valueOrigin": {
+          "enum": [
+            "request",
+            "authenticated-context",
+            "authenticated-grant"
+          ]
+        }
+      },
+      "required": [
+        "profile",
+        "valueOrigin",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "selector-field": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumBytes": {
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minimumBytes": {
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": {
+              "const": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "minimumBytes",
+            "maximumBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": {
+              "const": "date"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "minimum": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": {
+              "const": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": {
+              "const": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumBytes": {
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "scheme": {
+              "format": "uri",
+              "maxLength": 512,
+              "type": "string"
+            },
+            "type": {
+              "const": "controlled-code"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "scheme",
+            "version",
+            "maximumBytes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "subject": {
+      "additionalProperties": false,
+      "properties": {
+        "cardinality": {
+          "const": "one"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "required": [
+        "role",
+        "cardinality",
+        "selector"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/definitions-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "configurationRevision": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "definitions": {
+      "items": {
+        "$ref": "#/$defs/definition"
+      },
+      "maxItems": 16384,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "issuedBy": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "providedBy": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "schema": {
+      "const": "registry.evidence-definitions/v1"
+    }
+  },
+  "required": [
+    "schema",
+    "configurationRevision",
+    "issuedBy",
+    "providedBy",
+    "definitions"
+  ],
+  "title": "Requester-scoped Evidence definitions Version 1",
+  "type": "object"
+}

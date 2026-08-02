@@ -15,6 +15,86 @@ pub struct EvidenceRequest {
     pub subjects: Vec<RequestedSubject>,
 }
 
+/// Requester-scoped descriptions of the exact Evidence request shapes that
+/// the authenticated caller can currently invoke.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinitions {
+    pub schema: String,
+    pub configuration_revision: String,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub definitions: Vec<EvidenceDefinition>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinition {
+    pub requirement: String,
+    pub kind: String,
+    pub evidence_type: String,
+    pub purpose: String,
+    pub reference_frameworks: Vec<String>,
+    pub subjects: Vec<EvidenceDefinitionSubject>,
+    pub concepts: Vec<EvidenceDefinitionConcept>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceDefinitionSubject {
+    pub role: String,
+    pub cardinality: String,
+    pub selector: EvidenceDefinitionSelector,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinitionSelector {
+    pub profile: String,
+    pub value_origin: String,
+    pub fields: Vec<EvidenceSelectorField>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinitionConcept {
+    pub id: String,
+    pub form: String,
+}
+
+/// Public validation metadata for a selector field. Controlled-code
+/// definitions expose their governed scheme identity, never the bundle path or
+/// the configured list of supported values.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum EvidenceSelectorField {
+    String {
+        name: String,
+        #[serde(rename = "minimumBytes")]
+        minimum_bytes: u64,
+        #[serde(rename = "maximumBytes")]
+        maximum_bytes: u64,
+    },
+    Date {
+        name: String,
+    },
+    Integer {
+        name: String,
+        minimum: i64,
+        maximum: i64,
+    },
+    Boolean {
+        name: String,
+    },
+    ControlledCode {
+        name: String,
+        scheme: String,
+        version: String,
+        #[serde(rename = "maximumBytes")]
+        maximum_bytes: u64,
+    },
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestedSubject {
@@ -262,6 +342,12 @@ macro_rules! redacted_debug {
 
 redacted_debug!(
     EvidenceRequest,
+    EvidenceDefinitions,
+    EvidenceDefinition,
+    EvidenceDefinitionSubject,
+    EvidenceDefinitionSelector,
+    EvidenceDefinitionConcept,
+    EvidenceSelectorField,
     RequestedSubject,
     RequestedSelector,
     SelectorValue,
@@ -406,9 +492,17 @@ mod tests {
             payload: "protected-payload-canary".to_owned(),
             signature: "protected-signature-canary".to_owned(),
         };
+        let definitions = EvidenceDefinitions {
+            schema: "protected-discovery-schema-canary".to_owned(),
+            configuration_revision: "protected-discovery-revision-canary".to_owned(),
+            issued_by: "protected-discovery-issuer-canary".to_owned(),
+            provided_by: "protected-discovery-provider-canary".to_owned(),
+            definitions: Vec::new(),
+        };
 
         for diagnostic in [
             format!("{request:?}"),
+            format!("{definitions:?}"),
             format!(
                 "{:?}",
                 SelectorValue::String("protected-selector-canary".to_owned())

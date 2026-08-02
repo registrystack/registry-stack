@@ -1,6 +1,12 @@
 //! Complete authenticated Evidence evaluation and fail-closed release pipeline.
 
-use std::{collections::BTreeMap, path::Path, str, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    str,
+    sync::Arc,
+    time::Instant,
+};
 
 use chrono::Utc;
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
@@ -14,18 +20,29 @@ use crate::{
     },
     auth::{AuthenticatedContext, Authenticator},
     bundle::{Bundle, DeploymentInputs},
-    config::{AuthorityKind, RuntimeConfig, SelectorInput},
+    config::{
+        AuthorityKind, ConceptForm, RequirementKind, RuntimeConfig, SelectorField, SelectorInput,
+        SubjectCardinality, ValueOrigin,
+    },
+    contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection},
-    model::{EvidenceRequest, FlattenedJws, JwksDocument, SelectorValue, SubjectBinding},
+    model::{
+        EvidenceDefinition, EvidenceDefinitionConcept, EvidenceDefinitionSelector,
+        EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField,
+        FlattenedJws, JwksDocument, RequestedSelector, RequestedSubject, SelectorValue,
+        SubjectBinding,
+    },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     secrets::{ProtectedSecret, SecretProvider, SecretResolver},
     selector::{
-        match_entitlement, resolve_selectors, validate_subject_binding_key, AuthorizationError,
+        match_entitlement, resolve_selectors, validate_entitlement_context,
+        validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
         ResolvedAuthorization, ResolvedSelectorValue,
     },
     signing::{jwks_document, EvidenceSigner},
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
+    EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 
 const MAX_OPERATION_BYTES: usize = 128;
@@ -275,6 +292,190 @@ impl EvidenceRuntime {
             }
         }
         true
+    }
+
+    /// List only the complete request shapes that the authenticated caller can
+    /// currently invoke. Discovery performs no source access, credential
+    /// resolution, signing, or evidence-data audit.
+    pub async fn discover(
+        &self,
+        access_token: &str,
+    ) -> Result<EvidenceDefinitions, RuntimeFailure> {
+        let context = self
+            .authenticator
+            .authenticate(access_token)
+            .await
+            .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+        let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
+        let request_limit_key = self
+            .audit
+            .pseudonym("request-rate", &rate_scope, context.principal().as_bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        self.rate_limiter
+            .check_request(&request_limit_key)
+            .await
+            .map_err(map_request_limit)?;
+
+        let mut candidates = BTreeSet::new();
+        for (_, authority) in self.bundle().config.authority_profiles.iter() {
+            for grant in &authority.grants {
+                let mut subjects = grant
+                    .subjects
+                    .iter()
+                    .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
+                    .collect::<Vec<_>>();
+                subjects.sort();
+                candidates.insert((grant.requirement.clone(), grant.purpose.clone(), subjects));
+            }
+        }
+
+        let mut definitions = Vec::new();
+        for (requirement, purpose, subjects) in candidates {
+            let request = EvidenceRequest {
+                requirement,
+                purpose,
+                subjects: subjects
+                    .into_iter()
+                    .map(|(role, profile)| RequestedSubject {
+                        role,
+                        selector: RequestedSelector {
+                            profile,
+                            values: None,
+                        },
+                    })
+                    .collect(),
+            };
+            let Ok(matched) = match_entitlement(self.bundle(), &request, &context) else {
+                continue;
+            };
+            if validate_entitlement_context(self.bundle(), &context, &matched).is_err() {
+                continue;
+            }
+            definitions.push(self.discovery_definition(&request, &matched)?);
+        }
+        let response = EvidenceDefinitions {
+            schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
+            configuration_revision: self.bundle().revision().to_owned(),
+            issued_by: self.bundle().config.issuer.id.clone(),
+            provided_by: self.bundle().config.service.provider_id.clone(),
+            definitions,
+        };
+        let contract_value = serde_json::to_value(&response)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "discovery-contract"))?;
+        if !definitions_contract_accepts(&contract_value)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "discovery-contract"))?
+        {
+            return Err(failure(
+                ProblemCode::ServiceUnavailable,
+                "discovery-contract",
+            ));
+        }
+        Ok(response)
+    }
+
+    fn discovery_definition(
+        &self,
+        request: &EvidenceRequest,
+        matched: &MatchedEntitlement,
+    ) -> Result<EvidenceDefinition, RuntimeFailure> {
+        let requirement = self
+            .kernel
+            .requirement(&request.requirement)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-requirement"))?;
+        let subjects = requirement
+            .subject_roles
+            .iter()
+            .map(|role| {
+                let granted = matched
+                    .subjects()
+                    .iter()
+                    .find(|subject| subject.role == role.role)
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-subject"))?;
+                let profile = self
+                    .bundle()
+                    .config
+                    .selector_profiles
+                    .get(&granted.selector_profile)
+                    .ok_or_else(|| {
+                        failure(ProblemCode::ServiceUnavailable, "discovery-selector")
+                    })?;
+                let fields = profile
+                    .fields
+                    .iter()
+                    .map(|(name, field)| self.discovery_selector_field(name, field))
+                    .collect::<Result<Vec<_>, RuntimeFailure>>()?;
+                Ok(EvidenceDefinitionSubject {
+                    role: role.role.clone(),
+                    cardinality: subject_cardinality_name(role.cardinality).to_owned(),
+                    selector: EvidenceDefinitionSelector {
+                        profile: granted.selector_profile.clone(),
+                        value_origin: value_origin_name(granted.value_origin).to_owned(),
+                        fields,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, RuntimeFailure>>()?;
+        let concepts = requirement
+            .concepts
+            .iter()
+            .map(|concept| EvidenceDefinitionConcept {
+                id: concept.id.clone(),
+                form: concept_form_name(concept.form).to_owned(),
+            })
+            .collect();
+
+        Ok(EvidenceDefinition {
+            requirement: requirement.id.clone(),
+            kind: requirement_kind_name(requirement.kind).to_owned(),
+            evidence_type: requirement.evidence_type.clone(),
+            purpose: request.purpose.clone(),
+            reference_frameworks: requirement.reference_frameworks.clone(),
+            subjects,
+            concepts,
+        })
+    }
+
+    fn discovery_selector_field(
+        &self,
+        name: &str,
+        field: &SelectorField,
+    ) -> Result<EvidenceSelectorField, RuntimeFailure> {
+        Ok(match field {
+            SelectorField::String {
+                minimum_bytes,
+                maximum_bytes,
+            } => EvidenceSelectorField::String {
+                name: name.to_owned(),
+                minimum_bytes: *minimum_bytes,
+                maximum_bytes: *maximum_bytes,
+            },
+            SelectorField::Date => EvidenceSelectorField::Date {
+                name: name.to_owned(),
+            },
+            SelectorField::Integer { minimum, maximum } => EvidenceSelectorField::Integer {
+                name: name.to_owned(),
+                minimum: *minimum,
+                maximum: *maximum,
+            },
+            SelectorField::Boolean => EvidenceSelectorField::Boolean {
+                name: name.to_owned(),
+            },
+            SelectorField::ControlledCode {
+                codelist,
+                codelist_version,
+                maximum_bytes,
+            } => {
+                let list = self.bundle().codelist(codelist).ok_or_else(|| {
+                    failure(ProblemCode::ServiceUnavailable, "discovery-codelist")
+                })?;
+                EvidenceSelectorField::ControlledCode {
+                    name: name.to_owned(),
+                    scheme: list.id().to_owned(),
+                    version: codelist_version.clone(),
+                    maximum_bytes: *maximum_bytes,
+                }
+            }
+        })
     }
 
     /// Run the fixed authenticated path through signing and durable release audit.
@@ -964,6 +1165,44 @@ fn map_authority_kind(kind: AuthorityKind) -> AuditAuthorityKind {
         AuthorityKind::Consent => AuditAuthorityKind::Consent,
         AuthorityKind::Delegated => AuditAuthorityKind::Delegated,
         AuthorityKind::ExplicitRequest => AuditAuthorityKind::ExplicitRequest,
+    }
+}
+
+fn requirement_kind_name(kind: RequirementKind) -> &'static str {
+    match kind {
+        RequirementKind::Criterion => "criterion",
+        RequirementKind::InformationRequirement => "information-requirement",
+        RequirementKind::Constraint => "constraint",
+    }
+}
+
+fn subject_cardinality_name(cardinality: SubjectCardinality) -> &'static str {
+    match cardinality {
+        SubjectCardinality::One => "one",
+    }
+}
+
+fn value_origin_name(origin: ValueOrigin) -> &'static str {
+    match origin {
+        ValueOrigin::AuthenticatedContext => "authenticated-context",
+        ValueOrigin::AuthenticatedGrant => "authenticated-grant",
+        ValueOrigin::Request => "request",
+    }
+}
+
+fn concept_form_name(form: ConceptForm) -> &'static str {
+    match form {
+        ConceptForm::Boolean => "boolean",
+        ConceptForm::ControlledCode => "controlled-code",
+        ConceptForm::ControlledCategory => "controlled-category",
+        ConceptForm::BoundedInteger => "bounded-integer",
+        ConceptForm::BoundedDecimal => "bounded-decimal",
+        ConceptForm::DateBucket => "date-bucket",
+        ConceptForm::TimeBucket => "time-bucket",
+        ConceptForm::AudienceScopedEntityReference => "audience-scoped-entity-reference",
+        ConceptForm::ControlledCodeList => "controlled-code-list",
+        ConceptForm::EntityReferenceList => "entity-reference-list",
+        ConceptForm::ReviewedStructuredValue => "reviewed-structured-value",
     }
 }
 

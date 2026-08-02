@@ -1,0 +1,141 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/definitions-v1.json
+title: Requester-scoped Evidence definitions Version 1
+type: object
+additionalProperties: false
+required: [schema, configurationRevision, issuedBy, providedBy, definitions]
+properties:
+  schema: {const: registry.evidence-definitions/v1}
+  configurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+  issuedBy: {type: string, format: uri, maxLength: 512}
+  providedBy: {type: string, format: uri, maxLength: 512}
+  definitions:
+    type: array
+    maxItems: 16384
+    uniqueItems: true
+    items: {$ref: '#/$defs/definition'}
+$defs:
+  definition:
+    type: object
+    additionalProperties: false
+    required:
+      - requirement
+      - kind
+      - evidenceType
+      - purpose
+      - referenceFrameworks
+      - subjects
+      - concepts
+    properties:
+      requirement: {type: string, format: uri, maxLength: 512}
+      kind: {enum: [criterion, information-requirement, constraint]}
+      evidenceType: {type: string, format: uri, maxLength: 512}
+      purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+      referenceFrameworks:
+        type: array
+        minItems: 1
+        maxItems: 16
+        uniqueItems: true
+        items: {type: string, format: uri, maxLength: 512}
+      subjects:
+        type: array
+        minItems: 1
+        maxItems: 8
+        uniqueItems: true
+        items: {$ref: '#/$defs/subject'}
+      concepts:
+        type: array
+        minItems: 1
+        maxItems: 16
+        uniqueItems: true
+        items: {$ref: '#/$defs/concept'}
+  subject:
+    type: object
+    additionalProperties: false
+    required: [role, cardinality, selector]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      cardinality: {const: one}
+      selector: {$ref: '#/$defs/selector'}
+  selector:
+    type: object
+    additionalProperties: false
+    required: [profile, valueOrigin, fields]
+    properties:
+      profile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      valueOrigin:
+        enum: [request, authenticated-context, authenticated-grant]
+      fields:
+        type: array
+        minItems: 1
+        maxItems: 16
+        uniqueItems: true
+        items: {$ref: '#/$defs/selector-field'}
+  selector-field:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type, name, minimumBytes, maximumBytes]
+        properties:
+          type: {const: string}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          minimumBytes: {type: integer, minimum: 1, maximum: 8192}
+          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+      - type: object
+        additionalProperties: false
+        required: [type, name]
+        properties:
+          type: {const: date}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      - type: object
+        additionalProperties: false
+        required: [type, name, minimum, maximum]
+        properties:
+          type: {const: integer}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          minimum:
+            {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+          maximum:
+            {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - type: object
+        additionalProperties: false
+        required: [type, name]
+        properties:
+          type: {const: boolean}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      - type: object
+        additionalProperties: false
+        required: [type, name, scheme, version, maximumBytes]
+        properties:
+          type: {const: controlled-code}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          scheme: {type: string, format: uri, maxLength: 512}
+          version: {type: string, minLength: 1, maxLength: 128}
+          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+  concept:
+    type: object
+    additionalProperties: false
+    required: [id, form]
+    properties:
+      id: {type: string, format: uri, maxLength: 512}
+      form:
+        enum:
+          - boolean
+          - controlled-code
+          - controlled-category
+          - bounded-integer
+          - bounded-decimal
+          - date-bucket
+          - time-bucket
+          - audience-scoped-entity-reference
+          - controlled-code-list
+          - entity-reference-list
+          - reviewed-structured-value
+$comment: >-
+  The authenticated response contains only complete request shapes that match
+  exactly one configured authority path. It never exposes source plans,
+  scripts, credentials, requester tags, authority-profile identifiers,
+  selector values, codelist values, or unrelated definitions. Discovery
+  performs no provider request and grants no authority.

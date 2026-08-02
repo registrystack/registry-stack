@@ -32,8 +32,8 @@ use wiremock::{
 use crate::{
     auth::{AuthenticationClaimsConfig, Authenticator},
     model::{
-        Evidence, EvidenceRequest, FlattenedJws, PublicValue, RequestedSelector, RequestedSubject,
-        SelectorValue,
+        Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
+        PublicValue, RequestedSelector, RequestedSubject, SelectorValue,
     },
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeInitializationError},
@@ -92,7 +92,7 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
     mount_adult_source(&fixture.server, None).await;
 
     let request = adult_request();
-    let token = access_token(None);
+    let token = access_token(Some(parent_grant_claims()));
     let state_root =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/.first-curl");
     fs::create_dir_all(&state_root).expect("first-curl state directory is created");
@@ -102,11 +102,14 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700))
             .expect("first-curl state directory is owner-only");
     }
+    let definitions_path = state_root.join("definitions.json");
     let response_path = state_root.join("response.json");
-    match fs::remove_file(&response_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => panic!("stale first-curl response could not be removed: {error}"),
+    for stale in [&definitions_path, &response_path] {
+        match fs::remove_file(stale) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("stale first-curl output could not be removed: {error}"),
+        }
     }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:18080")
@@ -138,6 +141,42 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         })
         .await
     });
+
+    let definitions = tokio::time::timeout(Duration::from_secs(180), async {
+        loop {
+            if let Ok(bytes) = fs::read(&definitions_path) {
+                if let Ok(definitions) = serde_json::from_slice::<EvidenceDefinitions>(&bytes) {
+                    break definitions;
+                }
+                if let Ok(problem) = serde_json::from_slice::<Value>(&bytes) {
+                    if let Some(code) = problem.get("code").and_then(Value::as_str) {
+                        panic!("Evidence discovery returned the safe problem code {code}");
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("curl discovery response arrives within three minutes");
+    assert_eq!(definitions.definitions.len(), 4);
+    assert_eq!(
+        definitions.configuration_revision,
+        fixture.runtime.bundle().revision()
+    );
+    let serialized_definitions =
+        serde_json::to_string(&definitions).expect("discovery response serializes");
+    for prohibited in [
+        "fixture-agency",
+        "statutory-caseworker-v1",
+        "source-a",
+        "adapters/",
+        "derivations/",
+        "codelists/",
+        "secret:",
+    ] {
+        assert!(!serialized_definitions.contains(prohibited));
+    }
 
     let serialized = tokio::time::timeout(Duration::from_secs(180), async {
         loop {
@@ -179,7 +218,7 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
     let audit = fs::read_to_string(&fixture.audit_path).expect("first-curl audit is readable");
     assert_eq!(audit.lines().count(), 2);
     println!(
-        "PASS: Evidence returned HTTP 200, its JWS verified, adult-status was true, minimization held, and both audit events were durable."
+        "PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200, its JWS verified, adult-status was true, minimization held, and both audit events were durable."
     );
 }
 
@@ -258,9 +297,86 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
         *fixture.runtime.jwks()
     );
 
-    mount_success_sources(&fixture.server, false).await;
     let standard_token = access_token(None);
     let parent_token = access_token(Some(parent_grant_claims()));
+    let standard_discovery = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {standard_token}"))
+        .await;
+    standard_discovery.assert_status_ok();
+    assert_eq!(
+        standard_discovery.header("content-type"),
+        "application/json"
+    );
+    let standard_definitions = standard_discovery.json::<EvidenceDefinitions>();
+    assert_eq!(standard_definitions.definitions.len(), 3);
+    assert_eq!(
+        standard_definitions.configuration_revision,
+        fixture.runtime.bundle().revision()
+    );
+    assert!(standard_definitions
+        .definitions
+        .iter()
+        .all(|definition| !definition.requirement.contains("legal-parent")));
+
+    let parent_discovery = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {parent_token}"))
+        .await;
+    parent_discovery.assert_status_ok();
+    let parent_definitions = parent_discovery.json::<EvidenceDefinitions>();
+    assert_eq!(parent_definitions.definitions.len(), 4);
+    let adult_definition = parent_definitions
+        .definitions
+        .iter()
+        .find(|definition| definition.requirement.ends_with(":adult-status:v1"))
+        .expect("authorized adult definition is discoverable");
+    assert!(adult_definition.subjects[0].selector.fields.iter().any(
+        |field| matches!(field, EvidenceSelectorField::Date { name } if name == "birth_date")
+    ));
+    let parent_definition = parent_definitions
+        .definitions
+        .iter()
+        .find(|definition| {
+            definition
+                .requirement
+                .ends_with(":legal-parent-relationship:v1")
+        })
+        .expect("grant-backed relationship definition is discoverable");
+    assert_eq!(
+        parent_definition.subjects[1].selector.value_origin,
+        "authenticated-grant"
+    );
+    let serialized_discovery =
+        serde_json::to_string(&parent_definitions).expect("discovery serializes");
+    for prohibited in [
+        "fixture-agency",
+        "statutory-caseworker-v1",
+        "source-a",
+        "adapters/",
+        "derivations/",
+        "codelists/",
+        "secret:",
+    ] {
+        assert!(
+            !serialized_discovery.contains(prohibited),
+            "discovery exposed protected deployment material"
+        );
+    }
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(
+        fs::read_to_string(&fixture.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "metadata discovery must not create evidence-data audit records"
+    );
+
+    mount_success_sources(&fixture.server, false).await;
     let adult_request = adult_request();
     let residence_request = residence_request();
     let licence_request = licence_request();
@@ -344,6 +460,169 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     for canary in privacy_canaries() {
         assert!(!audit.contains(canary));
     }
+}
+
+#[tokio::test]
+async fn discovery_requires_authentication_and_returns_no_unentitled_definitions() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    let missing = http.get("/v1/evidence-definitions").await;
+    assert_eq!(missing.status_code(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        missing.json::<Value>()["code"],
+        json!("authentication_failed")
+    );
+
+    let filtered = http
+        .get("/v1/evidence-definitions?requirement=caller-selected")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .await;
+    assert_eq!(filtered.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(filtered.json::<Value>()["code"], json!("malformed_request"));
+
+    let body_response = build_app(Arc::clone(&fixture.runtime))
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/v1/evidence-definitions")
+                .header("authorization", format!("Bearer {}", access_token(None)))
+                .body(Body::from("{}"))
+                .expect("discovery request is valid"),
+        )
+        .await
+        .expect("discovery router responds");
+    assert_eq!(body_response.status(), axum::http::StatusCode::BAD_REQUEST);
+
+    let now = Utc::now().timestamp();
+    let unentitled = signed_access_token(json!({
+        "iss": TOKEN_ISSUER,
+        "aud": TOKEN_AUDIENCE,
+        "sub": "unentitled-discovery-principal",
+        "iat": now - 1,
+        "exp": now + 3600,
+        "evidence_tags": ["unentitled-agency"],
+        "evidence_audience": EVIDENCE_AUDIENCE
+    }));
+    let response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {unentitled}"))
+        .await;
+    response.assert_status_ok();
+    assert!(response
+        .json::<EvidenceDefinitions>()
+        .definitions
+        .is_empty());
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(
+        fs::read_to_string(&fixture.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "denied discovery must not create evidence-data audit records"
+    );
+}
+
+#[tokio::test]
+async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "authorityProfiles:\n  statutory-caseworker-v1:",
+        r#"authorityProfiles:
+  overlapping-caseworker-v1:
+    kind: statutory
+    requesterTags: [fixture-agency]
+    grants:
+      - requirement: urn:example:fixture:requirement:adult-status:v1
+        purpose: fixture-eligibility
+        audienceFrom: authenticated-requester
+        subjects:
+          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}
+  statutory-caseworker-v1:"#,
+        1,
+    );
+    fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("overlapping runtime initializes for fail-closed request decisions"),
+    );
+    let http = TestServer::new(build_app(runtime));
+
+    let response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .await;
+    response.assert_status_ok();
+    let definitions = response.json::<EvidenceDefinitions>();
+    assert_eq!(definitions.definitions.len(), 2);
+    assert!(definitions
+        .definitions
+        .iter()
+        .all(|definition| !definition.requirement.ends_with(":adult-status:v1")));
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(fs::read_to_string(&prepared.audit_path)
+        .expect("audit is readable")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn discovery_uses_the_bounded_per_principal_request_budget() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}",
+        "rateLimits: {requestsPerPrincipalPerMinute: 1, burstPerPrincipal: 1, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}",
+        1,
+    );
+    fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("rate-limited discovery runtime initializes"),
+    );
+    let http = TestServer::new(build_app(runtime));
+    let token = access_token(None);
+
+    http.get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await
+        .assert_status_ok();
+    let limited = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await;
+    assert_eq!(
+        limited.status_code(),
+        axum::http::StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(limited.json::<Value>()["code"], json!("rate_limited"));
+    assert_eq!(limited.header("retry-after"), "1");
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
 }
 
 #[tokio::test]
