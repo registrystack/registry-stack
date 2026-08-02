@@ -1,0 +1,101 @@
+# Demonstration Evidence bundle for delegated, subject-bound access.
+#
+# The one line that matters is `valueOrigin: authenticated-context` under
+# `delegated-agent-v1`. It moves the subject out of the request body and into
+# the access token: Evidence reads the selector from the claims listed in
+# `valueClaims`, and refuses any request that carries selector values of its
+# own. A token minted for one person therefore cannot be pointed at another.
+#
+# Synthetic identifiers only. Nothing here describes a real person or source.
+version: 1
+service: {providerId: urn:example:demo:provider:evidence, trustDomain: urn:example:demo:trust-domain:delegation}
+issuer: {id: urn:example:demo:issuer:authority}
+authentication:
+  kind: oidc-access-token
+  # Mint's public origin. Evidence requires HTTPS for both the issuer and the
+  # key set, so the demonstration puts a TLS terminator in front of Mint exactly
+  # as a real deployment would.
+  issuer: https://localhost:8443
+  audiences: [evidence.demo.invalid]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://localhost:8443/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+  # The claim Mint writes the delegated agent into. Its presence is what
+  # confines a token to `kind: delegated` authority profiles.
+  actorClaim: evidence_actor
+audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+signing: {format: flattened-jws-json, algorithm: EdDSA, activeKeyId: demo-evidence-key, activeKeyRef: secret:file/signing-key, retiredPublicJwkFiles: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
+selectorProfiles:
+  demographics-v1:
+    maximumAggregateBytes: 420
+    fields:
+      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      birth_date: {type: date}
+sources:
+  demo-source:
+    transport: http-json
+    # The stand-in registry source the demonstration runs on loopback. Evidence
+    # permits plain HTTP only for a numeric loopback host.
+    baseUrl: http://127.0.0.1:8092
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives: [{profile: demographics-v1, fields: [given_name, family_name, birth_date]}]
+      prepareScript: adapters/demo-source-prepare.rhai
+      adapterParameters: {requestedFields: [official_residence_code], resultLimit: 2}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/total, /official_residence_code]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    extractScript: adapters/demo-source.rhai
+    factSchema: schemas/facts.schema.yaml
+authorityProfiles:
+  delegated-agent-v1:
+    kind: delegated
+    requesterTags: [demo-agent]
+    grants:
+      - requirement: urn:example:demo:requirement:residence-region:v1
+        purpose: demo-routing
+        audienceFrom: authenticated-requester
+        subjects:
+          - role: subject
+            selectorProfile: demographics-v1
+            valueOrigin: authenticated-context
+            valueClaims:
+              given_name: identity.given_name
+              family_name: identity.family_name
+              birth_date: identity.birth_date
+requirements:
+  - id: urn:example:demo:requirement:residence-region:v1
+    kind: information-requirement
+    source: demo-source
+    purposes: [demo-routing]
+    subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [demographics-v1]}]
+    referenceFrameworks: [urn:example:demo:framework:residence-region:v1]
+    evidenceType: urn:example:demo:evidence-type:residence-region:v1
+    validitySeconds: 86400
+    derivation: {script: derivations/residence-region.rhai, parameters: {}}
+    concepts:
+      - id: urn:example:demo:concept:residence-region
+        form: controlled-code
+        required: true
+        constraints: {codelist: codelists/region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:demo:disclosure-family:residence-region]}
+    existenceDisclosure: collapse-unresolved

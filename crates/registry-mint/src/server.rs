@@ -56,6 +56,8 @@ pub enum ServiceError {
     Minter(#[from] MinterError),
     #[error("the client registry could not be loaded: {0}")]
     Registry(#[from] ClientRegistryError),
+    #[error("client {0} cannot be served: {1}")]
+    Delegation(String, &'static str),
 }
 
 /// The whole serving state: an immutable minter over a reloadable registry.
@@ -86,6 +88,7 @@ impl MintService {
     pub fn load(config: MintConfig) -> Result<Self, ServiceError> {
         let minter = TokenMinter::new(&config)?;
         let registry = Arc::new(ClientRegistry::load(&config.clients.directory)?);
+        check_delegations(&registry, minter.claims())?;
         let replay = Arc::new(ReplayCache::new(
             config.client_assertion.replay_cache_entries,
         ));
@@ -107,6 +110,9 @@ impl MintService {
     /// dropped into the directory must not silently revoke every caller.
     pub fn reload_clients(&self) -> Result<usize, ServiceError> {
         let registry = Arc::new(ClientRegistry::load(&self.config.clients.directory)?);
+        // Checked on every reload, not only at startup: a registration dropped
+        // into the directory later must clear the same bar.
+        check_delegations(&registry, self.minter.claims())?;
         let count = registry.len();
         let authenticator = Arc::new(ClientAuthenticator::new(
             registry,
@@ -160,15 +166,62 @@ impl MintService {
 
         // Cloned out of the lock so a concurrent reload cannot block here.
         let authenticator = self.authenticator();
-        let client = authenticator
+        let authenticated = authenticator
             .authenticate(&request.client_assertion, now)
             .await?;
-        let token = self.minter.mint(&client, now).await?;
+        let token = self.minter.mint(&authenticated, now).await?;
 
         serde_json::to_vec(&token)
             .map(|body| json_response(StatusCode::OK, JSON_MEDIA_TYPE, body))
             .map_err(|_| TokenError::server_error("the token response could not be serialized"))
     }
+}
+
+/// Refuse a registry whose delegations this configuration cannot express.
+///
+/// The registry and the claim-name configuration are loaded independently, so
+/// this is the only place their agreement can be established. A disagreement
+/// caught here is an operator error at startup or reload; caught at the first
+/// token request instead, it would be an outage for one caller and a token
+/// missing its actor for another.
+fn check_delegations(
+    registry: &ClientRegistry,
+    claims: &crate::config::ClaimNames,
+) -> Result<(), ServiceError> {
+    // The claims Mint writes itself. A subject minted over one of these would
+    // replace authority the registry, not the caller, is supposed to decide.
+    let mut reserved = vec!["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "sub"];
+    reserved.push(claims.principal.as_str());
+    reserved.push(claims.requester_tags.as_str());
+    reserved.push(claims.evidence_audience.as_str());
+    reserved.push(claims.grant_id.as_str());
+    reserved.push(claims.grant_authority.as_str());
+    reserved.extend(claims.actor.as_deref());
+
+    for client_id in registry.client_ids() {
+        let client = registry
+            .get(client_id)
+            .expect("client id came from this registry");
+        let Some(delegation) = client.delegation() else {
+            continue;
+        };
+        if claims.actor.is_none() {
+            return Err(ServiceError::Delegation(
+                client_id.to_owned(),
+                "it declares a delegation but no actor claim name is configured",
+            ));
+        }
+        for path in delegation.subject_claims.values() {
+            let root = path.split('.').next().unwrap_or(path);
+            if reserved.contains(&root) {
+                return Err(ServiceError::Delegation(
+                    client_id.to_owned(),
+                    "a subject claim path would overwrite an authority claim",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_metadata(config: &MintConfig) -> Value {
@@ -454,6 +507,75 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    fn registry_with(extra: &str) -> ClientRegistry {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public = crate::assertion::tests::test_key(1).1;
+        std::fs::write(
+            directory.path().join("client-a.yaml"),
+            format!("clientId: client-a\nprincipal: urn:example:client-a\nevidenceAudience: https://client-a.example.org\nrequesterTags: [tag-a]\nkeys: [{public}]\n{extra}"),
+        )
+        .expect("write client registration");
+        ClientRegistry::load(directory.path()).expect("registry loads")
+    }
+
+    fn claim_names() -> crate::config::ClaimNames {
+        crate::config::tests::sample_config().access_tokens.claims
+    }
+
+    const DELEGATION: &str = "delegation:\n  subjectClaims:\n    given_name: identity.given_name\n";
+
+    /// The registry and the claim-name configuration are loaded independently,
+    /// so a delegation with nowhere to mint its actor has to be caught here or
+    /// not at all.
+    #[test]
+    fn a_delegation_without_a_configured_actor_claim_refuses_to_load() {
+        let mut claims = claim_names();
+        claims.actor = None;
+        let error = check_delegations(&registry_with(DELEGATION), &claims)
+            .expect_err("an unconfigured actor claim must refuse the registry");
+        assert!(matches!(error, ServiceError::Delegation(client, _) if client == "client-a"));
+
+        claims.actor = Some("evidence_actor".to_owned());
+        assert!(check_delegations(&registry_with(DELEGATION), &claims).is_ok());
+    }
+
+    /// A subject path rooted at a claim Mint writes itself would let the caller
+    /// choose authority the registry is supposed to decide.
+    #[test]
+    fn a_subject_path_rooted_at_an_authority_claim_refuses_to_load() {
+        let mut claims = claim_names();
+        claims.actor = Some("evidence_actor".to_owned());
+
+        for root in [
+            "iss",
+            "sub",
+            "jti",
+            "client_id",
+            claims.requester_tags.as_str(),
+            claims.evidence_audience.as_str(),
+            claims.grant_id.as_str(),
+            claims.grant_authority.as_str(),
+            "evidence_actor",
+        ] {
+            let registry = registry_with(&format!(
+                "delegation:\n  subjectClaims:\n    given_name: {root}.given_name\n"
+            ));
+            assert!(
+                check_delegations(&registry, &claims).is_err(),
+                "a subject path rooted at {root} must be refused"
+            );
+        }
+    }
+
+    /// A registry with no delegations is unaffected by the actor claim either
+    /// way, so an existing deployment does not have to configure one.
+    #[test]
+    fn an_undelegated_registry_loads_without_an_actor_claim() {
+        let mut claims = claim_names();
+        claims.actor = None;
+        assert!(check_delegations(&registry_with(""), &claims).is_ok());
     }
 
     #[test]

@@ -92,6 +92,8 @@ accessTokens:
     evidenceAudience: evidence_audience
     grantId: evidence_grant_id
     grantAuthority: evidence_authority
+    # Optional. Required only to issue delegated tokens; see below.
+    actor: evidence_actor
 clientAssertion:
   audience: https://mint.example.org/token
   maximumLifetimeSeconds: 300
@@ -133,6 +135,78 @@ Only public JWKs are accepted; a document carrying a private member is
 rejected. The load is all-or-nothing, so one malformed registration fails the
 whole load and a partially applied registry can never serve.
 
+## Delegation: a token bound to one subject
+
+A caller can be issued a token that is valid only for evidence *about one named
+person*. The point is containment rather than labelling: a client that loops
+over the wrong list or reuses a request object cannot cross from one person to
+another, because the subject is not a request parameter it controls.
+
+Three things have to line up.
+
+**The registration** says which agents this client may act as, and which
+selector fields it may bind, at which claim paths:
+
+```yaml
+clientId: appointment-scheduler
+principal: service:appointment-scheduler
+evidenceAudience: https://scheduler.example.org
+requesterTags: [scheduling-agent]
+delegation:
+  # Optional. Omitted means the client names its own actor.
+  actors: [urn:example:agent:appointment-scheduler]
+  subjectClaims:
+    given_name: identity.given_name
+    family_name: identity.family_name
+    birth_date: identity.birth_date
+keys: [...]
+```
+
+A client with no `delegation` block cannot obtain a delegated token at all.
+
+**The request** names the actor and the subject inside the client's own signed
+assertion, in an `on_behalf_of` member:
+
+```json
+{
+  "iss": "appointment-scheduler",
+  "sub": "appointment-scheduler",
+  "aud": "https://mint.example.org/token",
+  "iat": 1785671511, "exp": 1785671631, "jti": "...",
+  "on_behalf_of": {
+    "actor": "urn:example:agent:appointment-scheduler",
+    "subject": {"given_name": "...", "family_name": "...", "birth_date": "..."}
+  }
+}
+```
+
+Placing it inside the assertion is deliberate: the actor and the subject are
+covered by the client's signature, so nothing between the client and Mint can
+alter who the token is for. `on_behalf_of` is Mint's own member rather than RFC
+8693 `act`, because token exchange presents a subject's own credential, which is
+exactly what a deployment without an identity provider does not have.
+
+The subject must carry the registration's subject fields exactly: a missing
+field or an extra one is refused, like every other delegation failure, as
+`invalid_client`.
+
+**The resource server bundle** declares that subject role's `valueOrigin` as
+`authenticated-context`, with `valueClaims` mirroring `subjectClaims` above.
+That is what makes the property hold: Evidence reads the selector from the token
+and rejects any request that carries selector values of its own. A request
+naming a different person is refused for carrying values at all, not for
+carrying the wrong ones.
+
+Two limits worth stating plainly. This defends against a *buggy* client, not a
+*compromised* one: a client holding its own signing key can ask Mint for a token
+naming a different subject, within the fields its registration permits. And
+Evidence confines an actor-bearing token to `kind: delegated` authority profiles
+but does not conversely require an actor to reach one, so an undelegated token
+matches such a grant and is stopped when the subject cannot be resolved.
+
+[`demo/`](demo/) runs all of this end to end against the real binaries, with
+every request printed before it is sent.
+
 The registry is the one reloadable part of Mint. `SIGHUP` reloads it in place,
 keeping the previous registry if the new one does not load. Onboarding,
 offboarding, and caller key rotation therefore never restart the resource
@@ -163,5 +237,7 @@ cargo test --locked -p registry-mint
 
 `tests/evidence_compatibility.rs` is the test that justifies the crate: it
 drives the real router over a real on-disk deployment and feeds the minted
-token to Evidence's own authenticator. The dependency runs one way only.
-Evidence does not depend on Mint.
+token to Evidence's own authenticator. `tests/delegated_subject_binding.rs`
+does the same for delegation, running Evidence's own entitlement match and
+selector resolution over a token from the real Mint router. The dependency runs
+one way only. Evidence does not depend on Mint.

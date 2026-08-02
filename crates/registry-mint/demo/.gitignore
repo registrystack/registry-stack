@@ -1,0 +1,3 @@
+# The throwaway deployment `run.sh` provisions: keys, certificates, configs,
+# audit log. Regenerated on every run, never committed.
+.run/

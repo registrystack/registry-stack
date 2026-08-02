@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [official_residence_code]
+properties:
+  official_residence_code: {type: string, minLength: 1, maxLength: 32}
