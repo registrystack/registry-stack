@@ -128,7 +128,7 @@ Version one is not:
 - an OOTS Evidence Broker, Data Service Directory, Semantic Repository, Preview Space, or AS4 Access Point;
 - a replacement for source-system access control.
 
-Document evidence, holder credentials, transaction-bound replay protection, OOTS execution, public or federated catalogs, multi-source fulfillment, source-planning scripts, and delegated-agent access are explicitly deferred. The closed requester-scoped definition response is not a catalog or authorization source.
+Document evidence, holder credentials, transaction-bound replay protection, OOTS execution, public or federated catalogs, multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source.
 
 ## 5. Design principles
 
@@ -426,6 +426,8 @@ types in the Evidence core.
 ### 8.4 Consent, statutory authority, and delegation
 
 Evidence consumes an authenticated authority context. Its basis may be statutory authority, organizational authority, consent, delegation, or an OOTS explicit request. A per-request grant reference is optional because statutory flows may derive authority from the requester and configured procedure. Evidence does not issue, manage, revoke, or infer that authority.
+
+Where the basis is delegation, version one carries the actor identity in that context and confines an actor-bearing request to authority paths declared `delegated`. It does not resolve a delegating principal, enforce call constraints, or consume an agent grant record; section 15.3 covers those.
 
 A caller-supplied consent or approval reference never creates authority by itself.
 
