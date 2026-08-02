@@ -100,6 +100,8 @@ struct Expected {
     facts: Option<Value>,
     #[serde(default)]
     value: Option<Value>,
+    #[serde(default)]
+    values: Option<Value>,
     #[serde(default, rename = "entityReferenceCount")]
     entity_reference_count: Option<usize>,
     #[serde(default, rename = "rawReferencesDisclosed")]
@@ -192,7 +194,7 @@ impl Drop for LoadedProject {
 
 #[tokio::test]
 async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
-    for project_name in ["dhis2-adult-status", "opencrvs-family-evidence"] {
+    for project_name in ["dhis2-tracker-evidence", "opencrvs-family-evidence"] {
         let project = load_project(project_name);
         let signer = fixture_signer().await;
         for requirement in &project.bundle.config.requirements {
@@ -322,6 +324,11 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract) {
         assert_eq!(
             primary_inputs, 1,
             "{project_name}/{}: case input form is not closed",
+            case.id
+        );
+        assert!(
+            !(case.expected.value.is_some() && case.expected.values.is_some()),
+            "{project_name}/{}: a case states either one concept value or the complete concept map",
             case.id
         );
     }
@@ -894,6 +901,30 @@ fn assert_values(
             "{label}: scalar value mismatch"
         );
     }
+    // A requirement disclosing more than one concept states every concept it
+    // discloses, so a new or leaked concept cannot pass unnoticed.
+    if let Some(expected_values) = &expected.values {
+        let expected_values = expected_values
+            .as_object()
+            .unwrap_or_else(|| panic!("{label}: expected concept map is not an object"));
+        assert_eq!(
+            values.len(),
+            expected_values.len(),
+            "{label}: concept value count mismatch"
+        );
+        for (concept_id, expected_value) in expected_values {
+            let value = values
+                .iter()
+                .find(|value| &value.provides_value_for == concept_id)
+                .unwrap_or_else(|| panic!("{label}: expected concept is absent"));
+            let actual = serde_json::to_value(&value.value)
+                .unwrap_or_else(|_| panic!("{label}: concept value encoding failed"));
+            assert!(
+                same_json(expected_value, &actual),
+                "{label}: concept value mismatch"
+            );
+        }
+    }
     if let Some(expected_count) = expected.entity_reference_count {
         assert_eq!(values.len(), 1, "{label}: reference concept count mismatch");
         let actual_count = match &values[0].value {
@@ -1129,6 +1160,8 @@ fn assert_privacy(project_name: &str, expectation: &PrivacyExpectation, payloads
         "request preparation failed",
         "exact facts mismatch",
         "scalar value mismatch",
+        "concept value mismatch",
+        "expected concept is absent",
         "signed evidence verification failed",
     ];
     for prohibited in &expectation.diagnostics_exclude {

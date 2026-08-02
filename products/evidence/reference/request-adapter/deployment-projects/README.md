@@ -30,9 +30,10 @@ the same fixtures with `evidence evaluate` before deployment.
 
 ## Projects
 
-- [`dhis2-adult-status/`](dhis2-adult-status/) resolves one tracked entity by
-  an exact reference and derives adult status from the configured date-of-birth
-  attribute.
+- [`dhis2-tracker-evidence/`](dhis2-tracker-evidence/) resolves one tracked
+  entity by an exact reference and supports adult status from the configured
+  date-of-birth attribute and professional licence status as an active-licence
+  boolean plus a bounded expiry category.
 - [`opencrvs-family-evidence/`](opencrvs-family-evidence/) resolves one
   registered birth event and supports adult status, exact registered-parent
   confirmation, and bounded registered-parent identification.

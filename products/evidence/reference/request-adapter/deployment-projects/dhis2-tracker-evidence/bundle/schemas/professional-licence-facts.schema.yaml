@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+required: [record_reference, licence_state, valid_from, valid_until, restriction_recorded]
+properties:
+  record_reference: {type: string, minLength: 11, maxLength: 64}
+  licence_state: {type: string, minLength: 1, maxLength: 32}
+  valid_from: {type: string, format: date}
+  valid_until: {type: string, format: date}
+  restriction_recorded: {type: boolean}

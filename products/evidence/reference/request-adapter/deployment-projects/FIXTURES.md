@@ -124,6 +124,7 @@ those stages apply. Omission is not treated as a wildcard.
 | `lookup` | `match`, `no_match`, or `ambiguous` | Exact closed extraction outcome. |
 | `facts` | JSON object | Exact complete fact object after fact-schema validation, never a partial match. |
 | `value` | supported scalar | Exact value of the requirement's only concept. Use only for a one-concept requirement. |
+| `values` | concept map | Exact complete set of disclosed concepts, keyed by concept id. Use for a requirement disclosing more than one concept. |
 | `entityReferenceCount` | integer | Exact number of audience-scoped entity references in the public value. |
 | `rawReferencesDisclosed` | boolean | Whether any configured raw reference appears in evidence; these projects require `false`. |
 | `signed` | boolean | Whether a flattened JWS success is returned. A valid `false` concept still requires `true`. |
@@ -147,6 +148,10 @@ to disk, or included in output. Unresolved and failing cases require
 Every `facts` expectation is exact. If a test cares about only two of four
 facts, it must still list all four. This prevents fixtures from silently
 accepting a new or leaked fact.
+
+`value` and `values` are mutually exclusive, and `values` is exact in the same
+way: it states every concept the requirement discloses, so a new or leaked
+concept cannot pass unnoticed.
 
 ## Error classes and public problems
 

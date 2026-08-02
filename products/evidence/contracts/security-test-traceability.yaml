@@ -10,6 +10,13 @@ entries:
     tests: [{file: crates/registry-evidence/src/config.rs, name: a_shared_disclosure_family_rejects_the_complete_bundle}]
   - id: sec-missing-principal-no-fallback
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: missing_principal_never_falls_back_to_client_id_or_azp}]
+  - id: sec-sender-constrained-token-denied
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: sender_constrained_tokens_are_denied_rather_than_downgraded}]
+  - id: sec-telemetry-bounded-and-operator-private
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: metrics_report_bounded_series_without_disclosing_request_content}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_configured_metrics_listener_serves_beside_the_evidence_listener}
+      - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
   - id: sec-no-entitlement-union
     tests: [{file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}]
   - id: sec-selector-possession-no-authority
@@ -50,6 +57,7 @@ entries:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: derived_value_debug_redacts_every_value_carrier}
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: request_parts_debug_redacts_query_and_body_values}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value}
   - id: sec-unresolved-public-collapse
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
@@ -183,3 +191,7 @@ entries:
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: configured_jwks_path_is_mechanically_the_served_route}]
   - id: sec-script-operation-exhaustion
     tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]
+  - id: sec-reserved-header-aliases-closed
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}

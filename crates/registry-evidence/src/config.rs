@@ -697,6 +697,10 @@ pub struct RuntimeConfig {
     pub version: u8,
     pub bundle_directory: String,
     pub listener: ListenerConfig,
+    /// Optional operator-only metrics listener. Absent means the deployment
+    /// serves no metrics endpoint at all, which is the default posture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: RuntimeSecretProviders,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
@@ -720,6 +724,9 @@ impl RuntimeConfig {
         }
         validate_absolute_path(&self.bundle_directory)?;
         self.listener.validate()?;
+        if let Some(metrics) = &self.metrics_listener {
+            metrics.validate(&self.listener)?;
+        }
         self.secret_providers.validate()?;
         self.audit_storage.validate()?;
         self.outbound_tls.validate()
@@ -812,20 +819,7 @@ pub struct ListenerConfig {
 
 impl ListenerConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.bind_host.len() < 2 || self.bind_host.len() > 64 {
-            return invalid("listener bindHost length is invalid");
-        }
-        let ip: IpAddr = self
-            .bind_host
-            .parse()
-            .map_err(|_| ConfigError::Invalid("listener bindHost must be a private numeric IP"))?;
-        let private = match ip {
-            IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
-            IpAddr::V6(ip) => ip.is_loopback() || is_unique_local(ip),
-        };
-        if !private || ip.is_unspecified() || ip.is_multicast() {
-            return invalid("listener bindHost must be loopback or private");
-        }
+        validate_private_bind_host(&self.bind_host)?;
         if self.trust_proxy_identity_headers {
             return invalid("proxy identity headers must not be trusted");
         }
@@ -854,6 +848,52 @@ impl ListenerConfig {
             "shutdownGraceMilliseconds",
         )
     }
+}
+
+/// Operator-only telemetry listener.
+///
+/// It is a separate binding rather than a route on the evidence listener so
+/// that reaching the counters requires reaching a different socket. It carries
+/// no request limits of its own: it serves one static rendering of in-process
+/// counters, reads no request body, and touches no source or signing material.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    pub bind_host: String,
+    pub port: u16,
+}
+
+impl MetricsListenerConfig {
+    fn validate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
+        validate_private_bind_host(&self.bind_host)?;
+        // Sharing the evidence binding would publish the counters on the
+        // listener the public contract describes, which is the separation this
+        // block exists to enforce.
+        if self.bind_host == evidence_listener.bind_host && self.port == evidence_listener.port {
+            return invalid("metricsListener must not share the evidence listener binding");
+        }
+        Ok(())
+    }
+}
+
+/// Accept only numeric loopback, RFC 1918 private IPv4, and RFC 4193
+/// unique-local IPv6 bindings. Every listener this service opens is an
+/// operator-network listener; TLS and exposure are upstream concerns.
+fn validate_private_bind_host(bind_host: &str) -> Result<(), ConfigError> {
+    if bind_host.len() < 2 || bind_host.len() > 64 {
+        return invalid("listener bindHost length is invalid");
+    }
+    let ip: IpAddr = bind_host
+        .parse()
+        .map_err(|_| ConfigError::Invalid("listener bindHost must be a private numeric IP"))?;
+    let private = match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+        IpAddr::V6(ip) => ip.is_loopback() || is_unique_local(ip),
+    };
+    if !private || ip.is_unspecified() || ip.is_multicast() {
+        return invalid("listener bindHost must be loopback or private");
+    }
+    Ok(())
 }
 
 fn is_unique_local(ip: Ipv6Addr) -> bool {
@@ -3371,7 +3411,7 @@ mod tests {
             include_bytes!("../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/conformance/selectors/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml").as_slice(),
-            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/bundle/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml").as_slice(),
         ] {
             assert!(validator.is_valid(&bundle_contract_instance(yaml)));
@@ -3720,7 +3760,7 @@ outboundTls:
         let validator = runtime_contract_validator();
         assert!(validator.is_valid(&bundle_contract_instance(valid)));
         for reference in [
-            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/runtime.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/runtime.yaml").as_slice(),
             include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml").as_slice(),
         ] {
             assert!(validator.is_valid(&bundle_contract_instance(reference)));
@@ -3769,6 +3809,77 @@ outboundTls:
                 "runtime schema accepted governed bundle key {governed_key}"
             );
         }
+    }
+
+    /// The metrics listener is opt-in operator surface. It must be absent
+    /// unless an operator asks for it, must obey the same private-address rule
+    /// as the evidence listener, and must not be able to reuse the evidence
+    /// binding, which would publish counters on the contract listener.
+    #[test]
+    fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
+        let base = r#"
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+"#;
+        let validator = runtime_contract_validator();
+        let default = RuntimeConfig::parse_yaml(base.as_bytes()).expect("closed runtime parses");
+        assert!(
+            default.metrics_listener.is_none(),
+            "a deployment that asked for no metrics listener must not get one"
+        );
+
+        let configured = format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n");
+        assert!(validator.is_valid(&bundle_contract_instance(configured.as_bytes())));
+        let parsed =
+            RuntimeConfig::parse_yaml(configured.as_bytes()).expect("metrics listener parses");
+        let metrics = parsed
+            .metrics_listener
+            .expect("the configured metrics listener is retained");
+        assert_eq!(metrics.bind_host, "127.0.0.1");
+        assert_eq!(metrics.port, 9090);
+
+        for rejected_host in ["evidence.internal", "0.0.0.0", "8.8.8.8", "ff02::1"] {
+            let candidate =
+                format!("{base}metricsListener:\n  bindHost: {rejected_host}\n  port: 9090\n");
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "metrics listener accepted prohibited bindHost {rejected_host}"
+            );
+        }
+
+        // Reusing the evidence binding would put the counters on the listener
+        // the public contract describes.
+        let shared = format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
+        assert!(matches!(
+            RuntimeConfig::parse_yaml(shared.as_bytes()),
+            Err(ConfigError::Invalid(
+                "metricsListener must not share the evidence listener binding"
+            ))
+        ));
+
+        // The block is closed like every other level of the document.
+        let unknown = format!(
+            "{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n  path: /telemetry\n"
+        );
+        assert!(RuntimeConfig::parse_yaml(unknown.as_bytes()).is_err());
+        assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
     }
 
     #[test]

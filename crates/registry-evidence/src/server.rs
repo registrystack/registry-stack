@@ -26,7 +26,7 @@ use axum::{
         },
         HeaderMap, HeaderValue, Request, StatusCode,
     },
-    middleware::{from_fn, Next},
+    middleware::{from_fn, from_fn_with_state, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -35,16 +35,36 @@ use registry_platform_crypto::parse_json_strict;
 use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
 use tokio::{net::TcpListener, sync::Semaphore};
-use ulid::Ulid;
 
 use crate::{
     config::{ListenerConfig, ResponseFormat},
     contracts::{request_contract_accepts, served_openapi_document},
     model::{request_nonce_is_canonical, EvidenceRequest},
+    observability::{self, operation_id, Metrics},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
     EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
+
+const EVIDENCE_ROUTE: &str = "/v1/evidence";
+const DEFINITIONS_ROUTE: &str = "/v1/evidence-definitions";
+const HEALTH_ROUTE: &str = "/health";
+const OPENAPI_ROUTE: &str = "/openapi.json";
+const READY_ROUTE: &str = "/ready";
+const JWKS_ROUTE: &str = "/.well-known/evidence/jwks.json";
+
+/// Every route template this listener registers.
+///
+/// Operational telemetry labels requests with a member of this set or with a
+/// single fixed unmatched label, so a caller cannot introduce a label value.
+pub(crate) const ROUTE_TEMPLATES: [&str; 6] = [
+    EVIDENCE_ROUTE,
+    DEFINITIONS_ROUTE,
+    HEALTH_ROUTE,
+    OPENAPI_ROUTE,
+    READY_ROUTE,
+    JWKS_ROUTE,
+];
 
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
@@ -77,14 +97,24 @@ pub(crate) fn build_app_at_for_test(
     build_app_with_tracker_at(runtime, Some(evaluation_time)).0
 }
 
-fn build_app_with_tracker(runtime: Arc<EvidenceRuntime>) -> (Router, EvaluationTracker) {
+/// Build the application together with the registry its observation layer
+/// feeds, so a test can read the counters a request produced.
+#[cfg(test)]
+pub(crate) fn build_app_with_metrics(runtime: Arc<EvidenceRuntime>) -> (Router, Arc<Metrics>) {
+    let (app, _evaluations, metrics) = build_app_with_tracker_at(runtime, None);
+    (app, metrics)
+}
+
+fn build_app_with_tracker(
+    runtime: Arc<EvidenceRuntime>,
+) -> (Router, EvaluationTracker, Arc<Metrics>) {
     build_app_with_tracker_at(runtime, None)
 }
 
 fn build_app_with_tracker_at(
     runtime: Arc<EvidenceRuntime>,
     evaluation_time: Option<chrono::DateTime<chrono::Utc>>,
-) -> (Router, EvaluationTracker) {
+) -> (Router, EvaluationTracker, Arc<Metrics>) {
     #[cfg(not(test))]
     let _ = evaluation_time;
     let listener = &runtime.runtime_config().listener;
@@ -103,16 +133,21 @@ fn build_app_with_tracker_at(
     });
 
     let routes = Router::new()
-        .route("/v1/evidence", post(create_evidence))
-        .route("/v1/evidence-definitions", get(discover_evidence))
-        .route("/health", get(health))
-        .route("/openapi.json", get(openapi))
-        .route("/ready", get(ready))
-        .route("/.well-known/evidence/jwks.json", get(jwks))
+        .route(EVIDENCE_ROUTE, post(create_evidence))
+        .route(DEFINITIONS_ROUTE, get(discover_evidence))
+        .route(HEALTH_ROUTE, get(health))
+        .route(OPENAPI_ROUTE, get(openapi))
+        .route(READY_ROUTE, get(ready))
+        .route(JWKS_ROUTE, get(jwks))
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(state);
-    (response_layers(routes), evaluations)
+    let metrics = Arc::new(Metrics::default());
+    (
+        response_layers(routes, Arc::clone(&metrics)),
+        evaluations,
+        metrics,
+    )
 }
 
 #[derive(Clone, Default)]
@@ -165,13 +200,16 @@ impl Drop for ActiveEvaluation {
     }
 }
 
-fn response_layers(routes: Router) -> Router {
+fn response_layers(routes: Router, metrics: Arc<Metrics>) -> Router {
     routes
         .layer(from_fn(add_no_store))
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(
             registry_platform_httpsec::security_headers(CspBuilder::restrictive()).without_hsts(),
         )
+        // Outermost, so that every response including both fallbacks carries a
+        // correlation identifier and produces exactly one operational record.
+        .layer(from_fn_with_state(metrics, observability::observe))
 }
 
 /// Bind the configured private listener and serve until graceful shutdown.
@@ -180,20 +218,52 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let listener_config = runtime.runtime_config().listener.clone();
-    let bind_ip = listener_config
-        .bind_host
-        .parse::<IpAddr>()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let address = SocketAddr::new(bind_ip, listener_config.port);
-    let listener = TcpListener::bind(address).await?;
-    let (app, evaluations) = build_app_with_tracker(runtime);
-    let result = serve_listener(listener, app, &listener_config, shutdown).await;
+    let metrics_config = runtime.runtime_config().metrics_listener.clone();
+    let listener = bind(&listener_config.bind_host, listener_config.port).await?;
+    let (app, evaluations, metrics) = build_app_with_tracker(runtime);
+
+    // Both listeners are bound before either serves, so a misconfigured
+    // metrics binding fails startup instead of leaving a service that reports
+    // healthy while publishing no telemetry.
+    let metrics_listener = match &metrics_config {
+        Some(config) => Some(bind(&config.bind_host, config.port).await?),
+        None => None,
+    };
+    let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
+    let metrics_server = metrics_listener.map(|listener| {
+        let mut stopped = metrics_stopped;
+        tokio::spawn(async move {
+            axum::serve(listener, observability::metrics_app(metrics))
+                .with_graceful_shutdown(async move {
+                    // A dropped sender also ends the wait, so the metrics
+                    // listener cannot outlive a failed evidence listener.
+                    let _ = stopped.changed().await;
+                })
+                .await
+        })
+    });
+
+    let result = serve_listener(listener, app, &listener_config, async move {
+        shutdown.await;
+        drop(stop_metrics);
+    })
+    .await;
+    if let Some(server) = metrics_server {
+        let _ = server.await;
+    }
 
     // A disconnected client can cause axum to drop its handler future. The
     // admitted evaluation itself is owned by a detached task, so the server
     // must explicitly drain those tasks before production shutdown returns.
     evaluations.wait_idle().await;
     result
+}
+
+async fn bind(bind_host: &str, port: u16) -> io::Result<TcpListener> {
+    let ip = bind_host
+        .parse::<IpAddr>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    TcpListener::bind(SocketAddr::new(ip, port)).await
 }
 
 /// Serve a pre-bound listener and drain client-bound handlers on shutdown.
@@ -250,7 +320,7 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let listener_config = runtime.runtime_config().listener.clone();
-    let (app, evaluations) = build_app_with_tracker(runtime);
+    let (app, evaluations, _metrics) = build_app_with_tracker(runtime);
     let result = serve_listener(listener, app, &listener_config, shutdown).await;
     evaluations.wait_idle().await;
     result
@@ -269,7 +339,7 @@ async fn create_evidence(
 }
 
 async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Body>) -> Response {
-    let operation = operation_id();
+    let operation = operation_id(request.extensions());
     let started = Instant::now();
 
     let access_token = match bearer_token(request.headers()) {
@@ -399,7 +469,7 @@ async fn discover_evidence(
     State(state): State<Arc<ServerState>>,
     request: Request<Body>,
 ) -> Response {
-    let operation = operation_id();
+    let operation = operation_id(request.extensions());
     let started = Instant::now();
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
@@ -456,35 +526,41 @@ async fn health() -> Response {
 
 /// Publish the generated public contract. The document is static release
 /// material, so this route takes no credential and reaches no dependency.
-async fn openapi() -> Response {
+async fn openapi(request: Request<Body>) -> Response {
     match served_openapi_document() {
         Some(document) => bytes_response(
             StatusCode::OK,
             OPENAPI_MEDIA_TYPE,
             document.as_bytes().to_vec(),
         ),
-        None => problem_response(ProblemCode::ServiceUnavailable, &operation_id()),
+        None => problem_response(
+            ProblemCode::ServiceUnavailable,
+            &operation_id(request.extensions()),
+        ),
     }
 }
 
-async fn ready(State(state): State<Arc<ServerState>>) -> Response {
-    let operation = operation_id();
+async fn ready(State(state): State<Arc<ServerState>>, request: Request<Body>) -> Response {
+    let operation = operation_id(request.extensions());
     match tokio::time::timeout(state.request_timeout, state.runtime.ready()).await {
         Ok(true) => static_json_response(StatusCode::OK, r#"{"status":"ready"}"#),
         Ok(false) | Err(_) => problem_response(ProblemCode::ServiceUnavailable, &operation),
     }
 }
 
-async fn jwks(State(state): State<Arc<ServerState>>) -> Response {
-    let operation = operation_id();
+async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> Response {
+    let operation = operation_id(request.extensions());
     match serialize_response(StatusCode::OK, JWKS_MEDIA_TYPE, state.runtime.jwks()) {
         Some(response) => response,
         None => problem_response(ProblemCode::ServiceUnavailable, &operation),
     }
 }
 
-async fn unknown_route() -> Response {
-    problem_response(ProblemCode::MalformedRequest, &operation_id())
+async fn unknown_route(request: Request<Body>) -> Response {
+    problem_response(
+        ProblemCode::MalformedRequest,
+        &operation_id(request.extensions()),
+    )
 }
 
 async fn add_no_store(request: Request<Body>, next: Next) -> Response {
@@ -572,6 +648,10 @@ fn problem_response(code: ProblemCode, operation: &str) -> Response {
     let body = code.body(operation);
     let mut response = serialize_response(code.status(), PROBLEM_MEDIA_TYPE, &body)
         .unwrap_or_else(|| empty_response(StatusCode::INTERNAL_SERVER_ERROR));
+    // The observation layer reads the code from here rather than from the
+    // response body, so the operational record names the same reviewed error
+    // category the caller was given without reparsing public bytes.
+    response.extensions_mut().insert(code);
     if code == ProblemCode::AuthenticationFailed {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
@@ -609,10 +689,6 @@ fn bytes_response(status: StatusCode, media_type: &'static str, bytes: Vec<u8>) 
 
 fn empty_response(status: StatusCode) -> Response {
     (status, Body::empty()).into_response()
-}
-
-fn operation_id() -> String {
-    Ulid::new().to_string()
 }
 
 #[cfg(test)]
@@ -826,8 +902,25 @@ mod tests {
 
     #[test]
     fn operation_ids_meet_the_audit_contract() {
-        let operation = operation_id();
-        assert!((16..=128).contains(&operation.len()));
+        // The public `operation` field is frozen to a 26-character Crockford
+        // Base32 ULID by the generated problem schema (^[0-9A-HJKMNP-TV-Z]{26}$).
+        // Pin the producer to that exact shape so a future change (for example
+        // swapping ULID for a hyphenated UUID) fails loudly here instead of
+        // silently breaking the frozen contract.
+        let operation = operation_id(&axum::http::Extensions::new());
+        assert_operation_contract(&operation);
+    }
+
+    fn assert_operation_contract(operation: &str) {
+        const CROCKFORD_UPPER: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        assert_eq!(operation.len(), 26, "operation id is a 26-character ULID");
+        assert!(
+            operation
+                .bytes()
+                .all(|byte| CROCKFORD_UPPER.contains(&byte)),
+            "operation id uses only Crockford Base32 uppercase symbols"
+        );
+        // 26 lies inside the frozen 16..=128 audit-operation length range.
         assert!(!operation.bytes().any(|byte| byte.is_ascii_whitespace()));
     }
 
@@ -835,6 +928,7 @@ mod tests {
     async fn response_layers_apply_no_store_and_security_headers_without_hsts() {
         let app = response_layers(
             Router::new().route("/probe", get(|| async { StatusCode::NO_CONTENT })),
+            Arc::new(Metrics::default()),
         );
         let response = app
             .oneshot(
@@ -862,6 +956,16 @@ mod tests {
             .headers()
             .get("strict-transport-security")
             .is_none());
+        // The identifier the caller can quote back is produced by the boundary
+        // itself, so it must meet the same frozen shape as the audit field.
+        assert_operation_contract(
+            response
+                .headers()
+                .get(crate::observability::CORRELATION_HEADER)
+                .expect("every response carries a correlation identifier")
+                .to_str()
+                .expect("the correlation header is ASCII"),
+        );
     }
 
     #[tokio::test]

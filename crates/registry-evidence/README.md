@@ -11,11 +11,15 @@ The `evidence` binary takes a runtime file and one subcommand:
 evidence --runtime <path> check
 evidence --runtime <path> evaluate --fixture <bundle-relative path>
 evidence --runtime <path> serve
+evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
 ```
 
 `check` validates and compiles the complete immutable bundle. `evaluate` runs
-one bundle-owned fixture without source or credential access. `serve` starts
-the native HTTP service:
+one bundle-owned fixture without source or credential access. `verify`
+re-verifies a stored signed response offline against a pinned trusted JWKS
+file and a complete relying-procedure policy document, reporting cryptographic
+authenticity separately from current validity; it needs no runtime file and
+never touches the network. `serve` starts the native HTTP service:
 
 ```text
 POST /v1/evidence

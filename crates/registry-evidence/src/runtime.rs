@@ -811,7 +811,12 @@ impl EvidenceRuntime {
             }
         };
         let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
-        let issued_at = evaluation_time.unwrap_or_else(Utc::now);
+        // `issued_at` is read after the source round-trip, so a backward wall-clock
+        // adjustment between it and `observed_at` could otherwise make `issued_at`
+        // precede `observed_at` and fail evidence construction. Clamp the wall-clock
+        // read so issuance never predates observation; an injected evaluation time
+        // keeps both stamps equal.
+        let issued_at = evaluation_time.unwrap_or_else(|| Utc::now().max(observed_at));
         let evidence = match self.kernel.construct_evidence(
             &request.requirement,
             values,
@@ -875,10 +880,14 @@ impl EvidenceRuntime {
                 let bytes = match bytes {
                     Ok(bytes) => bytes,
                     Err(error) => {
+                        // Serialization of the already-signed artifact failed;
+                        // record it with the same decision as the unsigned path
+                        // so the audit taxonomy for release-serialization is one
+                        // class regardless of format.
                         self.append_failure(
                             &material,
                             operation,
-                            AuditDecision::SigningFailure,
+                            AuditDecision::EvaluationFailure,
                             "release-serialization",
                             &source_id,
                             &adapter_id,

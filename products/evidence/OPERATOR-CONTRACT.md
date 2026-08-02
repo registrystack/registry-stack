@@ -46,6 +46,13 @@ context and independently enforces requirement, purpose, subject authority,
 selector, audience, disclosure, signing, and audit rules. Unsigned headers or
 caller request fields never substitute for authenticated authority.
 
+Version 1 accepts bearer tokens only. A token carrying a proof-of-possession
+confirmation claim is denied rather than accepted as an ordinary bearer, because
+Evidence validates no sender proof and accepting one would discard the
+constraint the authorization server issued the token under. An authorization
+server that binds tokens to DPoP keys or client certificates must issue Evidence
+clients unbound tokens.
+
 ## Governed bundle and operator runtime
 
 The operator supplies one atomic bundle containing the approved YAML,
@@ -272,6 +279,27 @@ selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
 excluded from logs, metrics, traces, snapshots, panics, and errors.
 
+The serving process writes those records as line-delimited JSON on standard
+output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
+default of `info`. Offline commands print their own result and emit no
+operational records. Every response, including responses to unrouted paths,
+carries the request's operation identifier in `X-Request-Id`; it is minted by
+Evidence and never taken from an inbound header, so a caller reporting a
+problem can quote an identifier the operator can find without disclosing
+anything about the request.
+
+Telemetry is off by default. Setting `metricsListener` in `runtime.yaml` serves
+`GET /metrics` in Prometheus text format on a second private binding, which must
+differ from the evidence listener binding and is subject to the same
+loopback-or-private-address rule. The evidence listener never serves `/metrics`,
+and the metrics listener never serves evidence. Series carry only the registered
+route template, request method, status category, and reviewed problem code, so
+series cardinality is bounded by the deployed contract and cannot grow with
+caller input. A path that matches no route is counted as `unmatched` and a
+method outside the served set as `other`, so a caller cannot write a label
+value. Operators should still reach this listener only from their own network,
+since request rates per route are operational information.
+
 The operator owns audit retention, backup, restore, access control, key
 rotation, and chain verification for the selected durable sink. A deployment
 profile may require more reviewed metadata or retention, but it cannot silently
@@ -454,7 +482,34 @@ No-match and ambiguous outcomes are publicly indistinguishable by default.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 
+Every authorization refusal collapses to one generic `not_authorized` problem
+(code `n`) with HTTP 403 and reveals no layer detail: a principal outside the
+bundle audience, a requirement no matched grant permits, an authority the grant
+does not carry, and an unsigned-envelope request the bundle or grant does not
+allow all return the same body. This is deliberate; the response is not an
+oracle for which check failed. Because the wire response is intentionally
+uninformative, operators debug a 403 from trusted local state, not from the
+response. Confirm, in order: the Bearer principal is in the deployed bundle's
+audience; a grant matches the requested requirement, purpose, and subject
+roles; the grant carries the claimed authority; and, only for an unsigned
+request, both the bundle and that grant permit
+`application/vnd.registrystack.evidence-unsigned+json`. The keyed audit chain
+records the refusal phase for after-the-fact diagnosis; the caller never sees
+it.
+
 ## Verification and release limit
+
+A relying party or operator re-verifies a stored signed response offline with
+`evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]`.
+The pinned JWKS file is the complete trust set and the policy document carries
+every expectation from independent trusted state: the retained request nonce,
+the expected role-bound subject bindings, and the expected output contract,
+under
+[`contracts/verification-policy.schema.yaml`](contracts/verification-policy.schema.yaml).
+The command performs no network access, reports cryptographic authenticity
+separately from current validity, and exits 0 only when both hold; an
+authentic but expired response exits 3. Every failed policy comparison reports
+one generic class so verification is not an oracle.
 
 Operators must verify a candidate revision with the applicable phase and final
 commands in [AGENTS.md](AGENTS.md). Public-demo source tests are optional,

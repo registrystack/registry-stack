@@ -64,12 +64,13 @@ products/evidence/
   scripts/
 ```
 
-The binary exposes three commands:
+The binary exposes four commands:
 
 ```text
 evidence serve
 evidence check
 evidence evaluate --fixture <path>
+evidence verify --jws <file> --jwks <file> --policy <file>
 ```
 
 Do not create client, worker, adapter, policy, credential, or interoperability

@@ -113,8 +113,10 @@ missing `Accept`, `*/*`, or the exact `application/jose+json` all select it. The
 exact `application/vnd.registrystack.evidence-unsigned+json` selects a visibly
 unsigned envelope, and only when both the immutable bundle and the one complete
 matched grant permit that format; otherwise the request is refused with the
-ordinary `not_authorized` problem before credentials or source access, without
-revealing which layer refused. A duplicate, combined, parameterized, weighted,
+ordinary `not_authorized` problem (HTTP 403) before credentials or source
+access, without revealing which layer refused. Every authorization refusal
+shares this one generic 403, so it is never an oracle for which check failed. A
+duplicate, combined, parameterized, weighted,
 or unknown `Accept` returns the `response_format_not_acceptable` problem with
 HTTP 406 before source access. Unsigned output is transport-authenticated
 convenience data for development and for consumers that cannot process JWS. It

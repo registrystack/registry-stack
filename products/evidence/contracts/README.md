@@ -17,6 +17,9 @@ The normative source set is:
   `jws-profile.yaml`: public discovery, request, the required `requestNonce`
   and its echo in the Evidence payload, response-format negotiation, payload,
   signing, rotation, and strict verifier rules;
+- `verification-policy.schema.yaml`: the closed all-required relying-procedure
+  policy document consumed by the offline `evidence verify` command, its frozen
+  command surface, exit codes, and no-network rule;
 - `problem-contract.yaml`: safe public failures, the
   `response_format_not_acceptable` negotiation failure, and existence-collapse
   rules;

@@ -186,10 +186,20 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Serve => {
+            install_operational_logging();
             let runtime = Arc::new(
                 EvidenceRuntime::initialize(&cli.runtime)
                     .await
                     .map_err(runtime_initialization_error)?,
+            );
+            tracing::info!(
+                target: "registry_evidence::startup",
+                bundle_revision = runtime.bundle().revision(),
+                runtime_revision = runtime.runtime_revision(),
+                bind_host = runtime.runtime_config().listener.bind_host,
+                port = runtime.runtime_config().listener.port,
+                metrics = runtime.runtime_config().metrics_listener.is_some(),
+                "evidence service starting"
             );
             server::serve(runtime, shutdown_signal())
                 .await
@@ -278,6 +288,24 @@ fn compile_source_plans_with_runtime(
         plans.insert(source_id.to_owned(), plan);
     }
     Ok(plans)
+}
+
+/// Install the operational log subscriber for the serving process.
+///
+/// Records are line-delimited JSON on stdout so a collector can read them
+/// without a parsing convention of its own. `EVIDENCE_LOG` selects verbosity
+/// and defaults to `info`, which is the level the request boundary emits at.
+/// Offline commands print their own result and install nothing, so no command
+/// gains log output it did not have.
+fn install_operational_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("EVIDENCE_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .with_current_span(false)
+        .with_span_list(false)
+        .init();
 }
 
 /// Resolve on the first operator stop signal.
@@ -822,6 +850,7 @@ async fn evaluate_reference_fixture(
                 "lookup",
                 "facts",
                 "value",
+                "values",
                 "entityReferenceCount",
                 "rawReferencesDisclosed",
                 "signed",
@@ -835,6 +864,11 @@ async fn evaluate_reference_fixture(
                 "expectedTransport",
             ],
         )?;
+        // A case states either the one concept value or the complete concept map,
+        // never both, so neither expectation can weaken the other.
+        if expected.contains_key("value") && expected.contains_key("values") {
+            return Err(CliError("reference fixture states two value expectations"));
+        }
         let forms = [
             "response",
             "sourceFailure",
@@ -1091,6 +1125,24 @@ async fn validate_reference_response(
                     return Err(CliError("reference scalar value did not match"));
                 }
             }
+            if let Some(exact) = expected.get("values") {
+                let exact = exact
+                    .as_object()
+                    .ok_or(CliError("reference concept map is invalid"))?;
+                if values.as_slice().len() != exact.len() {
+                    return Err(CliError("reference concept value did not match"));
+                }
+                for (concept, expected_value) in exact {
+                    let disclosed = values
+                        .as_slice()
+                        .iter()
+                        .find(|value| value.provides_value_for == *concept)
+                        .ok_or(CliError("reference concept value did not match"))?;
+                    if public_json(&disclosed.value)? != *expected_value {
+                        return Err(CliError("reference concept value did not match"));
+                    }
+                }
+            }
             if let Some(count) = expected.get("entityReferenceCount").and_then(Value::as_u64) {
                 let actual = match values.as_slice() {
                     [value] => match &value.value {
@@ -1273,6 +1325,7 @@ fn validate_reference_expectation_keys(
             "lookup",
             "facts",
             "value",
+            "values",
             "entityReferenceCount",
             "rawReferencesDisclosed",
             "signed",
@@ -2632,7 +2685,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn offline_cli_evaluates_every_reference_deployment_fixture() {
-        for project in ["dhis2-adult-status", "opencrvs-family-evidence"] {
+        for project in ["dhis2-tracker-evidence", "opencrvs-family-evidence"] {
             let directory = tempfile::tempdir().expect("temporary bundle");
             let source = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../products/evidence/reference/request-adapter/deployment-projects")
@@ -2643,7 +2696,7 @@ mod tests {
 
             let bundle = Arc::new(Bundle::load(directory.path()).expect("reference bundle loads"));
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-            let outbound_tls: OutboundTlsConfig = if project == "dhis2-adult-status" {
+            let outbound_tls: OutboundTlsConfig = if project == "dhis2-tracker-evidence" {
                 serde_norway::from_str(
                     "systemRoots: true\ntrustProfiles:\n  government-internal-pki:\n    caBundleFile: /etc/registry-evidence/ca/government-internal.pem\n",
                 )
@@ -2654,7 +2707,7 @@ mod tests {
                     trust_profiles: Default::default(),
                 }
             };
-            let ca_bundles = if project == "dhis2-adult-status" {
+            let ca_bundles = if project == "dhis2-tracker-evidence" {
                 let certificate =
                     rcgen::generate_simple_self_signed(
                         vec!["tracker.dhis2.gov.example".to_owned()],

@@ -18,6 +18,7 @@ ownership:
     prohibited: source, origin, method, path, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
 evidence_data_request:
   count: Exactly one per evaluation after successful authorization, durable access audit, and complete RequestParts validation.
+  retry: The HTTP client disables transport retry explicitly, so a connection failure yields exactly one connection attempt and no second request.
   owner: Core runtime.
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
@@ -139,6 +140,7 @@ authentication:
     - Evidence-request processing resolves credentials only after authorization, access audit, preparation, and RequestParts validation.
     - Missing or invalid credentials fail closed without an evidence-data request.
 tls_and_proxy:
+  backend: The evidence-data and OAuth token clients select the rustls TLS backend explicitly, so workspace-wide dependency feature unification that enables an alternate backend elsewhere cannot change which backend these clients use.
   system_roots: Supported when runtime outboundTls.systemRoots is true.
   private_ca: A governed logical tlsTrustProfile must have exactly one regular, read-only, captured, bounded, valid runtime CA file binding before readiness; missing, extra, symlinked, mutable, and malformed bindings fail startup.
   verification: Fixed-origin and hostname verification remain mandatory; insecure, skip-verification, and trust-all modes do not exist.

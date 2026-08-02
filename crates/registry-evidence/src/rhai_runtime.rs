@@ -1121,6 +1121,13 @@ fn decode_derived_value(value: Dynamic) -> Result<DerivedValue, RhaiRuntimeError
 /// operand routed through the host-owned index guard. The raw engine remains the
 /// capability boundary; this lexical review is an enforceable language contract over
 /// governed bundle scripts and is not claimed as a sandbox perimeter.
+///
+/// This scanner mirrors the pinned `rhai` lexer's operand-position and
+/// brace-disambiguation rules. Bumping the `rhai` dependency requires
+/// re-validating this scanner against the new lexer: over-acceptance only weakens
+/// a defense-in-depth guard over trusted scripts (the runtime negative-index guard
+/// still holds), while over-rejection breaks a valid adapter and is caught by the
+/// scanner and fixture tests.
 fn guarded_script_source(source: &str) -> Result<String, RhaiRuntimeError> {
     validate_top_level_functions(source)?;
     let mut insertions = review_script_bytes(source)?;

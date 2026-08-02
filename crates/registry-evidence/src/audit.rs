@@ -114,7 +114,6 @@ pub struct EvidenceAuditEvent {
 
 impl EvidenceAuditEvent {
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         operation: String,
         phase: AuditPhase,
@@ -961,6 +960,83 @@ mod tests {
             .and_then(|mut file| file.write_all(b"{}\n"))
             .expect("tamper audit file");
         assert!(!log.ready().await, "readiness detects chain tampering");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_appends_extend_one_keyed_chain_without_forking() {
+        // Every evaluation shares one `EvidenceAuditLog` through an `Arc`, so many
+        // requests can append at once. The keyed chain must serialize each event's
+        // prev-hash read with its durable write: if two appends observed the same
+        // tail hash in parallel they would fork the chain and surface as a
+        // `ChainForkDetected` error (a spurious 503) or a broken linkage. Drive a
+        // burst of concurrent appends across worker threads and prove each one
+        // succeeds and the resulting chain still verifies end to end.
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = Arc::new(
+            EvidenceAuditLog::initialize(
+                &path,
+                256 * 1024,
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+                1,
+            )
+            .await
+            .expect("audit initializes"),
+        );
+
+        const CONCURRENCY: usize = 16;
+        let mut handles = Vec::with_capacity(CONCURRENCY);
+        for _ in 0..CONCURRENCY {
+            let log = Arc::clone(&log);
+            handles.push(tokio::spawn(async move {
+                let event = event(log.as_ref());
+                log.append(event).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("append task joins")
+                .expect("a concurrent append never forks the keyed chain");
+        }
+
+        assert!(
+            log.ready().await,
+            "the chain verifies after concurrent appends"
+        );
+        assert_eq!(
+            log.sink.full_verifications.load(Ordering::Relaxed),
+            1,
+            "concurrent appends extend the chain incrementally without rescanning it"
+        );
+        let lines = std::fs::read_to_string(&path)
+            .expect("audit reads")
+            .lines()
+            .count();
+        assert_eq!(
+            lines, CONCURRENCY,
+            "every concurrent append is durably recorded exactly once"
+        );
+
+        // Release the single-writer sink lock before reopening: the sink holds an
+        // exclusive lock for one writer per file, so a fresh reader can only
+        // re-verify the chain once this handle is dropped.
+        drop(log);
+
+        // A fresh reader re-verifies the whole keyed chain from disk, proving the
+        // prev-hash linkage stayed consistent under concurrent appends.
+        let reopened = EvidenceAuditLog::initialize(
+            &path,
+            256 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("a chain grown under concurrency verifies on restart");
+        assert!(
+            reopened.ready().await,
+            "the reopened chain verifies end to end"
+        );
     }
 
     #[tokio::test]

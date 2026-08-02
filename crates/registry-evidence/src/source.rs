@@ -1160,10 +1160,9 @@ async fn parse_token_response(
     response: reqwest::Response,
     expected_scope: Option<&str>,
 ) -> Result<(ProtectedToken, Duration), SourceError> {
-    reject_response_status(&response).map_err(|error| match error {
-        SourceError::Timeout => SourceError::Timeout,
-        _ => SourceError::Credential,
-    })?;
+    // `reject_response_status` classifies only redirect/status outcomes, never a
+    // timeout, so every rejection here is a credential-exchange failure.
+    reject_response_status(&response).map_err(|_| SourceError::Credential)?;
     if response_media_type(&response).map_err(|_| SourceError::Credential)? != JSON_MEDIA_TYPE {
         return Err(SourceError::Credential);
     }

@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
+use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher, AuditHashSecret};
 use registry_platform_crypto::{
     sign, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
     SigningProvider,
@@ -30,6 +31,11 @@ use wiremock::{
 };
 
 use crate::{
+    audit::{
+        AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
+        AuthorityKind as AuditAuthorityKind, EvidenceAuditEvent, EvidenceAuditLog,
+        ResponseProtection,
+    },
     auth::{AuthenticationClaimsConfig, Authenticator},
     config::ResponseFormat,
     contracts::evidence_contract_accepts,
@@ -37,9 +43,10 @@ use crate::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
         PublicValue, RequestedSelector, RequestedSubject, SelectorValue, UnsignedEvidenceEnvelope,
     },
+    observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeInitializationError},
-    server::{build_app, build_app_at_for_test, serve_listener_for_test},
+    server::{build_app, build_app_at_for_test, build_app_with_metrics, serve_listener_for_test},
     signing::EvidenceSigner,
     verifier::{verify_flattened_jws, EvidenceVerificationPolicy},
     EVIDENCE_UNSIGNED_MEDIA_TYPE,
@@ -56,6 +63,8 @@ const BASIC_USER: &str = "source-user-canary";
 const BASIC_PASSWORD: &str = "source-password-canary";
 const PARENT_REFERENCE: &str = "synthetic-parent-reference-001";
 const NON_PARENT_REFERENCE: &str = "synthetic-non-parent-reference-003";
+const LOG_TOKEN_CANARY: &str = "operational-log-token-canary";
+const LOG_SELECTOR_CANARY: &str = "operational-log-selector-canary";
 
 struct AcceptanceRuntime {
     _temporary: TempDir,
@@ -514,6 +523,385 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 4);
     for canary in privacy_canaries() {
         assert!(!audit.contains(canary));
+    }
+}
+
+/// One identifier is minted per request at the boundary and stays the same
+/// everywhere an operator can observe it. Without a response header the
+/// identifier the problem body reports is the only copy the caller ever sees,
+/// so a support report cannot be joined to a server-side record.
+#[tokio::test]
+async fn every_response_carries_the_request_scoped_correlation_identifier() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    let health = http.get("/health").await;
+    health.assert_status_ok();
+    let first = correlation_id(&health);
+
+    // A rejected request reports one identifier, not one per error site.
+    let denied = http.get("/v1/evidence-definitions").await;
+    assert_eq!(denied.status_code(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(correlation_id(&denied), denied.json::<Value>()["operation"]);
+
+    // An unrouted request correlates on the same terms.
+    let unknown = http.get("/absent").await;
+    assert_eq!(
+        correlation_id(&unknown),
+        unknown.json::<Value>()["operation"]
+    );
+
+    // Identifiers are request-scoped, never process-scoped.
+    let second = http.get("/health").await;
+    assert_ne!(first, correlation_id(&second));
+}
+
+/// Section 12 fixes exactly what an operational record may contain. Anything
+/// outside that set is a disclosure the record has never been reviewed for, so
+/// the field set is asserted whole rather than field by field.
+#[test]
+fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
+    let emitted = capture_evidence_logs(|| async {
+        let fixture = acceptance_runtime().await;
+        let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+        http.get("/health").await.assert_status_ok();
+
+        // The body parses and its selector values are held in memory before
+        // authentication rejects the request, so this exercises the disclosure
+        // path rather than an early parse failure.
+        let rejected = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {LOG_TOKEN_CANARY}"))
+            .json(&request(
+                "urn:example:fixture:requirement:adult-status:v1",
+                "fixture-eligibility",
+                vec![requested_subject(
+                    "subject",
+                    "person-demographics-v1",
+                    Some([
+                        ("given_name", LOG_SELECTOR_CANARY),
+                        ("family_name", "Diallo"),
+                        ("birth_date", "2000-01-01"),
+                    ]),
+                )],
+            ))
+            .await;
+        assert_eq!(
+            rejected.status_code(),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "the canary token is not a verifiable access token"
+        );
+    });
+
+    let served: Vec<&Value> = emitted
+        .iter()
+        .filter(|record| record["target"] == json!(REQUEST_LOG_TARGET))
+        .collect();
+    assert_eq!(served.len(), 2, "one operational record per served request");
+
+    for record in &served {
+        let fields = record["fields"]
+            .as_object()
+            .expect("an operational record carries fields");
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "message",
+                "route",
+                "operation",
+                "duration_ms",
+                "status",
+                "error"
+            ])
+        );
+        assert!(fields["duration_ms"].is_u64());
+        assert!(!fields["operation"]
+            .as_str()
+            .expect("the operation identifier is a string")
+            .is_empty());
+    }
+
+    // The route template, never the requested path, and a status category
+    // rather than a code.
+    assert_eq!(served[0]["fields"]["route"], json!("/health"));
+    assert_eq!(served[0]["fields"]["status"], json!("success"));
+    assert_eq!(served[0]["fields"]["error"], json!("none"));
+    assert_eq!(served[1]["fields"]["route"], json!("/v1/evidence"));
+    assert_eq!(served[1]["fields"]["status"], json!("client_error"));
+    assert_eq!(served[1]["fields"]["error"], json!("authentication_failed"));
+
+    // No token, selector value, purpose, or requirement identity reaches an
+    // operational record this crate emits.
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize");
+    for canary in [
+        LOG_TOKEN_CANARY,
+        LOG_SELECTOR_CANARY,
+        "Diallo",
+        "2000-01-01",
+        "fixture-eligibility",
+        "adult-status",
+    ] {
+        assert!(
+            !raw.contains(canary),
+            "an operational log disclosed {canary}"
+        );
+    }
+}
+
+/// Counters describe traffic. They must say how the boundary behaved without
+/// naming what any request asked for, and their label set must stay bounded by
+/// the route table rather than by anything a caller can send.
+#[tokio::test]
+async fn metrics_report_bounded_series_without_disclosing_request_content() {
+    let fixture = acceptance_runtime().await;
+    let (app, metrics) = build_app_with_metrics(Arc::clone(&fixture.runtime));
+    let http = TestServer::new(app);
+
+    http.get("/health").await.assert_status_ok();
+    http.get("/health").await.assert_status_ok();
+    let denied = http.get("/v1/evidence-definitions").await;
+    assert_eq!(denied.status_code(), axum::http::StatusCode::UNAUTHORIZED);
+    http.get("/absent-path-canary").await;
+
+    let exposition = TestServer::new(metrics_app(Arc::clone(&metrics)));
+    let rendered = exposition.get("/metrics").await;
+    rendered.assert_status_ok();
+    assert_eq!(rendered.header("content-type"), "text/plain; version=0.0.4");
+    let body = rendered.text();
+
+    assert!(body.contains(
+        "evidence_http_requests_total{route=\"/health\",method=\"GET\",status=\"success\",error=\"none\"} 2\n"
+    ));
+    assert!(body.contains(
+        "evidence_http_requests_total{route=\"/v1/evidence-definitions\",method=\"GET\",status=\"client_error\",error=\"authentication_failed\"} 1\n"
+    ));
+    assert!(body.contains("evidence_http_request_duration_seconds_count{route=\"/health\""));
+
+    // An unrouted request is one fixed label, never the path the caller chose.
+    assert!(body.contains("route=\"unmatched\""));
+    assert!(!body.contains("absent-path-canary"));
+    for canary in privacy_canaries() {
+        assert!(!body.contains(canary), "metrics disclosed {canary}");
+    }
+
+    // The metrics application answers for metrics only; it is not a second
+    // way to reach the evidence routes.
+    for path in ["/health", "/v1/evidence-definitions", "/openapi.json"] {
+        assert_eq!(
+            exposition.get(path).await.status_code(),
+            axum::http::StatusCode::NOT_FOUND,
+            "the metrics listener served {path}"
+        );
+    }
+}
+
+/// The metrics endpoint is opt-in deployment surface on its own socket. The
+/// evidence listener must not gain a metrics route, and the two listeners must
+/// share one lifecycle so shutdown leaves nothing behind.
+#[tokio::test]
+async fn a_configured_metrics_listener_serves_beside_the_evidence_listener() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let evidence_port = reserved_port();
+    let metrics_port = reserved_port();
+    let mut document =
+        fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
+    replace_exact(
+        &mut document,
+        "port: 8080",
+        &format!("port: {evidence_port}"),
+        1,
+    );
+    document.push_str(&format!(
+        "metricsListener:\n  bindHost: 127.0.0.1\n  port: {metrics_port}\n"
+    ));
+    // The prepared document is already read-only, as deployment requires, so
+    // this variant is written before the runtime captures it.
+    make_file_writable(&prepared.runtime_path);
+    fs::write(&prepared.runtime_path, &document).expect("runtime configuration is rewritten");
+    make_file_read_only(&prepared.runtime_path);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("the runtime initializes with a metrics listener"),
+    );
+
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::server::serve(runtime, async move {
+        let _ = stopped.await;
+    }));
+    let client = reqwest::Client::new();
+    let evidence = format!("http://127.0.0.1:{evidence_port}");
+    let telemetry = format!("http://127.0.0.1:{metrics_port}");
+    await_ready(&client, &format!("{evidence}/health")).await;
+
+    let exposition = client
+        .get(format!("{telemetry}/metrics"))
+        .send()
+        .await
+        .expect("the metrics listener answers");
+    assert_eq!(exposition.status(), reqwest::StatusCode::OK);
+    assert!(exposition
+        .text()
+        .await
+        .expect("the exposition is readable")
+        .contains("evidence_http_requests_total{route=\"/health\""));
+
+    // The evidence listener gained no metrics route of its own.
+    let on_evidence_listener = client
+        .get(format!("{evidence}/metrics"))
+        .send()
+        .await
+        .expect("the evidence listener answers");
+    assert_eq!(
+        on_evidence_listener.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        on_evidence_listener
+            .json::<Value>()
+            .await
+            .expect("problem body")["code"],
+        json!("malformed_request")
+    );
+
+    let _ = stop.send(());
+    server
+        .await
+        .expect("the service task joins")
+        .expect("the service stops cleanly");
+
+    // One shutdown closes both sockets.
+    assert!(client
+        .get(format!("{telemetry}/metrics"))
+        .send()
+        .await
+        .is_err());
+    assert!(client
+        .get(format!("{evidence}/health"))
+        .send()
+        .await
+        .is_err());
+}
+
+/// Reserve an ephemeral port and release it, so a test can name a port in
+/// configuration that the operating system has just confirmed is free.
+fn reserved_port() -> u16 {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral port is available");
+    listener
+        .local_addr()
+        .expect("the reserved socket has an address")
+        .port()
+}
+
+async fn await_ready(client: &reqwest::Client, url: &str) {
+    for _ in 0..100 {
+        if let Ok(response) = client.get(url).send().await {
+            if response.status().is_success() {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the evidence listener never became reachable at {url}");
+}
+
+fn correlation_id(response: &axum_test::TestResponse) -> Value {
+    json!(response
+        .header(CORRELATION_HEADER)
+        .to_str()
+        .expect("the correlation header is ASCII"))
+}
+
+/// Collect every record this crate emits while `body` runs.
+///
+/// The subscriber is thread-local and the request future is driven to
+/// completion on this thread, so records emitted from the detached evaluation
+/// task land in the same buffer.
+///
+/// Earlier tests serve requests with no subscriber installed, which caches the
+/// request boundary's callsite as permanently uninteresting and drops the
+/// global maximum level to off. A thread-local subscriber does not undo that on
+/// its own, so one subscriber is installed process-wide on first use and routes
+/// each record to the buffer of the thread that emitted it. Tests running
+/// concurrently on other threads have no buffer and their records are dropped.
+fn capture_evidence_logs<F, Fut>(body: F) -> Vec<Value>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .json()
+                .with_max_level(tracing::Level::INFO)
+                .with_writer(CapturedLogs)
+                .finish(),
+        )
+        .expect("this test binary installs no other subscriber");
+    });
+
+    let buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    CAPTURED_LOGS.with(|slot| *slot.borrow_mut() = Some(Arc::clone(&buffer)));
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a single-threaded executor builds");
+    executor.block_on(body());
+    CAPTURED_LOGS.with(|slot| *slot.borrow_mut() = None);
+
+    let raw = buffer
+        .lock()
+        .expect("the log buffer is not poisoned")
+        .clone();
+    String::from_utf8(raw)
+        .expect("operational records are UTF-8")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| {
+            record["target"]
+                .as_str()
+                .is_some_and(|target| target.starts_with("registry_evidence"))
+        })
+        .collect()
+}
+
+thread_local! {
+    /// The buffer `capture_evidence_logs` is filling on this thread, if any.
+    static CAPTURED_LOGS: std::cell::RefCell<Option<Arc<std::sync::Mutex<Vec<u8>>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[derive(Clone)]
+struct CapturedLogs;
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        // A record emitted outside a capture window belongs to a test that is
+        // not inspecting logs, so it is deliberately discarded rather than
+        // written anywhere.
+        let _ = CAPTURED_LOGS.try_with(|slot| {
+            if let Some(sink) = slot.borrow().as_ref() {
+                sink.lock()
+                    .expect("the log buffer is not poisoned")
+                    .extend_from_slice(buffer);
+            }
+        });
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
     }
 }
 
@@ -1045,6 +1433,39 @@ async fn missing_principal_never_falls_back_to_client_id_or_azp() {
     let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
     assert!(!audit.contains("fallback-client-canary"));
     assert!(!audit.contains("fallback-authorized-party-canary"));
+}
+
+/// A confirmation claim binds the token to a sender-provided proof this
+/// profile does not validate. Accepting it as an ordinary bearer would
+/// silently discard the constraint the authorization server issued it under,
+/// so the only safe outcome is denial.
+#[tokio::test]
+async fn sender_constrained_tokens_are_denied_rather_than_downgraded() {
+    for confirmation in [
+        json!({"jkt": "sender-constraint-canary"}),
+        json!({"x5t#S256": "sender-constraint-canary"}),
+        json!({"jwk": {"kty": "OKP", "crv": "Ed25519", "x": "sender-constraint-canary"}}),
+    ] {
+        let fixture = acceptance_runtime().await;
+        let token = access_token(Some(json!({"cnf": confirmation})));
+        let error = fixture
+            .runtime
+            .evaluate("operation-sender-constrained", &token, &adult_request())
+            .await
+            .expect_err("a confirmation-bound token is denied");
+        assert_eq!(error.problem(), ProblemCode::AuthenticationFailed);
+        assert!(
+            fixture
+                .server
+                .received_requests()
+                .await
+                .expect("request journal is available")
+                .is_empty(),
+            "a sender-constrained token cannot acquire source credentials"
+        );
+        let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+        assert!(!audit.contains("sender-constraint-canary"));
+    }
 }
 
 #[tokio::test]
@@ -2677,6 +3098,115 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
     );
 }
 
+/// Many simultaneous evaluations must leave exactly one verifiable audit chain:
+/// two records per released assertion, no forked or interleaved hash links, and
+/// one distinct evidence identity per request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_evidence_requests_keep_one_verifiable_audit_chain() {
+    let load = LoadFixture::start().await;
+    let outcomes = load.run(LOAD_CONCURRENCY, LOAD_CONCURRENCY).await;
+    assert_eq!(
+        outcomes.released(),
+        LOAD_CONCURRENCY,
+        "every admitted concurrent request releases evidence; observed {:?}",
+        outcomes.status_counts()
+    );
+
+    let audit = load.shutdown().await;
+    assert_eq!(
+        audit.matches("\"phase\":\"access-attempt\"").count(),
+        LOAD_CONCURRENCY
+    );
+    assert_eq!(
+        audit.matches("\"phase\":\"disclosure-release\"").count(),
+        LOAD_CONCURRENCY
+    );
+    assert_eq!(
+        released_evidence_ids(&audit).len(),
+        LOAD_CONCURRENCY,
+        "concurrent releases must not share an evidence identity"
+    );
+
+    let verification = verify_jsonl_lines_with_hasher(audit.lines(), &acceptance_audit_hasher())
+        .expect("the concurrently written audit chain verifies under the deployment key");
+    assert_eq!(verification.records, LOAD_CONCURRENCY * 2);
+}
+
+/// Report sustained request throughput against the two candidate ceilings, so
+/// the dominant one is attributed from measurement rather than argument.
+///
+/// This asserts only correctness invariants. The rates themselves are reported,
+/// never asserted: they are properties of the host filesystem and core count,
+/// and a threshold here would be a flake generator. Read the report, record the
+/// numbers with the hardware they came from, and compare across changes.
+///
+/// ```text
+/// cargo test -p registry-evidence --lib -- --ignored --nocapture soak_reports
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in throughput soak; rates are host-specific and reported, not asserted"]
+async fn soak_reports_request_throughput_against_the_audit_ceiling() {
+    let load = LoadFixture::start().await;
+
+    // Warm the OAuth-free source path, JWKS cache, and connection pool so
+    // first-request costs do not land inside the measured window.
+    let _ = load.run(LOAD_CONCURRENCY, LOAD_CONCURRENCY).await;
+
+    let outcomes = load.run(SOAK_REQUESTS, LOAD_CONCURRENCY).await;
+    let released = outcomes.released();
+    let request_rate = released as f64 / outcomes.elapsed.as_secs_f64();
+
+    let source_rate = load.measure_source_rate(SOURCE_PROBE_REQUESTS).await;
+    let append_rate = load.measure_audit_append_rate(AUDIT_PROBE_APPENDS).await;
+    // Every released assertion writes an access-attempt record before source
+    // access and a disclosure-release record after it.
+    let audit_ceiling = append_rate / 2.0;
+
+    let percentiles = outcomes.latency_percentiles();
+    println!(
+        "\n=== Evidence throughput report ===\n\
+         host                : {} logical cores\n\
+         load                : {SOAK_REQUESTS} requests, {LOAD_CONCURRENCY} concurrent\n\
+         released            : {released} in {:.2}s\n\
+         \n\
+         observed request    : {request_rate:.0} rps\n\
+         audit ceiling       : {audit_ceiling:.0} rps ({append_rate:.0} appends/s / 2 records per request)\n\
+         mock source floor   : {source_rate:.0} rps\n\
+         \n\
+         latency p50/p95/p99 : {:.1} / {:.1} / {:.1} ms\n\
+         audit share of ceiling: {:.0}%\n\
+         ==================================\n",
+        std::thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get),
+        outcomes.elapsed.as_secs_f64(),
+        percentiles.0.as_secs_f64() * 1000.0,
+        percentiles.1.as_secs_f64() * 1000.0,
+        percentiles.2.as_secs_f64() * 1000.0,
+        if audit_ceiling > 0.0 {
+            request_rate / audit_ceiling * 100.0
+        } else {
+            0.0
+        },
+    );
+
+    assert_eq!(
+        released,
+        SOAK_REQUESTS,
+        "sustained load must not shed requests; observed {:?}",
+        outcomes.status_counts()
+    );
+
+    let audit = load.shutdown().await;
+    let expected_releases = SOAK_REQUESTS + LOAD_CONCURRENCY;
+    assert_eq!(
+        audit.matches("\"phase\":\"disclosure-release\"").count(),
+        expected_releases
+    );
+    assert_eq!(released_evidence_ids(&audit).len(), expected_releases);
+    let verification = verify_jsonl_lines_with_hasher(audit.lines(), &acceptance_audit_hasher())
+        .expect("the audit chain written under sustained load verifies");
+    assert_eq!(verification.records, expected_releases * 2);
+}
+
 fn acceptance_case_time(
     case: &serde_json::Map<String, Value>,
     common: &serde_json::Map<String, Value>,
@@ -3433,4 +3963,333 @@ fn make_writable(path: &Path) {
                 .expect("bundle file becomes writable for mutation test");
         }
     }
+}
+
+// Concurrency and throughput harness.
+
+/// Simultaneous virtual clients. Held below the fixture listener's 64 admitted
+/// request slots so admission queueing never reads as a throughput limit.
+const LOAD_CONCURRENCY: usize = 32;
+
+/// Requests issued by one measured soak window.
+const SOAK_REQUESTS: usize = 512;
+
+/// Direct source calls used to establish the mock-source floor.
+const SOURCE_PROBE_REQUESTS: usize = 256;
+
+/// Appends used to measure the audit sink ceiling on the same filesystem.
+const AUDIT_PROBE_APPENDS: usize = 200;
+
+/// Probe ceiling. The probe writes a small fraction of this.
+const AUDIT_PROBE_MAXIMUM_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The acceptance runtime behind a real TCP listener, driven by real HTTP
+/// clients. Load is applied over sockets rather than through an in-process
+/// router so admission, the detached evaluation task, and connection handling
+/// are all measured.
+struct LoadFixture {
+    _temporary: TempDir,
+    _source: MockServer,
+    source_origin: String,
+    audit_path: PathBuf,
+    probe_directory: PathBuf,
+    address: std::net::SocketAddr,
+    client: reqwest::Client,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+    runtime: Arc<EvidenceRuntime>,
+}
+
+/// One measured load window.
+struct LoadOutcomes {
+    statuses: Vec<u16>,
+    latencies: Vec<Duration>,
+    elapsed: Duration,
+}
+
+impl LoadOutcomes {
+    fn released(&self) -> usize {
+        self.statuses
+            .iter()
+            .filter(|status| **status == 200)
+            .count()
+    }
+
+    fn status_counts(&self) -> BTreeMap<u16, usize> {
+        let mut counts = BTreeMap::new();
+        for status in &self.statuses {
+            *counts.entry(*status).or_insert(0_usize) += 1;
+        }
+        counts
+    }
+
+    /// Nearest-rank p50, p95, and p99 over the whole window.
+    fn latency_percentiles(&self) -> (Duration, Duration, Duration) {
+        if self.latencies.is_empty() {
+            return (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        }
+        let mut sorted = self.latencies.clone();
+        sorted.sort_unstable();
+        let at = |fraction: f64| {
+            let rank = (fraction * sorted.len() as f64).ceil() as usize;
+            sorted[rank.clamp(1, sorted.len()) - 1]
+        };
+        (at(0.50), at(0.95), at(0.99))
+    }
+}
+
+impl LoadFixture {
+    async fn start() -> Self {
+        let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+        mount_unmetered_adult_source(&prepared.server).await;
+        let runtime = Arc::new(
+            EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+                .await
+                .expect("the load fixture runtime initializes"),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the load listener binds");
+        let address = listener
+            .local_addr()
+            .expect("the load listener has an address");
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move {
+                serve_listener_for_test(runtime, listener, async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(LOAD_CONCURRENCY)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("the load client builds");
+
+        Self {
+            source_origin: prepared.server.uri(),
+            probe_directory: prepared
+                .audit_path
+                .parent()
+                .expect("the audit path has a parent")
+                .to_path_buf(),
+            audit_path: prepared.audit_path,
+            _temporary: prepared.temporary,
+            _source: prepared.server,
+            address,
+            client,
+            shutdown,
+            serving,
+            runtime,
+        }
+    }
+
+    /// Issue `total` adult-status requests across `concurrency` clients.
+    ///
+    /// Each request carries its own principal so the per-principal token bucket
+    /// never becomes the thing under measurement. Tokens are signed up front,
+    /// outside the timed window.
+    async fn run(&self, total: usize, concurrency: usize) -> LoadOutcomes {
+        let tokens: Arc<Vec<String>> = Arc::new(
+            (0..total)
+                .map(|index| access_token_for(&format!("load-principal-{index:06}"), None))
+                .collect(),
+        );
+        let body =
+            Arc::new(serde_json::to_vec(&adult_request()).expect("the load request serializes"));
+        let endpoint = Arc::new(format!("http://{}/v1/evidence", self.address));
+
+        let started = Instant::now();
+        let mut workers = Vec::with_capacity(concurrency);
+        for worker in 0..concurrency {
+            let client = self.client.clone();
+            let tokens = Arc::clone(&tokens);
+            let body = Arc::clone(&body);
+            let endpoint = Arc::clone(&endpoint);
+            workers.push(tokio::spawn(async move {
+                let mut results = Vec::new();
+                let mut index = worker;
+                while index < tokens.len() {
+                    let attempt = Instant::now();
+                    let response = client
+                        .post(endpoint.as_str())
+                        .header("authorization", format!("Bearer {}", tokens[index]))
+                        .header("content-type", "application/json")
+                        .body(body.as_ref().clone())
+                        .send()
+                        .await
+                        .expect("the load request completes");
+                    let status = response.status().as_u16();
+                    // Drain the body so the connection returns to the pool.
+                    let _ = response
+                        .bytes()
+                        .await
+                        .expect("the load response body reads");
+                    results.push((status, attempt.elapsed()));
+                    index += concurrency;
+                }
+                results
+            }));
+        }
+
+        let mut statuses = Vec::with_capacity(total);
+        let mut latencies = Vec::with_capacity(total);
+        for worker in workers {
+            for (status, latency) in worker.await.expect("a load worker completes") {
+                statuses.push(status);
+                latencies.push(latency);
+            }
+        }
+        LoadOutcomes {
+            statuses,
+            latencies,
+            elapsed: started.elapsed(),
+        }
+    }
+
+    /// Call the mock source directly to establish the harness floor: no result
+    /// above this rate is attributable to Evidence.
+    async fn measure_source_rate(&self, requests: usize) -> f64 {
+        let endpoint = Arc::new(format!("{}/v1/facts", self.source_origin));
+        let started = Instant::now();
+        let mut workers = Vec::with_capacity(LOAD_CONCURRENCY);
+        for worker in 0..LOAD_CONCURRENCY {
+            let client = self.client.clone();
+            let endpoint = Arc::clone(&endpoint);
+            workers.push(tokio::spawn(async move {
+                let mut index = worker;
+                while index < requests {
+                    let response = client
+                        .post(endpoint.as_str())
+                        .header("accept", "application/json")
+                        .header("authorization", format!("Bearer {BEARER}"))
+                        .json(&adult_source_request())
+                        .send()
+                        .await
+                        .expect("the source probe request completes");
+                    let _ = response.bytes().await.expect("the source probe body reads");
+                    index += LOAD_CONCURRENCY;
+                }
+            }));
+        }
+        for worker in workers {
+            worker.await.expect("a source probe worker completes");
+        }
+        requests as f64 / started.elapsed().as_secs_f64()
+    }
+
+    /// Append through a real keyed sink on the same filesystem as the runtime's
+    /// own audit file. Appends are serialized by the chain, so this is a
+    /// sequential measurement by construction, not by choice of harness.
+    async fn measure_audit_append_rate(&self, appends: usize) -> f64 {
+        let path = self.probe_directory.join("audit-throughput-probe.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            AUDIT_PROBE_MAXIMUM_BYTES,
+            b"audit-hash-secret-canary-32-bytes-minimum".to_vec(),
+            1,
+        )
+        .await
+        .expect("the audit throughput probe initializes");
+
+        let started = Instant::now();
+        for index in 0..appends {
+            log.append(audit_probe_event(index))
+                .await
+                .expect("the audit throughput probe appends");
+        }
+        appends as f64 / started.elapsed().as_secs_f64()
+    }
+
+    /// Stop the listener, drain detached evaluations, and return the audit file.
+    async fn shutdown(self) -> String {
+        let _ = self.shutdown.send(());
+        self.serving
+            .await
+            .expect("the load listener task completes")
+            .expect("the load listener shuts down cleanly");
+        drop(self.runtime);
+        fs::read_to_string(&self.audit_path).expect("the load audit file is readable")
+    }
+}
+
+/// The adult source mock without a call-count expectation, so one mount serves
+/// a whole load window.
+async fn mount_unmetered_adult_source(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(header("accept", "application/json"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(adult_source_request()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "date_of_birth": "2000-01-01"
+        })))
+        .mount(server)
+        .await;
+}
+
+fn adult_source_request() -> Value {
+    json!({
+        "lookup": {
+            "given_name": "Amina",
+            "family_name": "Diallo",
+            "birth_date": "2000-01-01"
+        },
+        "fields": ["date_of_birth"],
+        "limit": 2
+    })
+}
+
+/// A valid access-attempt event shaped like the ones the runtime writes, so the
+/// probe measures the real serialization, hashing, and fsync path.
+fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
+    EvidenceAuditEvent::new(
+        format!("audit-throughput-probe-{index:012}"),
+        AuditPhase::AccessAttempt,
+        "urn:example:fixture:requirement:adult-status:v1".to_owned(),
+        "audit-throughput-probe".to_owned(),
+        "fixture-eligibility".to_owned(),
+        "hmac-sha256:v1:audit-throughput-probe-requester".to_owned(),
+        AuditAuthority {
+            kind: AuditAuthorityKind::Statutory,
+            grant_pseudonym: None,
+        },
+        vec![AuditSubject {
+            role: "subject".to_owned(),
+            selector_profile: "person-demographics-v1".to_owned(),
+            selector_bundle_pseudonym: None,
+        }],
+        ResponseProtection::Signed,
+        AuditDecision::Authorized,
+        0,
+    )
+}
+
+fn acceptance_audit_hasher() -> AuditChainHasher {
+    AuditChainHasher::keyed(
+        AuditHashSecret::new(b"audit-hash-secret-canary-32-bytes-minimum".to_vec())
+            .expect("the acceptance audit secret is accepted"),
+    )
+}
+
+/// Distinct evidence identities across every disclosure-release record.
+fn released_evidence_ids(audit: &str) -> BTreeSet<String> {
+    audit
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<Value>(line).expect("an audit line is JSON"))
+        .filter_map(|envelope| {
+            envelope
+                .get("record")?
+                .get("evidenceId")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect()
 }

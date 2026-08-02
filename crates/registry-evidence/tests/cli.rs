@@ -302,6 +302,19 @@ fn serve_stops_on_sigterm_and_restarts_on_an_archived_audit_chain() {
     stop(&mut restarted);
 
     assert!(archive.is_file(), "the archived chain was disturbed");
+
+    // Rollback is the same stop, rename, start sequence in reverse: the new
+    // chain is set aside and the archived chain resumes at the original path.
+    let superseded = deployment.path("audit-superseded.jsonl");
+    fs::rename(&first, &superseded).expect("set the new chain aside");
+    fs::rename(&archive, &first).expect("restore the archived chain");
+    let mut rolled_back = deployment.serve();
+    wait_until_ready(port);
+    stop(&mut rolled_back);
+    assert!(
+        superseded.is_file(),
+        "the superseded chain was disturbed during rollback"
+    );
     deployment.unseal();
 }
 
@@ -398,6 +411,25 @@ fn verify_rejects_a_policy_document_with_an_unknown_field() {
         "",
         "evidence: stored response verification failed (malformed)\n",
     );
+}
+
+#[test]
+fn verify_rejects_a_verification_instant_that_is_not_strict_utc() {
+    let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &fixture_policy());
+
+    for at in ["2026-08-02T12:00:00+02:00", "2026-08-02", CANARY] {
+        let output = stored.verify(Some(at));
+        assert_eq!(output.status.code(), Some(1), "verify accepted {at:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "verify printed an unusable instant"
+        );
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert_eq!(
+            stderr, "evidence: verification instant is not strict RFC 3339 UTC\n",
+            "unexpected verification diagnostic"
+        );
+    }
 }
 
 /// Assert one closed verification failure: exit 1, the chosen instant, the

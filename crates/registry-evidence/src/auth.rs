@@ -154,7 +154,14 @@ pub enum AuthenticationError {
     Verification,
     #[error("required authenticated context is missing or invalid")]
     Context,
+    #[error("access token is bound to a sender proof this profile cannot validate")]
+    SenderConstrained,
 }
+
+/// RFC 7800 confirmation claim. Its presence means the authorization server
+/// issued a token that is only valid when presented with a matching proof of
+/// possession, such as DPoP or mutual TLS.
+const CONFIRMATION_CLAIM: &str = "cnf";
 
 impl Authenticator {
     /// Build the one strict resource-server profile from the loaded bundle.
@@ -229,6 +236,15 @@ impl Authenticator {
         let claims =
             serde_json::to_value(verified.claims).map_err(|_| AuthenticationError::Context)?;
         let claims_object = claims.as_object().ok_or(AuthenticationError::Context)?;
+
+        // Version one validates no proof of possession. Treating a
+        // sender-constrained token as an ordinary bearer would silently discard
+        // the constraint the authorization server issued it under and make a
+        // stolen token replayable for its whole lifetime, so the profile denies
+        // rather than downgrades.
+        if claims_object.contains_key(CONFIRMATION_CLAIM) {
+            return Err(AuthenticationError::SenderConstrained);
+        }
 
         let principal = required_direct_string(
             claims_object,

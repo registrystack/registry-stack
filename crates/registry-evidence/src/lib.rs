@@ -11,6 +11,7 @@ pub mod config;
 pub mod contracts;
 pub mod kernel;
 pub mod model;
+pub mod observability;
 pub mod problem;
 pub mod rate_limit;
 pub mod rhai_runtime;

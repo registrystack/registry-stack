@@ -27,7 +27,7 @@ common:
 cases:
   - id: positive
     response:
-      pager: {page: 1, pageSize: 2, total: 1}
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
       trackedEntities:
         - trackedEntity: Tei00000001
           attributes:
@@ -41,7 +41,7 @@ cases:
       value: true
   - id: negative-false-is-success
     response:
-      pager: {page: 1, pageSize: 2, total: 1}
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
       trackedEntities:
         - trackedEntity: Tei00000001
           attributes: [{attribute: Dob00000001, value: "2010-01-01"}]
@@ -53,7 +53,7 @@ cases:
       signed: true
   - id: boundary-on
     response:
-      pager: {page: 1, pageSize: 2, total: 1}
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
       trackedEntities:
         - trackedEntity: Tei00000001
           attributes: [{attribute: Dob00000001, value: "2008-08-02"}]
@@ -65,25 +65,57 @@ cases:
       value: true
   - id: missing-fact
     response:
-      pager: {page: 1, pageSize: 2, total: 1}
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
       trackedEntities:
         - trackedEntity: Tei00000001
           attributes: [{attribute: Oth00000001, value: SOURCE-UNRELATED-CANARY}]
     expected: {publicProblem: evidence_not_available, derivationRuns: false, signed: false}
   - id: no-match
-    response: {pager: {page: 1, pageSize: 2, total: 0}, trackedEntities: []}
+    response: {pager: {page: 1, pageSize: 2, total: 0, pageCount: 0}, trackedEntities: []}
     expected: {lookup: no_match, publicProblem: evidence_not_available, derivationRuns: false, signed: false}
   - id: ambiguous
     response:
-      pager: {page: 1, pageSize: 2, total: 2}
+      pager: {page: 1, pageSize: 2, total: 2, pageCount: 1}
       trackedEntities:
         - {trackedEntity: Tei00000001, attributes: []}
         - {trackedEntity: Tei00000002, attributes: []}
     expected: {lookup: ambiguous, publicProblem: evidence_not_available, derivationRuns: false, signed: false}
-  - {id: fractional-total, response: {pager: {total: 1.5}, trackedEntities: []}, expected: {error: source_protocol_error, derivationRuns: false, signed: false}}
+  # A tracker page whose envelope is truncated, inconsistent, or wrongly typed is
+  # never read as an authoritative no-match, unique match, or duplicate.
+  - id: truncated-pager
+    response: {pager: {page: 1, pageSize: 2, total: 1}, trackedEntities: [{trackedEntity: Tei00000001, attributes: []}]}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - id: pager-count-mismatch
+    response: {pager: {page: 1, pageSize: 2, total: 1, pageCount: 2}, trackedEntities: [{trackedEntity: Tei00000001, attributes: []}]}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - id: total-collection-mismatch
+    response: {pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}, trackedEntities: []}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - id: fractional-total
+    response: {pager: {page: 1, pageSize: 2, total: 1.5, pageCount: 1}, trackedEntities: []}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  # One tracked entity carrying the configured attribute twice, or carrying it
+  # with a non-string value, is a provider or configuration fault rather than a
+  # record that legitimately lacks a date of birth.
+  - id: duplicate-configured-attribute
+    response:
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - {attribute: Dob00000001, value: "2000-01-01"}
+            - {attribute: Dob00000001, value: "2010-01-01"}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - id: non-string-attribute-value
+    response:
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: [{attribute: Dob00000001, value: 20000101}]
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
   - id: returned-subject-mismatch
     response:
-      pager: {page: 1, pageSize: 2, total: 1}
+      pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
       trackedEntities:
         - trackedEntity: Tei00000002
           attributes: [{attribute: Dob00000001, value: "2000-01-01"}]
@@ -94,6 +126,8 @@ cases:
       derivationRuns: true
       signed: false
   - {id: source-failure, sourceFailure: timeout, expected: {publicProblem: dependency_unavailable, signed: false}}
+  # An expired provider session answers a JSON request with an HTML sign-in page.
+  - {id: source-html-sign-in-page, sourceFailure: invalid-media-type, expected: {publicProblem: dependency_unavailable, signed: false}}
   - id: hostile-reference
     selectorOverrides:
       subject:

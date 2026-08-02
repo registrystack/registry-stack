@@ -165,7 +165,18 @@ confirms both audit events are durable, shuts down, and ends with:
 PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200, its JWS verified, adult-status was true, minimization held, and both audit events were durable.
 ```
 
-Anything else is not a pass. Do not paste `session.env` or its bearer token
+If you also ran the optional unsigned variant, its `response-unsigned.json`
+output is present, so the harness additionally verifies that leg and ends with
+the four-audit-event form instead:
+
+```text
+PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200 in both formats, the JWS verified, the unsigned envelope was self-identifying and rejected by the JWS verifier, adult-status was true, minimization held, and all four audit events were durable.
+```
+
+Either `PASS:` line is a full pass; which one you see depends only on whether the
+optional unsigned leg ran (two audit events for the signed leg alone, four when
+the unsigned leg also ran). Anything else is not a pass. Do not paste
+`session.env` or its bearer token
 into chat. The responses are retained at
 `products/evidence/.first-curl/definitions.json`,
 `products/evidence/.first-curl/response.json`, and, if you ran the optional
@@ -198,12 +209,6 @@ not for Version 1 completion:
   with HTTPS OIDC JWKS and the file-secret boundary;
 - run the Evidence server against one bounded DHIS2 demo record and one bounded
   OpenCRVS demo record using `.env`, then verify each returned JWS;
-- bind the remaining authenticated definition-discovery acceptance requirement
-  to executable traceability so every numbered requirement maps to a test;
-- make `existenceDisclosure` and the fixed JWKS path explicit enforced
-  invariants rather than decorative configuration;
-- document audit capacity, rotation/restart, and independent chain files, and
-  bind the Unix single-link secret check to security traceability;
 - rerun the final Evidence package, contract, neutrality, generated-artifact,
   and ignored live-source gates on one stable revision;
 - stage the exact Evidence scope. Workspace-wide gates remain outside the

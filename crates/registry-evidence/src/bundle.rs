@@ -1965,7 +1965,7 @@ mod tests {
     fn deployment_reference_projects_are_complete_compilable_bundles() {
         let projects_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/evidence/reference/request-adapter/deployment-projects");
-        for project in ["dhis2-adult-status", "opencrvs-family-evidence"] {
+        for project in ["dhis2-tracker-evidence", "opencrvs-family-evidence"] {
             let project_root = projects_root.join(project);
             RuntimeConfig::parse_yaml(
                 &fs::read(project_root.join("runtime.yaml")).expect("read reference runtime"),

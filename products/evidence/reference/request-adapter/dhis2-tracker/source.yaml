@@ -1,5 +1,5 @@
 # Focused executable DHIS2 adapter fragment. For a deployable governed bundle
-# and runtime binding, use deployment-projects/dhis2-adult-status/.
+# and runtime binding, use deployment-projects/dhis2-tracker-evidence/.
 transport: http-json
 baseUrl: https://tracker.example.invalid
 posture: record-transformed
@@ -39,7 +39,10 @@ request:
     maximumQueryValueBytes: 1024
     maximumNormalizedBytes: 8192
   projection:
+    - /pager/page
+    - /pager/pageSize
     - /pager/total
+    - /pager/pageCount
     - /trackedEntities/*/trackedEntity
     - /trackedEntities/*/attributes/*/attribute
     - /trackedEntities/*/attributes/*/value

@@ -157,6 +157,16 @@ invariants:
     threat: A relying party accepts substituted subjects or outputs under a valid signature, or leaks which hidden comparison failed.
     enforcement: Verifier policy comparison after signature and schema verification with a single generic policy error and a separate current-validity result.
     negative_test: sec-verifier-independent-expectations
+  - id: V1-I32
+    rule: An access token carrying a proof-of-possession confirmation claim is denied, never accepted as an ordinary bearer token.
+    threat: A stolen sender-constrained token replays for its full lifetime because the profile silently discards a constraint it does not validate.
+    enforcement: Verified-claim rejection of the RFC 7800 confirmation claim before any authenticated context is constructed.
+    negative_test: sec-sender-constrained-token-denied
+  - id: V1-I33
+    rule: Operational telemetry is off by default, served only on a separate operator-private listener, and carries no caller-supplied or protected value in any label or series.
+    threat: A metrics surface becomes a public existence oracle, or per-request labels reconstruct selectors, requirement usage, or registry membership through unbounded series cardinality.
+    enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, never from request content.
+    negative_test: sec-telemetry-bounded-and-operator-private
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.
@@ -188,7 +198,7 @@ cross_cutting:
     negative_test: sec-request-preparation-closed
   runtime_ownership_split:
     threat: An environment-specific runtime file silently changes governed authorization, disclosure, source authority, signing, or audit policy.
-    enforcement: Closed runtime.yaml accepts only process-local listener, path, secret-root, audit-storage, and logical private-CA bindings and has an independent immutable digest.
+    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit-storage, and logical private-CA bindings and has an independent immutable digest.
     negative_test: sec-runtime-cannot-override-governed-bundle
   outbound_tls_and_proxy:
     threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.
@@ -218,4 +228,8 @@ cross_cutting:
     threat: A hostile or defective reviewed script consumes unbounded execution inside the shared process.
     enforcement: The engine's normative operation ceiling terminates the invocation with a closed value-free error.
     negative_test: sec-script-operation-exhaustion
+  reserved_header_aliases:
+    threat: A configured fixed or API-key header name collides with an authorization, framing, routing, cookie, forwarding, proxy, or tracing header, including case variants and known infrastructure aliases.
+    enforcement: One closed ASCII-case-insensitive deny set shared by startup configuration validation and source plan compilation, with prefix families denied before exact names and both checks running before any credential is resolved.
+    negative_test: sec-reserved-header-aliases-closed
 fixture_index: ../fixtures/conformance/coverage-matrix.yaml
