@@ -71,13 +71,17 @@ gates for its area (see Verification), and committed.
       existing gate or add one).
 - [ ] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
       tightly linked to the frozen contracts so it cannot drift.
-- [ ] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job;
-      Evidence tutorials must pass it to merge.
+- [ ] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
+      that runs each Evidence tutorial from a clean container with only the
+      prerequisites the tutorial itself documents; Evidence tutorials must
+      pass it to merge.
 - [ ] B5. Tutorials E1-E5 published and gated: first assertion via fixtures
       (keygen, scaffold, fixture run); serve assertions over HTTP with a
       Mint token; author an acceptance definition using the coequal neutral
       examples; connect an institution source via sanitized local mock;
-      verify an assertion as a consumer.
+      verify an assertion as a consumer. Adopter outcome for E1: a fresh
+      machine completes it in 15 minutes or less using released binaries
+      installed via F1 (the released-binary form of this gate needs F3).
 - [ ] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
 - [ ] B7. Mint has real docs presence: a Configure page and a reference page.
@@ -135,6 +139,42 @@ gates for its area (see Verification), and committed.
 - [ ] E3. Final sweep: a case-insensitive Notary search over the docs
       product surface matches only history pages and the retirement page.
 
+### F. Adopter distribution and experience
+
+Context discovered 2026-08-03: releases already ship reproducible bare
+binaries (`<name>-<tag>-linux-amd64` plus SHA256SUMS, cosign-signed at
+promotion) built by `release/scripts/build-release-binaries.sh` in a pinned
+builder image, and `crates/registryctl/install.sh` is already published as
+the `registryctl-<tag>-install.sh` release asset. Evidence rides that
+channel; it does not get a parallel one.
+
+- [x] F1. `crates/registry-evidencectl/install.sh` exists, mirroring the
+      registryctl installer conventions: installs `evidence`, `evidencectl`,
+      and `mint` from a release, verifies every artifact against SHA256SUMS,
+      refuses unverified installs, has offline tests, and passes shellcheck
+      and shfmt.
+- [ ] F2. The three binaries and the installer asset enter the release
+      channel: `build-release-binaries.sh` builds and checksums them, the
+      candidate workflow stages `evidencectl-<tag>-install.sh`, and the
+      artifact inventory in `release/scripts/registry-release` accepts them
+      (optional at first), with its tests updated. Security-sensitive
+      (release provenance): review notes required.
+- [ ] F3. First release shipping F2 verified end to end: curl | bash against
+      the published assets installs working binaries. Then flip the
+      inventory entries from optional to required at a minimum version, the
+      way `registryctl-installer` did at v0.14.0.
+- [ ] F4. Platform coverage decision recorded: linux-amd64 is the
+      reproducible baseline; registryctl already publishes optional
+      macos-arm64 and linux-arm64 assets; decide and record the same
+      optional set for the Evidence binaries.
+- [ ] F5. Personas named on the docs site (assertion provider, data
+      publisher, consumer/verifier, operator) and every tutorial labeled
+      with whose it is.
+- [ ] F6. An Evidence errors and problems reference page exists for
+      adopters: what each public problem means and what to do about it.
+- [ ] F7. An evaluate-stage page exists: what Evidence costs to run
+      (footprint, dependencies, operational burden, support window).
+
 ### Global gates (checked at the end, not per item)
 
 - [ ] G1. Full verification suite green: `cargo fmt --check`, `cargo check
@@ -153,8 +193,10 @@ gates for its area (see Verification), and committed.
 ## Dependency order
 
 A1 → A2 → A3. A → D. B1 → C7. C1 → C2 → C3 → C4. D → the B8 quickstart
-flip. E ships with or after C7. Everything else is parallel; B has no
-upstream dependencies and is the standing priority (onboarding first).
+flip. E ships with or after C7. F1 → F2 → F3; F3 unlocks the
+released-binary form of the B4/B5 clean-environment gate. Everything else
+is parallel; B has no upstream dependencies and is the standing priority
+(onboarding first).
 
 ## Verification (match to touched area)
 
@@ -173,3 +215,17 @@ upstream dependencies and is the standing priority (onboarding first).
 
 - 2026-08-03: Plan approved by Jeremi in session; `/goal` command added.
   Execution not started.
+- 2026-08-03: Adopter-POV review added workstream F (distribution and
+  adopter experience) and hardened B4/B5 into outcome-based gates. Jeremi
+  decided distribution is curl | bash installers over released binaries.
+- 2026-08-03: Discovery while starting F: the release channel already
+  builds reproducible bare binaries with SHA256SUMS and cosign signing,
+  and registryctl already ships an installer asset. F was rewritten to
+  extend that channel (evidence, evidencectl, mint were simply missing
+  from it) instead of inventing a parallel one. F1 and F2 in progress.
+- 2026-08-03: F1 done. The evidencectl installer mirrors the registryctl
+  conventions (toolset all-or-nothing install, SHA256SUMS verification,
+  asset-dir mode, staged install with rollback) with 11 offline tests;
+  shellcheck and shfmt clean. Found in passing: the rust-result shard
+  test in release/scripts/test_registry_release.py is stale on main
+  (ci.yml gained evidence-contracts); flagged separately, not fixed here.
