@@ -282,6 +282,9 @@ fn make_read_only(path: &Path) {
 /// and the *shape* of the subject, and carries no selector values at all.
 fn subject_bound_request() -> EvidenceRequest {
     EvidenceRequest {
+        // The nonce is a caller correlation value that never reaches
+        // authorization, which is the only thing under test here.
+        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
         requirement: REQUIREMENT.to_owned(),
         purpose: PURPOSE.to_owned(),
         subjects: vec![RequestedSubject {

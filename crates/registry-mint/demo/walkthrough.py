@@ -22,6 +22,7 @@ Every request below is printed before it is sent. Run it with:
 
 import base64
 import json
+import secrets
 import sys
 from pathlib import Path
 
@@ -104,6 +105,9 @@ def request_evidence(token, subject_values=None):
     if subject_values is not None:
         selector["values"] = subject_values
     body = {
+        # A caller-generated correlation value. Evidence echoes it into the
+        # assertion and keeps it away from authorization, sources, and audit.
+        "requestNonce": request_nonce(),
         "requirement": REQUIREMENT,
         "purpose": PURPOSE,
         "subjects": [{"role": "subject", "selector": selector}],
@@ -229,6 +233,11 @@ def now():
 
 def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def request_nonce() -> str:
+    """32 random bytes, base64url without padding. Evidence rejects anything else."""
+    return b64url(secrets.token_bytes(32))
 
 
 def unb64url(text: str) -> bytes:

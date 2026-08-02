@@ -127,13 +127,16 @@ curl -sS http://127.0.0.1:8080/v1/evidence \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{
+        "requestNonce": "<32 random bytes, base64url, unpadded>",
         "requirement": "urn:example:demo:requirement:residence-region:v1",
         "purpose": "demo-routing",
         "subjects": [{"role": "subject", "selector": {"profile": "demographics-v1"}}]
       }'
 ```
 
-Note what is not in that body: the person. The bundle says where the subject
+Note what is not in that body: the person. `requestNonce` is a caller
+correlation value, echoed into the assertion and kept away from authorization,
+sources, and audit. The bundle says where the subject
 comes from instead.
 
 ```yaml
@@ -178,6 +181,7 @@ curl -sS http://127.0.0.1:8080/v1/evidence \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{
+        "requestNonce": "<32 random bytes, base64url, unpadded>",
         "requirement": "urn:example:demo:requirement:residence-region:v1",
         "purpose": "demo-routing",
         "subjects": [{"role": "subject", "selector": {"profile": "demographics-v1",
