@@ -361,7 +361,8 @@ series cardinality is bounded by the deployed contract and cannot grow with
 caller input. A path that matches no route is counted as `unmatched` and a
 method outside the served set as `other`, so a caller cannot write a label
 value. Operators should still reach this listener only from their own network,
-since request rates per route are operational information.
+since request rates per route are operational information. The series and
+labels it publishes are in [Metrics reference](#metrics-reference).
 
 The operator owns audit retention, backup, restore, access control, key
 rotation, and chain verification for the selected durable sink. A deployment
@@ -443,6 +444,101 @@ The stop is graceful, so an admitted evaluation writes its disclosure-release
 event before the process exits. The archive is a rename of an already closed
 file, so nothing can be appended to a retired chain. The successor is a new
 file starting at genesis, so no record belongs to two chains.
+
+## Metrics reference
+
+This section describes what a configured `metricsListener` serves. It is
+operator material: the public evidence contract and the generated OpenAPI
+document do not describe it, and a deployment that leaves `metricsListener`
+absent serves none of it.
+
+```yaml
+metricsListener:
+  bindHost: 127.0.0.1
+  port: 9090
+```
+
+`bindHost` accepts a numeric loopback, RFC 1918 private IPv4, or RFC 4193
+unique-local IPv6 address. Hostnames and unspecified, multicast, and public
+addresses are rejected at startup, as is a `bindHost` and `port` pair that
+repeats the evidence listener binding. Both listeners bind before either
+serves, so a rejected telemetry binding fails startup rather than leaving a
+service that reports healthy while publishing nothing. The two share one
+lifecycle: the telemetry listener cannot outlive a failed evidence listener.
+
+The listener serves `GET /metrics` and answers every other path with `404`,
+including the evidence routes. The exposition is Prometheus text format,
+declared as `Content-Type: text/plain; version=0.0.4`. Two series are
+published:
+
+| Series | Type | Meaning |
+|---|---|---|
+| `evidence_http_requests_total` | counter | Requests served at the evidence boundary |
+| `evidence_http_request_duration_seconds` | histogram | Duration of those requests |
+
+The histogram publishes `_bucket`, `_sum`, and `_count`. Its upper bounds in
+seconds are `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1.0`,
+`5.0`, and `+Inf`. They are fixed by the build and are not configurable.
+
+Both series carry the same four labels, and each is drawn from a closed set
+fixed by the deployed contract rather than by anything a caller sends:
+
+| Label | Values |
+|---|---|
+| `route` | A registered route template, otherwise `unmatched` |
+| `method` | `GET`, `POST`, `HEAD`, `OPTIONS`, otherwise `other` |
+| `status` | `success`, `client_error`, `server_error` |
+| `error` | A reviewed problem code, otherwise `none` |
+
+The registered route templates are `/v1/evidence`,
+`/v1/evidence-definitions`, `/health`, `/ready`, `/openapi.json`,
+`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. The
+reviewed problem codes are the closed public set: `malformed_request`,
+`invalid_selector`, `authentication_failed`, `not_authorized`,
+`response_format_not_acceptable`, `evidence_not_available`, `rate_limited`,
+`dependency_unavailable`, and `service_unavailable`.
+
+`status` is the outcome class and never the exact status code, because the
+exact status of a denial belongs to the closed public problem contract rather
+than to operational telemetry. `error` carries the same reviewed problem code
+the caller received, which makes a denial rate observable without making the
+reason for any one request observable.
+
+Because both label sets are closed, series cardinality is bounded by the route
+table and the problem-code set regardless of traffic, and the registry needs no
+eviction. A caller cannot create a series or write a label value: a path
+matching no route is counted as `unmatched` and the requested path is never
+recorded anywhere in the exposition.
+
+An abbreviated exposition:
+
+```text
+# HELP evidence_http_requests_total Requests served by the Evidence boundary.
+# TYPE evidence_http_requests_total counter
+evidence_http_requests_total{route="/health",method="GET",status="success",error="none"} 2
+evidence_http_requests_total{route="/v1/evidence-definitions",method="GET",status="client_error",error="authentication_failed"} 1
+# HELP evidence_http_request_duration_seconds Request duration at the Evidence boundary.
+# TYPE evidence_http_request_duration_seconds histogram
+evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.005"} 2
+evidence_http_request_duration_seconds_sum{route="/health",method="GET",status="success",error="none"} 0.000241
+evidence_http_request_duration_seconds_count{route="/health",method="GET",status="success",error="none"} 2
+```
+
+The registry lives in process memory. A restart resets both series to zero,
+which a `rate` or `increase` query handles under the ordinary counter-reset
+rule. Version 1 neither persists counters nor pushes them anywhere.
+
+The telemetry listener performs no authentication of its own. The private
+binding and the operator's own network are the only access controls, so the
+operator must not route it through a public ingress or a shared scrape network.
+Request rates per route and per problem code are operational information about
+the registry even though no individual request is described.
+
+The series describe the HTTP boundary only. Version 1 publishes no source-call,
+signing, credential-acquisition, or audit-sink series. A slow or failing
+upstream source is visible only as evidence-request duration and as the problem
+code the boundary returned; audit, signing, and source-credential health are
+reported by `/ready` rather than by telemetry.
 
 ## Startup and readiness
 
