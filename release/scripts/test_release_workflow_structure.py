@@ -140,7 +140,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(
             document["jobs"]["promote-images"]["permissions"],
-            {"actions": "read", "contents": "read", "packages": "write"},
+            {"actions": "read", "contents": "write", "packages": "write"},
         )
         self.assertEqual(
             document["jobs"]["dispatch-docs"]["permissions"],

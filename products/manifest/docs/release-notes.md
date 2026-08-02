@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.16.3
+
+- Registry Manifest has no user-visible changes relative to v0.16.2. That
+  workflow stopped at an unpublished draft before public image promotion, so
+  install only v0.16.3.
+
 ## 0.16.2
 
 - Registry Manifest has no user-visible changes relative to the v0.16.0 and

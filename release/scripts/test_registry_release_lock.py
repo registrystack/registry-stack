@@ -667,7 +667,35 @@ class RegistryReleaseLockTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(
             encoding="utf-8"
         )
-        install = workflow.index("cosign-release: v3.0.4")
+        self.assertIn("COSIGN_VERSION: v3.0.4", workflow)
+        self.assertIn(
+            "COSIGN_LINUX_AMD64_SHA256: "
+            "10dab2fd2170b5aa0d5c0673a9a2793304960220b314f6a873bf39c2f08287aa",
+            workflow,
+        )
+        self.assertEqual(
+            workflow.count(
+                "https://github.com/sigstore/cosign/releases/download/"
+                "${COSIGN_VERSION}/cosign-linux-amd64"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                'echo "${COSIGN_LINUX_AMD64_SHA256}  ${RUNNER_TEMP}/cosign" \\\n'
+                "            | sha256sum --check --strict"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                'install -m 0755 "${RUNNER_TEMP}/cosign" '
+                '"${HOME}/.local/bin/cosign"'
+            ),
+            2,
+        )
+        self.assertNotIn("sigstore/cosign-installer@", workflow)
+        install = workflow.index("name: Install pinned checksum signer")
         image_lock = workflow.index("name: Render the final image lock", install)
         checksum = workflow.index(
             "find . -maxdepth 1 -type f ! -name SHA256SUMS", image_lock
@@ -677,10 +705,12 @@ class RegistryReleaseLockTests(unittest.TestCase):
             checksum,
         )
         checksum_verify = workflow.index("cosign verify-blob draft/SHA256SUMS")
+        verify_install = workflow.index("name: Install pinned cosign verifier")
         self.assertLess(install, image_lock)
         self.assertLess(image_lock, checksum)
         self.assertLess(checksum, checksum_sign)
-        self.assertLess(checksum_sign, checksum_verify)
+        self.assertLess(checksum_sign, verify_install)
+        self.assertLess(verify_install, checksum_verify)
         self.assertIn(
             ".github/workflows/release.yml@refs/heads/main",
             workflow[checksum_sign:checksum_verify],

@@ -27,7 +27,7 @@ function fixture(overrides = {}) {
     ],
     ['/start/quickstart/', html(`${origin}/start/quickstart/`)],
     ['/dev/', html(`${origin}/dev/`)],
-    ['/v/1.2.3/', html(`${origin}/`)],
+    ['/v/1.2.3/', html(`${origin}/v/1.2.3/`)],
     ['/pagefind/pagefind.js', Buffer.from('search')],
     ['/pagefind/pagefind-entry.json', Buffer.from('{}')],
     ['/sitemap-index.xml', Buffer.from('<sitemapindex/>')],

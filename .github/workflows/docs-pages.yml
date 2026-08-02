@@ -166,6 +166,9 @@ jobs:
       - name: Verify current machine-readable documentation
         working-directory: docs/site
         run: npm run check:llms:built
+        env:
+          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/dev
+          DOCS_PUBLIC_BASE: /dev/
 
       - name: Verify assembled documentation tree
         working-directory: docs/site

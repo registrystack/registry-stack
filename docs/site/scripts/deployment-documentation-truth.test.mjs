@@ -91,7 +91,7 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
 
   for (const docset of docsets.docsets) {
     if (docset.id === 'latest') continue;
-    if (['v0.16.1', 'v0.16.0'].includes(docset.id)) {
+    if (['v0.16.2', 'v0.16.1', 'v0.16.0'].includes(docset.id)) {
       assert.equal(docset.status, 'draft');
       assert.equal(docset.availability, 'failed');
       assert.match(docset.description, /failed-train record/);
@@ -103,7 +103,7 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
     }
     assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
     const expectedAvailability =
-      ['v0.16.2', 'v0.15.1', 'v0.15.0'].includes(docset.id)
+      ['v0.16.3', 'v0.15.1', 'v0.15.0'].includes(docset.id)
         ? 'candidate'
         : docset.id.startsWith('v')
           ? 'released'
