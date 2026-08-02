@@ -24,7 +24,10 @@ properties:
     minItems: 1
     maxItems: 2
     uniqueItems: true
-    items: {type: string, minLength: 1, maxLength: 128}
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
   minimumParentReferences: {const: 1}
   maximumParentReferences: {const: 2}
   parentReferenceNamespace: {const: urn:gov:example:opencrvs:person}

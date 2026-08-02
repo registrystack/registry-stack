@@ -43,7 +43,10 @@ selectorProfiles:
   tracked-entity-reference-v1:
     maximumAggregateBytes: 64
     fields:
-      record_reference: {type: string, minimumBytes: 11, maximumBytes: 64}
+      record_reference:
+        type: string
+        minimumBytes: 11
+        maximumBytes: 64
 sources:
   population-tracker:
     transport: http-json
@@ -58,11 +61,13 @@ sources:
       method: GET
       path: /api/tracker/trackedEntities
       fixedHeaders:
-        - {name: Accept, value: application/json}
+        - name: Accept
+          value: application/json
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: tracked-entity-reference-v1, fields: [record_reference]}
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
       prepareScript: adapters/prepare.rhai
       adapterParameters:
         program: Prg00000001
@@ -107,11 +112,13 @@ sources:
       method: GET
       path: /api/tracker/trackedEntities
       fixedHeaders:
-        - {name: Accept, value: application/json}
+        - name: Accept
+          value: application/json
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: tracked-entity-reference-v1, fields: [record_reference]}
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
       prepareScript: adapters/prepare.rhai
       adapterParameters:
         program: Prg00000002
@@ -182,7 +189,9 @@ requirements:
     source: population-tracker
     purposes: [benefit-eligibility]
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [tracked-entity-reference-v1]}
+      - role: subject
+        cardinality: one
+        selectorProfiles: [tracked-entity-reference-v1]
     referenceFrameworks: [urn:gov:example:framework:age-of-majority:v1]
     evidenceType: urn:gov:example:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
@@ -192,7 +201,8 @@ requirements:
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: tracked-entity-reference-v1, fields: [record_reference]}
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
       parameters: {minimum_age_years: 18}
     concepts:
       - id: urn:gov:example:concept:adult-status
@@ -208,7 +218,9 @@ requirements:
     source: professional-licence-register
     purposes: [professional-registration-verification]
     subjectRoles:
-      - {role: subject, cardinality: one, selectorProfiles: [tracked-entity-reference-v1]}
+      - role: subject
+        cardinality: one
+        selectorProfiles: [tracked-entity-reference-v1]
     referenceFrameworks: [urn:gov:example:framework:professional-practice-licence:v1]
     evidenceType: urn:gov:example:evidence-type:professional-licence-status:v1
     observationTimezone: Asia/Bangkok
@@ -218,16 +230,44 @@ requirements:
       selectorInputs:
         - role: subject
           alternatives:
-            - {profile: tracked-entity-reference-v1, fields: [record_reference]}
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
       parameters:
         active_state: ACTIVE
         expiry_buckets:
-          - {minimumInclusive: {type: decimal, value: '-365000'}, maximumExclusive: {type: decimal, value: '0'}, code: expired}
-          - {minimumInclusive: {type: decimal, value: '0'}, maximumExclusive: {type: decimal, value: '31'}, code: within-30-days}
-          - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
-          - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
+          - minimumInclusive:
+              type: decimal
+              value: '-365000'
+            maximumExclusive:
+              type: decimal
+              value: '0'
+            code: expired
+          - minimumInclusive:
+              type: decimal
+              value: '0'
+            maximumExclusive:
+              type: decimal
+              value: '31'
+            code: within-30-days
+          - minimumInclusive:
+              type: decimal
+              value: '31'
+            maximumExclusive:
+              type: decimal
+              value: '91'
+            code: within-90-days
+          - minimumInclusive:
+              type: decimal
+              value: '91'
+            maximumExclusive:
+              type: decimal
+              value: '365001'
+            code: later
     concepts:
-      - {id: urn:gov:example:concept:professional-licence-active, form: boolean, required: true, constraints: {}}
+      - id: urn:gov:example:concept:professional-licence-active
+        form: boolean
+        required: true
+        constraints: {}
       - id: urn:gov:example:concept:professional-licence-expiry-category
         form: controlled-category
         required: true

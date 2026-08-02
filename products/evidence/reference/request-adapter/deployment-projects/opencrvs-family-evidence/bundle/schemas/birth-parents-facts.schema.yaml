@@ -7,13 +7,19 @@ required:
   - relationship_set_contract
   - relationship_set_complete
 properties:
-  record_tracking_id: {type: string, minLength: 1, maxLength: 64}
+  record_tracking_id:
+    type: string
+    minLength: 1
+    maxLength: 64
   parent_references:
     type: array
     minItems: 1
     maxItems: 2
     uniqueItems: true
-    items: {type: string, minLength: 1, maxLength: 128}
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
   reference_namespace: {const: urn:gov:example:opencrvs:person}
   relationship_set_contract: {const: urn:gov:example:opencrvs:registered-parent-set:v1}
   relationship_set_complete: {const: true}

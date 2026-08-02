@@ -28,14 +28,19 @@ common:
         type: and
         clauses:
           - eventType: birth
-            status: {type: exact, term: REGISTERED}
-            trackingId: {type: exact, term: TRACKING-SYNTHETIC-001}
+            status:
+              type: exact
+              term: REGISTERED
+            trackingId:
+              type: exact
+              term: TRACKING-SYNTHETIC-001
       limit: 2
       offset: 0
   expectedTransport:
     path: /events/search
     fixedHeaders:
-      - {name: Accept, value: application/json}
+      - name: Accept
+        value: application/json
 cases:
   - id: positive
     response:
@@ -48,7 +53,11 @@ cases:
             mother.personReference: PERSON-SYNTHETIC-A
             father.personReference: PERSON-SYNTHETIC-B
             unrelated.field: SOURCE-UNRELATED-CANARY
-    expected: {lookup: match, value: true, derivationRuns: true, signed: true}
+    expected:
+      lookup: match
+      value: true
+      derivationRuns: true
+      signed: true
   - id: negative-false-is-success
     response:
       total: 1
@@ -76,20 +85,49 @@ cases:
           status: REGISTERED
           trackingId: TRACKING-SYNTHETIC-001
           declaration: {mother.personReference: PERSON-SYNTHETIC-A}
-    expected: {lookup: match, value: true, derivationRuns: true, signed: true}
-  - {id: no-match, response: {total: 0, results: []}, expected: {lookup: no_match, publicProblem: evidence_not_available, derivationRuns: false, signed: false}}
+    expected:
+      lookup: match
+      value: true
+      derivationRuns: true
+      signed: true
+  - id: no-match
+    response:
+      total: 0
+      results: []
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
   - id: ambiguous-child
     response:
       total: 2
       results:
-        - {type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-001, declaration: {mother.personReference: PERSON-SYNTHETIC-A}}
-        - {type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-002, declaration: {father.personReference: PERSON-SYNTHETIC-B}}
-    expected: {lookup: ambiguous, publicProblem: evidence_not_available, derivationRuns: false, signed: false}
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-002
+          declaration: {father.personReference: PERSON-SYNTHETIC-B}
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
   - id: missing-parent-set
     response:
       total: 1
-      results: [{type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-001, declaration: {unrelated.field: SOURCE-UNRELATED-CANARY}}]
-    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration: {unrelated.field: SOURCE-UNRELATED-CANARY}
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
   - id: duplicate-parent-reference
     response:
       total: 1
@@ -97,19 +135,64 @@ cases:
         - type: birth
           status: REGISTERED
           trackingId: TRACKING-SYNTHETIC-001
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A, father.personReference: PERSON-SYNTHETIC-A}
-    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+          declaration:
+            mother.personReference: PERSON-SYNTHETIC-A
+            father.personReference: PERSON-SYNTHETIC-A
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
   - id: wrong-parent-reference-type
     response:
       total: 1
-      results: [{type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-001, declaration: {mother.personReference: 123}}]
-    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
-  - {id: namespace-mismatch, derivationParameterMutation: {candidate_reference_namespace: urn:gov:example:other:person}, expected: {signed: false, error: derivation_input_error, derivationRuns: true}}
-  - {id: returned-child-mismatch, response: {total: 1, results: [{type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-OTHER, declaration: {mother.personReference: PERSON-SYNTHETIC-A}}]}, expected: {lookup: match, error: derivation_input_error, derivationRuns: true, signed: false}}
-  - {id: swapped-roles, requestMutation: swap-subject-roles, expected: {rejectedBefore: source, sourceRequestCount: 0, signed: false}}
-  - {id: caller-candidate-substitution, requestMutation: supply-grant-derived-candidate, expected: {rejectedBefore: source, sourceRequestCount: 0, signed: false}}
-  - {id: source-failure, sourceFailure: timeout, expected: {publicProblem: dependency_unavailable, signed: false}}
-  - {id: anti-reconstruction, bundleMutation: duplicate-disclosure-family, expected: {bundle: rejected}}
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration: {mother.personReference: 123}
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+  - id: namespace-mismatch
+    derivationParameterMutation: {candidate_reference_namespace: urn:gov:example:other:person}
+    expected:
+      signed: false
+      error: derivation_input_error
+      derivationRuns: true
+  - id: returned-child-mismatch
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-OTHER
+          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
+    expected:
+      lookup: match
+      error: derivation_input_error
+      derivationRuns: true
+      signed: false
+  - id: swapped-roles
+    requestMutation: swap-subject-roles
+    expected:
+      rejectedBefore: source
+      sourceRequestCount: 0
+      signed: false
+  - id: caller-candidate-substitution
+    requestMutation: supply-grant-derived-candidate
+    expected:
+      rejectedBefore: source
+      sourceRequestCount: 0
+      signed: false
+  - id: source-failure
+    sourceFailure: timeout
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
 privacyExpectation:
   evidenceContains: [urn:gov:example:concept:registered-parent-relationship-confirmed]
   evidenceExcludes: [parent_references, tracking_id, person_reference, relationship_set_contract]
