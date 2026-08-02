@@ -43,15 +43,36 @@ verifier. Its six steps are:
 5. re-verify the stored credential offline with `evidence verify --sd-jwt-vc`;
 6. edit one disclosure and re-verify, which must fail.
 
+Every step prints the exact command it runs before running it, so the transcript
+doubles as the copy-pasteable version of this walkthrough. The bearer token is
+the one thing never printed: the demo passes it to `curl` on standard input, and
+the printed form shows `$EVIDENCE_ACCESS_TOKEN` rather than its value.
+
 Expected output, abbreviated:
 
 ```text
 1. Fetch the issuer keys from the published metadata route (no token)
+   $ curl \
+       --header 'Accept: application/json' \
+       --output 'products/evidence/.sd-jwt-vc-demo/issuer-metadata.json' \
+       ... \
+       http://127.0.0.1:18081/.well-known/jwt-vc-issuer
    HTTP 200 application/json
    issuer: urn:example:fixture:provider:evidence
 2. Request the signed default (Accept: application/jose+json)
+   $ curl \
+       --request 'POST' \
+       --header 'Authorization: Bearer $EVIDENCE_ACCESS_TOKEN' \
+       --header 'Content-Type: application/json' \
+       --header 'Accept: application/jose+json' \
+       --data-binary '@products/evidence/.sd-jwt-vc-demo/request.json' \
+       ... \
+       http://127.0.0.1:18081/v1/evidence
    HTTP 200 application/jose+json
 3. Request the same assertion as an SD-JWT VC (Accept: application/dc+sd-jwt)
+   $ curl \
+       ... the same request with Accept: application/dc+sd-jwt \
+       http://127.0.0.1:18081/v1/evidence
    HTTP 200 application/dc+sd-jwt
 
 PASS: the same assertion was released as a signed JWS and as an SD-JWT VC, ...
@@ -64,6 +85,7 @@ PASS: the same assertion was released as a signed JWS and as an SD-JWT VC, ...
      ["7MNkDxEPeSWvyGbI2ziaRw","urn:example:fixture:concept:adult-status",true]
 
 5. Re-verify the stored credential offline, no network and no server
+   $ cargo run --locked --quiet -p registry-evidence -- verify --sd-jwt-vc ...
 verified-at: 2026-08-02T13:49:03Z
 authentic: yes
 currently-valid: yes
@@ -71,6 +93,7 @@ currently-valid: yes
 
 6. Tamper with one disclosure and re-verify: selective disclosure is not
    an invitation to edit the claim after issuance
+   $ cargo run --locked --quiet -p registry-evidence -- verify --sd-jwt-vc ...
    rejected: evidence: stored response verification failed (disclosure)
 ```
 
