@@ -21,7 +21,14 @@ properties:
     items:
       type: object
       additionalProperties: false
-      required: [trackedEntity, attributes]
+      # No projected leaf can be required of every record. Projection drops a
+      # leaf the record did not carry, and an ambiguous page is decided from
+      # the pager before any record is read, so a record on that page need not
+      # be complete. What a single matched record must carry stays with the
+      # script. attributes is not listed either: projection rejects a record
+      # missing an intermediate its children hang from, so saying so here would
+      # only repeat the projection.
+      required: []
       properties:
         trackedEntity: {type: string, minLength: 1, maxLength: 64}
         attributes:
