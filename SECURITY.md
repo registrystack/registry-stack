@@ -43,7 +43,7 @@ After downloading a release, verify the checksum bundle and then the covered
 payloads:
 
 ```bash
-tag=v0.16.2
+tag=v0.16.3
 bundle="registry-stack-${tag}-SHA256SUMS.sigstore.json"
 
 cosign verify-blob SHA256SUMS \

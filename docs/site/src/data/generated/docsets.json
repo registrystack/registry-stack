@@ -31,15 +31,56 @@
       }
     },
     {
+      "id": "v0.16.3",
+      "label": "v0.16.3",
+      "path": "/v/0.16.3/",
+      "status": "archived",
+      "availability": "candidate",
+      "source": "registry-stack-v0.16.3",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-08-01",
+      "description": "Registry Stack v0.16.3 beta-26 stabilization candidate documentation set pinned to its stable release identity.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "registry-platform": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "registry-manifest": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "registry-notary": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "registry-relay": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "registry-registryctl": {
+          "version": "v0.16.3",
+          "ref": "v0.16.3"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        }
+      }
+    },
+    {
       "id": "v0.16.2",
       "label": "v0.16.2",
       "path": "/v/0.16.2/",
-      "status": "archived",
-      "availability": "candidate",
+      "status": "draft",
+      "availability": "failed",
       "source": "registry-stack-v0.16.2",
       "repo_docs_source": "monorepo",
       "published_at": "2026-08-01",
-      "description": "Registry Stack v0.16.2 beta-25 fix-forward candidate documentation set pinned to its stable release identity.",
+      "description": "Registry Stack v0.16.2 beta-25 failed-train record. Its release workflow stopped after staging an unpublished draft and before public image or documentation publication.",
       "products": {
         "registry-stack": {
           "version": "v0.16.2",

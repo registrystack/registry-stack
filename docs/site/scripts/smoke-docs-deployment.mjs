@@ -88,8 +88,8 @@ export async function smokeDocsDeployment({
   if (canonicalFromHtml(devHtml) !== `${productionOrigin}/dev/`) {
     throw new Error('/dev/ is not canonical at the protected-main mount');
   }
-  if (canonicalFromHtml(versionHtml) !== `${productionOrigin}/`) {
-    throw new Error(`${versionPath} is not an unchanged root-canonical release copy`);
+  if (canonicalFromHtml(versionHtml) !== `${productionOrigin}${versionPath}`) {
+    throw new Error(`${versionPath} is not canonical at the immutable version route`);
   }
   if (!rootHtml.includes(versionPath)) {
     throw new Error(`/ does not expose version navigation to ${versionPath}`);
