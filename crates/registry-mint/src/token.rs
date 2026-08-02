@@ -1,10 +1,22 @@
 //! Access token minting.
 //!
 //! Every authority claim written here is read from the server-side client
-//! registry. Nothing is copied from the client assertion. That is what makes a
-//! caller's private key a proof of *identity* rather than a licence to assert
-//! whatever it likes: the caller chooses which registry entry it authenticates
-//! as, and the registry chooses what that entry may say.
+//! registry. That is what makes a caller's private key a proof of *identity*
+//! rather than a licence to assert whatever it likes: the caller chooses which
+//! registry entry it authenticates as, and the registry chooses what that entry
+//! may say.
+//!
+//! A delegated token is the one case where values reach a token from the
+//! caller, and they arrive already reconciled against the registration by
+//! [`crate::assertion`]: the actor is one the client may act as, and the
+//! subject holds exactly the selector fields the registration declared, minted
+//! at exactly the claim paths it declared. The registry still fixes the shape;
+//! the caller only fills it in.
+//!
+//! Minting the subject into the token is what bounds a delegated token to one
+//! person. A resource server configured to read that subject from the token
+//! refuses any request carrying its own selector values, so a token issued for
+//! one subject cannot be turned toward another, however the caller misbehaves.
 
 use std::path::Path;
 
@@ -15,7 +27,8 @@ use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use crate::{
-    clients::{contains_private_material, RegisteredClient},
+    assertion::AuthenticatedClient,
+    clients::{contains_private_material, Delegation, RegisteredClient},
     config::{Algorithm, ClaimNames, MintConfig},
     error::TokenError,
     secretfile::{self, SecretFileError},
@@ -121,12 +134,19 @@ impl TokenMinter {
         &self.issuer
     }
 
+    /// The claim names this minter writes authority into.
+    #[must_use]
+    pub fn claims(&self) -> &ClaimNames {
+        &self.claims
+    }
+
     /// Mint an access token carrying the registry's authority for `client`.
     pub async fn mint(
         &self,
-        client: &RegisteredClient,
+        authenticated: &AuthenticatedClient,
         now: i64,
     ) -> Result<MintedToken, TokenError> {
+        let client: &RegisteredClient = &authenticated.client;
         let expires_at = now + self.lifetime_seconds;
         let mut claims = Map::new();
         claims.insert("iss".to_owned(), Value::String(self.issuer.clone()));
@@ -183,6 +203,22 @@ impl TokenMinter {
             );
         }
 
+        if let Some(delegation) = &authenticated.delegation {
+            let registered = client.delegation().ok_or_else(|| {
+                TokenError::server_error("a delegation was resolved for an undelegated client")
+            })?;
+            // Startup refuses a registry that declares delegation without a
+            // configured actor claim, so reaching here means the two disagree.
+            let actor_claim = self.claims.actor.as_ref().ok_or_else(|| {
+                TokenError::server_error("no actor claim is configured for delegated tokens")
+            })?;
+            claims.insert(
+                actor_claim.clone(),
+                Value::String(delegation.actor().to_owned()),
+            );
+            write_subject_claims(&mut claims, registered, delegation)?;
+        }
+
         let header = json!({
             "alg": self.algorithm.as_header_value(),
             "typ": ACCESS_TOKEN_TYP,
@@ -205,6 +241,46 @@ impl TokenMinter {
             expires_in: self.lifetime_seconds as u64,
         })
     }
+}
+
+/// Write each subject selector value at the claim path its registration
+/// declared, creating the intermediate objects the path implies.
+///
+/// The registration's paths were checked at load time to be well formed,
+/// unique, and non-nesting, so no write here can overwrite another. Anything
+/// that would still collide is a bug rather than a caller's doing, and is
+/// refused rather than allowed to overwrite an authority claim.
+fn write_subject_claims(
+    claims: &mut Map<String, Value>,
+    registered: &Delegation,
+    delegation: &crate::assertion::ResolvedDelegation,
+) -> Result<(), TokenError> {
+    let collision =
+        || TokenError::server_error("a subject claim path collides with an authority claim");
+
+    for (field, path) in &registered.subject_claims {
+        let value = delegation
+            .subject()
+            .get(field)
+            .ok_or_else(|| TokenError::server_error("a resolved subject field is missing"))?;
+
+        let mut segments = path.split('.').peekable();
+        let mut current = &mut *claims;
+        while let Some(segment) = segments.next() {
+            if segments.peek().is_none() {
+                if current.contains_key(segment) {
+                    return Err(collision());
+                }
+                current.insert(segment.to_owned(), value.clone());
+                break;
+            }
+            let entry = current
+                .entry(segment.to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            current = entry.as_object_mut().ok_or_else(collision)?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_json(value: &Value) -> Result<String, TokenError> {
@@ -272,6 +348,13 @@ mod tests {
     }
 
     fn fixture(grant: Option<&str>) -> Fixture {
+        build_fixture(grant, "", "")
+    }
+
+    /// `registration` appends lines to the client registration, `claim` appends
+    /// lines to the configured claim names. Both are how the delegation tests
+    /// reach a shape the plain fixture does not have.
+    fn build_fixture(grant: Option<&str>, registration: &str, claim: &str) -> Fixture {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path();
         fs::create_dir_all(root.join("clients")).expect("client dir");
@@ -286,13 +369,12 @@ mod tests {
             .unwrap_or_default();
         fs::write(
             root.join("clients/client-a.yaml"),
-            format!("clientId: client-a\nprincipal: urn:example:client-a\nevidenceAudience: https://client-a.example.org\nrequesterTags: [ministry-of-health, tier-one]\n{grant_line}keys: [{}]\n", ed25519_key(1, "client-a-1").1),
+            format!("clientId: client-a\nprincipal: urn:example:client-a\nevidenceAudience: https://client-a.example.org\nrequesterTags: [ministry-of-health, tier-one]\n{grant_line}keys: [{}]\n{registration}", ed25519_key(1, "client-a-1").1),
         )
         .expect("write client");
 
         let config_path = root.join("mint.yaml");
-        fs::write(
-            &config_path,
+        let mut document = String::from(
             r#"
 version: 1
 issuer: https://mint.example.org
@@ -310,14 +392,18 @@ accessTokens:
     evidenceAudience: evidence_audience
     grantId: evidence_grant_id
     grantAuthority: evidence_authority
-clientAssertion:
+"#,
+        );
+        document.push_str(claim);
+        document.push_str(
+            r#"clientAssertion:
   audience: https://mint.example.org/token
   algorithms: [EdDSA]
 clients:
   directory: clients
 "#,
-        )
-        .expect("write config");
+        );
+        fs::write(&config_path, document).expect("write config");
 
         let config = MintConfig::load(&config_path).expect("config loads");
         let registry = ClientRegistry::load(&config.clients.directory).expect("registry loads");
@@ -326,6 +412,13 @@ clients:
             _directory: directory,
             minter,
             registry,
+        }
+    }
+
+    fn undelegated(client: &std::sync::Arc<RegisteredClient>) -> AuthenticatedClient {
+        AuthenticatedClient {
+            client: std::sync::Arc::clone(client),
+            delegation: None,
         }
     }
 
@@ -345,7 +438,11 @@ clients:
     async fn minted_claims_come_from_the_registry() {
         let fixture = fixture(None);
         let client = fixture.registry.get("client-a").expect("client registered");
-        let minted = fixture.minter.mint(client, NOW).await.expect("token mints");
+        let minted = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
 
         let claims = decode_claims(&minted.access_token);
         assert_eq!(claims["iss"], json!("https://mint.example.org"));
@@ -371,7 +468,11 @@ clients:
     async fn the_header_names_the_active_key_and_access_token_type() {
         let fixture = fixture(None);
         let client = fixture.registry.get("client-a").expect("client registered");
-        let minted = fixture.minter.mint(client, NOW).await.expect("token mints");
+        let minted = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
 
         assert_eq!(
             decode_header(&minted.access_token),
@@ -386,7 +487,7 @@ clients:
         let claims = decode_claims(
             &without
                 .minter
-                .mint(client, NOW)
+                .mint(&undelegated(client), NOW)
                 .await
                 .expect("token mints")
                 .access_token,
@@ -399,7 +500,7 @@ clients:
         let claims = decode_claims(
             &with
                 .minter
-                .mint(client, NOW)
+                .mint(&undelegated(client), NOW)
                 .await
                 .expect("token mints")
                 .access_token,
@@ -412,12 +513,185 @@ clients:
     async fn every_token_carries_a_distinct_identifier() {
         let fixture = fixture(None);
         let client = fixture.registry.get("client-a").expect("client registered");
-        let first = fixture.minter.mint(client, NOW).await.expect("token mints");
-        let second = fixture.minter.mint(client, NOW).await.expect("token mints");
+        let first = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
+        let second = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
 
         let first_jti = decode_claims(&first.access_token)["jti"].clone();
         let second_jti = decode_claims(&second.access_token)["jti"].clone();
         assert_ne!(first_jti, second_jti);
+    }
+
+    const DELEGATION: &str =
+        "delegation:\n  actors: [urn:example:agent-one]\n  subjectClaims:\n    given_name: identity.given_name\n    birth_date: identity.birth_date\n";
+    const ACTOR_CLAIM: &str = "    actor: evidence_actor\n";
+
+    fn delegated_fixture() -> Fixture {
+        build_fixture(None, DELEGATION, ACTOR_CLAIM)
+    }
+
+    fn delegation(subject: &[(&str, Value)]) -> crate::assertion::ResolvedDelegation {
+        crate::assertion::ResolvedDelegation::new(
+            "urn:example:agent-one".to_owned(),
+            subject
+                .iter()
+                .map(|(field, value)| ((*field).to_owned(), value.clone()))
+                .collect(),
+        )
+    }
+
+    fn delegated(
+        client: &std::sync::Arc<RegisteredClient>,
+        subject: &[(&str, Value)],
+    ) -> AuthenticatedClient {
+        AuthenticatedClient {
+            client: std::sync::Arc::clone(client),
+            delegation: Some(delegation(subject)),
+        }
+    }
+
+    /// The subject is minted at exactly the claim paths the registration
+    /// declared, which is what lets a resource server read it back out as the
+    /// selector it will not accept from the request body.
+    #[tokio::test]
+    async fn a_delegated_token_carries_the_actor_and_the_subject_at_their_declared_paths() {
+        let fixture = delegated_fixture();
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let minted = fixture
+            .minter
+            .mint(
+                &delegated(
+                    client,
+                    &[
+                        ("given_name", json!("Amara")),
+                        ("birth_date", json!("1998-04-02")),
+                    ],
+                ),
+                NOW,
+            )
+            .await
+            .expect("token mints");
+
+        let claims = decode_claims(&minted.access_token);
+        assert_eq!(claims["evidence_actor"], json!("urn:example:agent-one"));
+        assert_eq!(
+            claims["identity"],
+            json!({"given_name": "Amara", "birth_date": "1998-04-02"})
+        );
+        // The registry's own authority is unchanged by the delegation.
+        assert_eq!(claims["sub"], json!("urn:example:client-a"));
+        assert_eq!(claims["client_id"], json!("client-a"));
+    }
+
+    /// An ordinary token from the same minter carries neither, so a resource
+    /// server reading the subject from the token has nothing to read.
+    #[tokio::test]
+    async fn an_undelegated_token_carries_no_actor_and_no_subject() {
+        let fixture = delegated_fixture();
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let minted = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
+
+        let claims = decode_claims(&minted.access_token);
+        assert!(claims.get("evidence_actor").is_none());
+        assert!(claims.get("identity").is_none());
+    }
+
+    /// Startup refuses a registry that declares delegation without a configured
+    /// actor claim, so this can only be reached by a bug. It must fail rather
+    /// than mint a token whose subject no resource server can attribute.
+    #[tokio::test]
+    async fn minting_a_delegation_without_a_configured_actor_claim_is_a_server_error() {
+        let fixture = build_fixture(None, DELEGATION, "");
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let error = fixture
+            .minter
+            .mint(
+                &delegated(
+                    client,
+                    &[
+                        ("given_name", json!("Amara")),
+                        ("birth_date", json!("1998-04-02")),
+                    ],
+                ),
+                NOW,
+            )
+            .await
+            .expect_err("an unconfigured actor claim must not mint");
+        assert_eq!(
+            error,
+            TokenError::server_error("no actor claim is configured for delegated tokens")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delegation_resolved_for_an_undelegated_client_is_a_server_error() {
+        let fixture = build_fixture(None, "", ACTOR_CLAIM);
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let error = fixture
+            .minter
+            .mint(&delegated(client, &[("given_name", json!("Amara"))]), NOW)
+            .await
+            .expect_err("an undelegated client must not mint a delegation");
+        assert_eq!(
+            error,
+            TokenError::server_error("a delegation was resolved for an undelegated client")
+        );
+    }
+
+    /// Two fields under one path prefix have to nest into one object rather than
+    /// the second overwriting the first.
+    #[tokio::test]
+    async fn subject_claims_sharing_a_path_prefix_nest_into_one_object() {
+        let deep = "delegation:\n  subjectClaims:\n    given_name: subject.identity.given_name\n    region: subject.residence.region\n";
+        let fixture = build_fixture(None, deep, ACTOR_CLAIM);
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let minted = fixture
+            .minter
+            .mint(
+                &delegated(
+                    client,
+                    &[("given_name", json!("Amara")), ("region", json!("north"))],
+                ),
+                NOW,
+            )
+            .await
+            .expect("token mints");
+
+        assert_eq!(
+            decode_claims(&minted.access_token)["subject"],
+            json!({"identity": {"given_name": "Amara"}, "residence": {"region": "north"}})
+        );
+    }
+
+    /// The startup check refuses a subject path rooted at an authority claim, so
+    /// this is unreachable in a loaded server. If it were ever reached, the
+    /// delegation must not be allowed to overwrite the authority.
+    #[tokio::test]
+    async fn a_subject_path_colliding_with_an_authority_claim_is_a_server_error() {
+        let colliding =
+            "delegation:\n  subjectClaims:\n    given_name: evidence_audience.given_name\n";
+        let fixture = build_fixture(None, colliding, ACTOR_CLAIM);
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let error = fixture
+            .minter
+            .mint(&delegated(client, &[("given_name", json!("Amara"))]), NOW)
+            .await
+            .expect_err("a colliding subject path must not mint");
+        assert_eq!(
+            error,
+            TokenError::server_error("a subject claim path collides with an authority claim")
+        );
     }
 
     #[test]

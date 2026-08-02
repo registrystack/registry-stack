@@ -1,0 +1,6 @@
+id: urn:example:demo:codelist:region-map
+version: '2026-01'
+entries:
+  R-101: REGION-NORTH
+  R-201: REGION-SOUTH
+allowed_outputs: [REGION-NORTH, REGION-SOUTH]

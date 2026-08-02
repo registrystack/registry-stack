@@ -35,6 +35,12 @@ const MAX_TAGS: usize = 32;
 const MAX_KEYS_PER_CLIENT: usize = 8;
 const MAX_CLIENT_FILE_BYTES: u64 = 256 * 1024;
 const MAX_CLIENTS: usize = 4_096;
+/// Evidence permits at most this many fields in one selector profile, so a
+/// larger subject could never satisfy one.
+const MAX_SUBJECT_FIELDS: usize = 16;
+const MAX_DELEGATED_ACTORS: usize = 64;
+/// The longest claim path Evidence will resolve.
+const MAX_CLAIM_PATH_BYTES: usize = 512;
 
 /// JWK members that only ever appear in private keys.
 const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
@@ -64,6 +70,38 @@ pub struct Grant {
     pub authority: String,
 }
 
+/// Permission for a client to obtain tokens bound to one delegated actor acting
+/// for one subject.
+///
+/// This is what makes a delegated token narrower than an ordinary one rather
+/// than merely differently labelled. The subject's selector values are minted
+/// into the token at [`Delegation::subject_claims`], which must mirror the
+/// `valueClaims` of the matching `authenticated-context` entitlement in the
+/// resource server's bundle. The resource server then reads the subject from
+/// the token and refuses any request that carries its own selector values, so a
+/// token issued for one subject cannot reach another.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Delegation {
+    /// A closed set of actor identities this client may act as. Omitted means
+    /// the client names its own actor, bounded only by length.
+    #[serde(default)]
+    pub actors: Option<Vec<String>>,
+    /// Selector field name to the claim path its value is minted at.
+    pub subject_claims: BTreeMap<String, String>,
+}
+
+impl Delegation {
+    /// Whether `actor` is one this client may act as.
+    #[must_use]
+    pub fn permits_actor(&self, actor: &str) -> bool {
+        match &self.actors {
+            Some(actors) => actors.iter().any(|permitted| permitted == actor),
+            None => true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientDocument {
@@ -73,6 +111,8 @@ struct ClientDocument {
     requester_tags: Vec<String>,
     #[serde(default)]
     grant: Option<Grant>,
+    #[serde(default)]
+    delegation: Option<Delegation>,
     keys: Vec<Value>,
 }
 
@@ -85,6 +125,7 @@ pub struct RegisteredClient {
     evidence_audience: String,
     requester_tags: Vec<String>,
     grant: Option<Grant>,
+    delegation: Option<Delegation>,
     jwks: JwkSet,
 }
 
@@ -114,6 +155,14 @@ impl RegisteredClient {
         self.grant.as_ref()
     }
 
+    /// The delegation this client is registered for, if any. A client with no
+    /// delegation may never obtain a token carrying an actor or a bound
+    /// subject.
+    #[must_use]
+    pub fn delegation(&self) -> Option<&Delegation> {
+        self.delegation.as_ref()
+    }
+
     /// The public keys registered for this client, and nothing else. This is
     /// the set an assertion from this client is verified against.
     #[must_use]
@@ -136,6 +185,10 @@ impl fmt::Debug for RegisteredClient {
                 &format_args!("[{} redacted]", self.requester_tags.len()),
             )
             .field("grant", &self.grant.as_ref().map(|_| "[redacted]"))
+            .field(
+                "delegation",
+                &self.delegation.as_ref().map(|_| "[redacted]"),
+            )
             .field("keys", &self.jwks.keys.len())
             .finish()
     }
@@ -271,6 +324,10 @@ fn build_client(
         }
     }
 
+    if let Some(delegation) = &document.delegation {
+        validate_delegation(delegation, &invalid)?;
+    }
+
     let jwks = build_public_jwks(document.keys, &invalid)?;
 
     Ok(RegisteredClient {
@@ -279,7 +336,94 @@ fn build_client(
         evidence_audience: document.evidence_audience,
         requester_tags: document.requester_tags,
         grant: document.grant,
+        delegation: document.delegation,
         jwks,
+    })
+}
+
+fn validate_delegation(
+    delegation: &Delegation,
+    invalid: &impl Fn(&'static str) -> ClientRegistryError,
+) -> Result<(), ClientRegistryError> {
+    if let Some(actors) = &delegation.actors {
+        // An empty list reads as "no restriction" but means "nothing may be
+        // requested", so it is refused rather than silently interpreted.
+        if actors.is_empty() || actors.len() > MAX_DELEGATED_ACTORS {
+            return Err(invalid("between 1 and 64 delegated actors are required"));
+        }
+        for actor in actors {
+            if actor.trim().is_empty() || actor.len() > MAX_PRINCIPAL_BYTES {
+                return Err(invalid("delegated actors must be 1..=512 bytes"));
+            }
+        }
+        if actors.iter().collect::<BTreeSet<_>>().len() != actors.len() {
+            return Err(invalid("delegated actors must be unique"));
+        }
+    }
+
+    if delegation.subject_claims.is_empty() || delegation.subject_claims.len() > MAX_SUBJECT_FIELDS
+    {
+        return Err(invalid("between 1 and 16 subject claims are required"));
+    }
+    for (field, path) in &delegation.subject_claims {
+        if !valid_selector_field(field) {
+            return Err(invalid("subject claim field names are invalid"));
+        }
+        if !valid_claim_path(path) {
+            return Err(invalid("subject claim paths are invalid"));
+        }
+    }
+
+    // Two fields minted at one path would leave whichever came last in place,
+    // so the resource server would read one field's value for both.
+    let paths = delegation.subject_claims.values().collect::<BTreeSet<_>>();
+    if paths.len() != delegation.subject_claims.len() {
+        return Err(invalid("subject claim paths must be unique"));
+    }
+
+    // Minting builds nested objects, so `identity` and `identity.given_name`
+    // cannot both hold a value. Sorting groups any prefix with what it
+    // prefixes, so comparing neighbours is enough.
+    let mut segmented = paths
+        .iter()
+        .map(|path| path.split('.').collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    segmented.sort_unstable();
+    if segmented
+        .windows(2)
+        .any(|pair| pair[1].starts_with(&pair[0]))
+    {
+        return Err(invalid(
+            "subject claim paths must not nest inside one another",
+        ));
+    }
+    Ok(())
+}
+
+/// The selector field name grammar Evidence enforces on bundle selector
+/// profiles. A field Mint accepts but Evidence rejects could never resolve.
+fn valid_selector_field(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+/// The claim path grammar Evidence resolves tokens against.
+fn valid_claim_path(value: &str) -> bool {
+    if value.is_empty() || value.len() > MAX_CLAIM_PATH_BYTES {
+        return false;
+    }
+    value.split('.').all(|segment| {
+        let bytes = segment.as_bytes();
+        !bytes.is_empty()
+            && matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+            && bytes[1..]
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     })
 }
 
@@ -483,6 +627,138 @@ keys:
             load_one(&text),
             Err(ClientRegistryError::Document(_, _))
         ));
+    }
+
+    /// A registration with a `delegation` block, whose subject claims mirror
+    /// the `valueClaims` of an `authenticated-context` entitlement.
+    fn delegated(body: &str) -> String {
+        format!("{CLIENT_A}delegation:\n{body}")
+    }
+
+    const SUBJECT_CLAIMS: &str =
+        "  subjectClaims:\n    given_name: identity.given_name\n    birth_date: identity.birth_date\n";
+
+    #[test]
+    fn a_delegated_registration_declares_its_actors_and_subject_claims() {
+        let text = delegated(&format!(
+            "  actors: [urn:example:agent:scheduling]\n{SUBJECT_CLAIMS}"
+        ));
+        let registry = load_one(&text).expect("registry loads");
+        let client = registry.get("client-a").expect("client-a is registered");
+        let delegation = client.delegation().expect("client-a may delegate");
+
+        assert_eq!(
+            delegation.subject_claims,
+            BTreeMap::from([
+                ("given_name".to_owned(), "identity.given_name".to_owned()),
+                ("birth_date".to_owned(), "identity.birth_date".to_owned()),
+            ])
+        );
+        assert!(delegation.permits_actor("urn:example:agent:scheduling"));
+        assert!(!delegation.permits_actor("urn:example:agent:other"));
+
+        // Ordinary registrations stay undelegated, which is what makes an
+        // assertion asking to delegate refusable.
+        assert_eq!(
+            load_one(CLIENT_A)
+                .expect("registry loads")
+                .get("client-a")
+                .expect("client-a is registered")
+                .delegation(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_omitted_actor_list_permits_any_actor_the_client_names() {
+        let registry = load_one(&delegated(SUBJECT_CLAIMS)).expect("registry loads");
+        let client = registry.get("client-a").expect("client-a is registered");
+        let delegation = client.delegation().expect("client-a may delegate");
+
+        assert_eq!(delegation.actors, None);
+        assert!(delegation.permits_actor("urn:example:agent:anything"));
+    }
+
+    #[test]
+    fn an_actor_list_must_be_non_empty_bounded_and_unique() {
+        assert_eq!(
+            load_error(&delegated(&format!("  actors: []\n{SUBJECT_CLAIMS}"))),
+            invalid("between 1 and 64 delegated actors are required")
+        );
+        assert_eq!(
+            load_error(&delegated(&format!("  actors: [a, a]\n{SUBJECT_CLAIMS}"))),
+            invalid("delegated actors must be unique")
+        );
+        assert_eq!(
+            load_error(&delegated(&format!("  actors: ['']\n{SUBJECT_CLAIMS}"))),
+            invalid("delegated actors must be 1..=512 bytes")
+        );
+    }
+
+    #[test]
+    fn subject_claim_paths_must_use_the_resource_servers_claim_path_grammar() {
+        for path in ["identity..given_name", "1identity.given_name", "", "a.b!c"] {
+            let text = delegated(&format!("  subjectClaims:\n    given_name: \"{path}\"\n"));
+            assert_eq!(
+                load_error(&text),
+                invalid("subject claim paths are invalid"),
+                "path {path:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn subject_claim_field_names_follow_the_selector_profile_grammar() {
+        for field in ["Given_Name", "1given", "given name", ""] {
+            let text = delegated(&format!(
+                "  subjectClaims:\n    \"{field}\": identity.given_name\n"
+            ));
+            assert_eq!(
+                load_error(&text),
+                invalid("subject claim field names are invalid"),
+                "field {field:?} must be rejected"
+            );
+        }
+    }
+
+    /// Minting builds nested objects, so a path and a path inside it cannot
+    /// both hold a value.
+    #[test]
+    fn subject_claim_paths_must_be_unique_and_must_not_nest() {
+        let text = delegated(
+            "  subjectClaims:\n    given_name: identity.name\n    family_name: identity.name\n",
+        );
+        assert_eq!(
+            load_error(&text),
+            invalid("subject claim paths must be unique")
+        );
+
+        let text = delegated(
+            "  subjectClaims:\n    given_name: identity\n    family_name: identity.family_name\n",
+        );
+        assert_eq!(
+            load_error(&text),
+            invalid("subject claim paths must not nest inside one another")
+        );
+    }
+
+    #[test]
+    fn a_delegation_must_bind_at_least_one_subject_claim() {
+        // Delegation with no subject binding would be an actor label on an
+        // otherwise unbounded token.
+        let text = delegated("  subjectClaims: {}\n");
+        assert_eq!(
+            load_error(&text),
+            invalid("between 1 and 16 subject claims are required")
+        );
+
+        let fields = (0..17)
+            .map(|index| format!("    field_{index}: identity.f{index}\n"))
+            .collect::<String>();
+        assert_eq!(
+            load_error(&delegated(&format!("  subjectClaims:\n{fields}"))),
+            invalid("between 1 and 16 subject claims are required")
+        );
     }
 
     #[test]

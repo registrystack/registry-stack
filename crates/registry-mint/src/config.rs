@@ -125,18 +125,24 @@ pub struct ClaimNames {
     pub evidence_audience: String,
     pub grant_id: String,
     pub grant_authority: String,
+    /// The delegated actor identity, present only where a deployment issues
+    /// delegated tokens. Omitting it is what stops a registry entry that
+    /// declares delegation from ever being served.
+    #[serde(default)]
+    pub actor: Option<String>,
 }
 
 impl ClaimNames {
     fn validate(&self) -> Result<(), ConfigError> {
-        let names = [
+        let mut names = vec![
             self.principal.as_str(),
             self.requester_tags.as_str(),
             self.evidence_audience.as_str(),
             self.grant_id.as_str(),
             self.grant_authority.as_str(),
         ];
-        for name in names {
+        names.extend(self.actor.as_deref());
+        for name in &names {
             if name.trim().is_empty() || name.len() > 128 {
                 return Err(ConfigError::Invalid("claim names must be 1..=128 bytes"));
             }
@@ -442,6 +448,39 @@ clients:
                 "claim {reserved} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn the_actor_claim_is_optional_and_obeys_every_other_claim_name_rule() {
+        // A deployment that never delegates names no actor claim at all.
+        assert!(sample_config().access_tokens.claims.actor.is_none());
+
+        let with_actor = |name: &str| {
+            VALID.replace(
+                "grantAuthority: evidence_authority",
+                &format!("grantAuthority: evidence_authority\n    actor: {name}"),
+            )
+        };
+
+        let config = load_from(&with_actor("evidence_actor")).expect("an actor claim is accepted");
+        assert_eq!(
+            config.access_tokens.claims.actor.as_deref(),
+            Some("evidence_actor")
+        );
+
+        // Reusing another authority claim would let the actor overwrite it.
+        assert_eq!(
+            load_error(&with_actor("evidence_tags")),
+            ConfigError::Invalid("claim names must be distinct")
+        );
+        assert_eq!(
+            load_error(&with_actor("client_id")),
+            ConfigError::Invalid("authority claim names must not shadow registered JWT claims")
+        );
+        assert_eq!(
+            load_error(&with_actor("\"\"")),
+            ConfigError::Invalid("claim names must be 1..=128 bytes")
+        );
     }
 
     #[test]

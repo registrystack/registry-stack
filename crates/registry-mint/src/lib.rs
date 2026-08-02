@@ -54,3 +54,11 @@ pub const GRANT_TYPE_CLIENT_CREDENTIALS: &str = "client_credentials";
 
 /// Media type of the minted access tokens.
 pub const ACCESS_TOKEN_TYP: &str = "at+jwt";
+
+/// The client assertion member naming the actor and subject a delegated token
+/// is requested for.
+///
+/// This is Mint's own member, not RFC 8693 `act`: token exchange presents a
+/// subject's own credential, which is precisely what a deployment without an
+/// identity provider does not have.
+pub const ON_BEHALF_OF_CLAIM: &str = "on_behalf_of";

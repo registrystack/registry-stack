@@ -22,10 +22,11 @@ use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, Toke
 use serde_json::Value;
 
 use crate::{
-    clients::{ClientRegistry, RegisteredClient},
+    clients::{ClientRegistry, Delegation, RegisteredClient},
     config::ClientAssertionConfig,
     error::TokenError,
     replay::{ReplayCache, ReplayError},
+    ON_BEHALF_OF_CLAIM,
 };
 
 /// Bounds chosen so a hostile caller cannot make Mint allocate before any
@@ -35,6 +36,9 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 const MAX_CLAIMS_BYTES: usize = 8 * 1024;
 const MAX_CLIENT_ID_BYTES: usize = 256;
 const MAX_JTI_BYTES: usize = 256;
+/// Evidence rejects an actor longer than this, and a selector value longer than
+/// this could not satisfy any selector profile.
+const MAX_DELEGATION_VALUE_BYTES: usize = 512;
 
 /// Tolerance for clock difference between a caller and Mint. Applied to the
 /// assertion's own `exp` and `nbf`, not to the tokens Mint issues.
@@ -48,6 +52,44 @@ const ALLOWED_ASSERTION_TYP: [&str; 2] = ["JWT", "client-assertion+jwt"];
 /// which client's keys to verify against.
 struct AssertionPreflight {
     claims: Value,
+}
+
+/// A delegation request that the registry permits, ready to be minted.
+///
+/// Every value here came from the signed assertion and was then checked against
+/// the client's registration: the actor against its permitted set, and the
+/// subject against the exact selector fields it declared. Nothing unbounded or
+/// undeclared survives into this type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDelegation {
+    actor: String,
+    /// Selector field to its value, keyed exactly as the registration declared.
+    subject: BTreeMap<String, Value>,
+}
+
+impl ResolvedDelegation {
+    /// Crate-internal because the type's meaning is that its contents already
+    /// passed [`build_delegation`]; nothing outside this crate may assert one.
+    pub(crate) fn new(actor: String, subject: BTreeMap<String, Value>) -> Self {
+        Self { actor, subject }
+    }
+
+    #[must_use]
+    pub fn actor(&self) -> &str {
+        &self.actor
+    }
+
+    #[must_use]
+    pub fn subject(&self) -> &BTreeMap<String, Value> {
+        &self.subject
+    }
+}
+
+/// An authenticated client, and the delegation it authenticated for.
+#[derive(Clone, Debug)]
+pub struct AuthenticatedClient {
+    pub client: Arc<RegisteredClient>,
+    pub delegation: Option<ResolvedDelegation>,
 }
 
 /// Authenticates client assertions against a registry snapshot.
@@ -129,12 +171,15 @@ impl ClientAuthenticator {
     /// Authenticate a client assertion and return the client it proves.
     ///
     /// The returned client is the registry entry, which is where all authority
-    /// is read from. Nothing from the assertion payload is carried forward.
+    /// is read from. The one thing carried forward from the assertion payload
+    /// is the delegation request, and only after the registry has confirmed
+    /// that this client may delegate, to that actor, over exactly those subject
+    /// fields.
     pub async fn authenticate(
         &self,
         assertion: &str,
         now: i64,
-    ) -> Result<Arc<RegisteredClient>, TokenError> {
+    ) -> Result<AuthenticatedClient, TokenError> {
         let preflight = preflight(assertion)?;
         let client_id = asserted_client_id(&preflight.claims)?;
 
@@ -196,6 +241,10 @@ impl ClientAuthenticator {
             return Err(TokenError::invalid_client("assertion is not yet issued"));
         }
 
+        // Resolved before the assertion is spent so a rejected delegation does
+        // not burn the caller's jti.
+        let delegation = resolve_delegation(client, &verified.claims.extra)?;
+
         let jti = verified
             .claims
             .extra
@@ -223,7 +272,99 @@ impl ClientAuthenticator {
                 ReplayError::Poisoned => TokenError::server_error("replay cache poisoned"),
             })?;
 
-        Ok(Arc::clone(client))
+        Ok(AuthenticatedClient {
+            client: Arc::clone(client),
+            delegation,
+        })
+    }
+}
+
+/// Reconcile the delegation the assertion asks for with the one the registry
+/// permits.
+///
+/// Both directions fail closed. A client with no registered delegation cannot
+/// obtain an actor or a bound subject by asking for one, and a client that *is*
+/// registered for delegation cannot obtain an ordinary unbounded token by
+/// omitting the request. The second half is what stops a delegated caller
+/// quietly widening its own reach.
+fn resolve_delegation(
+    client: &RegisteredClient,
+    claims: &serde_json::Map<String, Value>,
+) -> Result<Option<ResolvedDelegation>, TokenError> {
+    let requested = claims.get(ON_BEHALF_OF_CLAIM);
+    match (client.delegation(), requested) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(TokenError::invalid_client(
+            "client is not registered to act on behalf of a subject",
+        )),
+        (Some(_), None) => Err(TokenError::invalid_client(
+            "a delegated client must name the actor and subject it acts for",
+        )),
+        (Some(registered), Some(requested)) => Ok(Some(build_delegation(registered, requested)?)),
+    }
+}
+
+fn build_delegation(
+    registered: &Delegation,
+    requested: &Value,
+) -> Result<ResolvedDelegation, TokenError> {
+    let invalid = |reason: &'static str| TokenError::invalid_client(reason);
+
+    let requested = requested
+        .as_object()
+        .ok_or_else(|| invalid("the delegation request is malformed"))?;
+    // An unrecognized member would be silently dropped, leaving the caller
+    // believing it constrained something it did not.
+    if requested.len() != 2 || !requested.contains_key("actor") {
+        return Err(invalid("the delegation request is malformed"));
+    }
+
+    let actor = requested
+        .get("actor")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("the delegation request is malformed"))?;
+    if actor.trim().is_empty() || actor.len() > MAX_DELEGATION_VALUE_BYTES {
+        return Err(invalid("the delegated actor is not bounded"));
+    }
+    if !registered.permits_actor(actor) {
+        return Err(invalid("the client may not act as this actor"));
+    }
+
+    let subject = requested
+        .get("subject")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("the delegation request is malformed"))?;
+    // Exactly the declared fields: a missing one would leave the resource
+    // server unable to resolve the subject, and an extra one would be minted
+    // nowhere while looking to the caller as though it had been honoured.
+    if subject.len() != registered.subject_claims.len() {
+        return Err(invalid(
+            "the delegated subject does not match its registration",
+        ));
+    }
+    let mut resolved = BTreeMap::new();
+    for field in registered.subject_claims.keys() {
+        let value = subject
+            .get(field)
+            .ok_or_else(|| invalid("the delegated subject does not match its registration"))?;
+        resolved.insert(field.clone(), bounded_selector_value(value)?);
+    }
+
+    Ok(ResolvedDelegation::new(actor.to_owned(), resolved))
+}
+
+/// The value shapes a resource server can read back out as a selector value.
+fn bounded_selector_value(value: &Value) -> Result<Value, TokenError> {
+    match value {
+        Value::String(text) if !text.is_empty() && text.len() <= MAX_DELEGATION_VALUE_BYTES => {
+            Ok(value.clone())
+        }
+        Value::Bool(_) => Ok(value.clone()),
+        // Only integers survive a JSON round trip into a selector value.
+        Value::Number(number) if number.is_i64() => Ok(value.clone()),
+        _ => Err(TokenError::invalid_client(
+            "a delegated subject value is not a bounded string, integer, or boolean",
+        )),
     }
 }
 
@@ -292,7 +433,7 @@ fn asserted_client_id(claims: &Value) -> Result<&str, TokenError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::Algorithm;
     use serde_json::json;
@@ -345,10 +486,21 @@ mod tests {
     }
 
     fn registry_with(clients: &[(&str, &Value)]) -> Arc<ClientRegistry> {
+        registry_of(
+            &clients
+                .iter()
+                .map(|(id, key)| (*id, *key, ""))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Each entry is a client id, its public key, and any extra registration
+    /// lines (a `delegation:` block, in these tests).
+    fn registry_of(clients: &[(&str, &Value, &str)]) -> Arc<ClientRegistry> {
         let directory = tempfile::tempdir().expect("temp dir");
-        for (client_id, public) in clients {
+        for (client_id, public, extra) in clients {
             let document = format!(
-                "clientId: {client_id}\nprincipal: urn:example:{client_id}\nevidenceAudience: https://{client_id}.example.org\nrequesterTags: [tag-{client_id}]\nkeys: [{public}]\n"
+                "clientId: {client_id}\nprincipal: urn:example:{client_id}\nevidenceAudience: https://{client_id}.example.org\nrequesterTags: [tag-{client_id}]\nkeys: [{public}]\n{extra}"
             );
             std::fs::write(directory.path().join(format!("{client_id}.yaml")), document)
                 .expect("write client registration");
@@ -372,12 +524,13 @@ mod tests {
         let authenticator = authenticator(registry_with(&[("client-a", &public)]));
         let assertion = sign_assertion(&private, "JWT", &assertion_claims("client-a", "jti-1"));
 
-        let client = authenticator
+        let authenticated = authenticator
             .authenticate(&assertion, NOW)
             .await
             .expect("valid assertion authenticates");
-        assert_eq!(client.client_id(), "client-a");
-        assert_eq!(client.principal(), "urn:example:client-a");
+        assert_eq!(authenticated.client.client_id(), "client-a");
+        assert_eq!(authenticated.client.principal(), "urn:example:client-a");
+        assert_eq!(authenticated.delegation, None);
     }
 
     /// The core security property. Client A holds a real, registered key. It
@@ -625,6 +778,268 @@ mod tests {
             .await
             .expect_err("duplicate members are rejected");
         assert_eq!(error, TokenError::invalid_client("assertion is malformed"));
+    }
+
+    const DELEGATION: &str = "delegation:\n  actors: [urn:example:agent-one, urn:example:agent-two]\n  subjectClaims:\n    given_name: identity.given_name\n    birth_date: identity.birth_date\n";
+
+    fn on_behalf_of(jti: &str, request: Value) -> Value {
+        let mut claims = assertion_claims("client-a", jti);
+        claims[ON_BEHALF_OF_CLAIM] = request;
+        claims
+    }
+
+    fn subject_request() -> Value {
+        json!({
+            "actor": "urn:example:agent-one",
+            "subject": {"given_name": "Amara", "birth_date": "1998-04-02"},
+        })
+    }
+
+    /// A delegated assertion carries the actor and the subject; both survive
+    /// only because the registration named them.
+    #[tokio::test]
+    async fn a_delegated_assertion_resolves_the_actor_and_subject_it_names() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", subject_request()));
+
+        let authenticated = authenticator
+            .authenticate(&assertion, NOW)
+            .await
+            .expect("a permitted delegation authenticates");
+        let delegation = authenticated.delegation.expect("delegation resolved");
+        assert_eq!(delegation.actor(), "urn:example:agent-one");
+        assert_eq!(
+            delegation.subject(),
+            &BTreeMap::from([
+                ("birth_date".to_owned(), json!("1998-04-02")),
+                ("given_name".to_owned(), json!("Amara")),
+            ])
+        );
+    }
+
+    /// Asking is not enough. Delegation is a property of the registration.
+    #[tokio::test]
+    async fn a_client_with_no_registered_delegation_cannot_ask_for_one() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_with(&[("client-a", &public)]));
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", subject_request()));
+
+        let error = authenticator
+            .authenticate(&assertion, NOW)
+            .await
+            .expect_err("an undelegated client is refused");
+        assert_eq!(
+            error,
+            TokenError::invalid_client("client is not registered to act on behalf of a subject")
+        );
+    }
+
+    /// The other direction, and the one that is easy to miss: if omitting the
+    /// request produced an ordinary token, a delegated caller could widen its
+    /// own reach from one subject to every subject by leaving out a claim.
+    #[tokio::test]
+    async fn a_delegated_client_cannot_widen_itself_by_omitting_the_request() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+        let assertion = sign_assertion(&private, "JWT", &assertion_claims("client-a", "jti-1"));
+
+        let error = authenticator
+            .authenticate(&assertion, NOW)
+            .await
+            .expect_err("a delegated client must name its subject");
+        assert_eq!(
+            error,
+            TokenError::invalid_client(
+                "a delegated client must name the actor and subject it acts for"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn an_actor_outside_the_registered_set_is_refused() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+        let mut request = subject_request();
+        request["actor"] = json!("urn:example:agent-three");
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", request));
+
+        let error = authenticator
+            .authenticate(&assertion, NOW)
+            .await
+            .expect_err("an unregistered actor is refused");
+        assert_eq!(
+            error,
+            TokenError::invalid_client("the client may not act as this actor")
+        );
+    }
+
+    /// Without an `actors` list the client names its own actor, so the actor is
+    /// an audit label rather than a bound. The subject binding is unaffected.
+    #[tokio::test]
+    async fn an_open_actor_list_still_binds_the_subject() {
+        let (private, public) = test_key(1);
+        let open = "delegation:\n  subjectClaims:\n    given_name: identity.given_name\n    birth_date: identity.birth_date\n";
+        let authenticator = authenticator(registry_of(&[("client-a", &public, open)]));
+        let mut request = subject_request();
+        request["actor"] = json!("urn:example:anything");
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", request));
+
+        let authenticated = authenticator
+            .authenticate(&assertion, NOW)
+            .await
+            .expect("any actor is permitted");
+        let delegation = authenticated.delegation.expect("delegation resolved");
+        assert_eq!(delegation.actor(), "urn:example:anything");
+        assert_eq!(delegation.subject().len(), 2);
+    }
+
+    /// A missing field would leave the resource server unable to resolve the
+    /// subject; an extra one would be minted nowhere while looking to the caller
+    /// as though it had been honoured.
+    #[tokio::test]
+    async fn the_subject_must_carry_exactly_the_registered_fields() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+
+        let mut missing = subject_request();
+        missing["subject"] = json!({"given_name": "Amara"});
+        let mut extra = subject_request();
+        extra["subject"] = json!({
+            "given_name": "Amara",
+            "birth_date": "1998-04-02",
+            "national_id": "some-identifier",
+        });
+        let mut renamed = subject_request();
+        renamed["subject"] = json!({"given_name": "Amara", "family_name": "Okafor"});
+
+        for (index, request) in [missing, extra, renamed].into_iter().enumerate() {
+            let assertion = sign_assertion(
+                &private,
+                "JWT",
+                &on_behalf_of(&format!("jti-{index}"), request),
+            );
+            let error = authenticator
+                .authenticate(&assertion, NOW)
+                .await
+                .expect_err("a mismatched subject is refused");
+            assert_eq!(
+                error,
+                TokenError::invalid_client("the delegated subject does not match its registration")
+            );
+        }
+    }
+
+    /// Only the shapes a resource server can read back out as a selector value.
+    #[tokio::test]
+    async fn a_subject_value_that_is_not_a_selector_value_is_refused() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+
+        for (index, value) in [
+            json!(null),
+            json!(""),
+            json!(1.5),
+            json!(["Amara"]),
+            json!({"value": "Amara"}),
+            json!("x".repeat(513)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut request = subject_request();
+            request["subject"] = json!({"given_name": value, "birth_date": "1998-04-02"});
+            let assertion = sign_assertion(
+                &private,
+                "JWT",
+                &on_behalf_of(&format!("jti-{index}"), request),
+            );
+            let error = authenticator
+                .authenticate(&assertion, NOW)
+                .await
+                .expect_err("an unusable subject value is refused");
+            assert_eq!(
+                error,
+                TokenError::invalid_client(
+                    "a delegated subject value is not a bounded string, integer, or boolean"
+                )
+            );
+        }
+
+        // Integers and booleans are selector values, so they are accepted.
+        let mut numeric = subject_request();
+        numeric["subject"] = json!({"given_name": 42, "birth_date": true});
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-ok", numeric));
+        assert!(authenticator.authenticate(&assertion, NOW).await.is_ok());
+    }
+
+    /// A malformed request must not cost the caller its `jti`: the delegation is
+    /// reconciled before the assertion is spent, so correcting the request and
+    /// retrying works.
+    #[tokio::test]
+    async fn a_refused_delegation_does_not_spend_the_assertion() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+
+        let mut wrong = subject_request();
+        wrong["actor"] = json!("urn:example:agent-three");
+        let refused = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", wrong));
+        assert!(authenticator.authenticate(&refused, NOW).await.is_err());
+
+        // Same jti, corrected request.
+        let corrected = sign_assertion(&private, "JWT", &on_behalf_of("jti-1", subject_request()));
+        assert!(authenticator.authenticate(&corrected, NOW).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_structurally_malformed_delegation_request_is_refused() {
+        let (private, public) = test_key(1);
+        let authenticator = authenticator(registry_of(&[("client-a", &public, DELEGATION)]));
+
+        let mut unknown_member = subject_request();
+        unknown_member["scope"] = json!("everything");
+        let mut no_subject = subject_request();
+        no_subject
+            .as_object_mut()
+            .expect("request object")
+            .remove("subject");
+
+        for (index, request) in [
+            json!("urn:example:agent-one"),
+            json!([{"actor": "urn:example:agent-one"}]),
+            json!({"subject": {"given_name": "Amara", "birth_date": "1998-04-02"}}),
+            json!({"actor": "urn:example:agent-one", "subject": "Amara"}),
+            unknown_member,
+            no_subject,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let assertion = sign_assertion(
+                &private,
+                "JWT",
+                &on_behalf_of(&format!("jti-{index}"), request),
+            );
+            let error = authenticator
+                .authenticate(&assertion, NOW)
+                .await
+                .expect_err("a malformed delegation request is refused");
+            assert_eq!(
+                error,
+                TokenError::invalid_client("the delegation request is malformed")
+            );
+        }
+
+        let mut blank_actor = subject_request();
+        blank_actor["actor"] = json!("   ");
+        let assertion = sign_assertion(&private, "JWT", &on_behalf_of("jti-blank", blank_actor));
+        assert_eq!(
+            authenticator
+                .authenticate(&assertion, NOW)
+                .await
+                .expect_err("a blank actor is refused"),
+            TokenError::invalid_client("the delegated actor is not bounded")
+        );
     }
 
     #[tokio::test]
