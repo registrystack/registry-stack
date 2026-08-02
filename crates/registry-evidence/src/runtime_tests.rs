@@ -86,6 +86,15 @@ struct PreparedAcceptance {
     audit_path: PathBuf,
 }
 
+/// A prepared bundle and runtime file with no opinion about what serves the
+/// configured source origin.
+struct PreparedFixture {
+    temporary: TempDir,
+    bundle_root: PathBuf,
+    runtime_path: PathBuf,
+    audit_path: PathBuf,
+}
+
 struct FailAfterSelfTestSigner {
     delegate: LocalJwkSigner,
     calls: AtomicUsize,
@@ -3792,6 +3801,29 @@ async fn acceptance_runtime() -> AcceptanceRuntime {
 }
 
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture(
+        binding_secret,
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+    );
+    PreparedAcceptance {
+        temporary: prepared.temporary,
+        bundle_root: prepared.bundle_root,
+        runtime_path: prepared.runtime_path,
+        server,
+        audit_path: prepared.audit_path,
+    }
+}
+
+/// Copy the acceptance bundle into a temporary root, point every source at
+/// `source_origin`, write the synthetic secrets and the runtime configuration
+/// under `ceilings`, then make the bundle and runtime file read-only.
+fn prepare_fixture(
+    binding_secret: &str,
+    source_origin: &str,
+    ceilings: &FixtureCeilings,
+) -> PreparedFixture {
     let temporary = tempfile::tempdir().expect("temporary acceptance root");
     let bundle_root = temporary.path().join("bundle");
     let runtime_path = temporary.path().join("runtime.yaml");
@@ -3807,8 +3839,8 @@ async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
     }
     copy_tree(&fixture_root(), &bundle_root);
 
-    let server = MockServer::start().await;
-    rewrite_deployment_values(&bundle_root, &server.uri());
+    rewrite_deployment_values(&bundle_root, source_origin);
+    apply_fixture_ceilings(&bundle_root, ceilings);
     write_secret(
         &secret_root,
         "audit-hash-key",
@@ -3821,15 +3853,20 @@ async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
     write_secret(&secret_root, "source-c-username", BASIC_USER);
     write_secret(&secret_root, "source-c-password", BASIC_PASSWORD);
     write_secret(&secret_root, "source-d-token", BEARER);
-    write_runtime_config(&runtime_path, &bundle_root, &secret_root, &audit_path);
+    write_runtime_config(
+        &runtime_path,
+        &bundle_root,
+        &secret_root,
+        &audit_path,
+        ceilings,
+    );
     make_file_read_only(&runtime_path);
     make_read_only(&bundle_root);
 
-    PreparedAcceptance {
+    PreparedFixture {
         temporary,
         bundle_root,
         runtime_path,
-        server,
         audit_path,
     }
 }
@@ -4328,11 +4365,72 @@ fn rewrite_deployment_values(bundle_root: &Path, source_origin: &str) {
     fs::write(path, text).expect("deployment-only fixture rewrite succeeds");
 }
 
+/// The deployment ceilings a prepared fixture runs under.
+///
+/// Every field here is a production-meaningful default in the acceptance
+/// bundle or runtime file. They exist as a struct only so a throughput
+/// measurement can lift the ones that would otherwise be the thing measured;
+/// the lifted values are measurement scaffolding and are not a recommended
+/// deployment posture.
+struct FixtureCeilings {
+    maximum_concurrent_requests: u32,
+    audit_maximum_file_bytes: u64,
+    requests_per_principal_per_minute: u64,
+    burst_per_principal: u64,
+    source_concurrency_limit: u16,
+}
+
+impl FixtureCeilings {
+    /// The values the tracked acceptance bundle and the acceptance runtime
+    /// file carry. Every existing fixture runs under exactly these.
+    fn deployment_defaults() -> Self {
+        Self {
+            maximum_concurrent_requests: 64,
+            audit_maximum_file_bytes: 10_485_760,
+            requests_per_principal_per_minute: 60,
+            burst_per_principal: 10,
+            source_concurrency_limit: 8,
+        }
+    }
+}
+
+/// Rewrite the copied bundle's rate limits and per-source outbound concurrency
+/// to `ceilings`. The tracked fixture under `products/evidence/fixtures` is
+/// never touched: only the temporary copy is, and only before it is sealed
+/// read-only.
+fn apply_fixture_ceilings(bundle_root: &Path, ceilings: &FixtureCeilings) {
+    let path = bundle_root.join("evidence.yaml");
+    let mut text = fs::read_to_string(&path).expect("copied configuration is readable");
+    replace_exact(
+        &mut text,
+        "requestsPerPrincipalPerMinute: 60",
+        &format!(
+            "requestsPerPrincipalPerMinute: {}",
+            ceilings.requests_per_principal_per_minute
+        ),
+        1,
+    );
+    replace_exact(
+        &mut text,
+        "burstPerPrincipal: 10",
+        &format!("burstPerPrincipal: {}", ceilings.burst_per_principal),
+        1,
+    );
+    replace_exact(
+        &mut text,
+        "concurrencyLimit: 8",
+        &format!("concurrencyLimit: {}", ceilings.source_concurrency_limit),
+        4,
+    );
+    fs::write(path, text).expect("deployment-only ceiling rewrite succeeds");
+}
+
 fn write_runtime_config(
     runtime_path: &Path,
     bundle_root: &Path,
     secret_root: &Path,
     audit_path: &Path,
+    ceilings: &FixtureCeilings,
 ) {
     let document = format!(
         r#"version: 1
@@ -4343,7 +4441,7 @@ listener:
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
-  maximumConcurrentRequests: 64
+  maximumConcurrentRequests: {}
   requestTimeoutMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
 secretProviders:
@@ -4351,14 +4449,16 @@ secretProviders:
     root: {}
 auditStorage:
   path: {}
-  maximumFileBytes: 10485760
+  maximumFileBytes: {}
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
 "#,
         bundle_root.display(),
+        ceilings.maximum_concurrent_requests,
         secret_root.display(),
         audit_path.display(),
+        ceilings.audit_maximum_file_bytes,
     );
     fs::write(runtime_path, document).expect("immutable runtime configuration is written");
 }
@@ -4844,4 +4944,504 @@ fn released_evidence_ids(audit: &str) -> BTreeSet<String> {
                 .map(str::to_owned)
         })
         .collect()
+}
+
+// Sustained end-to-end throughput measurement.
+
+/// Requests offered simultaneously by the sustained driver.
+///
+/// Two durable audit appends sit on every request's critical path, and the
+/// audit sink commits in groups: appends that arrive while a durable write is
+/// in flight join the next batch instead of each paying an `fsync`. Its rate
+/// therefore rises with the number of concurrent appenders and collapses
+/// toward one `fsync` per append when only a few are in flight, so the offered
+/// concurrency has to keep batches full. 128 also leaves Little's law room:
+/// sustaining 1000 requests per second needs roughly `1000 * latency_seconds`
+/// requests in flight, so 128 covers per-request latencies up to about 128 ms.
+const SUSTAINED_CONCURRENCY: usize = 128;
+
+/// The measured window. Ten seconds is long enough for group-commit batching,
+/// connection reuse, and the verifier and source caches to reach steady state,
+/// and short enough that the check stays runnable on demand rather than
+/// becoming a nightly job.
+const SUSTAINED_WINDOW: Duration = Duration::from_secs(10);
+
+/// An unmeasured window that absorbs first-request script compilation, lazy
+/// initialization, connection establishment, and audit file growth.
+const SUSTAINED_WARMUP: Duration = Duration::from_secs(3);
+
+/// The end-to-end rate this check exists to prove, in requests per second.
+const SUSTAINED_TARGET_RPS: f64 = 1000.0;
+
+/// How far the constant source's own ceiling must sit above the Evidence
+/// result before the run is read as a measurement of Evidence.
+///
+/// A source held at a fraction `f` of its own ceiling contributes about `f` of
+/// the saturation, so a factor of five keeps the source below 20 percent
+/// utilization while the service under test is at 100 percent. Below this
+/// factor the harness is close enough to the result to be part of what was
+/// measured, and the run is reported as inconclusive rather than as a pass or
+/// a failure.
+const SUSTAINED_SOURCE_HEADROOM: f64 = 5.0;
+
+/// The one constant body the sustained source returns. It satisfies the
+/// projection and fact schema the acceptance bundle declares for that source.
+const CONSTANT_SOURCE_BODY: &str = r#"{"total":1,"date_of_birth":"2000-01-01"}"#;
+
+/// The ceilings the sustained fixture runs under.
+///
+/// Each lifted value is a production-meaningful default that would otherwise
+/// become the thing measured, not a recommended deployment posture:
+///
+/// - `requestsPerPrincipalPerMinute: 60` with `burstPerPrincipal: 10` is one
+///   request per second per principal, so an unlifted run measures the rate
+///   limiter returning `rate_limited`.
+/// - `maximumConcurrentRequests: 64` admits fewer requests than this driver
+///   offers, so an unlifted run measures admission queueing.
+/// - `concurrencyLimit: 8` per source caps outbound calls in flight, so an
+///   unlifted run measures the source semaphore.
+/// - `maximumFileBytes: 10485760` rotates the audit segment several times
+///   inside a measured window, so an unlifted run measures segment rotation.
+///
+/// Deployments should keep the tracked defaults and tune from real traffic.
+fn sustained_ceilings() -> FixtureCeilings {
+    FixtureCeilings {
+        maximum_concurrent_requests: 512,
+        audit_maximum_file_bytes: 1_073_741_824,
+        requests_per_principal_per_minute: 1_000_000,
+        burst_per_principal: 100_000,
+        source_concurrency_limit: 256,
+    }
+}
+
+/// The upstream source used for sustained measurement: one `axum` handler
+/// returning a constant JSON body over a real socket.
+///
+/// A matching mock server puts request matching, shared-state locking, and
+/// per-call allocation on the measured path, and a rate measured through one
+/// describes the harness rather than Evidence. This handler matches nothing,
+/// locks nothing, and allocates only its response.
+struct ConstantSource {
+    origin: String,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+async fn start_constant_source() -> ConstantSource {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the constant source listener binds");
+    let address = listener
+        .local_addr()
+        .expect("the constant source listener has an address");
+    let router = axum::Router::new().route(
+        "/v1/facts",
+        axum::routing::post(|| async {
+            // Built explicitly so the response carries exactly one
+            // `Content-Type`, which is what the source client requires.
+            axum::response::Response::builder()
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(CONSTANT_SOURCE_BODY))
+                .expect("the constant source response builds")
+        }),
+    );
+    let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let serving = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    ConstantSource {
+        origin: format!("http://{address}"),
+        shutdown,
+        serving,
+    }
+}
+
+/// One flat-out window against one endpoint. Every attempt lands in exactly
+/// one of `statuses` or `transport_failures`, so nothing is dropped.
+#[derive(Default)]
+struct SustainedOutcome {
+    statuses: BTreeMap<u16, usize>,
+    latencies: Vec<Duration>,
+    transport_failures: Vec<String>,
+    elapsed: Duration,
+}
+
+impl SustainedOutcome {
+    fn attempted(&self) -> usize {
+        self.latencies.len() + self.transport_failures.len()
+    }
+
+    fn released(&self) -> usize {
+        self.statuses.get(&200).copied().unwrap_or_default()
+    }
+
+    /// Attempts that did not return 200, including transport failures.
+    fn unexpected(&self) -> usize {
+        self.attempted() - self.released()
+    }
+
+    fn rate(&self) -> f64 {
+        if self.elapsed.is_zero() {
+            return 0.0;
+        }
+        self.released() as f64 / self.elapsed.as_secs_f64()
+    }
+
+    /// Nearest-rank p50, p95, and p99 over the whole window.
+    fn latency_percentiles(&self) -> (Duration, Duration, Duration) {
+        if self.latencies.is_empty() {
+            return (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        }
+        let mut sorted = self.latencies.clone();
+        sorted.sort_unstable();
+        let at = |fraction: f64| {
+            let rank = (fraction * sorted.len() as f64).ceil() as usize;
+            sorted[rank.clamp(1, sorted.len()) - 1]
+        };
+        (at(0.50), at(0.95), at(0.99))
+    }
+
+    /// A short, operator-readable account of everything that was not a 200.
+    fn failure_summary(&self) -> String {
+        let statuses: Vec<String> = self
+            .statuses
+            .iter()
+            .filter(|(status, _)| **status != 200)
+            .map(|(status, count)| format!("{status} x{count}"))
+            .collect();
+        let mut summary = if statuses.is_empty() {
+            "no non-2xx statuses".to_owned()
+        } else {
+            statuses.join(", ")
+        };
+        if let Some(first) = self.transport_failures.first() {
+            summary.push_str(&format!(
+                "; {} transport failures, first: {first}",
+                self.transport_failures.len()
+            ));
+        }
+        summary
+    }
+}
+
+/// Issue requests flat out for `window` across `SUSTAINED_CONCURRENCY` closed
+/// loop workers. Worker `n` presents `authorizations[n]`, so the caller decides
+/// whether load spreads across principals or concentrates on one.
+///
+/// Both the service and the constant source are driven through this function
+/// with the same client, worker count, header set, and window, so the two
+/// reported rates are comparable.
+async fn drive_flat_out(
+    client: &reqwest::Client,
+    endpoint: &str,
+    body: &bytes::Bytes,
+    authorizations: &[String],
+    window: Duration,
+) -> SustainedOutcome {
+    assert_eq!(
+        authorizations.len(),
+        SUSTAINED_CONCURRENCY,
+        "one authorization per worker"
+    );
+    let endpoint = Arc::new(endpoint.to_owned());
+    let started = Instant::now();
+    let deadline = started + window;
+    let mut workers = Vec::with_capacity(SUSTAINED_CONCURRENCY);
+    for authorization in authorizations {
+        let client = client.clone();
+        let endpoint = Arc::clone(&endpoint);
+        let body = body.clone();
+        let authorization = authorization.clone();
+        workers.push(tokio::spawn(async move {
+            let mut attempts: Vec<Result<(u16, Duration), String>> = Vec::new();
+            while Instant::now() < deadline {
+                let issued = Instant::now();
+                let sent = client
+                    .post(endpoint.as_str())
+                    .header("authorization", authorization.as_str())
+                    .header("content-type", "application/json")
+                    .body(body.clone())
+                    .send()
+                    .await;
+                attempts.push(match sent {
+                    // Draining the body returns the connection to the pool. A
+                    // body that fails to arrive is a failed request, not a
+                    // successful one with a footnote.
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        match response.bytes().await {
+                            Ok(_) => Ok((status, issued.elapsed())),
+                            Err(error) => Err(error.to_string()),
+                        }
+                    }
+                    Err(error) => Err(error.to_string()),
+                });
+            }
+            attempts
+        }));
+    }
+
+    let mut outcome = SustainedOutcome::default();
+    for worker in workers {
+        for attempt in worker.await.expect("a sustained load worker completes") {
+            match attempt {
+                Ok((status, latency)) => {
+                    *outcome.statuses.entry(status).or_default() += 1;
+                    outcome.latencies.push(latency);
+                }
+                Err(failure) => outcome.transport_failures.push(failure),
+            }
+        }
+    }
+    outcome.elapsed = started.elapsed();
+    outcome
+}
+
+/// The acceptance runtime behind a real TCP listener, with a constant
+/// in-process upstream source, driven by a real HTTP client over sockets.
+struct SustainedFixture {
+    _temporary: TempDir,
+    source: ConstantSource,
+    address: std::net::SocketAddr,
+    client: reqwest::Client,
+    /// One access token per worker, signed once outside every measured window.
+    authorizations: Vec<String>,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+    runtime: Arc<EvidenceRuntime>,
+    audit_path: PathBuf,
+}
+
+impl SustainedFixture {
+    async fn start() -> Self {
+        let source = start_constant_source().await;
+        let prepared = prepare_fixture(
+            "subject-binding-secret-canary-32-bytes-minimum",
+            &source.origin,
+            &sustained_ceilings(),
+        );
+        let runtime = Arc::new(
+            EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+                .await
+                .expect("the sustained load runtime initializes"),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the sustained load listener binds");
+        let address = listener
+            .local_addr()
+            .expect("the sustained load listener has an address");
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move {
+                serve_listener_for_test(runtime, listener, async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(SUSTAINED_CONCURRENCY)
+            .no_proxy()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("the sustained load client builds");
+
+        // One principal per worker keeps the rate limiter's tracked key set
+        // small and its per-check pruning cheap, so neither the token bucket
+        // nor its map becomes the thing measured.
+        let authorizations = (0..SUSTAINED_CONCURRENCY)
+            .map(|worker| {
+                format!(
+                    "Bearer {}",
+                    access_token_for(&format!("sustained-principal-{worker:04}"), None)
+                )
+            })
+            .collect();
+
+        Self {
+            _temporary: prepared.temporary,
+            source,
+            address,
+            client,
+            authorizations,
+            shutdown,
+            serving,
+            runtime,
+            audit_path: prepared.audit_path,
+        }
+    }
+
+    /// Drive the whole Evidence request path for `window`.
+    async fn drive_service(&self, window: Duration) -> SustainedOutcome {
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&adult_request()).expect("the sustained request serializes"),
+        );
+        drive_flat_out(
+            &self.client,
+            &format!("http://{}/v1/evidence", self.address),
+            &body,
+            &self.authorizations,
+            window,
+        )
+        .await
+    }
+
+    /// Drive the constant source directly to establish the harness ceiling the
+    /// Evidence result has to sit well below.
+    ///
+    /// The probe opens its own connections and gets no warm-up, so it
+    /// understates the source. That is the safe direction: it can only shrink
+    /// the reported headroom, never inflate it.
+    async fn drive_source(&self, window: Duration) -> SustainedOutcome {
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&adult_source_request()).expect("the probe body serializes"),
+        );
+        drive_flat_out(
+            &self.client,
+            &format!("{}/v1/facts", self.source.origin),
+            &body,
+            &self.authorizations,
+            window,
+        )
+        .await
+    }
+
+    /// Stop the listener and the source, drain detached evaluations, and return
+    /// the durable audit file.
+    async fn shutdown(self) -> String {
+        let _ = self.shutdown.send(());
+        self.serving
+            .await
+            .expect("the sustained listener task completes")
+            .expect("the sustained listener shuts down cleanly");
+        let _ = self.source.shutdown.send(());
+        self.source
+            .serving
+            .await
+            .expect("the constant source task completes")
+            .expect("the constant source shuts down cleanly");
+        drop(self.runtime);
+        fs::read_to_string(&self.audit_path).expect("the sustained audit file is readable")
+    }
+}
+
+/// Sustain 1000 end-to-end requests per second through the whole request path.
+///
+/// Every measured request runs token verification, rate limiting, Rhai request
+/// preparation, one outbound source call, Rhai extraction, evidence
+/// construction, Ed25519 signing, and two durable audit appends, over real
+/// sockets against the real router. At 1000 requests per second that is 2000
+/// audit appends per second.
+///
+/// The upstream source is a constant in-process handler whose own ceiling is
+/// measured in the same run, under the same client, worker count, header set,
+/// and window shape. When that ceiling is not at least
+/// `SUSTAINED_SOURCE_HEADROOM` times the Evidence result, the harness is part
+/// of what was measured and the run is reported as inconclusive rather than as
+/// a pass or a failure.
+///
+/// The target holds with and without `--release`; the recorded figures in
+/// `products/evidence/OPERATOR-CONTRACT.md` come from the optimized build.
+///
+/// ```text
+/// cargo test --release -p registry-evidence --lib -- --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "opt-in sustained throughput target; host-specific and long running"]
+async fn sustained_load_holds_one_thousand_requests_per_second() {
+    let fixture = SustainedFixture::start().await;
+
+    let warmup = fixture.drive_service(SUSTAINED_WARMUP).await;
+    assert_eq!(
+        warmup.unexpected(),
+        0,
+        "warm-up must already be clean; observed {}",
+        warmup.failure_summary()
+    );
+
+    let measured = fixture.drive_service(SUSTAINED_WINDOW).await;
+    let source = fixture.drive_source(SUSTAINED_WINDOW).await;
+
+    let rate = measured.rate();
+    let source_rate = source.rate();
+    let headroom = if rate > 0.0 { source_rate / rate } else { 0.0 };
+    let percentiles = measured.latency_percentiles();
+    println!(
+        "\n=== Evidence sustained throughput ===\n\
+         host                  : {} logical cores\n\
+         offered concurrency   : {SUSTAINED_CONCURRENCY} in flight, {} principals\n\
+         measured window       : {:.1}s after a {:.1}s warm-up\n\
+         \n\
+         requests released     : {} in {:.2}s\n\
+         achieved rate         : {rate:.0} rps ({:.0} audit appends/s)\n\
+         target                : {SUSTAINED_TARGET_RPS:.0} rps\n\
+         non-2xx and failures  : {} ({})\n\
+         \n\
+         latency p50           : {:.2} ms\n\
+         latency p95           : {:.2} ms\n\
+         latency p99           : {:.2} ms\n\
+         \n\
+         constant source rate  : {source_rate:.0} rps standalone, {} non-2xx and failures\n\
+         source headroom       : {headroom:.1}x over Evidence (validity floor {SUSTAINED_SOURCE_HEADROOM:.1}x)\n\
+         =====================================\n",
+        std::thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get),
+        SUSTAINED_CONCURRENCY,
+        SUSTAINED_WINDOW.as_secs_f64(),
+        SUSTAINED_WARMUP.as_secs_f64(),
+        measured.released(),
+        measured.elapsed.as_secs_f64(),
+        rate * 2.0,
+        measured.unexpected(),
+        measured.failure_summary(),
+        percentiles.0.as_secs_f64() * 1000.0,
+        percentiles.1.as_secs_f64() * 1000.0,
+        percentiles.2.as_secs_f64() * 1000.0,
+        source.unexpected(),
+    );
+
+    assert_eq!(
+        measured.unexpected(),
+        0,
+        "sustained load must not shed requests; observed {}",
+        measured.failure_summary()
+    );
+    assert_eq!(
+        source.unexpected(),
+        0,
+        "the constant source probe must not shed requests; observed {}",
+        source.failure_summary()
+    );
+    assert!(
+        headroom >= SUSTAINED_SOURCE_HEADROOM,
+        "INCONCLUSIVE: the constant source sustained {source_rate:.0} rps against Evidence at \
+         {rate:.0} rps, only {headroom:.1}x. Below {SUSTAINED_SOURCE_HEADROOM:.1}x the harness is \
+         part of what was measured, so this run is neither a pass nor a failure"
+    );
+    assert!(
+        rate >= SUSTAINED_TARGET_RPS,
+        "sustained {rate:.0} rps, below the {SUSTAINED_TARGET_RPS:.0} rps target"
+    );
+
+    // Both audit appends are on the request's critical path, so a released
+    // assertion that skipped one would be a silently cheaper request.
+    let released = warmup.released() + measured.released();
+    let audit = fixture.shutdown().await;
+    assert_eq!(
+        audit.matches("\"phase\":\"access-attempt\"").count(),
+        released,
+        "one access-attempt record per released assertion"
+    );
+    assert_eq!(
+        audit.matches("\"phase\":\"disclosure-release\"").count(),
+        released,
+        "one disclosure-release record per released assertion"
+    );
 }

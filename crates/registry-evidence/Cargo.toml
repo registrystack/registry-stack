@@ -58,7 +58,12 @@ zeroize.workspace = true
 [dev-dependencies]
 assert-json-diff.workspace = true
 axum-test.workspace = true
+criterion.workspace = true
 rcgen.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true
+
+[[bench]]
+name = "audit_bench"
+harness = false

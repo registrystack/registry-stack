@@ -264,8 +264,13 @@ fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &Te
         .expect("test signature was just found");
     let prefix = &source[..item_start];
     let attribute_window = &prefix[prefix.len().saturating_sub(160)..];
+    // The parenthesized form is a test item too. A concurrency invariant can
+    // only be proven by a test that actually runs on several threads, so
+    // `#[tokio::test(flavor = "multi_thread", ...)]` has to be traceable.
     assert!(
-        attribute_window.contains("#[test]") || attribute_window.contains("#[tokio::test]"),
+        attribute_window.contains("#[test]")
+            || attribute_window.contains("#[tokio::test]")
+            || attribute_window.contains("#[tokio::test("),
         "{entry_id} reference {} is not a test item",
         test.name
     );

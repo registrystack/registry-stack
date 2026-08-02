@@ -147,11 +147,11 @@ pub struct EvidenceRuntime {
     runtime_revision: String,
     authenticator: Authenticator,
     sources: BTreeMap<String, SourceExecutor>,
-    audit: EvidenceAuditLog,
+    audit: Arc<EvidenceAuditLog>,
     signer: EvidenceSigner,
     jwks: JwksDocument,
     subject_binding_secret: ProtectedSecret,
-    rate_limiter: EvidenceRateLimiter,
+    rate_limiter: Arc<EvidenceRateLimiter>,
 }
 
 impl std::fmt::Debug for EvidenceRuntime {
@@ -277,6 +277,7 @@ impl EvidenceRuntime {
             .map_err(|_| RuntimeInitializationError::RateLimit)?,
         })
         .map_err(|_| RuntimeInitializationError::RateLimit)?;
+        let rate_limiter = Arc::new(rate_limiter);
 
         Ok(Self {
             kernel,
@@ -285,7 +286,7 @@ impl EvidenceRuntime {
             authenticator: authenticator_override
                 .unwrap_or_else(|| Authenticator::from_config(&bundle.config.authentication)),
             sources,
-            audit,
+            audit: Arc::new(audit),
             signer,
             jwks,
             subject_binding_secret,
@@ -307,6 +308,25 @@ impl EvidenceRuntime {
 
     pub fn jwks(&self) -> &JwksDocument {
         &self.jwks
+    }
+
+    /// The rate limiter whose tracked-key count backs the
+    /// `evidence_rate_limiter_tracked_keys` gauge on the metrics listener.
+    ///
+    /// Returned as a shared handle, independent of this runtime's own
+    /// lifetime, so the metrics listener can hold it and sample it fresh on
+    /// every scrape.
+    pub(crate) fn rate_limiter(&self) -> Arc<EvidenceRateLimiter> {
+        Arc::clone(&self.rate_limiter)
+    }
+
+    /// The audit chain, for the capacity gauge.
+    ///
+    /// Shared for the same reason as the rate limiter: the metrics listener
+    /// samples the chain's on-disk footprint at scrape time rather than
+    /// caching a value taken at startup.
+    pub(crate) fn audit(&self) -> Arc<EvidenceAuditLog> {
+        Arc::clone(&self.audit)
     }
 
     #[cfg(test)]

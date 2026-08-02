@@ -15,6 +15,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
+    audit::{verify_audit_chain, AuditChainSummary, EvidenceAuditError},
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
     config::{ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
     kernel::{
@@ -44,6 +45,7 @@ use registry_evidence::{
         VerificationError,
     },
 };
+use registry_platform_audit::{AuditHashSecret, OptionalHashHex};
 use registry_platform_crypto::{parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value};
@@ -106,6 +108,13 @@ enum Command {
         #[arg(long)]
         at: Option<String>,
     },
+    /// Run a full out-of-band verification pass over the audit chain.
+    ///
+    /// Startup verification is deliberately bounded to the active segment, so
+    /// restart time does not grow with retained history; tampering inside an
+    /// already sealed segment is not caught there. This is the counterpart
+    /// check that catches it, meant to run out of band.
+    VerifyAudit,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -235,6 +244,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 at.as_deref(),
             )?)
         }
+        Command::VerifyAudit => run_verify_audit(&cli.runtime),
     }
 }
 
@@ -415,9 +425,21 @@ struct ExpectedOutputDocument {
 }
 
 /// The closed expected value-form vocabulary, as written in a policy document.
+///
+/// The two alternatives are untagged because the policy schema writes a scalar
+/// form as a plain string and the list form as a mapping under `list`. An
+/// externally tagged enum would instead demand the YAML tag `!list`, which no
+/// relying party writing to the published schema would ever produce.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectedFormDocument {
+    Scalar(ExpectedScalarFormDocument),
+    List(ExpectedListFormDocument),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum ExpectedFormDocument {
+enum ExpectedScalarFormDocument {
     Boolean,
     Integer,
     String,
@@ -425,7 +447,12 @@ enum ExpectedFormDocument {
     TimeBucket,
     EntityReference,
     Structured,
-    List(ExpectedListDocument),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpectedListFormDocument {
+    list: ExpectedListDocument,
 }
 
 #[derive(Debug, Deserialize)]
@@ -473,16 +500,30 @@ impl VerificationPolicyDocument {
 
 fn expected_value_form(document: ExpectedFormDocument) -> ExpectedValueForm {
     match document {
-        ExpectedFormDocument::Boolean => ExpectedValueForm::Boolean,
-        ExpectedFormDocument::Integer => ExpectedValueForm::Integer,
-        ExpectedFormDocument::String => ExpectedValueForm::String,
-        ExpectedFormDocument::DateBucket => ExpectedValueForm::DateBucket,
-        ExpectedFormDocument::TimeBucket => ExpectedValueForm::TimeBucket,
-        ExpectedFormDocument::EntityReference => ExpectedValueForm::EntityReference,
-        ExpectedFormDocument::Structured => ExpectedValueForm::Structured,
-        ExpectedFormDocument::List(bounds) => ExpectedValueForm::List {
-            minimum_items: bounds.minimum_items,
-            maximum_items: bounds.maximum_items,
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => {
+            ExpectedValueForm::Boolean
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => {
+            ExpectedValueForm::Integer
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => {
+            ExpectedValueForm::String
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
+            ExpectedValueForm::DateBucket
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::TimeBucket) => {
+            ExpectedValueForm::TimeBucket
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::EntityReference) => {
+            ExpectedValueForm::EntityReference
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Structured) => {
+            ExpectedValueForm::Structured
+        }
+        ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
+            minimum_items: wrapper.list.minimum_items,
+            maximum_items: wrapper.list.maximum_items,
         },
     }
 }
@@ -607,6 +648,98 @@ fn verification_error_class(error: VerificationError) -> CliError {
         VerificationError::Disclosure => {
             CliError("stored response verification failed (disclosure)")
         }
+    }
+}
+
+/// Run a full out-of-band audit verification pass for the deployment named by
+/// one closed operator runtime file.
+///
+/// The audit storage path and hash secret are read from the same runtime
+/// document and secret provider the serving process uses; this command takes
+/// no path or secret flags of its own, so it can never be pointed at an audit
+/// chain the deployment does not own.
+fn run_verify_audit(runtime_path: &Path) -> Result<ExitCode, CommandError> {
+    let deployment = DeploymentInputs::load(runtime_path).map_err(deployment_load_error)?;
+    let secrets = SecretResolver::new(
+        [SecretProvider::File],
+        &deployment.runtime.config.secret_providers.file.root,
+    )
+    .map_err(|_| CliError("audit verification secret resolver failed"))?;
+    let audit_secret = secrets
+        .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
+        .map_err(|_| CliError("audit verification secret resolution failed"))?;
+    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
+        .map_err(|_| CliError("audit verification secret is invalid"))?;
+    verify_audit_with_secret(
+        Path::new(&deployment.runtime.config.audit_storage.path),
+        &master_secret,
+    )
+}
+
+/// Verify one audit chain and print the operator report.
+///
+/// Split from [`run_verify_audit`] so the report and the failure
+/// classification can be exercised directly against a constructed chain,
+/// without a full deployment bundle and runtime document on disk.
+fn verify_audit_with_secret(
+    audit_path: &Path,
+    master_secret: &AuditHashSecret,
+) -> Result<ExitCode, CommandError> {
+    match verify_audit_chain(audit_path, master_secret) {
+        Ok(summary) => {
+            println!("{}", audit_chain_report(&summary));
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            let (detail, class) = audit_verification_failure(error);
+            println!("{detail}");
+            Err(CommandError::Cli(class))
+        }
+    }
+}
+
+/// Render an out-of-band audit verification result for an operator.
+///
+/// The head hash and the segment and record counts carry no request content,
+/// so they are safe to print; nothing secret-derived beyond the chain head
+/// appears here. When the active segment could not be verified, the report
+/// says so plainly rather than reading as a pass of the whole chain.
+fn audit_chain_report(summary: &AuditChainSummary) -> String {
+    let sealed_sequence = match (summary.first_sequence, summary.last_sequence) {
+        (Some(first), Some(last)) => format!("{first}-{last}"),
+        _ => "none".to_owned(),
+    };
+    let active_segment = if summary.active_verified {
+        "verified".to_owned()
+    } else {
+        "not verified: a running writer holds it, so only sealed history was proven".to_owned()
+    };
+    format!(
+        "segments: {}\nrecords: {}\nsealed-sequence: {sealed_sequence}\nhead: {}\nactive-segment: {active_segment}",
+        summary.segments,
+        summary.records,
+        OptionalHashHex(summary.head),
+    )
+}
+
+/// Classify an audit verification failure for the operator report and exit.
+///
+/// A gap in the sealed sequence is archived-or-missing history, not a hash
+/// break, so it is reported in those terms and kept distinguishable from
+/// every other verification failure, which is corruption.
+fn audit_verification_failure(error: EvidenceAuditError) -> (String, CliError) {
+    match error {
+        EvidenceAuditError::SegmentMissing { sequence } => (
+            format!(
+                "sealed segment {sequence} is archived or missing from the chain; \
+                 this is not corruption"
+            ),
+            CliError("audit chain is missing sealed history"),
+        ),
+        _ => (
+            "audit chain verification failed".to_owned(),
+            CliError("audit chain verification failed"),
+        ),
     }
 }
 
@@ -2392,7 +2525,82 @@ fn safe_fixture_name(path: &Path) -> Result<&str, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_evidence::audit::{
+        audit_segment_paths, AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
+        AuthorityKind, EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
+    };
     use std::fs;
+
+    /// Every expected form the published policy schema accepts must parse the
+    /// way that schema writes it. The list form is a mapping under `list`, not
+    /// a YAML tag, and it is the only form a list-valued concept can state.
+    #[test]
+    fn policy_documents_parse_every_expected_form_as_the_contract_writes_it() {
+        for (written, expected) in [
+            ("boolean", ExpectedValueForm::Boolean),
+            ("integer", ExpectedValueForm::Integer),
+            ("string", ExpectedValueForm::String),
+            ("date-bucket", ExpectedValueForm::DateBucket),
+            ("time-bucket", ExpectedValueForm::TimeBucket),
+            ("entity-reference", ExpectedValueForm::EntityReference),
+            ("structured", ExpectedValueForm::Structured),
+            (
+                "{list: {minimumItems: 1, maximumItems: 2}}",
+                ExpectedValueForm::List {
+                    minimum_items: 1,
+                    maximum_items: 2,
+                },
+            ),
+        ] {
+            let document = verification_policy_document(&format!("form: {written}"));
+            let policy: VerificationPolicyDocument = serde_norway::from_str(&document)
+                .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
+            assert_eq!(
+                policy.into_policy(Utc::now()).expected_outputs[0].form,
+                expected,
+                "`{written}` parsed as a different form"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_documents_reject_forms_outside_the_closed_vocabulary() {
+        for written in [
+            "list",
+            "{list: {minimumItems: 1}}",
+            "{list: {minimumItems: 1, maximumItems: 2, extra: 3}}",
+            "{set: {minimumItems: 1, maximumItems: 2}}",
+            "date_bucket",
+        ] {
+            let document = verification_policy_document(&format!("form: {written}"));
+            assert!(
+                serde_norway::from_str::<VerificationPolicyDocument>(&document).is_err(),
+                "`{written}` is not a policy form but parsed as one"
+            );
+        }
+    }
+
+    /// One complete policy document whose single expected output states `form`.
+    fn verification_policy_document(form: &str) -> String {
+        format!(
+            "issuedBy: urn:example:issuer\n\
+             providedBy: urn:example:provider\n\
+             requirement: urn:example:requirement:v1\n\
+             evidenceType: urn:example:evidence-type:v1\n\
+             purpose: example-purpose\n\
+             audience: https://relying-party.example\n\
+             configurationRevision: sha256:0\n\
+             requestNonce: example-nonce\n\
+             expectedSubjects:\n\
+             \x20 - {{role: subject, binding: urn:evidence:subject:v1_{binding}}}\n\
+             expectedOutputs:\n\
+             \x20 - concept: urn:example:concept\n\
+             \x20   {form}\n\
+             maximumAssertionLifetimeSeconds: 86400\n\
+             clockSkewSeconds: 30\n",
+            binding = "A".repeat(43),
+        )
+    }
 
     #[test]
     fn fixture_paths_never_escape_the_captured_bundle() {
@@ -2650,6 +2858,191 @@ mod tests {
             .map(|_| ()),
             Err(CliError("source plan compilation failed"))
         );
+    }
+
+    fn test_audit_secret() -> AuditHashSecret {
+        AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
+            .expect("audit secret builds")
+    }
+
+    fn test_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
+        EvidenceAuditEvent::new(
+            "01K1EXAMPLE0000000000000000".to_owned(),
+            AuditPhase::AccessAttempt,
+            "urn:example:requirement:v1".to_owned(),
+            format!("sha256:{}", "0".repeat(64)),
+            "casework".to_owned(),
+            log.pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
+                .expect("pseudonym builds"),
+            AuditAuthority {
+                kind: AuthorityKind::Statutory,
+                grant_pseudonym: None,
+            },
+            vec![AuditSubject {
+                role: "subject".to_owned(),
+                selector_profile: "person-v1".to_owned(),
+                selector_bundle_pseudonym: Some(
+                    log.pseudonym("subject-v1", "casework", b"selector-canary")
+                        .expect("pseudonym builds"),
+                ),
+            }],
+            ResponseProtection::Signed,
+            AuditDecision::Authorized,
+            5,
+        )
+    }
+
+    /// Change one byte of a record without changing its length, so the
+    /// record no longer matches the hash the chain recorded for it.
+    fn corrupt_audit_line(line: &str) -> String {
+        let mut bytes = line.as_bytes().to_vec();
+        for byte in bytes.iter_mut() {
+            if byte.is_ascii_lowercase() {
+                *byte = if *byte == b'z' { b'y' } else { *byte + 1 };
+                break;
+            }
+        }
+        String::from_utf8(bytes).expect("a corrupted record stays UTF-8")
+    }
+
+    #[tokio::test]
+    async fn verify_audit_reports_a_clean_multi_segment_chain() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        {
+            let log = EvidenceAuditLog::initialize(
+                &path,
+                2048,
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+                1,
+            )
+            .await
+            .expect("audit initializes");
+            for _ in 0..48 {
+                log.append(test_audit_event(&log))
+                    .await
+                    .expect("event appends");
+            }
+        }
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        assert!(
+            segments.len() >= 4,
+            "the fixture needs several sealed segments plus the active one"
+        );
+
+        let secret = test_audit_secret();
+        let summary =
+            verify_audit_chain(&path, &secret).expect("a clean multi-segment chain verifies");
+        assert_eq!(summary.records, 48);
+        assert_eq!(summary.segments, segments.len());
+        assert!(summary.active_verified);
+        assert_eq!(summary.first_sequence, Some(1));
+
+        assert!(verify_audit_with_secret(&path, &secret).is_ok());
+    }
+
+    /// Startup verification only replays the active segment; this pins the
+    /// counterpart it exists for: corruption planted in an already sealed
+    /// segment passes startup and is only caught by the out-of-band verifier.
+    #[tokio::test]
+    async fn verify_audit_fails_on_sealed_segment_corruption() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        {
+            let log = EvidenceAuditLog::initialize(
+                &path,
+                4096,
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+                1,
+            )
+            .await
+            .expect("audit initializes");
+            for _ in 0..24 {
+                log.append(test_audit_event(&log))
+                    .await
+                    .expect("event appends");
+            }
+        }
+
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        let oldest_sealed = segments[0].clone();
+        let contents = fs::read_to_string(&oldest_sealed).expect("sealed segment reads");
+        let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+        assert!(
+            lines.len() > 1,
+            "the corrupted record must not be the sealed tail"
+        );
+        lines[0] = corrupt_audit_line(&lines[0]);
+        let mut rewritten = lines.join("\n");
+        rewritten.push('\n');
+        fs::write(&oldest_sealed, rewritten).expect("segment rewrites");
+
+        let restarted = EvidenceAuditLog::initialize(
+            &path,
+            4096,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("startup does not replay sealed history");
+        assert!(restarted.ready().await);
+        drop(restarted);
+
+        assert!(
+            verify_audit_with_secret(&path, &test_audit_secret()).is_err(),
+            "the out-of-band verifier must catch sealed-segment corruption"
+        );
+    }
+
+    /// A gap in sealed history is an operator archiving a segment, not
+    /// tampering, so it must be reported by sequence rather than folded into
+    /// the generic corruption message.
+    #[tokio::test]
+    async fn verify_audit_reports_an_archived_segment_as_missing_not_corrupt() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        {
+            let log = EvidenceAuditLog::initialize(
+                &path,
+                2048,
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+                1,
+            )
+            .await
+            .expect("audit initializes");
+            for _ in 0..48 {
+                log.append(test_audit_event(&log))
+                    .await
+                    .expect("event appends");
+            }
+        }
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        assert!(
+            segments.len() >= 4,
+            "the fixture needs a sealed segment that is neither first nor last"
+        );
+        fs::remove_file(&segments[1]).expect("a middle segment is archived away");
+
+        let error = verify_audit_chain(&path, &test_audit_secret())
+            .expect_err("a gap in sealed history must fail verification");
+        let sequence = match &error {
+            EvidenceAuditError::SegmentMissing { sequence } => *sequence,
+            other => panic!("expected a missing-segment error, got {other:?}"),
+        };
+        assert_eq!(sequence, 2);
+
+        let (detail, _) = audit_verification_failure(error);
+        assert!(
+            detail.contains(&format!("segment {sequence}"))
+                && detail.contains("archived or missing"),
+            "the report must name the sequence and describe archival: {detail}"
+        );
+        assert!(
+            detail.contains("not corruption"),
+            "the report must state plainly that this is not corruption: {detail}"
+        );
+
+        assert!(verify_audit_with_secret(&path, &test_audit_secret()).is_err());
     }
 
     #[cfg(unix)]
