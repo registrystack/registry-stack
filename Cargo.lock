@@ -5447,6 +5447,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-oidc",
+ "reqwest 0.12.28",
  "rustix",
  "serde",
  "serde_json",

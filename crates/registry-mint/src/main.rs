@@ -1,10 +1,17 @@
 //! The `mint` binary.
 //!
-//! Two subcommands: `check` validates a deployment without opening a socket,
-//! and `serve` runs the token endpoint. `SIGHUP` reloads the client registry in
+//! Three subcommands. `check` validates a deployment without opening a socket
+//! and `serve` runs the token endpoint; `SIGHUP` reloads the client registry in
 //! place so onboarding a caller never restarts the service.
+//!
+//! `token` is the odd one out: it is a *caller* tool, not an operator one. It
+//! reads no server configuration and never touches Mint's signing key. It signs
+//! a client assertion with the caller's own key and presents it to a running
+//! token endpoint, which then decides on its own terms. Obtaining a token still
+//! requires authenticating, in the CLI exactly as over the wire.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
@@ -12,9 +19,13 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use registry_mint::{
+    caller::{sign_client_assertion, AssertionRequest},
     config::MintConfig,
+    secretfile,
     server::{serve, MintService},
+    CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
+use serde_json::Value;
 
 #[derive(Debug, Parser)]
 #[command(name = "mint", about = "Registry Stack token issuer", version)]
@@ -35,18 +46,66 @@ enum Command {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
+    /// Obtain an access token from a running token endpoint, as a client would.
+    ///
+    /// This authenticates. It signs a client assertion with the caller's own
+    /// key and posts it; the endpoint decides. Nothing here can produce a token
+    /// the same request over the wire would not have produced.
+    Token {
+        /// The token endpoint, for example `https://mint.example.org/token`.
+        #[arg(long)]
+        url: String,
+        /// The `clientId` this caller is registered under.
+        #[arg(long)]
+        client_id: String,
+        /// The caller's private JWK. Must be owner-only and not a symlink.
+        #[arg(long)]
+        key: PathBuf,
+        /// The endpoint's configured `clientAssertion.audience`. Defaults to
+        /// `--url`, which is the usual configuration.
+        #[arg(long)]
+        audience: Option<String>,
+        /// Request a delegated token for this actor. Requires `--subject-file`.
+        #[arg(long)]
+        actor: Option<String>,
+        /// A JSON object of subject selector fields, for the actor to act for.
+        ///
+        /// A file rather than repeated flags on purpose: these are a real
+        /// person's identifying details, and command lines are visible to every
+        /// process on the host and land in shell history.
+        #[arg(long)]
+        subject_file: Option<PathBuf>,
+        /// Assertion lifetime in seconds.
+        #[arg(long, default_value_t = 120)]
+        lifetime_seconds: i64,
+        /// Trust this PEM certificate bundle in addition to the system roots,
+        /// for a development deployment behind a private CA.
+        #[arg(long)]
+        ca_certificate: Option<PathBuf>,
+        /// Print the full endpoint response instead of the access token alone.
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
+    let cli = Cli::parse();
+
+    // `token` writes the access token to stdout and nothing else, so its
+    // diagnostics go to stderr and the caller can pipe the token straight into
+    // whatever needs it. The services keep structured logs on stdout.
+    let logs = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .json()
-        .init();
+        .json();
+    if matches!(cli.command, Command::Token { .. }) {
+        logs.with_writer(std::io::stderr).init();
+    } else {
+        logs.init();
+    }
 
-    let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -84,7 +143,129 @@ fn run(cli: Cli) -> Result<(), String> {
                     .map_err(|error| format!("the listener failed: {error}"))
             })
         }
+        Command::Token {
+            url,
+            client_id,
+            key,
+            audience,
+            actor,
+            subject_file,
+            lifetime_seconds,
+            ca_certificate,
+            verbose,
+        } => {
+            // The caller's key gets the same file guarantees as Mint's own:
+            // a regular file, owned by this user, unreadable by anyone else,
+            // and reached without traversing a symlink.
+            let key = secretfile::read_owner_only(&key)
+                .map_err(|error| format!("the client key could not be read: {error}"))?;
+            let key = registry_platform_crypto::PrivateJwk::parse(&key)
+                .map_err(|error| format!("the client key is not a usable private JWK: {error}"))?;
+
+            let subject = subject_file.as_deref().map(read_subject).transpose()?;
+            let assertion = sign_client_assertion(
+                &key,
+                &AssertionRequest {
+                    client_id: &client_id,
+                    audience: audience.as_deref().unwrap_or(&url),
+                    lifetime_seconds,
+                    actor: actor.as_deref(),
+                    subject,
+                },
+                now_seconds()?,
+            )
+            .map_err(|error| format!("the client assertion could not be built: {error}"))?;
+
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("the async runtime could not start: {error}"))?;
+            let response =
+                runtime.block_on(request_token(&url, &assertion, ca_certificate.as_deref()))?;
+
+            if verbose {
+                println!("{response}");
+            } else {
+                let token = response
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "the endpoint returned no access token".to_owned())?;
+                println!("{token}");
+            }
+            Ok(())
+        }
     }
+}
+
+/// Read the delegation subject: a flat JSON object of selector fields.
+fn read_subject(path: &Path) -> Result<BTreeMap<String, Value>, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("the subject file could not be read: {error}"))?;
+    let subject: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("the subject file is not JSON: {error}"))?;
+    let Value::Object(fields) = subject else {
+        return Err("the subject file must hold a JSON object of selector fields".to_owned());
+    };
+    // Selector values are scalars. Rejecting anything else here names the
+    // problem, where the endpoint could only answer `invalid_client`.
+    for (name, value) in &fields {
+        if value.is_object() || value.is_array() || value.is_null() {
+            return Err(format!("the subject field `{name}` must be a scalar value"));
+        }
+    }
+    Ok(fields.into_iter().collect())
+}
+
+async fn request_token(
+    url: &str,
+    assertion: &str,
+    ca_certificate: Option<&Path>,
+) -> Result<Value, String> {
+    let mut client = reqwest::Client::builder();
+    if let Some(path) = ca_certificate {
+        let pem = std::fs::read(path)
+            .map_err(|error| format!("the CA certificate could not be read: {error}"))?;
+        for certificate in reqwest::Certificate::from_pem_bundle(&pem)
+            .map_err(|error| format!("the CA certificate could not be parsed: {error}"))?
+        {
+            client = client.add_root_certificate(certificate);
+        }
+    }
+    let client = client
+        .build()
+        .map_err(|error| format!("the HTTP client could not be built: {error}"))?;
+
+    let response = client
+        .post(url)
+        .form(&[
+            ("grant_type", GRANT_TYPE_CLIENT_CREDENTIALS),
+            ("client_assertion_type", CLIENT_ASSERTION_TYPE),
+            ("client_assertion", assertion),
+        ])
+        .send()
+        .await
+        .map_err(|error| format!("the token request failed: {error}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("the token response could not be read: {error}"))?;
+    if !status.is_success() {
+        // OAuth error bodies name the failure and carry no token, so echoing
+        // one is the useful thing to do.
+        return Err(format!(
+            "the endpoint refused the request ({status}): {body}"
+        ));
+    }
+    serde_json::from_str(&body).map_err(|error| format!("the token response is not JSON: {error}"))
+}
+
+fn now_seconds() -> Result<i64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .map_err(|_| "the system clock is before the Unix epoch".to_owned())
 }
 
 fn load(config: &Path) -> Result<MintService, String> {

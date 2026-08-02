@@ -229,6 +229,50 @@ socket.
 Mint serves plain HTTP and expects to sit behind TLS termination it does not
 manage.
 
+## Getting a token in development
+
+```bash
+mint token --url https://mint.example.org/token \
+  --client-id scheduler --key ./dev/scheduler.jwk
+```
+
+It prints the access token on stdout and nothing else, so `TOKEN=$(mint token
+...)` is the whole usage. Diagnostics go to stderr; `--verbose` prints the
+endpoint's full response instead.
+
+This is a *client* tool. It signs a client assertion with the caller's own key
+and presents it to a running endpoint, exactly as an adopter's client library
+would. It reads no server configuration and never touches Mint's signing key.
+There is deliberately no subcommand that signs an access token directly: that
+would be a way to obtain authority without authenticating, inside the binary
+whose purpose is to make authority depend on authentication. Anything `mint
+token` can obtain, the same client could have obtained over the wire.
+
+The key file gets the same treatment as Mint's own signing key: a regular file,
+owned by you, unreadable by group and other, reached without traversing a
+symlink.
+
+For a delegated token:
+
+```bash
+mint token --url https://mint.example.org/token \
+  --client-id scheduler --key ./dev/scheduler.jwk \
+  --actor urn:example:agent:appointment-scheduler \
+  --subject-file ./dev/subject.json
+```
+
+`--subject-file` holds a flat JSON object of selector fields
+(`{"given_name": "Amara", "birth_date": "1998-04-02"}`). It is a file rather
+than repeated flags because those are a real person's identifying details, and
+command lines are visible to every process on the host and land in shell
+history.
+
+Two more flags matter in development. `--audience` overrides the assertion
+audience, which defaults to `--url`; they differ when the endpoint is reached
+over loopback but configured with its public URL. `--ca-certificate` trusts a
+PEM bundle in addition to the system roots, for a deployment behind a private
+CA.
+
 ## Verify a change
 
 ```bash
@@ -241,3 +285,6 @@ token to Evidence's own authenticator. `tests/delegated_subject_binding.rs`
 does the same for delegation, running Evidence's own entitlement match and
 selector resolution over a token from the real Mint router. The dependency runs
 one way only. Evidence does not depend on Mint.
+
+`tests/token_cli.rs` runs `mint token` against a real `mint serve` as two
+processes, which is the only place the stdout contract can be observed.

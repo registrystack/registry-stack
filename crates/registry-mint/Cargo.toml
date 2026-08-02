@@ -25,6 +25,7 @@ jsonwebtoken.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-oidc.workspace = true
+reqwest.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true

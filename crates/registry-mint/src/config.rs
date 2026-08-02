@@ -153,13 +153,25 @@ impl ClaimNames {
         if unique.len() != names.len() {
             return Err(ConfigError::Invalid("claim names must be distinct"));
         }
-        // These are written by Mint itself and must not be overridable.
+        // These are written by Mint itself and must not be overridable. Minting
+        // writes the registered claims last, so any of these reused as a claim
+        // name would silently replace what Mint decided with what the registry
+        // did: an `aud` shadow yields a token whose audience is the principal
+        // and which still verifies.
         for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
-            if names.iter().skip(1).any(|name| *name == reserved) {
+            if names.contains(&reserved) {
                 return Err(ConfigError::Invalid(
                     "authority claim names must not shadow registered JWT claims",
                 ));
             }
+        }
+        // `sub` is the exception. It always carries the principal, so naming
+        // the principal claim `sub` rewrites the same value and is the default;
+        // any other claim named `sub` would replace the principal.
+        if names.iter().skip(1).any(|name| *name == "sub") {
+            return Err(ConfigError::Invalid(
+                "authority claim names must not shadow registered JWT claims",
+            ));
         }
         Ok(())
     }
@@ -446,6 +458,49 @@ clients:
                 load_error(&text),
                 ConfigError::Invalid("authority claim names must not shadow registered JWT claims"),
                 "claim {reserved} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn the_principal_claim_is_bound_by_the_same_rule_as_the_others() {
+        // Minting writes the registered claims after the JWT ones, so a
+        // principal named for a reserved claim would overwrite it. `aud` is the
+        // one that matters most: the token would carry the principal as its
+        // audience and still verify.
+        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
+            let text = VALID.replace("principal: sub", &format!("principal: {reserved}"));
+            assert_eq!(
+                load_error(&text),
+                ConfigError::Invalid("authority claim names must not shadow registered JWT claims"),
+                "principal {reserved} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_principal_may_be_named_sub() {
+        // `sub` always carries the principal, so naming the principal claim
+        // `sub` is the default and merely rewrites the same value.
+        load_from(VALID).expect("principal may be named sub");
+
+        // Any other claim named `sub` would replace the principal with its own
+        // value, which for requester tags is not even a string. The principal
+        // moves off `sub` first, so this is the shadowing rule answering rather
+        // than the distinctness rule.
+        let renamed = VALID.replace("principal: sub", "principal: evidence_principal");
+        for field in [
+            "requesterTags: evidence_tags",
+            "evidenceAudience: evidence_audience",
+            "grantId: evidence_grant_id",
+            "grantAuthority: evidence_authority",
+        ] {
+            let name = field.split(':').next().expect("a claim field name");
+            let text = renamed.replace(field, &format!("{name}: sub"));
+            assert_eq!(
+                load_error(&text),
+                ConfigError::Invalid("authority claim names must not shadow registered JWT claims"),
+                "{name} must not be named sub"
             );
         }
     }

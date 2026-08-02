@@ -16,6 +16,11 @@ Registry Manifest describes sources portably; Relay is its consumer in code
 (Notary does not depend on the manifest crates). `registry-platform-*` crates
 are shared primitives. `registryctl` is adopter tooling.
 
+Registry Mint is a supporting service, not a fourth pattern: it issues the
+access tokens a resource server such as Evidence verifies, for deployments with
+no identity provider. The dependency runs one way only. Mint's tests drive
+Evidence's authenticator; Evidence does not depend on Mint.
+
 ## Repository map
 
 | Area | Owns |
@@ -23,6 +28,7 @@ are shared primitives. `registryctl` is adopter tooling.
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-notary*` | Evidence gateway: server, core, client, source adapters, worker harness (Notary) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
+| `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives: audit, authcommon, cache, config, crypto, httpsec, httputil, oid4vci, oidc, ops, pdp, replay, sdjwt, sts, testing |
 | `crates/registryctl` | Adopter tooling |

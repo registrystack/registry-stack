@@ -38,6 +38,7 @@ compile_error!(
 );
 
 pub mod assertion;
+pub mod caller;
 pub mod clients;
 pub mod config;
 pub mod error;
