@@ -2,6 +2,7 @@
 members = [
     "crates/registry-config-report",
     "crates/registry-evidence",
+    "crates/registry-evidencectl",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-cache",

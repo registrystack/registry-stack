@@ -1,0 +1,39 @@
+# One registered caller, and the whole authorization decision Mint makes for it.
+#
+# Mint loads `*.yaml` from this directory, so this file is ignored until it is
+# renamed to `{{mint_client_id}}.yaml`. Rename it once the key below is real: a
+# registration is public data, and the scaffold has no caller key to put here.
+#
+# Authority is read from this file, never from what the caller signs. The caller
+# proves which entry it is; this entry decides what may be said about it.
+clientId: {{mint_client_id}}
+
+# The principal Evidence records for every request this caller makes.
+principal: {{mint_client_principal}}
+
+# The audience minted into the evidence this caller receives. Evidence parses it
+# as a URL and mixes it into subject binding, so it identifies the caller rather
+# than the deployment.
+evidenceAudience: {{mint_client_audience}}
+
+# These must match an authority profile in `bundle/evidence.yaml`. A caller
+# whose tags match no profile authenticates and is then refused everything.
+requesterTags: [{{requester_tag}}]
+
+# Optional, and minted only for a caller acting under a recorded authority.
+# Evidence reads the pair from the grant claims the bundle names, and requires
+# both members or neither.
+# grant:
+#   id: urn:example:scaffold:grant:1
+#   authority: urn:example:scaffold:authority:1
+
+# Public JWKs only, at most eight, each with a distinct kid. Replace `x` with
+# the public half of the caller's key, from
+# {{mint_caller_secret_root}}/signing-ed25519-public.jwk.json.
+# A document carrying a private member is refused.
+keys:
+  - kty: OKP
+    crv: Ed25519
+    kid: {{mint_client_key_id}}
+    alg: EdDSA
+    x: replace-with-the-caller-public-key

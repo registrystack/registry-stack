@@ -42,7 +42,7 @@ SHARDS = {
         "xtask",
     ),
     "relay": ("registry-relay",),
-    "evidence": ("registry-evidence",),
+    "evidence": ("registry-evidence", "registry-evidencectl"),
     "mint": ("registry-mint",),
     "developer-tools": (
         "registry-config-report",

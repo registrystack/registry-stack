@@ -1,0 +1,136 @@
+# Synthetic acceptance cases for the requirement. `evidence evaluate` replays
+# every case offline against the reviewed adapter, derivation and output gate,
+# so no source and no network are involved.
+#
+# The bundle is rejected unless the case identifiers cover every required
+# category: `positive`, `no-match`, `source-failure`, `anti-reconstruction`,
+# and at least one identifier each starting with `negative`, `boundary`,
+# `missing` and `ambiguous`.
+fixture: registry.evidence.scaffold.example-flag/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  legal_local_date: '2026-08-02'
+  selectors:
+    subject:
+      profile: subject-lookup-v1
+      # Synthetic identifiers only. These are asserted to be absent from
+      # diagnostics at the end of this file, so keep them distinctive.
+      values:
+        record_reference: RCD-000123
+        registry_code: RGC-07
+
+cases:
+  # A resolved record past the threshold produces a signed true.
+  - id: positive
+    source:
+      total: 1
+      event_date: '2000-01-01'
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  # A resolved record short of the threshold produces a signed false. A
+  # negative answer is a successful answer, not an error.
+  - id: negative-false-is-success
+    source:
+      total: 1
+      event_date: '2010-01-01'
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  - id: boundary-before
+    legal_local_date: '2026-08-01'
+    source:
+      total: 1
+      event_date: '2008-08-02'
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  - id: boundary-on
+    legal_local_date: '2026-08-02'
+    source:
+      total: 1
+      event_date: '2008-08-02'
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  - id: boundary-after
+    legal_local_date: '2026-08-03'
+    source:
+      total: 1
+      event_date: '2008-08-02'
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  - id: boundary-leap-day
+    legal_local_date: '2026-02-28'
+    source:
+      total: 1
+      event_date: '2008-02-29'
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  # One record resolved, but the fact the derivation requires is absent. The
+  # requester learns only that evidence is not available.
+  - id: missing-fact
+    source:
+      total: 1
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  - id: no-match
+    source:
+      total: 0
+    expected_lookup: no_match
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  - id: ambiguous
+    source:
+      total: 2
+    expected_lookup: ambiguous
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  # A source that never answers is a dependency problem, never a negative.
+  - id: source-failure
+    source_failure: timeout
+    expected_public_problem: dependency_unavailable
+    signed_success: false
+
+  # The output gate rejects a derivation result whose type contradicts the
+  # declared concept form, so a script defect cannot become signed evidence.
+  - id: negative-wrong-derived-type
+    injected_derivation:
+      - concept_id: '{{concept_id}}'
+        value: 'true'
+    expected: output-gate-rejection
+
+  # Two requirements that share a disclosure family could be combined to
+  # reconstruct the underlying value, so such a bundle must not load.
+  - id: anti-reconstruction
+    companion_bundle: threshold-ladder
+    expected: bundle-rejection
+
+# What the signed assertion must and must not carry.
+privacy_expectation:
+  evidence_contains: ['{{concept_id}}']
+  evidence_excludes: [event_date, record_reference, registry_code, selector-profile]
+  diagnostics_exclude: [RCD-000123, RGC-07, '2000-01-01']

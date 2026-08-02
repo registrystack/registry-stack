@@ -1,0 +1,176 @@
+# Governed Evidence deployment bundle.
+#
+# This file and every artifact it references are reviewed together and mounted
+# read-only. Nothing here is environment specific: process-local paths, the
+# listener, the secret root and audit storage live in runtime.yaml instead.
+#
+# The single requirement below is a deliberately abstract placeholder. It
+# answers one boolean question, whether a recorded event date is at least a
+# reviewed number of years in the past, and it exists to show the mechanics.
+# Replace it with the question your jurisdiction actually governs.
+version: 1
+
+service:
+  providerId: {{provider_id}}
+  trustDomain: {{trust_domain}}
+
+issuer:
+  id: {{issuer_id}}
+
+{{authentication_note}}
+authentication:
+  kind: oidc-access-token
+  issuer: {{token_issuer}}
+  audiences: [{{token_audience}}]
+  tokenTypes: [at+jwt]
+  algorithms: [{{token_algorithm}}]
+  jwksUri: {{token_jwks_uri}}
+  principalClaim: {{principal_claim}}
+  requesterTagsClaim: {{requester_tags_claim}}
+  evidenceAudienceClaim: {{evidence_audience_claim}}
+  grantIdClaim: {{grant_id_claim}}
+  grantAuthorityClaim: {{grant_authority_claim}}
+
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+  failClosed: true
+
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+
+signing:
+  format: flattened-jws-json
+  algorithm: EdDSA
+  activeKeyId: {{signing_key_id}}
+  activeKeyRef: secret:file/signing-ed25519-private-jwk
+  retiredPublicJwkFiles: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 86400
+  verifierClockSkewSeconds: 30
+
+responseFormats: [signed-jws]
+
+# A selector profile is the closed set of fields a requester may send to
+# identify a subject. Nothing outside a profile can reach a source.
+selectorProfiles:
+  subject-lookup-v1:
+    maximumAggregateBytes: 420
+    # One entry per field a requester may send. Replace these two with the
+    # identifiers your subjects are actually looked up by, and keep the byte
+    # bounds as tight as those identifiers allow.
+    fields:
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 200
+      registry_code:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+
+# One generic JSON over HTTP source. Point baseUrl and path at the system that
+# already holds the data, and keep the projection as narrow as the derivation
+# needs: anything outside the projection is discarded before extraction runs.
+sources:
+  source-a:
+    transport: http-json
+    # Replace with the origin of the system that holds the data. The path below
+    # is appended to it.
+    baseUrl: https://source.invalid
+    posture: field-projected
+    # The bearer token is read from the runtime secret root, never from this
+    # file. Name the secret file here and put its bytes there.
+    authentication:
+      kind: static-bearer
+      tokenRef: secret:file/source-bearer-token
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders:
+        - name: Accept
+          value: application/json
+      # Which selector profile fields reach this source, and in which role.
+      # Add an alternative for each accepted combination of fields.
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - profile: subject-lookup-v1
+              fields: [record_reference, registry_code]
+      prepareScript: adapters/source-a-prepare.rhai
+      # Reviewed constants the prepare script may read. They are validated
+      # against the schema below, so change the two together.
+      adapterParameters:
+        requestedFields: [event_date]
+        resultLimit: 2
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits:
+        query: forbidden
+        jsonBody: required
+        maximumJsonDepth: 8
+        maximumCollectionItems: 16
+        maximumStringBytes: 256
+        maximumNormalizedBytes: 4096
+      projection: [/total, /event_date]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    extractScript: adapters/source-a-extract.rhai
+    factSchema: schemas/facts.schema.yaml
+
+# An authority profile says which authenticated requesters may ask for which
+# requirement, for which purpose, about which subject roles.
+authorityProfiles:
+  statutory-caseworker-v1:
+    kind: statutory
+    requesterTags: [{{requester_tag}}]
+    grants:
+      - requirement: {{requirement_id}}
+        purpose: scaffold-eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: subject-lookup-v1
+            valueOrigin: request
+
+requirements:
+  - id: {{requirement_id}}
+    kind: criterion
+    source: source-a
+    purposes: [scaffold-eligibility]
+    subjectRoles:
+      - role: subject
+        cardinality: one
+        selectorProfiles: [subject-lookup-v1]
+    referenceFrameworks: [{{framework_id}}]
+    evidenceType: {{evidence_type_id}}
+    observationTimezone: UTC
+    validitySeconds: 86400
+    derivation:
+      script: derivations/example-flag.rhai
+      # Reviewed inputs to the script above. The script may read these and
+      # nothing else from this file.
+      parameters:
+        threshold_years: 18
+    # What the signed assertion carries. One boolean here is the whole
+    # disclosure: add a concept only when the answer genuinely needs it.
+    concepts:
+      - id: {{concept_id}}
+        form: boolean
+        required: true
+        constraints: {}
+    fixtures: fixtures/cases.yaml
+    # Requirements sharing a family could be combined to reconstruct the value
+    # behind them, so a bundle that allows the combination is refused at load.
+    disclosureGuard:
+      families: [{{disclosure_family_id}}]
+    existenceDisclosure: collapse-unresolved

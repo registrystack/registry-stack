@@ -1,0 +1,10 @@
+# Closed schema for the reviewed adapter parameters of source-a. Constants keep
+# the request shape under review rather than under operator control.
+type: object
+additionalProperties: false
+required: [requestedFields, resultLimit]
+properties:
+  requestedFields:
+    const: [event_date]
+  resultLimit:
+    const: 2

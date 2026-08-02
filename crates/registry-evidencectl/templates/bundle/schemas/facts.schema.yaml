@@ -1,0 +1,9 @@
+# Closed schema for the facts extraction may hand to the derivation. Extraction
+# output that does not match exactly is rejected before any derivation runs.
+type: object
+additionalProperties: false
+required: [event_date]
+properties:
+  event_date:
+    type: string
+    format: date

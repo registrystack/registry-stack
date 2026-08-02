@@ -5395,6 +5395,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidencectl"
+version = "0.16.3"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-language-server"
 version = "0.16.3"
 dependencies = [

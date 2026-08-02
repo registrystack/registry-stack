@@ -1,0 +1,4 @@
+# Key material, audit records and local output never belong in version control.
+secrets/
+audit/
+out/
