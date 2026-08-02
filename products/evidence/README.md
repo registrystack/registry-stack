@@ -73,6 +73,19 @@ smoke documentation. Production Rust, Cargo metadata, public configuration,
 routes, CLI options, and generated public contracts must remain source-product
 neutral.
 
+## Adopter tooling
+
+`evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
+beside the runtime, like `registryctl` for the rest of the stack. It sits
+outside the frozen Version 1 runtime contract: it generates signing, holder,
+and HMAC key material, assembles public JWKS documents, scaffolds a neutral
+deployment project that passes `evidence check` and `evidence evaluate`
+without edits after one keygen pass, and drives fixture runs. It shells out to
+the `evidence` binary for every Evidence semantic decision and never
+re-implements evaluation, signing, or verification. It must not depend on
+`registry-notary*`, and its source and scaffold templates are covered by the
+same source-product and domain neutrality checks as the runtime.
+
 ## Discovering available evidence
 
 An authenticated caller lists the complete Evidence request shapes it can
@@ -147,9 +160,9 @@ From the monorepo root, the Evidence-specific reproducible gate is:
 
 ```sh
 cargo fmt --check
-cargo check --locked -p registry-evidence --all-targets
-cargo test --locked -p registry-evidence
-cargo clippy --locked -p registry-evidence --all-targets -- -D warnings
+cargo check --locked -p registry-evidence -p registry-evidencectl --all-targets
+cargo test --locked -p registry-evidence -p registry-evidencectl
+cargo clippy --locked -p registry-evidence -p registry-evidencectl --all-targets -- -D warnings
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
 ```

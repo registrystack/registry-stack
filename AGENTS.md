@@ -28,6 +28,7 @@ Evidence's authenticator; Evidence does not depend on Mint.
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-notary*` | Evidence gateway: server, core, client, source adapters, worker harness (Notary) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
+| `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, project scaffolds, fixture runs |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives: audit, authcommon, cache, config, crypto, httpsec, httputil, oid4vci, oidc, ops, pdp, replay, sdjwt, sts, testing |
@@ -47,10 +48,19 @@ subsystems. Evidence serializes the same stateless assertion as an SD-JWT VC
 response format under its own frozen profile; that is a second encoding of one
 response, never a credential lifecycle.
 
-The implementation is one `registry-evidence` crate and one `evidence` binary.
-It may reuse narrowly applicable `registry-platform-*`
+The runtime implementation is one `registry-evidence` crate and one `evidence`
+binary. It may reuse narrowly applicable `registry-platform-*`
 primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
 and testing. It must not depend on `registry-notary*`.
+
+`registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
+like `registryctl` is for the rest of the stack. It sits outside the frozen
+Version 1 runtime contract: it generates key material and deployment-project
+scaffolds and drives fixture runs, but it shells out to the `evidence` binary
+for every Evidence semantic decision and never re-implements evaluation,
+signing, or verification. It must not depend on `registry-notary*`, and its
+source and scaffold templates are covered by the same source-product and
+domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,
