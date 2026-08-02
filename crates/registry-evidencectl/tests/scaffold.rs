@@ -42,6 +42,29 @@ fn a_mint_paired_project_passes_check_and_every_fixture() {
     passes_check_and_every_fixture(&project);
 }
 
+/// The scaffolded source authenticates with a bearer token the source system
+/// issues and nothing here generates. `check` and every fixture pass without
+/// it, and the service starts without it, so a reader who follows only the
+/// printed steps first discovers it missing at the first live request. The
+/// printed steps must name it, as the generated README already does.
+#[test]
+fn the_printed_next_steps_name_the_source_bearer_token() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let outcome = evidencectl(&["new", project.to_str().expect("project path")]);
+    assert!(
+        outcome.status.success(),
+        "evidencectl new failed: {}",
+        String::from_utf8_lossy(&outcome.stderr)
+    );
+
+    let printed = String::from_utf8_lossy(&outcome.stdout);
+    assert!(
+        printed.contains("source-bearer-token"),
+        "the printed next steps never mention the source bearer token:\n{printed}"
+    );
+}
+
 fn passes_check_and_every_fixture(project: &Path) {
     provision_secrets(project);
     let fixtures = scaffolded_fixtures(project);

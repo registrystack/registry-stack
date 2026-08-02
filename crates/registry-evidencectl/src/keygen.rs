@@ -199,8 +199,7 @@ fn run_keypair(
 fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
     reject_existing(&[&args.out], args.force)?;
 
-    let mut secret = Zeroizing::new([0_u8; SECRET_FILE_BYTES]);
-    getrandom::fill(secret.as_mut_slice()).context("failed to generate random key material")?;
+    let secret = generate_secret()?;
 
     if let Some(parent) = args
         .out
@@ -214,6 +213,24 @@ fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
     println!("wrote {}", args.out.display());
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Draws `SECRET_FILE_BYTES` uniformly at random, rejecting any draw that
+/// contains a NUL byte.
+///
+/// The Evidence runtime refuses a file-provided secret containing NUL, which a
+/// uniform 32-byte draw carries about 11.8% of the time. Rejection sampling
+/// keeps the value uniform over the accepted set (255^32, or 255.8 bits) and
+/// keeps a scaffolded project working the first time, instead of failing at
+/// `evidence serve` long after `evidence check` passed.
+fn generate_secret() -> Result<Zeroizing<[u8; SECRET_FILE_BYTES]>> {
+    let mut secret = Zeroizing::new([0_u8; SECRET_FILE_BYTES]);
+    loop {
+        getrandom::fill(secret.as_mut_slice()).context("failed to generate random key material")?;
+        if !secret.contains(&0) {
+            return Ok(secret);
+        }
+    }
 }
 
 /// Default kid: the RFC 7638 thumbprint of the public key.
