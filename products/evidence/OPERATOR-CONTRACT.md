@@ -534,6 +534,16 @@ operator must not route it through a public ingress or a shared scrape network.
 Request rates per route and per problem code are operational information about
 the registry even though no individual request is described.
 
+The accepted address range is therefore a floor, not a boundary. Startup
+rejects the mistake that actually exposes telemetry, a public or unspecified
+`bindHost`, but an accepted RFC 1918 or unique-local address only means the
+endpoint is unreachable from the public internet. On a flat pod network or a
+shared VPC every workload already holds such an address, so binding one there
+makes the endpoint scrapable by every neighbouring workload. `127.0.0.1` with
+a same-pod or same-host collector is the shape that keeps the operator
+boundary the operator intended; any wider binding must be closed by a network
+policy, and the operator owns that control.
+
 The series describe the HTTP boundary only. Version 1 publishes no source-call,
 signing, credential-acquisition, or audit-sink series. A slow or failing
 upstream source is visible only as evidence-request duration and as the problem
