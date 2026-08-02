@@ -117,7 +117,7 @@ The governed file is `bundle/evidence.yaml`.
 | `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced file contains at least 32 raw secret bytes. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
 | `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: EdDSA`, `activeKeyId`, file-only `activeKeyRef`, `retiredPublicJwkFiles`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Missing signing material fails readiness; there is no unsigned fallback. |
-| `responseFormats` | Closed unique list of 1 or 2 entries drawn from `signed-jws` and `unsigned-json`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Unsigned output additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
+| `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
 
 ### Selector profiles
 
@@ -146,10 +146,11 @@ An authority profile has a `kind` of `statutory`, `organizational`, `consent`,
 Each grant binds one exact `requirement`, `purpose`,
 `audienceFrom: authenticated-requester`, an optional `responseFormats` list,
 and the complete subject-role set. A grant's `responseFormats` follows the same
-closed rule as the bundle-level list: 1 or 2 unique entries that must include
-`signed-jws`, defaulting to `[signed-jws]` when omitted. Unsigned output
-requires both the bundle and the one complete matched grant to permit it, so a
-production grant that says nothing permits only signed JWS.
+closed rule as the bundle-level list: 1 through 3 unique entries that must
+include `signed-jws`, defaulting to `[signed-jws]` when omitted. Unsigned output
+and the SD-JWT VC serialization each require both the bundle and the one
+complete matched grant to permit them, so a production grant that says nothing
+permits only signed JWS.
 Every grant subject fixes `role`, `selectorProfile`, and one `valueOrigin`:
 
 - `request` requires values in the closed public request and prohibits

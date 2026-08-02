@@ -44,6 +44,8 @@ const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 /// Shape of the server-minted operation identifier, shared by the response
 /// header and the problem member so the two cannot describe different values.
 const OPERATION_PATTERN: &str = "^[0-9A-HJKMNP-TV-Z]{26}$";
+/// Unpadded base64url encoding of exactly one 32-byte Ed25519 public key.
+const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
     ("malformed_request", 400, "Request is not valid"),
     ("invalid_selector", 400, "Request is not valid"),
@@ -281,7 +283,8 @@ fn request_schema() -> Value {
             "subjects": {
                 "type": "array", "minItems": 1, "maxItems": 8,
                 "items": {"$ref": "#/$defs/subject"}
-            }
+            },
+            "holderKey": {"$ref": "#/$defs/holder-key"}
         },
         "$defs": {
             "subject": {
@@ -310,9 +313,20 @@ fn request_schema() -> Value {
                     {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64},
                     {"type": "boolean"}
                 ]
+            },
+            "holder-key": {
+                "type": "object", "additionalProperties": false,
+                "required": ["kty", "crv", "x"],
+                "properties": {
+                    "kty": {"type": "string", "enum": ["OKP"]},
+                    "crv": {"type": "string", "enum": ["Ed25519"]},
+                    "x": {"type": "string", "pattern": HOLDER_KEY_COORDINATE_PATTERN},
+                    "alg": {"type": "string", "enum": ["EdDSA"]},
+                    "kid": {"type": "string", "minLength": 1, "maxLength": 256}
+                }
             }
         },
-        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it."
+        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKey is meaningful only for the SD-JWT VC response format, where it is echoed into the cnf claim; it never reaches authorization, selectors, Rhai, source requests, or audit, and a key carrying any private member is rejected before credential acquisition or source access."
     })
 }
 
@@ -865,6 +879,7 @@ fn openapi_document(
             ("subject", "EvidenceRequestSubject"),
             ("selector", "EvidenceRequestSelector"),
             ("scalar-selector-value", "SelectorValue"),
+            ("holder-key", "HolderPublicKey"),
         ],
     );
     insert_schema_family(
@@ -940,6 +955,26 @@ fn openapi_document(
         &[("ed25519-public-jwk", "Ed25519PublicJwk")],
     );
     schemas.insert(
+        "SdJwtVcCredential".to_string(),
+        json!({
+            "type": "string",
+            "description": "Compact SD-JWT VC: the issuer-signed JWT, then one tilde-separated disclosure per supported value, then a trailing tilde marking an absent key-binding JWT. The issuer never appends a key-binding JWT.",
+            "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(~[A-Za-z0-9_-]+)*~$"
+        }),
+    );
+    schemas.insert(
+        "JwtVcIssuerMetadata".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["issuer", "jwks"],
+            "properties": {
+                "issuer": {"type": "string", "maxLength": 512},
+                "jwks": {"$ref": "#/components/schemas/JwksDocument"}
+            }
+        }),
+    );
+    schemas.insert(
         "HealthStatus".to_string(),
         json!({
             "type": "object", "additionalProperties": false,
@@ -968,7 +1003,7 @@ fn openapi_document(
                 "post": {
                     "operationId": "createEvidence",
                     "summary": "Produce evidence for one authorized fixed requirement",
-                    "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
+                    "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only the exact application/dc+sd-jwt media type selects the SD-JWT VC serialization of the same assertion; each is released only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
                     "security": [{"bearerAuth": []}],
                     "requestBody": {
                         "required": true,
@@ -976,10 +1011,11 @@ fn openapi_document(
                     },
                     "responses": {
                         "200": {
-                            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized self-identifying unsigned envelope",
+                            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized SD-JWT VC serialization or self-identifying unsigned envelope",
                             "headers": evidence_response_headers(None),
                             "content": {
                                 "application/jose+json": {"schema": {"$ref": "#/components/schemas/FlattenedJws"}},
+                                "application/dc+sd-jwt": {"schema": {"$ref": "#/components/schemas/SdJwtVcCredential"}},
                                 "application/vnd.registrystack.evidence-unsigned+json": {"schema": {"$ref": "#/components/schemas/UnsignedEvidenceEnvelope"}}
                             }
                         },
@@ -1122,6 +1158,18 @@ fn openapi_document(
                         "content": {"application/jwk-set+json": {"schema": {"$ref": "#/components/schemas/JwksDocument"}}}
                     }}
                 }
+            },
+            "/.well-known/jwt-vc-issuer": {
+                "get": {
+                    "operationId": "getJwtVcIssuerMetadata",
+                    "summary": "Publish JWT VC Issuer Metadata for the SD-JWT VC response format",
+                    "description": "Discovery is not a trust anchor. The document republishes the same public keys under the provider identity the assertion names, and resolution is meaningful only when that identity is the HTTPS origin of the deployment.",
+                    "responses": {"200": {
+                        "description": "Provider identity and public verification keys",
+                        "headers": response_headers(None),
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JwtVcIssuerMetadata"}}}
+                    }}
+                }
             }
         },
         "components": {
@@ -1210,6 +1258,7 @@ mod tests {
             paths.keys().map(String::as_str).collect::<Vec<_>>(),
             [
                 "/.well-known/evidence/jwks.json",
+                "/.well-known/jwt-vc-issuer",
                 "/health",
                 "/openapi.json",
                 "/ready",
@@ -1236,6 +1285,11 @@ mod tests {
                 ["application/vnd.registrystack.evidence-unsigned+json"]
                 .is_object()
         );
+        assert!(
+            document["paths"]["/v1/evidence"]["post"]["responses"]["200"]["content"]
+                ["application/dc+sd-jwt"]
+                .is_object()
+        );
         assert_eq!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["406"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
@@ -1259,6 +1313,11 @@ mod tests {
         assert!(
             document["paths"]["/.well-known/evidence/jwks.json"]["get"]["responses"]["200"]
                 ["content"]["application/jwk-set+json"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/.well-known/jwt-vc-issuer"]["get"]["responses"]["200"]["content"]
+                ["application/json"]
                 .is_object()
         );
         assert_eq!(

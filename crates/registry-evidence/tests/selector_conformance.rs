@@ -1179,6 +1179,7 @@ fn request(requirement: &str, subjects: Vec<RequestedSubject>) -> EvidenceReques
         requirement: requirement.to_owned(),
         purpose: PURPOSE.to_owned(),
         subjects,
+        holder_key: None,
     }
 }
 

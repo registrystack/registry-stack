@@ -68,14 +68,15 @@ $defs:
   uri: {type: string, format: uri, maxLength: 512}
   response-formats:
     # Closed enabled response formats. Signed flattened JWS is mandatory and
-    # remains the default; the unsigned format must be enabled by the bundle
-    # and permitted by the complete matched grant. Omission means signed only.
+    # remains the default; the unsigned and SD-JWT VC formats must each be
+    # enabled by the bundle and permitted by the complete matched grant.
+    # Omission means signed only.
     type: array
     minItems: 1
-    maxItems: 2
+    maxItems: 3
     uniqueItems: true
     contains: {const: signed-jws}
-    items: {enum: [signed-jws, unsigned-json]}
+    items: {enum: [signed-jws, unsigned-json, sd-jwt-vc]}
   secret-ref:
     {type: string, pattern: '^secret:file/[a-z][a-z0-9._-]{0,127}$'}
   relative-path: {type: string, pattern: '^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$'}

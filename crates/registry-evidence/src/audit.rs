@@ -50,6 +50,15 @@ pub enum AuditDecision {
 pub enum ResponseProtection {
     Signed,
     Unsigned,
+    SdJwtVc,
+}
+
+impl ResponseProtection {
+    /// Report whether release under this mode is cryptographically protected
+    /// and therefore records the signing key identifier.
+    pub fn is_signed(self) -> bool {
+        matches!(self, Self::Signed | Self::SdJwtVc)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -160,9 +169,10 @@ impl EvidenceAuditEvent {
         {
             return Err(EvidenceAuditError::InvalidEvent);
         }
-        // A signing key identity exists exactly for signed disclosure release.
-        let signing_key_required = self.phase == AuditPhase::DisclosureRelease
-            && self.response_protection == ResponseProtection::Signed;
+        // A signing key identity exists exactly for cryptographically
+        // protected disclosure release.
+        let signing_key_required =
+            self.phase == AuditPhase::DisclosureRelease && self.response_protection.is_signed();
         if self.signing_key_id.is_some() != signing_key_required {
             return Err(EvidenceAuditError::InvalidEvent);
         }

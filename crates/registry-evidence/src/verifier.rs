@@ -1,23 +1,36 @@
-//! Strict verifier for the Evidence Version 1 flattened JWS profile.
+//! Strict verifier for the Evidence Version 1 flattened JWS profile and for
+//! the SD-JWT VC profile that projects the same payload.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use registry_platform_crypto::{parse_json_strict, verify, PublicJwk, SigningAlgorithm};
 use serde::Deserialize;
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
     contracts::evidence_contract_accepts,
     model::{Evidence, FlattenedJws, JwksDocument},
-    EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
+    sdjwt_vc::evidence_payload_from_claims,
+    EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1, EVIDENCE_SD_JWT_VC_TYP,
 };
 
 const MAX_JWS_BYTES: usize = 256 * 1024;
 const MAX_PROTECTED_BYTES: usize = 8 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
 const MAX_TRUSTED_KEYS: usize = 33;
+/// One disclosure per Supported Value, bounded well above the largest
+/// requirement a Version 1 bundle can declare.
+const MAX_DISCLOSURES: usize = 64;
+const MAX_DISCLOSURE_BYTES: usize = 8 * 1024;
+const MINIMUM_SALT_BYTES: usize = 16;
+const MAXIMUM_SALT_BYTES: usize = 64;
 
 /// Complete relying-procedure expectations for strict verification.
 ///
@@ -173,6 +186,8 @@ pub enum VerificationError {
     Policy,
     #[error("Evidence payload is outside its validity interval")]
     Time,
+    #[error("SD-JWT VC disclosures do not match the signed digests")]
+    Disclosure,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +197,16 @@ struct ProtectedHeader {
     kid: String,
     typ: String,
     cty: String,
+}
+
+/// The SD-JWT VC header carries no `cty`: the credential type travels in the
+/// signed `vct` claim.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SdJwtHeader {
+    alg: String,
+    kid: String,
+    typ: String,
 }
 
 /// Strict one-call verification: cryptographic authenticity, every policy
@@ -258,6 +283,223 @@ pub fn verify_flattened_jws_report(
         evidence,
         currently_valid,
     })
+}
+
+/// Strict one-call verification of an issued SD-JWT VC: cryptographic
+/// authenticity, complete disclosure resolution, every policy expectation, and
+/// current validity must all hold.
+pub fn verify_sd_jwt_vc(
+    serialized: &[u8],
+    trusted_jwks: &JwksDocument,
+    policy: &EvidenceVerificationPolicy,
+) -> Result<Evidence, VerificationError> {
+    let report = verify_sd_jwt_vc_report(serialized, trusted_jwks, policy)?;
+    if !report.currently_valid {
+        return Err(VerificationError::Time);
+    }
+    Ok(report.evidence)
+}
+
+/// Verify an issued SD-JWT VC against a pinned trusted key set and the
+/// complete independent policy, reporting cryptographic authenticity
+/// separately from current validity.
+///
+/// Version 1 issues only complete credentials, so verification requires every
+/// signed digest to be resolved by exactly one presented disclosure. A holder
+/// presenting a subset is out of scope for the issuance profile, and the
+/// relying procedure's expected output contract would reject it in any case.
+/// A key-binding JWT is never accepted here: the serialization must end with
+/// the trailing tilde that marks its absence.
+pub fn verify_sd_jwt_vc_report(
+    serialized: &[u8],
+    trusted_jwks: &JwksDocument,
+    policy: &EvidenceVerificationPolicy,
+) -> Result<VerificationReport, VerificationError> {
+    if serialized.is_empty() || serialized.len() > MAX_JWS_BYTES {
+        return Err(VerificationError::MalformedJws);
+    }
+    let serialized =
+        std::str::from_utf8(serialized).map_err(|_| VerificationError::MalformedJws)?;
+    let body = serialized
+        .strip_suffix('~')
+        .ok_or(VerificationError::MalformedJws)?;
+    let mut segments = body.split('~');
+    let jwt = segments.next().ok_or(VerificationError::MalformedJws)?;
+    let encoded_disclosures: Vec<&str> = segments.collect();
+    if encoded_disclosures.len() > MAX_DISCLOSURES
+        || encoded_disclosures.iter().any(|value| value.is_empty())
+    {
+        return Err(VerificationError::MalformedJws);
+    }
+
+    let mut parts = jwt.split('.');
+    let (Some(encoded_header), Some(encoded_payload), Some(encoded_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(VerificationError::MalformedJws);
+    };
+
+    let header_bytes = decode_bounded(
+        encoded_header,
+        MAX_PROTECTED_BYTES,
+        VerificationError::ProtectedHeader,
+    )?;
+    let header_strict =
+        parse_json_strict(&header_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
+    let header: SdJwtHeader =
+        serde_json::from_value(header_strict).map_err(|_| VerificationError::ProtectedHeader)?;
+    if header.alg != "EdDSA"
+        || header.typ != EVIDENCE_SD_JWT_VC_TYP
+        || header.kid.is_empty()
+        || header.kid.len() > 256
+        || header.kid.chars().any(char::is_control)
+    {
+        return Err(VerificationError::ProtectedHeader);
+    }
+
+    let keys = trusted_keys(trusted_jwks)?;
+    let key = keys.get(&header.kid).ok_or(VerificationError::Key)?;
+    if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+        return Err(VerificationError::Key);
+    }
+    let signature = decode_bounded(
+        encoded_signature,
+        MAX_PROTECTED_BYTES,
+        VerificationError::Signature,
+    )?;
+    let signing_input = [encoded_header.as_bytes(), b".", encoded_payload.as_bytes()].concat();
+    verify(&signing_input, &signature, key).map_err(|_| VerificationError::Signature)?;
+
+    // Parse and act on the payload only after signature verification.
+    let payload_bytes = decode_bounded(
+        encoded_payload,
+        MAX_PAYLOAD_BYTES,
+        VerificationError::Payload,
+    )?;
+    let payload_strict =
+        parse_json_strict(&payload_bytes).map_err(|_| VerificationError::Payload)?;
+    let Value::Object(mut claims) = payload_strict else {
+        return Err(VerificationError::Payload);
+    };
+
+    let digests = signed_digests(&mut claims)?;
+    let disclosed = resolve_disclosures(&encoded_disclosures, &digests, &claims)?;
+    if let Some(confirmation) = claims.remove("cnf") {
+        validate_confirmation(&confirmation)?;
+    }
+
+    let payload = evidence_payload_from_claims(&claims, &disclosed)
+        .map_err(|_| VerificationError::Payload)?;
+    if !evidence_contract_accepts(&payload).map_err(|_| VerificationError::Payload)? {
+        return Err(VerificationError::Payload);
+    }
+    let evidence: Evidence =
+        serde_json::from_value(payload).map_err(|_| VerificationError::Payload)?;
+    let currently_valid = validate_policy(&evidence, policy)?;
+    Ok(VerificationReport {
+        evidence,
+        currently_valid,
+    })
+}
+
+/// Take the signed digest set out of the claims. The set must be sorted and
+/// free of duplicates, matching the issuance profile exactly.
+fn signed_digests(claims: &mut Map<String, Value>) -> Result<Vec<String>, VerificationError> {
+    if claims
+        .remove("_sd_alg")
+        .and_then(|alg| alg.as_str().map(str::to_owned))
+        != Some("sha-256".to_string())
+    {
+        return Err(VerificationError::Disclosure);
+    }
+    let listed = claims
+        .remove("_sd")
+        .ok_or(VerificationError::Disclosure)?
+        .as_array()
+        .ok_or(VerificationError::Disclosure)?
+        .iter()
+        .map(|digest| digest.as_str().map(str::to_owned))
+        .collect::<Option<Vec<String>>>()
+        .ok_or(VerificationError::Disclosure)?;
+    if listed.len() > MAX_DISCLOSURES
+        || listed.windows(2).any(|pair| pair[0] >= pair[1])
+        || listed.iter().any(|digest| digest.len() != 43)
+    {
+        return Err(VerificationError::Disclosure);
+    }
+    Ok(listed)
+}
+
+/// Resolve every presented disclosure against the signed digests. Each digest
+/// must be claimed by exactly one disclosure, each disclosure must carry a
+/// distinct name, and no disclosure may shadow a public claim.
+fn resolve_disclosures(
+    encoded: &[&str],
+    digests: &[String],
+    claims: &Map<String, Value>,
+) -> Result<Vec<(String, Value)>, VerificationError> {
+    if encoded.len() != digests.len() {
+        return Err(VerificationError::Disclosure);
+    }
+    let signed: BTreeSet<&str> = digests.iter().map(String::as_str).collect();
+    let mut resolved = Vec::with_capacity(encoded.len());
+    let mut seen_digests = BTreeSet::new();
+    let mut seen_names = BTreeSet::new();
+    for disclosure in encoded {
+        if disclosure.len() > MAX_DISCLOSURE_BYTES {
+            return Err(VerificationError::Disclosure);
+        }
+        let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+        if !signed.contains(digest.as_str()) || !seen_digests.insert(digest) {
+            return Err(VerificationError::Disclosure);
+        }
+        let decoded = decode_bounded(
+            disclosure,
+            MAX_DISCLOSURE_BYTES,
+            VerificationError::Disclosure,
+        )?;
+        let strict = parse_json_strict(&decoded).map_err(|_| VerificationError::Disclosure)?;
+        let Value::Array(members) = strict else {
+            return Err(VerificationError::Disclosure);
+        };
+        let [salt, name, value] = members.as_slice() else {
+            return Err(VerificationError::Disclosure);
+        };
+        let salt = salt.as_str().ok_or(VerificationError::Disclosure)?;
+        let salt_bytes = URL_SAFE_NO_PAD
+            .decode(salt)
+            .map_err(|_| VerificationError::Disclosure)?;
+        if salt_bytes.len() < MINIMUM_SALT_BYTES || salt_bytes.len() > MAXIMUM_SALT_BYTES {
+            return Err(VerificationError::Disclosure);
+        }
+        let name = name.as_str().ok_or(VerificationError::Disclosure)?;
+        if claims.contains_key(name) || !seen_names.insert(name.to_owned()) {
+            return Err(VerificationError::Disclosure);
+        }
+        resolved.push((name.to_owned(), value.clone()));
+    }
+    Ok(resolved)
+}
+
+/// The confirmation, when present, carries exactly one Ed25519 public key and
+/// no private material.
+fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> {
+    let Some(members) = confirmation.as_object() else {
+        return Err(VerificationError::Payload);
+    };
+    if members.len() != 1 {
+        return Err(VerificationError::Payload);
+    }
+    let jwk = members.get("jwk").ok_or(VerificationError::Payload)?;
+    let key: PublicJwk =
+        serde_json::from_value(jwk.clone()).map_err(|_| VerificationError::Payload)?;
+    if key.kty != "OKP"
+        || key.crv.as_deref() != Some("Ed25519")
+        || key.algorithm().ok() != Some(SigningAlgorithm::EdDsa)
+    {
+        return Err(VerificationError::Payload);
+    }
+    Ok(())
 }
 
 fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, VerificationError> {
@@ -1114,6 +1356,311 @@ mod tests {
         assert_eq!(
             verify_flattened_jws(&jws, &excess, &policy),
             Err(VerificationError::Key)
+        );
+    }
+
+    /// Issue the fixture as an SD-JWT VC through the same signer, mapping, and
+    /// key set the runtime uses.
+    async fn issued_sd_jwt_vc() -> (String, JwksDocument, EvidenceVerificationPolicy) {
+        let evidence = fixture_evidence();
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(&evidence, None).expect("evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = policy_for(
+            &evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+        (serialized, jwks, policy)
+    }
+
+    async fn fixture_signer() -> EvidenceSigner {
+        let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
+        let provider: Arc<dyn SigningProvider> =
+            Arc::new(LocalJwkSigner::new(private).expect("signer builds"));
+        EvidenceSigner::initialize(provider, "evidence-key-1")
+            .await
+            .expect("signer initializes")
+    }
+
+    /// Split an issued serialization into its JWT and its disclosures.
+    fn split_sd_jwt(serialized: &str) -> (String, Vec<String>) {
+        let body = serialized.strip_suffix('~').expect("trailing tilde");
+        let mut segments = body.split('~');
+        let jwt = segments.next().expect("JWT segment").to_owned();
+        (jwt, segments.map(str::to_owned).collect())
+    }
+
+    fn join_sd_jwt(jwt: &str, disclosures: &[String]) -> String {
+        let mut serialized = jwt.to_owned();
+        for disclosure in disclosures {
+            serialized.push('~');
+            serialized.push_str(disclosure);
+        }
+        serialized.push('~');
+        serialized
+    }
+
+    fn encode_disclosure(salt: &str, name: &str, value: Value) -> String {
+        URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&json!([salt, name, value])).expect("disclosure serializes"))
+    }
+
+    /// Decode the signed JWT payload of an issued serialization.
+    fn sd_jwt_claims(jwt: &str) -> Map<String, Value> {
+        let encoded = jwt.split('.').nth(1).expect("payload segment");
+        let decoded = URL_SAFE_NO_PAD.decode(encoded).expect("payload decodes");
+        serde_json::from_slice(&decoded).expect("payload parses")
+    }
+
+    /// Re-encode a JWT with a replaced segment, keeping the original signature.
+    fn replace_segment(jwt: &str, index: usize, replacement: &str) -> String {
+        let mut parts: Vec<String> = jwt.split('.').map(str::to_owned).collect();
+        parts[index] = replacement.to_owned();
+        parts.join(".")
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_vc_round_trips_and_verifies_under_the_same_policy() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let evidence =
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy).expect("SD-JWT VC verifies");
+        // The rebuilt payload is the payload the signed JWS would carry.
+        assert_eq!(evidence, fixture_evidence());
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material() {
+        let evidence = fixture_evidence();
+        let signer = fixture_signer().await;
+        let holder = crate::model::HolderPublicKey {
+            kty: "OKP".to_owned(),
+            crv: "Ed25519".to_owned(),
+            x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
+            alg: Some("EdDSA".to_owned()),
+            kid: Some("holder-1".to_owned()),
+        };
+        let input =
+            crate::sdjwt_vc::issuance_input(&evidence, Some(&holder)).expect("evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = policy_for(
+            &evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+
+        let (jwt, _) = split_sd_jwt(&serialized);
+        let claims = sd_jwt_claims(&jwt);
+        assert_eq!(claims["cnf"]["jwk"]["x"], json!(holder.x));
+        assert!(claims["cnf"]["jwk"].get("d").is_none());
+        assert!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy).is_ok(),
+            "a confirmed credential still verifies"
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_disclosure_modification_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let original = URL_SAFE_NO_PAD
+            .decode(&disclosures[0])
+            .expect("disclosure decodes");
+        let members: Vec<Value> = serde_json::from_slice(&original).expect("disclosure parses");
+        let salt = members[0].as_str().expect("salt is a string");
+        let name = members[1].as_str().expect("name is a string");
+
+        let flipped = encode_disclosure(salt, name, json!(true));
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &[flipped]).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        let renamed = encode_disclosure(salt, "urn:example:other-concept", json!(false));
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &[renamed]).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        let unsalted = encode_disclosure("", name, json!(false));
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &[unsalted]).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_added_disclosure_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+
+        let mut extra = disclosures.clone();
+        extra.push(encode_disclosure(
+            "0123456789abcdef0123ab",
+            "urn:example:extra-concept",
+            json!(true),
+        ));
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &extra).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        // Presenting the same signed disclosure twice claims one digest twice.
+        let mut repeated = disclosures.clone();
+        repeated.push(disclosures[0].clone());
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &repeated).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_removed_digest_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, _) = split_sd_jwt(&serialized);
+
+        // Version 1 issues complete credentials, so an unresolved signed digest
+        // is a mutation rather than a selective presentation.
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &[]).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        // A stripped trailing tilde is not a valid issued serialization.
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.trim_end_matches('~').as_bytes(), &jwks, &policy),
+            Err(VerificationError::MalformedJws)
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_payload_modification_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let mut claims = sd_jwt_claims(&jwt);
+        claims.insert(
+            "audience".to_owned(),
+            json!("urn:example:other-relying-party"),
+        );
+        let replacement =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialize"));
+        let mutated = replace_segment(&jwt, 1, &replacement);
+
+        assert_eq!(
+            verify_sd_jwt_vc(
+                join_sd_jwt(&mutated, &disclosures).as_bytes(),
+                &jwks,
+                &policy
+            ),
+            Err(VerificationError::Signature)
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_protected_header_modification_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+
+        for header in [
+            json!({"alg": "none", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP}),
+            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": "JWT"}),
+            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP, "jwk": {"kty": "OKP"}}),
+        ] {
+            let replacement =
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
+            let mutated = replace_segment(&jwt, 0, &replacement);
+            assert_eq!(
+                verify_sd_jwt_vc(
+                    join_sd_jwt(&mutated, &disclosures).as_bytes(),
+                    &jwks,
+                    &policy
+                ),
+                Err(VerificationError::ProtectedHeader)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_unknown_kid_rejected() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let header = json!({
+            "alg": "EdDSA",
+            "kid": "some-other-key",
+            "typ": EVIDENCE_SD_JWT_VC_TYP
+        });
+        let replacement =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
+        let mutated = replace_segment(&jwt, 0, &replacement);
+
+        assert_eq!(
+            verify_sd_jwt_vc(
+                join_sd_jwt(&mutated, &disclosures).as_bytes(),
+                &jwks,
+                &policy
+            ),
+            Err(VerificationError::Key)
+        );
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_prohibited_claim_rejected() {
+        let signer = fixture_signer().await;
+        let evidence = fixture_evidence();
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = policy_for(
+            &evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+
+        for (name, value) in [
+            (
+                "status",
+                json!({"status_list": {"uri": "https://example.test/status"}}),
+            ),
+            ("aud", json!("urn:example:relying-party")),
+            ("nbf", json!(1_785_662_100_i64)),
+            ("selector", json!({"profile": "national-identifier"})),
+        ] {
+            let mut input =
+                crate::sdjwt_vc::issuance_input(&evidence, None).expect("evidence maps");
+            if name == "status" {
+                input.status = Some(value.clone());
+            } else {
+                input.public_claims.insert(name.to_owned(), value.clone());
+            }
+            let Ok(serialized) = signer.sign_sd_jwt_vc(input).await else {
+                // The issuer refuses reserved claim names outright, which is a
+                // stronger outcome than verifier rejection.
+                continue;
+            };
+            assert_eq!(
+                verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy),
+                Err(VerificationError::Payload),
+                "{name} must never be published"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_rejected_by_flattened_jws_verifier() {
+        let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
+        assert_eq!(
+            verify_flattened_jws(serialized.as_bytes(), &jwks, &policy),
+            Err(VerificationError::MalformedJws)
+        );
+
+        // The reverse also holds: a flattened JWS is not an SD-JWT VC.
+        let (jws, _, _) = signed_fixture().await;
+        assert_eq!(
+            verify_sd_jwt_vc(&jws, &jwks, &policy),
+            Err(VerificationError::MalformedJws)
         );
     }
 }

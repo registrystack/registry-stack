@@ -48,7 +48,7 @@ properties:
         role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
         selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
         selectorBundlePseudonym: {$ref: '#/$defs/pseudonym'}
-  responseProtection: {enum: [signed, unsigned]}
+  responseProtection: {enum: [signed, unsigned, sd-jwt-vc]}
   sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   decision:
@@ -78,14 +78,14 @@ allOf:
   - if:
       properties:
         phase: {const: disclosure-release}
-        responseProtection: {const: signed}
+        responseProtection: {enum: [signed, sd-jwt-vc]}
     then: {required: [signingKeyId]}
   - if: {properties: {responseProtection: {const: unsigned}}}
     then: {not: {required: [signingKeyId]}}
 audit_rules:
   access_gate: access-attempt is durably accepted after authorization and before credential acquisition or source access
   release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released
-  response_protection: every event records the closed non-secret responseProtection mode resolved with authorization; signingKeyId exists exactly for signed disclosure release and is forbidden for unsigned output
+  response_protection: every event records the closed non-secret responseProtection mode resolved with authorization; signingKeyId exists exactly for cryptographically protected disclosure release, which is the signed flattened JWS and the SD-JWT VC serialization, and is forbidden for unsigned output
   failure_policy: sink failure blocks the applicable step
   chain_verification: The complete keyed chain is verified at startup and after restart; steady-state appends and readiness verify the pinned file identity, modification fingerprint, expected length, and verified tail without rescanning the growing file.
   external_mutation: Any external replacement or modification fails readiness and future appends closed until a restart completes full keyed-chain verification.

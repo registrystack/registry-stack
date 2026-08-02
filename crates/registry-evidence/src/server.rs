@@ -39,11 +39,11 @@ use tokio::{net::TcpListener, sync::Semaphore};
 use crate::{
     config::{ListenerConfig, ResponseFormat},
     contracts::{request_contract_accepts, served_openapi_document},
-    model::{request_nonce_is_canonical, EvidenceRequest},
+    model::{request_nonce_is_canonical, EvidenceRequest, JwksDocument},
     observability::{self, operation_id, Metrics},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
-    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const EVIDENCE_ROUTE: &str = "/v1/evidence";
@@ -52,18 +52,20 @@ const HEALTH_ROUTE: &str = "/health";
 const OPENAPI_ROUTE: &str = "/openapi.json";
 const READY_ROUTE: &str = "/ready";
 const JWKS_ROUTE: &str = "/.well-known/evidence/jwks.json";
+const JWT_VC_ISSUER_ROUTE: &str = "/.well-known/jwt-vc-issuer";
 
 /// Every route template this listener registers.
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 6] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 7] = [
     EVIDENCE_ROUTE,
     DEFINITIONS_ROUTE,
     HEALTH_ROUTE,
     OPENAPI_ROUTE,
     READY_ROUTE,
     JWKS_ROUTE,
+    JWT_VC_ISSUER_ROUTE,
 ];
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -139,6 +141,7 @@ fn build_app_with_tracker_at(
         .route(OPENAPI_ROUTE, get(openapi))
         .route(READY_ROUTE, get(ready))
         .route(JWKS_ROUTE, get(jwks))
+        .route(JWT_VC_ISSUER_ROUTE, get(jwt_vc_issuer_metadata))
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(state);
@@ -445,8 +448,9 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
 
 /// Resolve the closed Version 1 `Accept` matrix. Missing, `*/*`, and the exact
 /// signed media type select signed JWS; only the exact unsigned vendor media
-/// type selects the unsigned envelope. Duplicate, combined, parameterized,
-/// weighted, or unknown negotiation is not acceptable.
+/// type selects the unsigned envelope, and only the exact SD-JWT VC media type
+/// selects that serialization. Duplicate, combined, parameterized, weighted, or
+/// unknown negotiation is not acceptable.
 fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
     let mut values = headers.get_all(ACCEPT).iter();
     let Some(value) = values.next() else {
@@ -461,6 +465,7 @@ fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, Proble
         value if value == EVIDENCE_UNSIGNED_MEDIA_TYPE.as_bytes() => {
             Ok(ResponseFormat::UnsignedJson)
         }
+        value if value == EVIDENCE_SD_JWT_VC_MEDIA_TYPE.as_bytes() => Ok(ResponseFormat::SdJwtVc),
         _ => Err(ProblemCode::ResponseFormatNotAcceptable),
     }
 }
@@ -554,6 +559,31 @@ async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> 
         Some(response) => response,
         None => problem_response(ProblemCode::ServiceUnavailable, &operation),
     }
+}
+
+/// JWT VC Issuer Metadata. Discovery is not a trust anchor: it republishes the
+/// same public keys under the provider identity the assertion already names.
+/// Resolution is meaningful only when that identity is the HTTPS origin of the
+/// deployment; a URN provider identity simply has no resolution path.
+async fn jwt_vc_issuer_metadata(
+    State(state): State<Arc<ServerState>>,
+    request: Request<Body>,
+) -> Response {
+    let operation = operation_id(request.extensions());
+    let metadata = JwtVcIssuerMetadata {
+        issuer: &state.runtime.bundle().config.service.provider_id,
+        jwks: state.runtime.jwks(),
+    };
+    match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &metadata) {
+        Some(response) => response,
+        None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+    }
+}
+
+#[derive(Serialize)]
+struct JwtVcIssuerMetadata<'a> {
+    issuer: &'a str,
+    jwks: &'a JwksDocument,
 }
 
 async fn unknown_route(request: Request<Body>) -> Response {

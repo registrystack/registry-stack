@@ -1,6 +1,44 @@
 {
-  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it.",
+  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKey is meaningful only for the SD-JWT VC response format, where it is echoed into the cnf claim; it never reaches authorization, selectors, Rhai, source requests, or audit, and a key carrying any private member is rejected before credential acquisition or source access.",
   "$defs": {
+    "holder-key": {
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "enum": [
+            "EdDSA"
+          ],
+          "type": "string"
+        },
+        "crv": {
+          "enum": [
+            "Ed25519"
+          ],
+          "type": "string"
+        },
+        "kid": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "kty": {
+          "enum": [
+            "OKP"
+          ],
+          "type": "string"
+        },
+        "x": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kty",
+        "crv",
+        "x"
+      ],
+      "type": "object"
+    },
     "scalar-selector-value": {
       "oneOf": [
         {
@@ -65,6 +103,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "holderKey": {
+      "$ref": "#/$defs/holder-key"
+    },
     "purpose": {
       "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
       "type": "string"

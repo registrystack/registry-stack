@@ -130,6 +130,7 @@ source_shapes:
 public_contracts:
   requests_and_payloads: golden/
   jws: jws-cases.yaml
+  sd_jwt_vc: sd-jwt-vc-cases.yaml
   audit: audit-events.yaml
   problems: ../../contracts/problem-contract.yaml
 security_negative_tests:

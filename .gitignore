@@ -19,3 +19,4 @@ __pycache__/
 # Evidence local operator material. Never commit credentials or curl artifacts.
 /products/evidence/.env
 /products/evidence/.first-curl/
+/products/evidence/.sd-jwt-vc-demo/

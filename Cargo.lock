@@ -5369,6 +5369,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-sdjwt",
  "reqwest 0.12.28",
  "rhai",
  "rustix",

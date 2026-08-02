@@ -321,6 +321,10 @@ fn serve_stops_on_sigterm_and_restarts_on_an_archived_audit_chain() {
 /// The staged verification key identifier, echoed by the protected header.
 const VERIFY_KEY_ID: &str = "verify-fixture-key";
 
+/// A staged Ed25519 test key. It signs fixture assertions in this test binary
+/// only and is not a deployment key.
+const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"verify-fixture-key"}"#;
+
 /// A staged request nonce, of the exact 43-character request-nonce shape.
 const FIXTURE_NONCE: &str = "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I";
 
@@ -428,6 +432,96 @@ fn verify_rejects_a_verification_instant_that_is_not_strict_utc() {
         assert_eq!(
             stderr, "evidence: verification instant is not strict RFC 3339 UTC\n",
             "unexpected verification diagnostic"
+        );
+    }
+}
+
+#[test]
+fn verify_accepts_an_authentic_and_current_stored_sd_jwt_vc() {
+    let stored = StoredCredential::stage(&fixture_policy(), |credential| credential);
+    let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "verify rejected a good credential"
+    );
+    assert!(output.stderr.is_empty(), "verify wrote diagnostics");
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.contains("authentic: yes\n") && stdout.contains("currently-valid: yes\n"),
+        "verify did not report the credential as authentic and current"
+    );
+    assert!(
+        stdout.contains("urn:example:concept"),
+        "verify did not print the rebuilt Evidence for inspection"
+    );
+}
+
+#[test]
+fn verify_rejects_a_stored_sd_jwt_vc_whose_disclosure_was_replaced() {
+    // Substitute a well-formed disclosure of the same claim with the opposite
+    // value. Its digest is absent from the signed `_sd`, so the credential
+    // fails without the signature itself being touched.
+    let stored = StoredCredential::stage(&fixture_policy(), |credential| {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+        let body = credential
+            .strip_suffix('~')
+            .expect("the credential ends with the key-binding terminator");
+        let (jwt, disclosure) = body.split_once('~').expect("the credential discloses");
+        let decoded: serde_json::Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(disclosure)
+                .expect("disclosure decodes"),
+        )
+        .expect("disclosure parses");
+        let replaced = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!([decoded[0], decoded[1], true]))
+                .expect("disclosure serializes"),
+        );
+        format!("{jwt}~{replaced}~")
+    });
+    let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+    assert_verification_failure(
+        &output,
+        "2026-08-02T12:00:00Z",
+        "authentic: no\n",
+        "evidence: stored response verification failed (disclosure)\n",
+    );
+}
+
+#[test]
+fn verify_requires_exactly_one_stored_response_format() {
+    let stored = StoredCredential::stage(&fixture_policy(), |credential| credential);
+    for arguments in [
+        vec![],
+        vec![
+            "--jws".to_owned(),
+            stored.path("response.sd-jwt").display().to_string(),
+            "--sd-jwt-vc".to_owned(),
+            stored.path("response.sd-jwt").display().to_string(),
+        ],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .arg("verify")
+            .args(&arguments)
+            .arg("--jwks")
+            .arg(stored.path("trusted.jwks.json"))
+            .arg("--policy")
+            .arg(stored.path("policy.yaml"))
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+        let output = command.output().expect("evidence binary starts");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "verify accepted an ambiguous stored-response selection"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "verify began before selecting a stored response"
         );
     }
 }
@@ -565,6 +659,81 @@ impl StoredResponse {
             .arg(self.root.path().join("trusted.jwks.json"))
             .arg("--policy")
             .arg(self.root.path().join("policy.yaml"))
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+        if let Some(at) = at {
+            command.arg("--at").arg(at);
+        }
+        command.output().expect("evidence binary starts")
+    }
+}
+
+/// The SD-JWT VC counterpart of `StoredResponse`. The same assertion is
+/// serialized through the production issuance path, so the command is proven
+/// against the bytes an adopter actually receives rather than a hand-built
+/// approximation.
+struct StoredCredential {
+    root: tempfile::TempDir,
+}
+
+impl StoredCredential {
+    /// Issue the fixture assertion, apply `mutate` to the serialization, and
+    /// stage it beside the pinned key set and the policy.
+    fn stage(policy: &str, mutate: impl FnOnce(String) -> String) -> Self {
+        use registry_evidence::{
+            model::Evidence,
+            sdjwt_vc::issuance_input,
+            signing::{jwks_document, EvidenceSigner},
+        };
+        use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+        use std::sync::Arc;
+
+        let root = tempfile::tempdir().expect("temporary verification inputs");
+        let evidence: Evidence =
+            serde_json::from_value(fixture_evidence()).expect("the fixture is an Evidence payload");
+        let private = PrivateJwk::parse(VERIFY_PRIVATE_JWK).expect("fixture key parses");
+        let provider: Arc<dyn SigningProvider> =
+            Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
+
+        let (credential, trusted) = tokio::runtime::Runtime::new()
+            .expect("issuance runtime starts")
+            .block_on(async {
+                let signer = EvidenceSigner::initialize(provider, VERIFY_KEY_ID)
+                    .await
+                    .expect("signer initializes");
+                let input = issuance_input(&evidence, None).expect("the fixture maps");
+                let credential = signer
+                    .sign_sd_jwt_vc(input)
+                    .await
+                    .expect("credential serializes");
+                let trusted = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+                (credential, trusted)
+            });
+
+        fs::write(root.path().join("response.sd-jwt"), mutate(credential))
+            .expect("stage the stored credential");
+        fs::write(
+            root.path().join("trusted.jwks.json"),
+            serde_json::to_vec(&trusted).expect("JWKS serializes"),
+        )
+        .expect("stage the pinned key set");
+        fs::write(root.path().join("policy.yaml"), policy).expect("stage the policy");
+        Self { root }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.path().join(name)
+    }
+
+    fn verify(&self, at: Option<&str>) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .arg("verify")
+            .arg("--sd-jwt-vc")
+            .arg(self.path("response.sd-jwt"))
+            .arg("--jwks")
+            .arg(self.path("trusted.jwks.json"))
+            .arg("--policy")
+            .arg(self.path("policy.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME");
         if let Some(at) = at {
             command.arg("--at").arg(at);

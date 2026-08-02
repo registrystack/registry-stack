@@ -519,6 +519,7 @@ pub fn resolve_offline_fixture_authorization(
         requirement: requirement.id.clone(),
         purpose: purpose.to_owned(),
         subjects,
+        holder_key: None,
     };
     let (authority_name, authority) = bundle
         .config

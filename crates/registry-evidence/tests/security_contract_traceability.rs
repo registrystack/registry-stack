@@ -48,6 +48,35 @@ struct TestReference {
     name: String,
 }
 
+/// The SD-JWT VC profile. Only the members this checker binds to code and to
+/// the traceability index are modelled; the rest of the frozen profile is
+/// narrative owned by review.
+#[derive(Deserialize)]
+struct SdJwtVcProfile {
+    contract: String,
+    status: String,
+    response: ProfileResponse,
+    protected_header: ProfileProtectedHeader,
+    negative_tests: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ProfileResponse {
+    media_type: String,
+}
+
+#[derive(Deserialize)]
+struct ProfileProtectedHeader {
+    typ: ProfileConst,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileConst {
+    #[serde(rename = "const")]
+    constant: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AcceptanceTraceability {
@@ -162,6 +191,55 @@ fn every_named_security_negative_is_bound_to_an_executable_test() {
         }
     }
     assert_eq!(mapped, required, "security negative-test mapping drifted");
+}
+
+/// The SD-JWT VC profile is a frozen response-format contract, so every
+/// negative it names must resolve in the same security traceability index the
+/// checker above proves executable. The profile therefore cannot claim a
+/// guarantee no test enforces, and the response format cannot drift away from
+/// the media type and JWT type the runtime actually emits.
+#[test]
+fn every_sd_jwt_vc_profile_negative_is_bound_to_a_mapped_security_negative() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let profile: SdJwtVcProfile = serde_norway::from_slice(
+        &fs::read(root.join("products/evidence/contracts/sd-jwt-vc-profile.yaml"))
+            .expect("sd-jwt-vc profile reads"),
+    )
+    .expect("sd-jwt-vc profile parses");
+    assert_eq!(profile.contract, "registry.evidence.sd-jwt-vc-profile/v1");
+    assert_eq!(profile.status, "frozen");
+    assert_eq!(
+        profile.response.media_type,
+        registry_evidence::EVIDENCE_SD_JWT_VC_MEDIA_TYPE
+    );
+    assert_eq!(
+        profile.protected_header.typ.constant,
+        registry_evidence::EVIDENCE_SD_JWT_VC_TYP
+    );
+
+    let traceability: Traceability = serde_norway::from_slice(
+        &fs::read(root.join("products/evidence/contracts/security-test-traceability.yaml"))
+            .expect("traceability reads"),
+    )
+    .expect("traceability parses");
+    let mapped = traceability
+        .entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    assert!(
+        !profile.negative_tests.is_empty(),
+        "the profile names no negative test"
+    );
+    let mut named = BTreeSet::new();
+    for id in &profile.negative_tests {
+        assert!(named.insert(id.clone()), "the profile repeats {id}");
+        assert!(
+            mapped.contains(id),
+            "profile negative {id} is not mapped to an executable test"
+        );
+    }
 }
 
 /// Prove that one mapped reference still names a real Rust test item, so a

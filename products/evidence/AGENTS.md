@@ -23,13 +23,14 @@ process, and one operator-controlled trust domain. It is independent from
 Registry Notary and must not depend on or copy abstractions from
 `registry-notary*`. It also does not depend on Registry Manifest,
 `registry-platform-pdp`, `registry-platform-oid4vci`,
-`registry-platform-sdjwt`, `registry-platform-replay`, or
-`registry-platform-sts`.
+`registry-platform-replay`, or `registry-platform-sts`.
 
 Selected `registry-platform-*` primitives may be reused only when their existing
 contracts fit Evidence directly. The approved candidates are audit, crypto,
-OIDC, HTTP security, and testing primitives. Shared-crate changes are separate
-platform work and require the platform guidance and affected-consumer gates.
+OIDC, HTTP security, testing, and the `registry-platform-sdjwt` serialization
+primitive used solely by the SD-JWT VC response format. Shared-crate changes
+are separate platform work and require the platform guidance and
+affected-consumer gates.
 
 Production behavior must stay source-product and assertion-case neutral:
 

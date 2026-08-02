@@ -1786,6 +1786,8 @@ impl AuthorityGrant {
 pub enum ResponseFormat {
     SignedJws,
     UnsignedJson,
+    /// Audience-scoped SD-JWT VC serialization of the same assertion.
+    SdJwtVc,
 }
 
 fn default_response_formats() -> Vec<ResponseFormat> {
@@ -1796,7 +1798,7 @@ fn validate_response_formats(
     formats: &[ResponseFormat],
     description: &'static str,
 ) -> Result<(), ConfigError> {
-    validate_len(formats.len(), 1, 2, description)?;
+    validate_len(formats.len(), 1, 3, description)?;
     let mut seen = BTreeSet::new();
     for format in formats {
         if !seen.insert(format_discriminant(*format)) {
@@ -1813,6 +1815,7 @@ fn format_discriminant(format: ResponseFormat) -> u8 {
     match format {
         ResponseFormat::SignedJws => 0,
         ResponseFormat::UnsignedJson => 1,
+        ResponseFormat::SdJwtVc => 2,
     }
 }
 

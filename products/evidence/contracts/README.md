@@ -17,6 +17,10 @@ The normative source set is:
   `jws-profile.yaml`: public discovery, request, the required `requestNonce`
   and its echo in the Evidence payload, response-format negotiation, payload,
   signing, rotation, and strict verifier rules;
+- `sd-jwt-vc-profile.yaml`: the audience-scoped SD-JWT VC response format, its
+  exact claim and disclosure mapping, the optional `cnf` holder key, the
+  issuer-metadata path, and its explicit profile non-goals. It adds a
+  serialization of the same assertion and no credential lifecycle;
 - `verification-policy.schema.yaml`: the closed all-required relying-procedure
   policy document consumed by the offline `evidence verify` command, its frozen
   command surface, exit codes, and no-network rule;
@@ -75,10 +79,11 @@ Evidence vocabulary.
    authorized selectors. It cannot perform I/O.
 5. Signed flattened JWS over the exact UTF-8 payload bytes is mandatory and the
    default result. The exact unsigned media type selects the separately typed
-   unsigned envelope only when the immutable bundle and the one complete
-   matched grant both permit it. No signed-path failure falls back to unsigned
-   output, and the final immutable bytes exist before the disclosure-release
-   audit that gates them.
+   unsigned envelope, and the exact `application/dc+sd-jwt` media type selects
+   the audience-scoped SD-JWT VC serialization, each only when the immutable
+   bundle and the one complete matched grant both permit it. No failure on any
+   format falls back to another format, and the final immutable bytes exist
+   before the disclosure-release audit that gates them.
 6. The complete enabled bundle is one disclosure surface. Individually safe
    definitions may still be rejected when their combination reconstructs a
    protected value.
@@ -87,10 +92,13 @@ Evidence vocabulary.
    file secrets, and logical private CAs and cannot override governed
    semantics or source authority.
 
-Version 1 stops before documents, credentials, replay or nonce state beyond the
-stateless request-nonce echo and comparison, server-issued challenges, OOTS,
-delegated agents, federation, workflow, public or federated catalogs, runtime
-bundle mutation, source planning, multi-source fulfillment, and a general
-policy engine. Authenticated definition discovery is a closed projection of
+Version 1 stops before documents, credential issuance protocols and credential
+lifecycle, replay or nonce state beyond the stateless request-nonce echo and
+comparison, server-issued challenges, OOTS, delegated agents, federation,
+workflow, public or federated catalogs, runtime bundle mutation, source
+planning, multi-source fulfillment, and a general policy engine. The SD-JWT VC
+response format is a serialization of the same assertion under
+`sd-jwt-vc-profile.yaml`; it introduces no offer, code, nonce, status, or
+persisted credential state. Authenticated definition discovery is a closed projection of
 existing authority, not an authorization source or catalog. No contract here
 reserves a field or hook for future profiles.

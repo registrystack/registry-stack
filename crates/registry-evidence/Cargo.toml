@@ -33,6 +33,7 @@ registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
+registry-platform-sdjwt.workspace = true
 reqwest.workspace = true
 rand_core.workspace = true
 rhai.workspace = true

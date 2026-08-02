@@ -42,13 +42,15 @@ Evidence's authenticator; Evidence does not depend on Mint.
 Evidence work must remain independent from `registry-notary*`. Do not copy or
 depend on Notary product abstractions merely because both products use the word
 evidence. In particular, Evidence version one does not inherit credential
-issuance, OID4VCI, SD-JWT, PDP, replay, federation, worker, or document
-subsystems.
+issuance lifecycle, OID4VCI, PDP, replay, federation, worker, or document
+subsystems. Evidence serializes the same stateless assertion as an SD-JWT VC
+response format under its own frozen profile; that is a second encoding of one
+response, never a credential lifecycle.
 
 The implementation is one `registry-evidence` crate and one `evidence` binary.
 It may reuse narrowly applicable `registry-platform-*`
-primitives such as audit, crypto, OIDC, HTTP security, and testing. It must not
-depend on `registry-notary*`.
+primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
+and testing. It must not depend on `registry-notary*`.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,

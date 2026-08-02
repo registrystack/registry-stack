@@ -140,7 +140,11 @@ only in test bundles and do not create production domain types.
 ## Local public-demo smoke tests
 
 For the operator-facing first checkpoint, expected outputs, and the explicit
-post-checkpoint gap list, see [`FIRST-CURL-TEST.md`](FIRST-CURL-TEST.md).
+post-checkpoint gap list, see [`FIRST-CURL-TEST.md`](FIRST-CURL-TEST.md). For
+the same deterministic path exercised through the SD-JWT VC response format and
+its offline verifier, see [`SD-JWT-VC-DEMO.md`](SD-JWT-VC-DEMO.md). Both are
+mock-backed and credential-free, so neither is a live test and neither depends
+on the ordering below.
 
 Live tests are implemented in a separate ignored integration-test target. The
 required order is:

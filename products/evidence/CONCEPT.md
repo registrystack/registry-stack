@@ -121,14 +121,14 @@ Version one is not:
 - a workflow, orchestration, or case-management engine;
 - a general ETL, mapping, or query platform;
 - a runtime policy engine or general PDP;
-- a verifiable credential, OID4VCI, SD-JWT VC, holder-proof, or credential-status service;
+- a credential issuance, OID4VCI, holder-proof, credential-status, or wallet service; the SD-JWT VC *response format* of section 15.6 is a serialization of the same assertion and adds none of those capabilities;
 - a multi-tenant SaaS control plane;
 - a federation or delegated-evaluation protocol;
 - an AI agent runtime, MCP server, or agent discovery service;
 - an OOTS Evidence Broker, Data Service Directory, Semantic Repository, Preview Space, or AS4 Access Point;
 - a replacement for source-system access control.
 
-Document evidence, holder credentials, transaction-bound replay protection, OOTS execution, public or federated catalogs, multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source.
+Document evidence, multi-verifier holder credentials, credential status and revocation, transaction-bound replay protection, OOTS execution, public or federated catalogs, multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source.
 
 ## 5. Design principles
 
@@ -1184,6 +1184,96 @@ under a Rust-fixed transport plan. Script-selected sources, URLs, methods,
 headers, credentials, retries, pagination traversal, response-led requests,
 multi-call orchestration, and a richer policy language remain separate
 proposals. None is added merely as an extension seam.
+
+### 15.6 Audience-scoped SD-JWT VC response format
+
+This profile adds one additional response format for the assertion Version one
+already produces. It does not add a credential product, a credential lifecycle,
+or an issuance protocol.
+
+The distinction the profile rests on: SD-JWT VC is a *serialization*, while
+OID4VCI is a *delivery protocol*. The serialization is a pure function of an
+already-constructed assertion. The delivery protocol requires credential
+offers, pre-authorized codes, issuer-held nonces, deferred issuance, and the
+persistent state to hold them. Version one's stateless single-process property
+is load-bearing for its security argument, so this profile takes the
+serialization and refuses the protocol.
+
+#### What the profile adds
+
+A third member of the closed response-format vocabulary, selected by the exact
+`application/dc+sd-jwt` media type, permitted only when the immutable bundle
+and the one complete matched authority grant both allow it. Format selection
+creates no permission. Everything before serialization is unchanged: the same
+authorization decision, the same fixed source execution, the same bounded
+derivation, the same output validation, the same audience-scoped subject
+binding, the same durable access and disclosure-release audit ordering.
+
+The assertion is emitted as an IETF SD-JWT VC: an EdDSA-signed JWT carrying
+`_sd` digests, followed by the salted disclosures. The signing key, key
+identifier, JWKS publication, and rotation rules are exactly those of the
+signed-JWS format. No second key and no second key ceremony are introduced.
+
+An optional caller-supplied holder public key becomes the `cnf` claim, so the
+assertion can be presented later with key binding. Evidence issues; it does not
+receive, validate, or reason about presentations. Key-binding JWT validation is
+the relying party's responsibility.
+
+#### The trusted third party
+
+A third party triggering issuance is not a new trust model. It is the
+authenticated authority context of section 8.1 with a grant reference under
+section 8.4, which already admits statutory, organizational, consent, and
+delegated bases. The triggering party authenticates as itself, its grant names
+the requirement, purpose, audience, and subject authority, and the holder key
+travels in the request. Evidence still makes exactly one authorization
+decision and still does not issue, manage, revoke, or infer authority.
+
+#### The subject stays audience-scoped
+
+`sub` is the existing audience-scoped subject binding of section 8.3. The
+credential is therefore meaningful to the relying party named in `audience` and
+to no other. This is a deliberate limit, not an omission: a holder-scoped
+subject identifier would create a correlatable identifier that survives across
+verifiers, which is the property section 13 exists to prevent. A multi-verifier
+holder credential is a separate profile with its own privacy analysis, not an
+increment on this one.
+
+The consequence must be stated plainly in adopter-facing material. This profile
+produces a standards-conformant SD-JWT VC that a wallet can parse, hold, and
+present. It does not produce a credential that is meaningful to an arbitrary
+verifier.
+
+#### Profile non-goals
+
+None of the following is added, stubbed, flagged, or left as a seam:
+
+- OID4VCI in any part: credential offers, pre-authorized codes, authorization
+  or token endpoints, `c_nonce`, proof-of-possession challenges, credential
+  endpoints, or deferred issuance;
+- persistent issuance state, an application database, or any store beyond the
+  existing stateless request-nonce echo;
+- status lists, revocation, suspension, or a credential-status endpoint;
+  freshness remains expiry through `validUntil`;
+- presentation-side verification or key-binding JWT validation. The relying
+  party verifier this product already ships is extended to the second format,
+  and it checks exactly what it checks for the signed JWS: issuer authenticity
+  against a pinned key set, and the output contract. It never evaluates a
+  presentation, a key-binding JWT, or a holder's possession of the confirmed
+  key;
+- wallet onboarding, wallet attestation, or trust-list membership;
+- a second signing key, algorithm, or key ceremony;
+- holder-scoped or otherwise cross-verifier subject identifiers;
+- reissuance, refresh, batch issuance, or credential identifiers that persist
+  beyond the response.
+
+#### Claims that remain out of the credential
+
+Selector profiles, selector values, source identity, source responses, adapter
+identity, grant identifiers, and requester identity never appear in the
+credential, in a disclosure, or in credential-visible metadata. The disclosure
+set is exactly the assertion's supported values. Everything the payload of the
+signed-JWS format withholds, this format withholds identically.
 
 ## 16. Initial assertion cases
 

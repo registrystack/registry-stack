@@ -161,11 +161,13 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_unsigned_response_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_returns_a_problem_and_never_an_unsigned_body}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_signing_failure_no_fallback_format}
   - id: sec-audit-response-protection-mode
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: all_four_definitions_pass_the_explicitly_authorized_unsigned_path}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_grant}
   - id: sec-verifier-independent-expectations
     tests:
       - {file: crates/registry-evidence/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
@@ -195,3 +197,28 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}
+  - id: sec-sd-jwt-projection-integrity
+    tests:
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_vc_round_trips_and_verifies_under_the_same_policy}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_disclosure_modification_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_added_disclosure_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_removed_digest_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_payload_modification_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_protected_header_modification_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_unknown_kid_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_rejected_by_flattened_jws_verifier}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_accepts_an_authentic_and_current_stored_sd_jwt_vc}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_rejects_a_stored_sd_jwt_vc_whose_disclosure_was_replaced}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_requires_exactly_one_stored_response_format}
+  - id: sec-sd-jwt-format-requires-bundle-and-grant
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_bundle}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_grant}
+      - {file: crates/registry-evidence/src/config.rs, name: response_formats_are_closed_unique_and_keep_signed_mandatory}
+  - id: sec-sd-jwt-holder-key-closed
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_with_private_member_rejected}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_wrong_algorithm_rejected}
+      - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
+  - id: sec-sd-jwt-claims-closed
+    tests: [{file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]

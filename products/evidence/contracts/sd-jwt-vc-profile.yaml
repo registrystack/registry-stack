@@ -1,0 +1,159 @@
+contract: registry.evidence.sd-jwt-vc-profile/v1
+status: frozen
+summary: >-
+  Audience-scoped SD-JWT VC serialization of the Version one assertion. This
+  profile adds a response format, never a credential lifecycle. Everything
+  before serialization is the unchanged Version one path: one authorization
+  decision, fixed source execution, bounded derivation, output validation,
+  audience-scoped subject binding, and the same durable access and
+  disclosure-release audit ordering.
+response:
+  media_type: application/dc+sd-jwt
+  serialization: sd-jwt-vc-compact
+  structure: issuer-signed JWT, then one tilde-separated disclosure per supported value, then a trailing tilde
+  key_binding_jwt: never appended by the issuer; the trailing tilde marks an absent key-binding JWT
+  negotiation: Only the exact application/dc+sd-jwt media type selects this format, and only when the immutable bundle and the complete matched authority grant both permit it. Missing Accept and */* continue to select signed JWS. Duplicate, combined, parameterized, weighted, or unknown negotiation is not acceptable. Every response varies on Accept and remains no-store.
+  permission_rule: Format selection creates no permission. Denial does not reveal which layer withheld it.
+protected_header:
+  exact_members: [alg, typ, kid]
+  alg:
+    allowed: [EdDSA]
+    rule: Must equal the algorithm bound to the trusted key. Identical to the signed-JWS profile.
+  typ: {const: dc+sd-jwt}
+  kid:
+    required: true
+    rule: Resolved only within the verifier-pinned provider JWKS.
+  prohibited: [jku, x5u, jwk, x5c, crit, b64]
+claims:
+  always_disclosed:
+    iss:
+      source: service.providerId
+      rule: >-
+        The technical provider controlling the signing key, matching the
+        signed-JWS trust statement. The named legal issuer travels separately
+        as issuedBy. A valid signature proves the provider signed the exact
+        payload; governance must establish that the provider is authorized to
+        produce evidence for that legal issuer.
+    sub:
+      source: subjects[0].binding in requirement declaration order
+      rule: >-
+        Convenience projection of the first role-bound audience-scoped subject
+        binding. It is deterministic because the kernel canonicalizes subjects
+        to requirement declaration order. Verifiers must compare the complete
+        subjects set, never sub alone.
+    iat: {source: issuedAt, encoding: unix seconds}
+    exp: {source: validUntil, encoding: unix seconds, rule: exclusive upper bound, identical to the signed-JWS profile}
+    vct: {source: isConformantTo, rule: the Evidence Type is the credential type; no separate credential-type vocabulary is introduced}
+    jti: {source: the Evidence identifier, rule: also emitted as id; not a persisted credential identifier and not usable for status lookup}
+    _sd_alg: {const: sha-256}
+    issuedBy: {source: issuer.id}
+    providedBy: {source: service.providerId}
+    supportsRequirement: {source: supportsRequirement}
+    purpose: {source: purpose}
+    audience: {source: audience}
+    observedAt: {source: observedAt}
+    configurationRevision: {source: configurationRevision}
+    requestNonce: {source: requestNonce, rule: exact echo, never stored, never uniqueness-checked}
+    subjects: {source: subjects, rule: complete role and binding pairs, unordered set semantics on comparison}
+  selectively_disclosed:
+    rule: >-
+      Exactly one disclosure per supported value. The disclosure claim name is
+      the concept identifier from providesValueFor and the disclosure value is
+      the identical public value the signed-JWS payload would carry. The value
+      forms, schemas, codelists, precision, cardinality, sizes, structured
+      fields, and uniqueness are closed by the selected concept declaration
+      before evidence construction, exactly as in the signed-JWS profile.
+    digest_order: sorted lexicographically before insertion into _sd
+    salt: fresh per disclosure from a cryptographically secure random source
+  holder_binding:
+    cnf:
+      required: false
+      source: the optional holderKey member of the request
+      rule: >-
+        Present only when the caller supplies a holder public key. Evidence
+        embeds it and never validates a presentation. Key-binding JWT
+        verification is the relying party's responsibility.
+      constraints:
+        key_type: OKP Ed25519 public JWK
+        private_members_prohibited: [d, p, q, dp, dq, qi, k]
+        rule: A key carrying any private member, a non-allowlisted algorithm, or an unparseable body fails before credential acquisition or source access.
+  prohibited:
+    - status
+    - nbf
+    - aud
+    - any selector profile, selector field name, or selector value
+    - any source identity, source response fragment, or adapter identity
+    - any grant identifier, requester identity, or actor identity
+    - any credential-status, revocation, or reissuance reference
+subject_scope:
+  binding: the existing audience-scoped subject binding
+  consequence: >-
+    The credential is meaningful to the relying party named in audience and to
+    no other. This is deliberate. A holder-scoped subject identifier would
+    create a correlatable identifier surviving across verifiers, which the
+    trust and privacy invariants exist to prevent. Adopter-facing material must
+    state this limit rather than implying a general multi-verifier credential.
+signing:
+  active_keys: 1
+  key_source: identical to the signed-JWS profile; no second key, algorithm, or key ceremony
+  order:
+    - core validates the complete derivation result
+    - core constructs the exact evidence payload including the exact request nonce
+    - core maps that payload to public claims and disclosures without re-deriving any value
+    - signing provider signs the issuer-signed JWT
+    - core serializes the final immutable response bytes
+    - disclosure-release audit is durably accepted
+    - the exact pre-audited bytes are released
+  failure: safe 503 with no fallback to any other response format
+key_discovery:
+  jwks_path: /.well-known/evidence/jwks.json
+  issuer_metadata_path: /.well-known/jwt-vc-issuer
+  issuer_metadata_media_type: application/json
+  issuer_metadata_members: [issuer, jwks]
+  content: public keys only
+  trust_rule: >-
+    Discovery is not a trust anchor. Provider identity and key set remain
+    pinned through governed verifier configuration. JWT VC Issuer Metadata
+    resolution applies only when service.providerId is the HTTPS origin of the
+    deployment; a URN provider identity is valid for the assertion and simply
+    has no metadata resolution path.
+profile_non_goals:
+  rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
+  items:
+    - OID4VCI in any part, including credential offers, pre-authorized codes, authorization or token endpoints, c_nonce, proof-of-possession challenges, credential endpoints, and deferred issuance
+    - persistent issuance state, an application database, or any store beyond the stateless request-nonce echo
+    - status lists, revocation, suspension, or a credential-status endpoint
+    - presentation-side verification or key-binding JWT validation
+    - wallet onboarding, wallet attestation, or trust-list membership
+    - holder-scoped or otherwise cross-verifier subject identifiers
+    - reissuance, refresh, batch issuance, or persistent credential identifiers
+verifier_rules:
+  - Split the compact serialization on tilde with strict rejection of an empty issuer-signed segment.
+  - Reject any protected member outside the exact allowlist and require the allowlisted algorithm.
+  - Resolve kid only in the pinned provider key set.
+  - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
+  - Recompute every disclosure digest and require an exact match against _sd; reject unmatched disclosures and unmatched digests alike.
+  - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
+  - Require the exact expected role-bound subject bindings as an unordered set, compared only after signature verification, from independent trusted state.
+  - Require the exact request nonce from the independently retained original request. Nonce reuse is not replay prevention and is not rejected by the runtime.
+  - Treat exp as an exclusive upper bound and apply only the configured clock skew.
+  - Impose a maximum accepted assertion lifetime in addition to current validity.
+  - Report cryptographic authenticity separately from current validity.
+  - Do not infer source truth, legal-signature status, single-use semantics, or revocation status from a valid signature.
+  - Do not infer holder possession from cnf alone; possession is proven only by a key-binding JWT the relying party itself verifies.
+relying_party_tooling:
+  library: registry_evidence::verifier::verify_sd_jwt_vc, which applies the rules above and then the identical output-contract and policy path the signed-JWS verifier uses
+  command: evidence verify --sd-jwt-vc <file> --jwks <file> --policy <file>
+  scope: issuer authenticity and the output contract only. No presentation, key-binding JWT, or holder possession is evaluated, and no network call is made.
+# Each identifier is a named security negative resolved through
+# security-test-traceability.yaml to executable tests. The last three are
+# shared with the signed-JWS profile because this profile changes the
+# serialization, never the release, audit, or verifier expectation rules.
+negative_tests:
+  - sec-sd-jwt-projection-integrity
+  - sec-sd-jwt-format-requires-bundle-and-grant
+  - sec-sd-jwt-holder-key-closed
+  - sec-sd-jwt-claims-closed
+  - sec-release-bytes-pre-audited
+  - sec-audit-response-protection-mode
+  - sec-verifier-independent-expectations

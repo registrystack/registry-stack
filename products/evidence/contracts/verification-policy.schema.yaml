@@ -86,8 +86,11 @@ ownership:
   producer: the relying procedure that retained the original request and accepted the original transaction
   consumer: offline re-verification by the `evidence verify` operator command
 command:
-  surface: evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
+  surface: evidence verify (--jws <file> | --sd-jwt-vc <file>) --jwks <file> --policy <file> [--at <rfc3339-utc>]
   jws: one stored flattened JWS JSON response file
+  sd-jwt-vc: one stored SD-JWT VC response file, in the issued compact serialization
+  format_selection: exactly one stored response file is named, and naming it states its format; the command never infers a format from a file's contents, so a stored response is never re-verified under the other format's rules
+  policy_scope: one policy document governs both formats, because the same Evidence payload is verified whichever serialization carried it
   jwks: the pinned trusted key set, which is the complete trust set for the run
   policy: one document accepted by this schema
   at: strict RFC 3339 at zero offset; system time when omitted
@@ -100,7 +103,8 @@ output:
     - 'currently-valid: yes or no, printed only for an authentic response'
   inspection: on full success the verified Evidence JSON is also printed, for the operator who already holds the stored response
   failure: only the closed class is reported, on standard error, with no field-level detail
-  classes: [malformed, protected-header, key, signature, payload, policy, time]
+  classes: [malformed, protected-header, key, signature, payload, policy, time, disclosure]
+  disclosure_class: reported only for a stored SD-JWT VC whose disclosures do not reconstruct the payload the signature covers
   exit_codes:
     0: authentic and currently valid
     3: authentic but not currently valid

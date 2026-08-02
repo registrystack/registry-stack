@@ -25,6 +25,12 @@ properties:
       exactly once. Runtime resolves roles by name and emits the requirement's
       declaration order internally.
     items: {$ref: '#/$defs/subject'}
+  holderKey:
+    $ref: '#/$defs/holder-key'
+    description: >-
+      Optional holder public key echoed into the SD-JWT VC cnf claim. It is
+      meaningful only for the SD-JWT VC response format and never reaches
+      authorization, selectors, Rhai, source requests, or audit.
 $defs:
   subject:
     type: object
@@ -50,6 +56,18 @@ $defs:
         propertyNames:
           pattern: '^[a-z][a-z0-9._-]{0,63}$'
         additionalProperties: {$ref: '#/$defs/scalar-selector-value'}
+  holder-key:
+    type: object
+    additionalProperties: false
+    required: [kty, crv, x]
+    properties:
+      kty: {type: string, enum: [OKP]}
+      crv: {type: string, enum: [Ed25519]}
+      x:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{43}$'
+      alg: {type: string, enum: [EdDSA]}
+      kid: {type: string, minLength: 1, maxLength: 256}
   scalar-selector-value:
     oneOf:
       - {type: string, minLength: 1, maxLength: 512}
@@ -73,3 +91,6 @@ $comment: >-
   never uniqueness-checked, and never reaches authorization, rate limits,
   Rhai, source requests, logs, metrics, traces, or native audit. Callers must
   not encode identifiers, selectors, secrets, or document digests into it.
+  holderKey is an Ed25519 public JWK. A key carrying any private member, a
+  non-allowlisted algorithm, or an unparseable body fails before credential
+  acquisition or source access.

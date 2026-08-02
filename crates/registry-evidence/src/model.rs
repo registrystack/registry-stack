@@ -45,6 +45,54 @@ pub struct EvidenceRequest {
     /// Unordered role set encoded as an array. Roles are resolved by name and
     /// canonicalized to requirement declaration order.
     pub subjects: Vec<RequestedSubject>,
+    /// Optional holder public key echoed into the SD-JWT VC `cnf` claim. It is
+    /// meaningful only for the SD-JWT VC response format, never reaches
+    /// authorization, selectors, Rhai, source requests, or audit, and never
+    /// appears in the signed-JWS payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_key: Option<HolderPublicKey>,
+}
+
+/// Caller-supplied Ed25519 holder public key. `deny_unknown_fields` is the
+/// primary defence against private key members: a body carrying `d` or any
+/// other unexpected member fails to parse.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HolderPublicKey {
+    pub kty: String,
+    pub crv: String,
+    pub x: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+}
+
+/// Exact byte length of a raw Ed25519 public key.
+const HOLDER_KEY_DECODED_LENGTH: usize = 32;
+const MAX_HOLDER_KEY_ID_BYTES: usize = 256;
+
+impl HolderPublicKey {
+    /// Accept only a public OKP Ed25519 JWK whose coordinate is the canonical
+    /// unpadded base64url encoding of exactly 32 bytes.
+    pub fn is_acceptable(&self) -> bool {
+        if self.kty != "OKP" || self.crv != "Ed25519" {
+            return false;
+        }
+        if self.alg.as_deref().is_some_and(|alg| alg != "EdDSA") {
+            return false;
+        }
+        if self
+            .kid
+            .as_deref()
+            .is_some_and(|kid| kid.is_empty() || kid.len() > MAX_HOLDER_KEY_ID_BYTES)
+        {
+            return false;
+        }
+        URL_SAFE_NO_PAD
+            .decode(&self.x)
+            .is_ok_and(|decoded| decoded.len() == HOLDER_KEY_DECODED_LENGTH)
+    }
 }
 
 /// Requester-scoped descriptions of the exact Evidence request shapes that
@@ -408,6 +456,7 @@ macro_rules! redacted_debug {
 
 redacted_debug!(
     EvidenceRequest,
+    HolderPublicKey,
     EvidenceDefinitions,
     EvidenceDefinition,
     EvidenceDefinitionSubject,
@@ -564,6 +613,7 @@ mod tests {
                     )])),
                 },
             }],
+            holder_key: None,
         };
         let evidence = Evidence {
             schema: "protected-schema-canary".to_owned(),

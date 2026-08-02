@@ -16,6 +16,7 @@ pub mod problem;
 pub mod rate_limit;
 pub mod rhai_runtime;
 pub mod runtime;
+pub mod sdjwt_vc;
 pub mod secrets;
 pub mod selector;
 pub mod server;
@@ -33,5 +34,9 @@ pub const EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1: &str = "registry.unsigned-eviden
 pub const EVIDENCE_JWS_TYP: &str = "evidence+jws";
 pub const EVIDENCE_JWS_CTY: &str = "application/evidence+json";
 pub const EVIDENCE_JWS_MEDIA_TYPE: &str = "application/jose+json";
+/// Compact SD-JWT VC serialization of the same assertion. The profile adds a
+/// response format only; it introduces no credential lifecycle.
+pub const EVIDENCE_SD_JWT_VC_MEDIA_TYPE: &str = "application/dc+sd-jwt";
+pub const EVIDENCE_SD_JWT_VC_TYP: &str = "dc+sd-jwt";
 pub const EVIDENCE_UNSIGNED_MEDIA_TYPE: &str =
     "application/vnd.registrystack.evidence-unsigned+json";

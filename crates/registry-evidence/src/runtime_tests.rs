@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Write as _,
@@ -48,8 +49,10 @@ use crate::{
     runtime::{EvidenceRuntime, RuntimeInitializationError},
     server::{build_app, build_app_at_for_test, build_app_with_metrics, serve_listener_for_test},
     signing::EvidenceSigner,
-    verifier::{verify_flattened_jws, EvidenceVerificationPolicy},
-    EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    verifier::{
+        verify_flattened_jws, verify_sd_jwt_vc, EvidenceVerificationPolicy, ExpectedValueForm,
+    },
+    EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"acceptance-auth-key"}"#;
@@ -2110,6 +2113,549 @@ async fn all_four_definitions_pass_the_explicitly_authorized_unsigned_path() {
     }
 }
 
+/// Rewrite the acceptance bundle so the immutable bundle, and optionally the
+/// matched grant, enable the SD-JWT VC response format.
+async fn sd_jwt_vc_acceptance(grant_permits: bool) -> PreparedAcceptance {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nresponseFormats: [signed-jws, unsigned-json]",
+        "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]",
+        1,
+    );
+    if grant_permits {
+        replace_exact(
+            &mut configuration,
+            "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]",
+            "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]",
+            1,
+        );
+    }
+    fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    prepared
+}
+
+async fn runtime_for(prepared: &PreparedAcceptance) -> Arc<EvidenceRuntime> {
+    Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes"),
+    )
+}
+
+#[tokio::test]
+async fn sd_jwt_format_not_permitted_by_bundle() {
+    // The stock acceptance bundle enables signed and unsigned output only.
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+
+    assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "an unenabled response format is denied before source access"
+    );
+    assert!(fs::read_to_string(&fixture.audit_path)
+        .expect("audit is readable")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn sd_jwt_format_not_permitted_by_grant() {
+    // The bundle enables the format but the one matched grant withholds it.
+    let prepared = sd_jwt_vc_acceptance(false).await;
+    let runtime = runtime_for(&prepared).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let denied = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    assert_eq!(denied.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(denied.json::<Value>()["code"], json!("not_authorized"));
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+
+    // With both gates open the same assertion is released as an SD-JWT VC.
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&prepared).await;
+    // One evaluation per response format; both must reach the same source.
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+    let request = adult_request();
+
+    // The signed default establishes the independent expectations a relying
+    // party retains, so the credential is verified against the other format's
+    // payload rather than against itself.
+    let signed = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::to_value(&request).expect("request serializes"))
+        .await;
+    signed.assert_status_ok();
+    let jws = signed.json::<FlattenedJws>();
+    let payload = URL_SAFE_NO_PAD
+        .decode(&jws.payload)
+        .expect("payload decodes");
+    let expected: Evidence = serde_json::from_slice(&payload).expect("payload parses");
+    let policy = EvidenceVerificationPolicy::from_accepted_transaction(
+        &expected,
+        &request.request_nonce,
+        Duration::from_secs(48 * 60 * 60),
+        Utc::now(),
+        Duration::from_secs(30),
+    );
+
+    let credential = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&serde_json::to_value(&request).expect("request serializes"))
+        .await;
+    credential.assert_status_ok();
+    assert_eq!(
+        credential.header("content-type"),
+        EVIDENCE_SD_JWT_VC_MEDIA_TYPE
+    );
+    assert_eq!(credential.header("vary"), "Accept");
+    assert_eq!(credential.header("cache-control"), "no-store");
+
+    let serialized = credential.text();
+    assert!(serialized.ends_with('~'), "no key-binding JWT is issued");
+    let verified = verify_sd_jwt_vc(serialized.as_bytes(), runtime.jwks(), &policy)
+        .expect("the credential verifies against the signed transaction's expectations");
+    assert_eq!(verified.supported_values, expected.supported_values);
+    assert_eq!(verified.subjects, expected.subjects);
+    assert_eq!(verified.request_nonce, request.request_nonce);
+
+    // Audit records the closed protection mode and the signing key identity.
+    let audit = wait_for_audit_counts(&prepared.audit_path, 2, 2).await;
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .collect::<Vec<_>>();
+    let releases = events
+        .iter()
+        .filter(|event| event["record"]["phase"] == json!("disclosure-release"))
+        .collect::<Vec<_>>();
+    let credential_release = releases
+        .iter()
+        .find(|event| event["record"]["responseProtection"] == json!("sd-jwt-vc"))
+        .expect("the credential release records the SD-JWT VC mode");
+    assert_eq!(
+        credential_release["record"]["signingKeyId"],
+        json!("acceptance-evidence-key")
+    );
+    assert!(!audit.contains(&request.request_nonce));
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+#[tokio::test]
+async fn sd_jwt_holder_key_with_private_member_rejected() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&prepared).await;
+    // No source is mounted: no request may reach acquisition.
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+
+    for holder_key in [
+        json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+        }),
+        json!({
+            "kty": "oct",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "k": "c2VjcmV0LWtleS1jYW5hcnk"
+        }),
+    ] {
+        body["holderKey"] = holder_key;
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(
+            response.status_code(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "a holder key carrying private material is not a request"
+        );
+        let problem = response.json::<Value>();
+        assert_eq!(problem["code"], json!("malformed_request"));
+        let text = response.text();
+        assert!(
+            !text.contains("nWGxne") && !text.contains("c2VjcmV0"),
+            "rejected key material is never echoed"
+        );
+    }
+
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "an unacceptable holder key fails before credential acquisition"
+    );
+    assert!(fs::read_to_string(&prepared.audit_path)
+        .expect("audit is readable")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source(&prepared.server, None).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+
+    for holder_key in [
+        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "alg": "ES256"}),
+        json!({"kty": "EC", "crv": "P-256", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "alg": "EdDSA"}),
+        json!({"kty": "OKP", "crv": "X25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}),
+        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg"}),
+        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo="}),
+    ] {
+        body["holderKey"] = holder_key.clone();
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(
+            response.status_code(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "{holder_key} is outside the closed holder-key profile"
+        );
+        assert_eq!(response.json::<Value>()["code"], json!("malformed_request"));
+    }
+
+    // The same request without a holder key still succeeds, so the rejection
+    // is the key's and not the format's.
+    body.as_object_mut()
+        .expect("request is an object")
+        .remove("holderKey");
+    let accepted = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    accepted.assert_status_ok();
+    assert!(!accepted.text().contains("cnf"));
+}
+
+#[tokio::test]
+async fn sd_jwt_signing_failure_no_fallback_format() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailAfterSelfTestSigner {
+        delegate,
+        calls: AtomicUsize::new(0),
+    });
+    let failing_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(failing_signer);
+    mount_adult_source(&prepared.server, None).await;
+
+    let http = TestServer::new(build_app(Arc::new(runtime)));
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(response.header("content-type"), "application/problem+json");
+    let text = response.text();
+    assert!(
+        !text.contains('~') && !text.contains("integrityProtection"),
+        "a failed credential signature never falls back to another format"
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+}
+
+/// Serve the operator-driven SD-JWT VC demo documented in `SD-JWT-VC-DEMO.md`.
+///
+/// The immutable bundle and the one complete matched grant both enable the
+/// credential format, so one deterministic request is released twice: once as
+/// the signed default and once as an SD-JWT VC. The harness verifies the
+/// credential against expectations taken from the signed transaction rather
+/// than from the credential's own bytes, then leaves the pinned key set and a
+/// policy document so the operator can re-verify the stored credential offline
+/// with `evidence verify --sd-jwt-vc`.
+#[tokio::test]
+#[ignore = "operator-driven local curl demo"]
+async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    // One source call per response format. Both formats answer the same
+    // request, so neither may reach the source more than once.
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let runtime = runtime_for(&prepared).await;
+
+    let state_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/.sd-jwt-vc-demo");
+    fs::create_dir_all(&state_root).expect("demo state directory is created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700))
+            .expect("demo state directory is owner-only");
+    }
+    let signed_path = state_root.join("response.jws.json");
+    let credential_path = state_root.join("credential.txt");
+    let metadata_path = state_root.join("issuer-metadata.json");
+    let jwks_path = state_root.join("trusted.jwks.json");
+    let policy_path = state_root.join("verification-policy.yaml");
+    for stale in [
+        &signed_path,
+        &credential_path,
+        &metadata_path,
+        &jwks_path,
+        &policy_path,
+    ] {
+        match fs::remove_file(stale) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("stale demo output could not be removed: {error}"),
+        }
+    }
+
+    let request = adult_request();
+    write_secret(
+        &state_root,
+        "request.json",
+        &serde_json::to_string_pretty(&request).expect("request serializes"),
+    );
+    write_secret(
+        &state_root,
+        "session.env",
+        &format!("EVIDENCE_ACCESS_TOKEN={}\n", access_token(None)),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:18081")
+        .await
+        .expect("demo listener binds on 127.0.0.1:18081");
+    let address = listener
+        .local_addr()
+        .expect("listener address is available");
+    println!(
+        "Evidence SD-JWT VC demo server is ready at http://{address}. The ignored session.env contains only the short-lived synthetic bearer token. Use the curl commands in products/evidence/SD-JWT-VC-DEMO.md."
+    );
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let served = Arc::clone(&runtime);
+    let server = tokio::spawn(async move {
+        serve_listener_for_test(served, listener, async move {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    // The signed default is fetched first, because a relying party's
+    // expectations come from the transaction it accepted, never from the
+    // credential it is about to check.
+    let signed = tokio::time::timeout(Duration::from_secs(180), async {
+        loop {
+            if let Ok(bytes) = fs::read(&signed_path) {
+                if serde_json::from_slice::<FlattenedJws>(&bytes).is_ok() {
+                    break bytes;
+                }
+                if let Ok(problem) = serde_json::from_slice::<Value>(&bytes) {
+                    if let Some(code) = problem.get("code").and_then(Value::as_str) {
+                        panic!("Evidence returned the safe problem code {code}");
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the signed curl response arrives within three minutes");
+    let policy = verification_policy(&runtime, &request, &signed);
+    let accepted = verify_flattened_jws(&signed, runtime.jwks(), &policy)
+        .expect("the signed response verifies against the running Evidence JWKS");
+
+    // A partial write looks like a malformed credential, so the last
+    // verification failure is retained outside the polling future and reported
+    // on timeout rather than swallowed.
+    let last_failure = RefCell::new(None);
+    let credential_wait = tokio::time::timeout(Duration::from_secs(180), async {
+        loop {
+            if let Ok(bytes) = fs::read(&credential_path) {
+                if bytes.ends_with(b"~") {
+                    match verify_sd_jwt_vc(&bytes, runtime.jwks(), &policy) {
+                        Ok(verified) => {
+                            break (
+                                String::from_utf8(bytes).expect("credential is ASCII"),
+                                verified,
+                            )
+                        }
+                        Err(error) => *last_failure.borrow_mut() = Some(format!("{error:?}")),
+                    }
+                }
+                if let Ok(problem) = serde_json::from_slice::<Value>(&bytes) {
+                    if let Some(code) = problem.get("code").and_then(Value::as_str) {
+                        panic!("Evidence returned the safe problem code {code}");
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let (credential, verified) = match credential_wait {
+        Ok(pair) => pair,
+        Err(_) => panic!(
+            "the credential curl response arrives and verifies within three minutes; \
+             last verification failure: {:?}",
+            last_failure.borrow()
+        ),
+    };
+
+    assert!(
+        credential.ends_with('~'),
+        "no key-binding JWT is issued or expected"
+    );
+    assert_eq!(
+        credential
+            .split('~')
+            .filter(|part| !part.is_empty())
+            .count(),
+        1 + accepted.supported_values.len(),
+        "the credential carries the issuer-signed JWT and one disclosure per supported value"
+    );
+    assert_eq!(verified.supported_values, accepted.supported_values);
+    assert_eq!(verified.subjects, accepted.subjects);
+    assert_eq!(verified.request_nonce, request.request_nonce);
+
+    shutdown_tx.send(()).expect("demo server is still running");
+    server
+        .await
+        .expect("demo server task joins")
+        .expect("demo server stops cleanly");
+
+    // What an offline relying party keeps besides the credential: the closed
+    // policy document, written from the accepted transaction. The pinned key
+    // set is not written here, because the demo fetches it the way a relying
+    // party does, from the issuer metadata route.
+    fs::write(&policy_path, demo_verification_policy_document(&policy))
+        .expect("the verification policy is written");
+
+    let audit = wait_for_audit_counts(&prepared.audit_path, 2, 2).await;
+    let releases = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .filter(|event| event["record"]["phase"] == json!("disclosure-release"))
+        .map(|event| {
+            event["record"]["responseProtection"]
+                .as_str()
+                .expect("every release records a protection mode")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        releases,
+        BTreeSet::from(["sd-jwt-vc".to_owned(), "signed".to_owned()]),
+        "each release records its own closed protection mode"
+    );
+    assert!(!audit.contains(&request.request_nonce));
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+
+    println!(
+        "PASS: the same assertion was released as a signed JWS and as an SD-JWT VC, the credential verified against the signed transaction's expectations, minimization held, and both releases recorded their protection mode."
+    );
+}
+
+/// Render the accepted transaction's expectations as the closed policy document
+/// the `evidence verify` command parses.
+fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> String {
+    let document = json!({
+        "issuedBy": policy.issued_by,
+        "providedBy": policy.provided_by,
+        "requirement": policy.requirement,
+        "evidenceType": policy.evidence_type,
+        "purpose": policy.purpose,
+        "audience": policy.audience,
+        "configurationRevision": policy.configuration_revision,
+        "requestNonce": policy.request_nonce,
+        "expectedSubjects": policy
+            .expected_subjects
+            .iter()
+            .map(|subject| json!({"role": subject.role, "binding": subject.binding}))
+            .collect::<Vec<_>>(),
+        "expectedOutputs": policy
+            .expected_outputs
+            .iter()
+            .map(|output| json!({"concept": output.concept, "form": expected_form_document(&output.form)}))
+            .collect::<Vec<_>>(),
+        "maximumAssertionLifetimeSeconds": policy.maximum_assertion_lifetime.as_secs(),
+        "clockSkewSeconds": policy.clock_skew.as_secs(),
+    });
+    serde_norway::to_string(&document).expect("the policy document serializes as YAML")
+}
+
+/// The closed expected value-form vocabulary as a policy document writes it.
+fn expected_form_document(form: &ExpectedValueForm) -> Value {
+    match form {
+        ExpectedValueForm::Boolean => json!("boolean"),
+        ExpectedValueForm::Integer => json!("integer"),
+        ExpectedValueForm::String => json!("string"),
+        ExpectedValueForm::DateBucket => json!("date-bucket"),
+        ExpectedValueForm::TimeBucket => json!("time-bucket"),
+        ExpectedValueForm::EntityReference => json!("entity-reference"),
+        ExpectedValueForm::Structured => json!("structured"),
+        ExpectedValueForm::List {
+            minimum_items,
+            maximum_items,
+        } => json!({"list": {"minimumItems": minimum_items, "maximumItems": maximum_items}}),
+    }
+}
+
 #[tokio::test]
 async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
@@ -3438,6 +3984,11 @@ async fn mount_licence_source(server: &MockServer) {
 }
 
 async fn mount_adult_source(server: &MockServer, delay: Option<Duration>) {
+    mount_adult_source_expecting(server, delay, 1).await;
+}
+
+/// The same fixture source mounted for an exact number of evaluations.
+async fn mount_adult_source_expecting(server: &MockServer, delay: Option<Duration>, expected: u64) {
     let response = ResponseTemplate::new(200).set_body_json(json!({
         "total": 1,
         "date_of_birth": "2000-01-01"
@@ -3457,7 +4008,7 @@ async fn mount_adult_source(server: &MockServer, delay: Option<Duration>) {
             "limit": 2
         })))
         .respond_with(response)
-        .expect(1)
+        .expect(expected)
         .mount(server)
         .await;
 }
@@ -3621,6 +4172,7 @@ fn request(requirement: &str, purpose: &str, subjects: Vec<RequestedSubject>) ->
         requirement: requirement.to_owned(),
         purpose: purpose.to_owned(),
         subjects,
+        holder_key: None,
     }
 }
 

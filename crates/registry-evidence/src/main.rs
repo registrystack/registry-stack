@@ -11,7 +11,7 @@ use std::{
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
@@ -39,8 +39,9 @@ use registry_evidence::{
         project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
     },
     verifier::{
-        verify_flattened_jws, verify_flattened_jws_report, EvidenceVerificationPolicy,
-        ExpectedOutput, ExpectedSubject, ExpectedValueForm, VerificationError,
+        verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
+        EvidenceVerificationPolicy, ExpectedOutput, ExpectedSubject, ExpectedValueForm,
+        VerificationError,
     },
 };
 use registry_platform_crypto::{parse_json_strict, LocalJwkSigner, PrivateJwk};
@@ -83,10 +84,18 @@ enum Command {
     /// Start the native Evidence HTTP service.
     Serve,
     /// Re-verify one stored signed response offline against a pinned key set.
+    ///
+    /// Exactly one stored response is named, and its format is named with it.
+    /// The command never infers a format from the file's contents, so a
+    /// credential can never be re-verified under the other format's rules.
+    #[command(group(ArgGroup::new("stored").required(true)))]
     Verify {
         /// Stored flattened JWS JSON response file.
-        #[arg(long)]
-        jws: PathBuf,
+        #[arg(long, group = "stored")]
+        jws: Option<PathBuf>,
+        /// Stored compact SD-JWT VC response file.
+        #[arg(long = "sd-jwt-vc", group = "stored")]
+        sd_jwt_vc: Option<PathBuf>,
         /// Pinned trusted JWKS document. This file is the complete trust set.
         #[arg(long)]
         jwks: PathBuf,
@@ -208,10 +217,24 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::Verify {
             jws,
+            sd_jwt_vc,
             jwks,
             policy,
             at,
-        } => Ok(verify_stored_response(&jws, &jwks, &policy, at.as_deref())?),
+        } => {
+            let stored = jws
+                .map(StoredResponse::SignedJws)
+                .or_else(|| sd_jwt_vc.map(StoredResponse::SdJwtVc))
+                .ok_or(CommandError::Cli(CliError(
+                    "verify requires one stored response file",
+                )))?;
+            Ok(verify_stored_response(
+                &stored,
+                &jwks,
+                &policy,
+                at.as_deref(),
+            )?)
+        }
     }
 }
 
@@ -464,6 +487,22 @@ fn expected_value_form(document: ExpectedFormDocument) -> ExpectedValueForm {
     }
 }
 
+/// The one stored response an operator named, and the format its bytes are
+/// parsed under. The format is an operator statement, never a guess from the
+/// file's contents.
+enum StoredResponse {
+    SignedJws(PathBuf),
+    SdJwtVc(PathBuf),
+}
+
+impl StoredResponse {
+    fn path(&self) -> &Path {
+        match self {
+            Self::SignedJws(path) | Self::SdJwtVc(path) => path,
+        }
+    }
+}
+
 /// Re-verify one stored signed response offline.
 ///
 /// The pinned key set file is the complete trust set: this command opens no
@@ -475,7 +514,7 @@ fn expected_value_form(document: ExpectedFormDocument) -> ExpectedValueForm {
 /// A failure reports only its closed class, so re-verification never becomes
 /// an oracle for which hidden comparison failed.
 fn verify_stored_response(
-    jws_path: &Path,
+    stored: &StoredResponse,
     jwks_path: &Path,
     policy_path: &Path,
     at: Option<&str>,
@@ -486,7 +525,7 @@ fn verify_stored_response(
         instant.to_rfc3339_opts(SecondsFormat::Secs, true)
     );
 
-    let stored = read_verification_input(jws_path)?;
+    let response = read_verification_input(stored.path())?;
     let trusted: JwksDocument = serde_json::from_value(
         parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
     )
@@ -496,7 +535,15 @@ fn verify_stored_response(
             .map_err(|_| VERIFY_MALFORMED)?;
     let policy = document.into_policy(instant);
 
-    match verify_flattened_jws_report(&stored, &trusted, &policy) {
+    // One policy document, one set of expectations, and one report shape serve
+    // both response formats; only the serialization the operator named is
+    // parsed.
+    let report = match stored {
+        StoredResponse::SignedJws(_) => verify_flattened_jws_report(&response, &trusted, &policy),
+        StoredResponse::SdJwtVc(_) => verify_sd_jwt_vc_report(&response, &trusted, &policy),
+    };
+
+    match report {
         Ok(report) => {
             println!("authentic: yes");
             if !report.currently_valid {
@@ -557,6 +604,9 @@ fn verification_error_class(error: VerificationError) -> CliError {
         VerificationError::Payload => CliError("stored response verification failed (payload)"),
         VerificationError::Policy => CliError("stored response verification failed (policy)"),
         VerificationError::Time => CliError("stored response verification failed (time)"),
+        VerificationError::Disclosure => {
+            CliError("stored response verification failed (disclosure)")
+        }
     }
 }
 

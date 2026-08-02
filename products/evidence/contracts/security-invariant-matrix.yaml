@@ -232,4 +232,20 @@ cross_cutting:
     threat: A configured fixed or API-key header name collides with an authorization, framing, routing, cookie, forwarding, proxy, or tracing header, including case variants and known infrastructure aliases.
     enforcement: One closed ASCII-case-insensitive deny set shared by startup configuration validation and source plan compilation, with prefix families denied before exact names and both checks running before any credential is resolved.
     negative_test: sec-reserved-header-aliases-closed
+  sd_jwt_vc_projection_integrity:
+    threat: The SD-JWT VC serialization carries different content from the signed assertion, or a relying party accepts a modified disclosure, digest, payload, or protected header.
+    enforcement: The credential is a projection of the identical constructed evidence payload; the verifier rebuilds that payload from the token, requires an exact digest-to-disclosure match in both directions, and then applies the same output-contract and policy checks as the signed JWS. Each serialization is rejected by the other format's verifier.
+    negative_test: sec-sd-jwt-projection-integrity
+  sd_jwt_vc_format_authorization:
+    threat: Requesting the credential media type grants a disclosure the requester is not authorized to receive.
+    enforcement: Format selection creates no permission. The immutable bundle and the one complete matched authority grant must each enable the format, and denial does not reveal which layer withheld it.
+    negative_test: sec-sd-jwt-format-requires-bundle-and-grant
+  sd_jwt_vc_holder_key_closed:
+    threat: A caller-supplied holder key smuggles private key material, a non-allowlisted algorithm, or an unparseable body into a signed credential.
+    enforcement: The optional holder key must be a public OKP Ed25519 JWK; any private member, other key type or curve, or malformed body fails before credential acquisition and source access, and the rejection never echoes the submitted key material.
+    negative_test: sec-sd-jwt-holder-key-closed
+  sd_jwt_vc_claims_closed:
+    threat: A claim outside the profile, such as a status reference, an audience restriction, or a smuggled selector value, reaches a relying party under a valid signature.
+    enforcement: The published claim set is closed to the issuer-owned and always-disclosed names plus the declared disclosures; the verifier rejects any other member instead of ignoring it.
+    negative_test: sec-sd-jwt-claims-closed
 fixture_index: ../fixtures/conformance/coverage-matrix.yaml

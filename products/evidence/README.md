@@ -29,6 +29,9 @@ The following contracts define and verify the implemented Version 1 boundary:
 - [Operator contract](OPERATOR-CONTRACT.md): supported deployment shape,
   requester authority and purpose duties, required configuration and secrets,
   readiness, audit, key, and verification obligations.
+- [SD-JWT VC demo](SD-JWT-VC-DEMO.md): one deterministic local run that issues
+  the same assertion in both later-verifiable formats and re-verifies the
+  credential offline with `curl` and the `evidence` binary.
 - [Trusted request-adapter reference](reference/request-adapter/ADAPTER-API.md):
   complete Rhai API, configuration and fixture contracts, and deployable DHIS2
   and OpenCRVS-shaped reference projects.
@@ -54,7 +57,10 @@ the same offline and production path on one revision before Version 1 can be
 called implemented. None may become a Rust domain type, built-in operation,
 special route, or preferred implementation phase.
 
-Version 1 does not include documents, holder credentials, OID4VCI, SD-JWT,
+Version 1 serializes the same assertion as an SD-JWT VC when the bundle and the
+matched grant both permit that response format, under the frozen profile in
+`contracts/sd-jwt-vc-profile.yaml`. It does not include documents, credential
+lifecycle, status lists, OID4VCI, presentation verification,
 nonce or replay storage beyond stateless request-nonce echo and comparison,
 server-issued challenges, OOTS execution, federation, delegated agents, MCP,
 workflow, public or federated catalogs, runtime policy, runtime bundle mutation,
@@ -108,19 +114,32 @@ authorization, rate limits, scripts, source requests, logs, metrics, traces, or
 audit. Callers must not encode identifiers, selectors, secrets, or document
 digests in it.
 
-Signed flattened JWS is the default and the only later-verifiable format. A
-missing `Accept`, `*/*`, or the exact `application/jose+json` all select it. The
-exact `application/vnd.registrystack.evidence-unsigned+json` selects a visibly
-unsigned envelope, and only when both the immutable bundle and the one complete
-matched grant permit that format; otherwise the request is refused with the
-ordinary `not_authorized` problem (HTTP 403) before credentials or source
-access, without revealing which layer refused. Every authorization refusal
-shares this one generic 403, so it is never an oracle for which check failed. A
-duplicate, combined, parameterized, weighted,
-or unknown `Accept` returns the `response_format_not_acceptable` problem with
-HTTP 406 before source access. Unsigned output is transport-authenticated
-convenience data for development and for consumers that cannot process JWS. It
-is never later-verifiable evidence and never a fallback when signing fails.
+Signed flattened JWS is the default format. A missing `Accept`, `*/*`, or the
+exact `application/jose+json` all select it. The exact
+`application/vnd.registrystack.evidence-unsigned+json` selects a visibly
+unsigned envelope, and the exact `application/dc+sd-jwt` selects the same
+assertion serialized as an SD-JWT VC. Every format other than the default is
+released only when both the immutable bundle and the one complete matched grant
+permit it; otherwise the request is refused with the ordinary `not_authorized`
+problem (HTTP 403) before credentials or source access, without revealing which
+layer refused. Every authorization refusal shares this one generic 403, so it is
+never an oracle for which check failed. A duplicate, combined, parameterized,
+weighted, or unknown `Accept` returns the `response_format_not_acceptable`
+problem with HTTP 406 before source access. Unsigned output is
+transport-authenticated convenience data for development and for consumers that
+cannot process JWS. It is never later-verifiable evidence and never a fallback
+when signing fails.
+
+The SD-JWT VC format is a second encoding of the one stateless assertion the
+signed default carries, under the frozen profile in
+[the SD-JWT VC profile](contracts/sd-jwt-vc-profile.yaml). It is not a
+credential lifecycle: no issuance session, no holder binding ceremony, no
+status list, no revocation, and no presentation or key-binding verification. The
+shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
+JWS, namely issuer authenticity against a pinned key set and the output
+contract, and it never falls back to the credential format when signing fails.
+[The SD-JWT VC demo](SD-JWT-VC-DEMO.md) issues one assertion in both formats and
+re-verifies the credential offline with `curl` and the `evidence` binary.
 
 ## Current verification
 

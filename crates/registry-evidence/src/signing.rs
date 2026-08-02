@@ -7,6 +7,7 @@ use registry_platform_crypto::{
     verify, KeyReadiness, PublicJwk, SigningAlgorithm, SigningError as ProviderSigningError,
     SigningProvider,
 };
+use registry_platform_sdjwt::{SdJwtError, SdJwtIssuanceInput, SdJwtIssuer};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -38,6 +39,8 @@ pub enum EvidenceSigningError {
     PublishedKey,
     #[error("the published key set could not be serialized")]
     KeySerialization(#[source] serde_json::Error),
+    #[error("the SD-JWT VC serialization could not be produced")]
+    SdJwtVc(#[source] SdJwtError),
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +128,20 @@ impl EvidenceSigner {
             signature: URL_SAFE_NO_PAD.encode(signature),
         })
     }
+
+    /// Serialize the same assertion as a compact SD-JWT VC. The signer is the
+    /// one active key already used for the flattened JWS; the profile adds no
+    /// second key, algorithm, or key ceremony.
+    pub async fn sign_sd_jwt_vc(
+        &self,
+        input: SdJwtIssuanceInput,
+    ) -> Result<String, EvidenceSigningError> {
+        SdJwtIssuer::from_signing_provider(Arc::clone(&self.provider))
+            .issue(input)
+            .await
+            .map(|signed| signed.jwt)
+            .map_err(EvidenceSigningError::SdJwtVc)
+    }
 }
 
 pub fn jwks_document(
@@ -185,6 +202,7 @@ fn validate_key_id(key_id: &str) -> Result<(), EvidenceSigningError> {
 mod tests {
     use super::*;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
+    use sha2::{Digest, Sha256};
 
     const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
     const FIXTURE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"fixture-key-2026-01"}"#;
@@ -283,6 +301,96 @@ mod tests {
             jwks_document(signer.public_jwk(), too_many),
             Err(EvidenceSigningError::PublishedKey)
         ));
+    }
+
+    /// The SD-JWT VC fixture is the adopter-facing wire contract, so it must be
+    /// reproduced by the production issuance path over every golden payload:
+    /// the exact protected header, one disclosure per supported value, sorted
+    /// unique digests over the encoded disclosure bytes, and a trailing tilde.
+    #[tokio::test]
+    async fn sd_jwt_vc_fixture_serialization_and_protected_header_are_exact() {
+        let fixture: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/sd-jwt-vc-cases.yaml"
+        ))
+        .expect("SD-JWT VC fixture parses");
+        assert_eq!(
+            fixture["media_type"].as_str(),
+            Some(crate::EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        );
+        let expected_header = fixture["protected_header"]["exact_json"]
+            .as_str()
+            .expect("fixture header is text");
+        let signer = fixture_signer().await;
+
+        for case in fixture["cases"]
+            .as_array()
+            .expect("fixture cases are an array")
+        {
+            let relative = case["payload"].as_str().expect("payload path is text");
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/evidence/fixtures/conformance")
+                .join(relative);
+            let evidence: crate::model::Evidence =
+                serde_json::from_slice(&std::fs::read(path).expect("golden payload reads"))
+                    .expect("golden payload is an Evidence document");
+            let input =
+                crate::sdjwt_vc::issuance_input(&evidence, None).expect("golden payload maps");
+            let serialized = signer
+                .sign_sd_jwt_vc(input)
+                .await
+                .expect("golden payload serializes");
+
+            let body = serialized
+                .strip_suffix('~')
+                .expect("the serialization ends with the key-binding terminator");
+            let mut segments = body.split('~');
+            let jwt = segments.next().expect("issuer-signed JWT segment");
+            let disclosures = segments.collect::<Vec<_>>();
+            assert_eq!(
+                disclosures.len(),
+                evidence.supported_values.len(),
+                "{} discloses one value per supported value",
+                case["id"]
+            );
+
+            let parts = jwt.split('.').collect::<Vec<_>>();
+            assert_eq!(parts.len(), 3, "the JWT is compact JWS serialized");
+            assert_eq!(
+                URL_SAFE_NO_PAD.decode(parts[0]).expect("header decodes"),
+                expected_header.as_bytes()
+            );
+            let claims: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).expect("payload decodes"))
+                    .expect("payload parses");
+            assert_eq!(claims["_sd_alg"], serde_json::json!("sha-256"));
+
+            let digests = claims["_sd"]
+                .as_array()
+                .expect("_sd is an array")
+                .iter()
+                .map(|value| value.as_str().expect("digest is text").to_owned())
+                .collect::<Vec<_>>();
+            let mut sorted = digests.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(digests, sorted, "_sd is sorted and carries no repeat");
+            for disclosure in &disclosures {
+                let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+                assert!(
+                    digests.contains(&digest),
+                    "a disclosure is absent from _sd in {}",
+                    case["id"]
+                );
+            }
+
+            let signature = URL_SAFE_NO_PAD.decode(parts[2]).expect("signature decodes");
+            verify(
+                format!("{}.{}", parts[0], parts[1]).as_bytes(),
+                &signature,
+                &signer.public_jwk(),
+            )
+            .expect("fixture signature verifies");
+        }
     }
 
     #[tokio::test]

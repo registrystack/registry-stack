@@ -191,6 +191,69 @@ starts, Evidence lets it finish under the separately bounded OIDC and source
 operations so cancellation cannot bypass required audit or signed-response
 release ordering.
 
+## Response formats
+
+Evidence releases one stateless assertion. `responseFormats` decides which
+serializations may carry it, and the closed values are `signed-jws`,
+`unsigned-json`, and `sd-jwt-vc`. Both the immutable bundle and every authority
+grant declare the list, both default to `[signed-jws]` alone, and both must
+keep `signed-jws` enabled. Startup rejects a duplicate or unknown value and
+rejects any list that drops the signed default.
+
+The two lists are intersected and never unioned. A format is releasable only
+where the bundle and the one complete matched grant both name it, so enabling a
+format bundle-wide grants nothing by itself, and a grant cannot widen beyond the
+bundle. Requesting a format outside the intersection is refused with the
+ordinary `not_authorized` problem before credential acquisition and source
+access, and the refusal does not reveal which layer withheld it. An `Accept`
+that names no known format at all, or that is duplicated, combined,
+parameterized, or weighted, returns `response_format_not_acceptable` with HTTP
+406, also before source access.
+
+```yaml
+# the immutable bundle: the ceiling
+responseFormats: [signed-jws, sd-jwt-vc]
+
+# the grant: the actual authority, never wider than the bundle
+- requirement: urn:example:requirement:adult-status:v1
+  purpose: eligibility
+  audienceFrom: authenticated-requester
+  responseFormats: [signed-jws, sd-jwt-vc]
+```
+
+The requester selects among enabled formats with an exact `Accept`:
+`application/jose+json` (or a missing `Accept`, or `*/*`) for the signed
+default, `application/vnd.registrystack.evidence-unsigned+json` for the visibly
+unsigned envelope, `application/dc+sd-jwt` for the SD-JWT VC. Selection never
+changes evaluation, disclosure, or audit obligations. Each release records its
+own `responseProtection` in the disclosure-release audit event, with the closed
+values `signed`, `unsigned`, and `sd-jwt-vc`; `signingKeyId` is present for the
+two cryptographically protected modes and forbidden for unsigned output.
+
+Enabling `sd-jwt-vc` adds a serialization, not a credential lifecycle. There is
+no issuance session, holder binding ceremony, status list, revocation, or
+presentation verification, and `/.well-known/jwt-vc-issuer` publishes no
+per-requester or per-requirement information. The `vct` claim is the
+requirement's declared `isConformantTo` identifier, so the credential type is a
+governed bundle decision rather than a client choice. The subject identifier
+stays the audience-scoped pseudonym, so the same person requested for a
+different audience yields a different identifier and the credential is not a
+general-purpose multi-verifier credential.
+
+A request may carry an optional `holderKey`, which is echoed into the `cnf`
+claim and is meaningful only for the SD-JWT VC format. Only a public OKP
+Ed25519 JWK is accepted; an unacceptable key is rejected as a malformed request
+alongside the nonce check, before authentication, credential acquisition, and
+source access. The key never reaches authorization, selectors, Rhai, sources,
+audit, or the signed-JWS payload. Evidence issues no key-binding JWT, requires
+none, and verifies none, so `cnf` is an unverified caller-supplied
+convenience for whatever presentation layer the operator runs elsewhere.
+
+Signing failure remains fail-closed for every protected format. A deployment
+that cannot sign returns a safe transient failure and never downgrades an
+SD-JWT VC request to unsigned output or to the signed default.
+[The SD-JWT VC demo](SD-JWT-VC-DEMO.md) exercises this whole path locally.
+
 ## Secrets and keys
 
 Source credentials and private signing material are supplied only through the
@@ -463,6 +526,7 @@ GET /health
 GET /openapi.json
 GET /ready
 GET /.well-known/evidence/jwks.json
+GET /.well-known/jwt-vc-issuer
 ```
 
 `GET /openapi.json` publishes the generated public contract as
@@ -476,8 +540,16 @@ Bearer authentication profile and per-principal request budget as evidence
 creation.
 
 A successful `POST /v1/evidence` response uses `application/jose+json` and the
-flattened JWS JSON Serialization. No public or cross-requester catalog is
-supported.
+flattened JWS JSON Serialization unless the requester selected another enabled
+format under [response formats](#response-formats). No public or
+cross-requester catalog is supported.
+
+`GET /.well-known/jwt-vc-issuer` is unauthenticated discovery for the SD-JWT VC
+format. It publishes the configured provider identity and the same public key
+set as `/.well-known/evidence/jwks.json`, and nothing else. It is served
+whether or not any grant enables the credential format, it never reveals which
+requesters or requirements do, and it is discovery rather than a trust anchor
+on exactly the terms in [secrets and keys](#secrets-and-keys).
 No-match and ambiguous outcomes are publicly indistinguishable by default.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.

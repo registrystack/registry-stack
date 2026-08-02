@@ -36,6 +36,7 @@ use crate::{
     },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
+    sdjwt_vc,
     secrets::{ProtectedSecret, SecretProvider, SecretResolver},
     selector::{
         match_entitlement, resolve_selectors, validate_entitlement_context,
@@ -44,8 +45,8 @@ use crate::{
     },
     signing::{jwks_document, EvidenceSigner},
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
-    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
-    EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+    EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const MAX_OPERATION_BYTES: usize = 128;
@@ -389,6 +390,7 @@ impl EvidenceRuntime {
                         },
                     })
                     .collect(),
+                holder_key: None,
             };
             let Ok(matched) = match_entitlement(self.bundle(), &request, &context) else {
                 continue;
@@ -597,6 +599,16 @@ impl EvidenceRuntime {
         // until evidence construction echoes it.
         if !request_nonce_is_canonical(&request.request_nonce) {
             return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
+        }
+        // An unacceptable holder key fails before any credential acquisition or
+        // source access. The key never reaches authorization, selectors, Rhai,
+        // sources, or audit.
+        if request
+            .holder_key
+            .as_ref()
+            .is_some_and(|key| !key.is_acceptable())
+        {
+            return Err(failure(ProblemCode::MalformedRequest, "holder-key"));
         }
         let started = Instant::now();
         let context = self
@@ -903,6 +915,52 @@ impl EvidenceRuntime {
                     Some(self.signer.key_id().to_owned()),
                 )
             }
+            ResponseFormat::SdJwtVc => {
+                // The projection re-encodes the constructed payload and
+                // re-derives nothing.
+                let input = match sdjwt_vc::issuance_input(&evidence, request.holder_key.as_ref()) {
+                    Ok(input) => input,
+                    Err(_) => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::EvaluationFailure,
+                            "sd-jwt-vc-mapping",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(
+                            ProblemCode::ServiceUnavailable,
+                            "sd-jwt-vc-mapping",
+                        ));
+                    }
+                };
+                // A signing failure is a safe 503. It never falls back to the
+                // signed-JWS or unsigned format.
+                let serialized = match self.signer.sign_sd_jwt_vc(input).await {
+                    Ok(serialized) => serialized,
+                    Err(_) => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::SigningFailure,
+                            "signing",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(ProblemCode::ServiceUnavailable, "signing"));
+                    }
+                };
+                (
+                    serialized.into_bytes(),
+                    EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+                    Some(self.signer.key_id().to_owned()),
+                )
+            }
             ResponseFormat::UnsignedJson => {
                 // No signing operation runs, but the ordinary signing
                 // dependency must still be ready for the deployment.
@@ -1136,6 +1194,7 @@ fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
     match format {
         ResponseFormat::SignedJws => ResponseProtection::Signed,
         ResponseFormat::UnsignedJson => ResponseProtection::Unsigned,
+        ResponseFormat::SdJwtVc => ResponseProtection::SdJwtVc,
     }
 }
 

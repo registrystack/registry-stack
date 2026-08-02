@@ -96,10 +96,11 @@ Reuse selected shared primitives without inheriting another product model:
 | `registry-platform-oidc` | Strict access-token and JWKS verification for the reference authentication profile |
 | `registry-platform-httpsec` | Security response headers where the existing contract fits |
 | `registry-platform-httputil` | Bounded source-response body reads |
+| `registry-platform-sdjwt` | Compact SD-JWT VC serialization for the SD-JWT VC response format |
 
 Evidence must not depend on `registry-notary*`, `registry-platform-pdp`,
-`registry-platform-oid4vci`, `registry-platform-sdjwt`,
-`registry-platform-replay`, `registry-platform-sts`, or Registry Manifest.
+`registry-platform-oid4vci`, `registry-platform-replay`,
+`registry-platform-sts`, or Registry Manifest.
 
 The governed bundle and closed operator runtime file are trusted and
 startup-only. Use typed YAML and explicit secret references. Runtime
@@ -638,7 +639,7 @@ follow-up issue.
 | Verification evidence | Focused invariant tests, all package tests, contract drift checks, dependency policy, formatting, package and workspace check, Clippy with warnings denied, and workspace tests pass. Security-sensitive behavior has a named threat, enforcement point, and negative test. |
 | Local compatibility smoke | After deterministic mocks pass, the read-only DHIS2 and OpenCRVS smoke tests are attempted when local credentials and approved demo selectors are available. Unavailability may be recorded as inconclusive; authenticated schema drift or excess disclosure is investigated and cannot be ignored. No credential or live-data artifact enters the repository or test output. |
 | Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, and complete DHIS2/OpenCRVS-shaped projects without editing Rust. An operator can independently bind the immutable governed bundle to listener, secret, audit, and private-CA paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, signing rollover, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
-| Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed. This includes document evidence, holder credentials, VC, OID4VCI, SD-JWT, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, public or federated catalogs, runtime bundle mutation, script-selected transport or multi-call source planning, multi-source fulfillment, a general policy engine, application database, message broker, or worker process. |
+| Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, public or federated catalogs, runtime bundle mutation, script-selected transport or multi-call source planning, multi-source fulfillment, a general policy engine, application database, message broker, or worker process. |
 
 ## Required Version 1 acceptance tests
 
@@ -883,7 +884,11 @@ extension APIs for them:
   requirement;
 - evidence or raw-source persistence;
 - document retrieval or multipart responses;
-- VC, OID4VCI, SD-JWT, holder binding, status lists, or wallets;
+- OID4VCI, credential lifecycle, status lists, revocation, presentation or
+  key-binding verification, wallet onboarding, or holder-scoped subject
+  identifiers. The SD-JWT VC response format is a serialization of the same
+  stateless assertion under `contracts/sd-jwt-vc-profile.yaml`, and the optional
+  holder key is embedded without ever being validated as possession;
 - nonce or replay storage beyond stateless request-nonce echo and comparison;
 - OOTS XML, AS4, Evidence Broker, or DSD runtime code;
 - federation, agents, MCP, workflow, or public, cross-requester, searchable,
