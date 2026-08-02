@@ -181,6 +181,8 @@ struct OauthPlan {
     scope: Option<String>,
     credential_placement: CredentialPlacement,
     maximum_cache_lifetime: Duration,
+    /// Lifetime used when the provider omits `expires_in`.
+    assumed_lifetime: Option<Duration>,
     admission_timeout: Duration,
     cache: Mutex<Option<CachedToken>>,
 }
@@ -742,6 +744,7 @@ fn compile_authentication(
             scope,
             credential_placement,
             maximum_cache_seconds,
+            assumed_lifetime_seconds,
         } => {
             let token_endpoint = validate_url(token_endpoint, false)?;
             if token_endpoint.query().is_some() {
@@ -754,6 +757,7 @@ fn compile_authentication(
                 scope: scope.clone(),
                 credential_placement: *credential_placement,
                 maximum_cache_lifetime: Duration::from_secs(*maximum_cache_seconds),
+                assumed_lifetime: assumed_lifetime_seconds.map(Duration::from_secs),
                 admission_timeout,
                 cache: Mutex::new(None),
             })))
@@ -911,50 +915,35 @@ impl OauthPlan {
         let client_secret = resolve(secrets, &self.client_secret_ref)?;
         let client_id_text = protected_text(&client_id)?;
         let client_secret_text = protected_text(&client_secret)?;
-        let mut endpoint = self.token_endpoint.clone();
         let mut form = vec![("grant_type", "client_credentials")];
         if let Some(scope) = self.scope.as_deref() {
             form.push(("scope", scope));
         }
+        // Both placements keep the client credentials out of the request URI,
+        // where proxy and ingress logs would capture them.
         let mut request = client
-            .post(endpoint.clone())
+            .post(self.token_endpoint.clone())
             .header(ACCEPT, JSON_MEDIA_TYPE);
-        let send_form = match self.credential_placement {
+        match self.credential_placement {
             CredentialPlacement::BasicHeader => {
                 request = request.header(
                     AUTHORIZATION,
                     basic_authorization(&client_id, &client_secret)?,
                 );
-                true
             }
             CredentialPlacement::FormBody => {
                 form.push(("client_id", client_id_text));
                 form.push(("client_secret", client_secret_text));
-                true
             }
-            CredentialPlacement::QueryString => {
-                {
-                    let mut pairs = endpoint.query_pairs_mut();
-                    for (key, value) in &form {
-                        pairs.append_pair(key, value);
-                    }
-                    pairs.append_pair("client_id", client_id_text);
-                    pairs.append_pair("client_secret", client_secret_text);
-                }
-                request = client.post(endpoint).header(ACCEPT, JSON_MEDIA_TYPE);
-                false
-            }
-        };
-        if send_form {
-            request = request.form(&form);
         }
+        request = request.form(&form);
         drop(form);
         drop(client_id);
         drop(client_secret);
         let response = request.send().await.map_err(map_transport_error)?;
-        let (token, provider_lifetime) =
-            parse_token_response(response, self.scope.as_deref()).await?;
-        let cache_lifetime = provider_lifetime.min(self.maximum_cache_lifetime);
+        let (token, lifetime) =
+            parse_token_response(response, self.scope.as_deref(), self.assumed_lifetime).await?;
+        let cache_lifetime = lifetime.min(self.maximum_cache_lifetime);
         if !cache_lifetime.is_zero() {
             let expires_at = Instant::now()
                 .checked_add(cache_lifetime)
@@ -1159,6 +1148,7 @@ async fn parse_data_response(
 async fn parse_token_response(
     response: reqwest::Response,
     expected_scope: Option<&str>,
+    assumed_lifetime: Option<Duration>,
 ) -> Result<(ProtectedToken, Duration), SourceError> {
     // `reject_response_status` classifies only redirect/status outcomes, never a
     // timeout, so every rejection here is a credential-exchange failure.
@@ -1188,11 +1178,19 @@ async fn parse_token_response(
     if !token_type.eq_ignore_ascii_case("bearer") {
         return Err(SourceError::Credential);
     }
-    let expires_in = match object.remove("expires_in") {
-        Some(JsonValue::Number(value)) => value.as_u64().filter(|value| *value > 0),
-        _ => None,
-    }
-    .ok_or(SourceError::Credential)?;
+    // RFC 6749 section 5.1 makes `expires_in` recommended rather than required.
+    // A provider that omits it is accepted only when the bundle states the
+    // lifetime to assume; a present but unusable value is never rescued by it.
+    let lifetime = match object.remove("expires_in") {
+        Some(JsonValue::Number(value)) => Duration::from_secs(
+            value
+                .as_u64()
+                .filter(|seconds| *seconds > 0)
+                .ok_or(SourceError::Credential)?,
+        ),
+        Some(_) => return Err(SourceError::Credential),
+        None => assumed_lifetime.ok_or(SourceError::Credential)?,
+    };
     if let Some(scope) = object.remove("scope") {
         let JsonValue::String(scope) = scope else {
             return Err(SourceError::Credential);
@@ -1207,10 +1205,7 @@ async fn parse_token_response(
     if !object.is_empty() {
         return Err(SourceError::Credential);
     }
-    Ok((
-        ProtectedToken::from_string(access_token)?,
-        Duration::from_secs(expires_in),
-    ))
+    Ok((ProtectedToken::from_string(access_token)?, lifetime))
 }
 
 fn reject_response_status(response: &reqwest::Response) -> Result<(), SourceError> {
@@ -1673,8 +1668,9 @@ mod tests {
             client_secret_ref: SecretRef::parse("secret:file/missing-client-secret")
                 .expect("secret reference parses"),
             scope: Some("fixture.read".into()),
-            credential_placement: CredentialPlacement::QueryString,
+            credential_placement: CredentialPlacement::FormBody,
             maximum_cache_lifetime: Duration::from_secs(60),
+            assumed_lifetime: None,
             admission_timeout: Duration::from_millis(20),
             cache: Mutex::new(None),
         };

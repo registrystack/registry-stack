@@ -287,11 +287,12 @@ hop-by-hop header, forwarding/proxy header, or tracing header. Names are
 validated as HTTP field names. Secret values are bounded and reject controls,
 CR, and LF.
 
-OAuth `credentialPlacement` is one of `basic-header`, `form-body`, or the
-deployment-residual `query-string`. Query-string placement requires complete
-token URL/query redaction. Token redirects are denied and token responses are
-bounded. The token request is credential bootstrap, not a second evidence-data
-lookup.
+OAuth `credentialPlacement` is one of `basic-header` or `form-body`. RFC 6749
+section 2.3.1 requires the client identifier and secret to travel in the
+Authorization header or the request body and never in the request URI, so
+Version 1 offers no query-string placement and no credential can reach a token
+URL log. Token redirects are denied and token responses are bounded. The token
+request is credential bootstrap, not a second evidence-data lookup.
 
 Secret files are byte strings, not base64 fields. Do not base64-encode the
 audit or subject-binding key unless those encoded ASCII bytes are intentionally

@@ -91,12 +91,16 @@ wrong type, or a namespace mismatch stops without a signed negative.
 
 ## OAuth and secrets
 
-This example retains OpenCRVS query-string client credential placement for
-compatibility. It is a deployment residual because authorization-server,
-proxy, or ingress URL logs may capture the token request. Prefer Basic-header
-or form-body placement when the provider supports it. Locally, the complete
-token URL, query, body, response, and debug output must be stripped or
-redacted, redirects denied, and token responses bounded.
+This example places the client credentials in the token request body, so no
+credential reaches a URL that an authorization server, proxy, or ingress may
+log. `form-body` and `basic-header` are the only placements Version 1 offers.
+Locally, the complete token URL, body, response, and debug output must be
+stripped or redacted, redirects denied, and token responses bounded.
+
+The token endpoint returns only `access_token` and `token_type`. RFC 6749
+section 5.1 makes `expires_in` recommended rather than required, so the bundle
+states `assumedLifetimeSeconds` and the cache stays clamped to
+`maximumCacheSeconds`.
 
 Required secret files beneath `/run/secrets/registry-evidence`, each owned by
 the service identity with mode `0600`, are:

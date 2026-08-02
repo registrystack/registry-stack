@@ -9,10 +9,15 @@ authentication:
   clientIdRef: secret:file/events-client-id
   clientSecretRef: secret:file/events-client-secret
   scope: recordsearch
-  # OpenCRVS token-bootstrap compatibility only. The evidence-data request
-  # still uses Authorization: Bearer. See the documented URL-log risk.
-  credentialPlacement: query-string
+  # The token endpoint accepts client credentials in the request body, so
+  # they never reach a URL that a proxy or ingress may log. The evidence-data
+  # request still uses Authorization: Bearer.
+  credentialPlacement: form-body
   maximumCacheSeconds: 300
+  # OpenCRVS returns only access_token and token_type. RFC 6749 section
+  # 5.1 permits the omission, so the assumed lifetime is stated here and
+  # still clamped by maximumCacheSeconds.
+  assumedLifetimeSeconds: 600
 request:
   method: POST
   path: /events/search

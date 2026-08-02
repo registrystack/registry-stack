@@ -116,18 +116,35 @@ fn oauth_source(
     placement: &str,
     maximum_cache_seconds: u64,
 ) -> SourceConfig {
-    fixed_source(
+    oauth_source_with_assumed_lifetime(
         base_url,
-        json!({
-            "kind": "oauth2-client-credentials",
-            "tokenEndpoint": token_endpoint,
-            "clientIdRef": "secret:file/oauth-client-id",
-            "clientSecretRef": "secret:file/oauth-client-secret",
-            "scope": "fixture.read",
-            "credentialPlacement": placement,
-            "maximumCacheSeconds": maximum_cache_seconds
-        }),
+        token_endpoint,
+        placement,
+        maximum_cache_seconds,
+        None,
     )
+}
+
+fn oauth_source_with_assumed_lifetime(
+    base_url: &str,
+    token_endpoint: &str,
+    placement: &str,
+    maximum_cache_seconds: u64,
+    assumed_lifetime_seconds: Option<u64>,
+) -> SourceConfig {
+    let mut authentication = json!({
+        "kind": "oauth2-client-credentials",
+        "tokenEndpoint": token_endpoint,
+        "clientIdRef": "secret:file/oauth-client-id",
+        "clientSecretRef": "secret:file/oauth-client-secret",
+        "scope": "fixture.read",
+        "credentialPlacement": placement,
+        "maximumCacheSeconds": maximum_cache_seconds
+    });
+    if let Some(seconds) = assumed_lifetime_seconds {
+        authentication["assumedLifetimeSeconds"] = json!(seconds);
+    }
+    fixed_source(base_url, authentication)
 }
 
 fn selector(value: &str) -> ResolvedSourceSelector {
@@ -693,7 +710,7 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
     let mut oauth = oauth_source(
         &data_server.uri(),
         &format!("{}/token", token_server.uri()),
-        "query-string",
+        "form-body",
         60,
     );
     oauth.request.method = HttpMethod::GET;
@@ -881,13 +898,14 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         )
         .expect("match response fixture is JSON");
         if id == "opencrvs-event-search-json" {
+            // The reference shape returns only access_token and token_type.
+            // Adding a lifetime here would make the mock more compliant than
+            // the provider it models and hide the assumed-lifetime path.
             Mock::given(method("POST"))
                 .and(path("/oauth/token"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                     "access_token": "shape-oauth-access-token-canary",
-                    "token_type": "Bearer",
-                    "expires_in": 120,
-                    "scope": "fixture.read"
+                    "token_type": "Bearer"
                 })))
                 .expect(1)
                 .mount(&server)
@@ -994,17 +1012,29 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                 .filter(|request| request.url.path() == "/oauth/token")
                 .collect::<Vec<_>>();
             assert_eq!(token_requests.len(), 1, "exact OAuth bootstrap count");
-            let query = query_parameters(&token_requests[0].url);
+            // The reference shape accepts the client credentials in the token
+            // request body, so no credential may appear in the token URL.
             assert!(
-                query.len() == 4
-                    && contains_parameter(&query, "grant_type", "client_credentials")
-                    && contains_parameter(&query, "scope", "fixture.read")
-                    && contains_parameter(&query, "client_id", "shape-oauth-client-canary")
-                    && contains_parameter(&query, "client_secret", "shape-oauth-secret-canary"),
-                "OAuth bootstrap query is the exact reviewed shape"
+                query_parameters(&token_requests[0].url).is_empty(),
+                "OAuth bootstrap URL carries no query"
             );
-            assert!(token_requests[0].body.is_empty());
+            let form = encoded_parameters(&token_requests[0].body);
+            assert!(
+                form.len() == 4
+                    && contains_parameter(&form, "grant_type", "client_credentials")
+                    && contains_parameter(&form, "scope", "fixture.read")
+                    && contains_parameter(&form, "client_id", "shape-oauth-client-canary")
+                    && contains_parameter(&form, "client_secret", "shape-oauth-secret-canary"),
+                "OAuth bootstrap body is the exact reviewed shape"
+            );
             assert!(token_requests[0].headers.get("authorization").is_none());
+            assert_eq!(
+                token_requests[0]
+                    .headers
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok()),
+                Some("application/x-www-form-urlencoded")
+            );
             assert_eq!(
                 token_requests[0]
                     .headers
@@ -1491,18 +1521,6 @@ async fn assert_oauth_success_matrix_case(placement: &str, maximum_cache_seconds
                     "form placement token body is not exact"
                 );
             }
-            "query-string" => {
-                assert!(form.is_empty(), "query placement added a token body");
-                assert!(request.headers.get("authorization").is_none());
-                assert!(
-                    query.len() == 4
-                        && contains_parameter(&query, "grant_type", "client_credentials")
-                        && contains_parameter(&query, "scope", "fixture.read")
-                        && contains_parameter(&query, "client_id", &client_id)
-                        && contains_parameter(&query, "client_secret", &client_secret),
-                    "query placement token parameters are not exact"
-                );
-            }
             _ => panic!("unknown non-secret test placement"),
         }
     }
@@ -1510,16 +1528,66 @@ async fn assert_oauth_success_matrix_case(placement: &str, maximum_cache_seconds
 
 #[tokio::test]
 async fn oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded() {
-    for placement in ["basic-header", "form-body", "query-string"] {
+    for placement in ["basic-header", "form-body"] {
         assert_oauth_success_matrix_case(placement, 60).await;
         assert_oauth_success_matrix_case(placement, 0).await;
     }
 }
 
+/// A provider that omits `expires_in` still gets a bounded cache, and the
+/// configured maximum still wins over the assumed lifetime.
 #[tokio::test]
-async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
+async fn oauth_assumed_lifetime_caches_an_omitted_provider_lifetime_and_stays_clamped() {
+    for (maximum_cache_seconds, expected_token_requests) in [(60_u64, 1_u64), (0, 2)] {
+        let server = MockServer::start().await;
+        let access_token = format!("access-token-{}", ulid::Ulid::new());
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": access_token.clone(),
+                "token_type": "Bearer"
+            })))
+            .expect(expected_token_requests)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/data"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let (_root, secrets) = resolver(&[
+            ("oauth-client-id", "assumed-lifetime-client-id"),
+            ("oauth-client-secret", "assumed-lifetime-client-secret"),
+        ]);
+        let source = oauth_source_with_assumed_lifetime(
+            &server.uri(),
+            &format!("{}/token", server.uri()),
+            "form-body",
+            maximum_cache_seconds,
+            Some(120),
+        );
+        let executor = SourceExecutor::new(&source, secrets).expect("OAuth executor builds");
+        for _ in 0..2 {
+            executor
+                .execute(
+                    &[selector("record")],
+                    &RequestParts {
+                        query: vec![],
+                        body: Some(json!({})),
+                    },
+                )
+                .await
+                .expect("assumed lifetime authorizes the request");
+        }
+    }
+}
+
+#[tokio::test]
+async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests() {
     let fixture: Value = serde_norway::from_str(include_str!(
-        "../../../products/evidence/fixtures/conformance/oauth-query-credential-redaction.yaml"
+        "../../../products/evidence/fixtures/conformance/oauth-credential-redaction.yaml"
     ))
     .expect("OAuth redaction fixture parses");
     let declared = fixture["cases"]
@@ -1543,6 +1611,8 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
         "token-response-wrong-lifetime".to_owned(),
         "token-response-wrong-media-type".to_owned(),
         "token-response-wrong-scope".to_owned(),
+        "token-response-omitted-lifetime".to_owned(),
+        "token-response-omitted-lifetime-with-assumed-lifetime".to_owned(),
         "token-response-wrong-token-type".to_owned(),
         "token-success".to_owned(),
         "transport-connection-failure".to_owned(),
@@ -1611,6 +1681,15 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
                 "token_type": "Bearer",
                 "expires_in": 0
             }))),
+            // The minimum RFC 6749 section 5.1 response. Accepted only when the
+            // bundle states the lifetime to assume.
+            "token-response-omitted-lifetime"
+            | "token-response-omitted-lifetime-with-assumed-lifetime" => {
+                Some(ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": access_token.clone(),
+                    "token_type": "Bearer"
+                })))
+            }
             "token-response-wrong-media-type" => Some(ResponseTemplate::new(200).set_body_raw(
                 format!(
                     "{{\"access_token\":\"{access_token}\",\"token_type\":\"Bearer\",\"expires_in\":120}}"
@@ -1649,7 +1728,15 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
         } else {
             format!("{}/token", server.uri())
         };
-        let mut source = oauth_source(&server.uri(), &token_endpoint, "query-string", 0);
+        let assumed_lifetime_seconds =
+            (case_id == "token-response-omitted-lifetime-with-assumed-lifetime").then_some(120);
+        let mut source = oauth_source_with_assumed_lifetime(
+            &server.uri(),
+            &token_endpoint,
+            "form-body",
+            0,
+            assumed_lifetime_seconds,
+        );
         if case_id == "transport-timeout" {
             source.request.timeout_milliseconds = 20;
         }
@@ -1663,8 +1750,12 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
                 },
             )
             .await;
-        if case_id == "token-success" {
-            assert!(result.is_ok(), "success fixture case failed");
+        let expects_success = matches!(
+            case_id.as_str(),
+            "token-success" | "token-response-omitted-lifetime-with-assumed-lifetime"
+        );
+        if expects_success {
+            assert!(result.is_ok(), "success fixture case {case_id} failed");
         } else {
             let expected_error = match case_id.as_str() {
                 "transport-timeout" => SourceError::Timeout,
@@ -1686,7 +1777,7 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
             .iter()
             .filter(|request| request.url.path() == "/data")
             .count();
-        if case_id == "token-success" {
+        if expects_success {
             assert!(
                 data_count == 1,
                 "successful token did not authorize one data request"
@@ -1705,16 +1796,21 @@ async fn oauth_query_redaction_fixture_fails_closed_without_data_requests() {
             continue;
         }
         let token_request = token_request.expect("token request was journaled");
-        let query = query_parameters(&token_request.url);
+        // No placement may put a credential in the token URL, so the redaction
+        // surface is the request body and the response, never the URL.
         assert!(
-            query.len() == 4
-                && contains_parameter(&query, "grant_type", "client_credentials")
-                && contains_parameter(&query, "scope", "fixture.read")
-                && contains_parameter(&query, "client_id", &client_id)
-                && contains_parameter(&query, "client_secret", &client_secret),
-            "query placement did not deliver the exact closed credential request"
+            query_parameters(&token_request.url).is_empty(),
+            "token URL carried a query"
         );
-        assert!(token_request.body.is_empty());
+        let form = encoded_parameters(&token_request.body);
+        assert!(
+            form.len() == 4
+                && contains_parameter(&form, "grant_type", "client_credentials")
+                && contains_parameter(&form, "scope", "fixture.read")
+                && contains_parameter(&form, "client_id", &client_id)
+                && contains_parameter(&form, "client_secret", &client_secret),
+            "form placement did not deliver the exact closed credential request"
+        );
     }
 }
 

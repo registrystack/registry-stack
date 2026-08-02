@@ -59,8 +59,14 @@ sources:
       clientIdRef: secret:file/opencrvs-client-id
       clientSecretRef: secret:file/opencrvs-client-secret
       scope: recordsearch
-      credentialPlacement: query-string
+      # The token endpoint accepts client credentials in the request body,
+      # so they never reach a URL that a proxy or ingress may log.
+      credentialPlacement: form-body
       maximumCacheSeconds: 300
+      # OpenCRVS returns only access_token and token_type. RFC 6749 section
+      # 5.1 permits the omission, so the assumed lifetime is stated here and
+      # still clamped by maximumCacheSeconds.
+      assumedLifetimeSeconds: 600
     request:
       method: POST
       path: /events/search
@@ -108,8 +114,14 @@ sources:
       clientIdRef: secret:file/opencrvs-client-id
       clientSecretRef: secret:file/opencrvs-client-secret
       scope: recordsearch
-      credentialPlacement: query-string
+      # The token endpoint accepts client credentials in the request body,
+      # so they never reach a URL that a proxy or ingress may log.
+      credentialPlacement: form-body
       maximumCacheSeconds: 300
+      # OpenCRVS returns only access_token and token_type. RFC 6749 section
+      # 5.1 permits the omission, so the assumed lifetime is stated here and
+      # still clamped by maximumCacheSeconds.
+      assumedLifetimeSeconds: 600
     request:
       method: POST
       path: /events/search

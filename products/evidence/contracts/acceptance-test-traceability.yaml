@@ -100,9 +100,9 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: source_executor_failure_matrix_is_exact_single_request_and_value_free}
   - id: acceptance-row-19
-    summary: OAuth token requests and responses are absent from all diagnostics, even when the provider requires credentials in the query string.
+    summary: OAuth token requests and responses are absent from all diagnostics, and no placement can put client credentials in the token URL.
     tests:
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_query_redaction_fixture_fails_closed_without_data_requests}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
       - {file: crates/registry-evidence/src/config.rs, name: source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query}
   - id: acceptance-row-20

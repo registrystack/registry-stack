@@ -126,7 +126,7 @@ source_shapes:
     - maximum two bounded results solely for cardinality; profiles that cannot field-project declare record-transformed
     - no candidates, count beyond closed outcome, score, hint, or comparison in derivation or public surfaces
     - raw selectors, credentials, token flows, source values, and bodies absent from diagnostics and audit
-  query_oauth_redaction: oauth-query-credential-redaction.yaml
+  oauth_credential_redaction: oauth-credential-redaction.yaml
 public_contracts:
   requests_and_payloads: golden/
   jws: jws-cases.yaml

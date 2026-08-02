@@ -124,15 +124,16 @@ authentication:
     placement: The exact allowlisted provider header.
     rule: Header name is validated against the same collision denylist as fixed headers and cannot be Authorization.
   oauth2-client-credentials:
-    inputs: [token_endpoint, client_id_secret_ref, client_secret_secret_ref, optional_fixed_scope, credential_placement, maximum_cache_lifetime]
+    inputs: [token_endpoint, client_id_secret_ref, client_secret_secret_ref, optional_fixed_scope, credential_placement, maximum_cache_lifetime, optional_assumed_token_lifetime]
     rules:
       - Token acquisition is credential bootstrap, not an evidence-data request or fact source.
       - Endpoint, grant, scope, placement, response bounds, redirect denial, and cache maximum are fixed.
       - Waiting for the per-source token-cache and single-flight boundary is limited by the configured source timeout.
       - Cache lifetime is clamped to provider expiry and the configured maximum.
       - Token request and response are unavailable to Rhai and fully redacted.
-    credential_placements: [basic-header, form-body, query-string]
-    query_string_rule: Query-string placement is explicit and requires complete token URL, query, body, response, client identifier, and debug-output redaction.
+    token_lifetime_rule: RFC 6749 section 5.1 makes expires_in recommended rather than required, so a token response carrying only access_token and token_type is accepted when the bundle configures assumedLifetimeSeconds. The assumed lifetime is a governed positive bundle value, never inferred from the token, and the cache is still clamped to the configured maximum. A provider that omits expires_in without a configured assumed lifetime, or returns a zero or non-numeric expires_in, remains a credential failure.
+    credential_placements: [basic-header, form-body]
+    credential_placement_rule: RFC 6749 section 2.3.1 defines Basic authentication and the request-body parameters and requires that those parameters never appear in the request URI. Version 1 offers no query-string placement, so no client identifier or secret can reach an authorization-server, proxy, or ingress URL log. The token URL, body, response, and debug output are still fully redacted.
     token_endpoint_transport: The same HTTPS-or-explicit-numeric-loopback rule as the evidence-data origin.
   secret_rules:
     - The governed bundle contains only secret:file logical references. Environment-variable interpolation and literal secret values are not supported.
@@ -169,6 +170,6 @@ neutrality:
   named_compatibility_profiles: Test fixtures and reference documentation only.
 fixtures:
   postures: ../fixtures/conformance/acquisition-postures.yaml
-  oauth_query_redaction: ../fixtures/conformance/oauth-query-credential-redaction.yaml
+  oauth_credential_redaction: ../fixtures/conformance/oauth-credential-redaction.yaml
   shapes: ../fixtures/source-shapes/
   required_shape_outcomes: [zero, one, multiple, missing-fact, error-envelope]

@@ -129,7 +129,7 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: materialized_request_reuses_path_template_query_and_body_without_auth_material}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: get_body_is_rejected_before_static_or_oauth_credential_acquisition}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_query_redaction_fixture_fails_closed_without_data_requests}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
   - id: sec-runtime-cannot-override-governed-bundle
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: runtime_document_is_closed_and_contains_no_governed_override_surface}

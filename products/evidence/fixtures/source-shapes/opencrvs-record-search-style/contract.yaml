@@ -12,8 +12,9 @@ validated_source_definition:
     clientIdRef: secret:file/fixture-event-search-client-id
     clientSecretRef: secret:file/fixture-event-search-client-secret
     scope: fixture.read
-    credentialPlacement: query-string
+    credentialPlacement: form-body
     maximumCacheSeconds: 300
+    assumedLifetimeSeconds: 600
   request:
     method: POST
     path: /events/search
@@ -50,11 +51,14 @@ credential_bootstrap:
   method: POST
   token_endpoint: 'http://[::1]:18083/oauth/token'
   grant_type: client_credentials
-  credential_placement: query-string
+  credential_placement: form-body
+  credential_placement_rule: The reference shape accepts client credentials in the token request body, so no credential reaches the request URL. Version 1 offers no query-string placement.
   client_id: injected from secret reference
   client_secret: injected from secret reference
   maximum_response_bytes: 8192
   maximum_cache_seconds: 300
+  token_response_fields: [access_token, token_type]
+  omitted_expires_in: The reference shape returns no expires_in, which RFC 6749 section 5.1 permits. The fixture therefore configures assumedLifetimeSeconds and must not be relaxed by adding a lifetime the reference shape does not send.
   failures: [http-400, http-401, http-429, http-500, timeout, invalid-json, missing-token, wrong-token-type, oversized-response]
 request:
   method: POST

@@ -413,13 +413,14 @@ references. This is honest `record-transformed` compatibility, not
 field-projected acquisition. A governed decision endpoint or provider-side
 result projection is preferable where available.
 
-The reference also reflects OpenCRVS's current client bootstrap, which places
-the client identifier and secret in the token endpoint query string. This
-placement applies only to the token request; Rust sends the resulting access
-token to `/events/search` in the `Authorization: Bearer` header. Query-string
-bootstrap can expose credentials to upstream URL logs, proxies, or tracing.
-Use a safer provider-supported placement when available and require complete
-token-URL stripping and redaction locally. External provider logging remains a
+The reference bootstraps its client credentials in the token request body,
+which the provider accepts and which RFC 6749 section 2.3.1 requires. No
+credential reaches the token URL, so upstream URL logs, proxies, and tracing
+have nothing to capture. This placement applies only to the token request;
+Rust sends the resulting access token to `/events/search` in the
+`Authorization: Bearer` header. The provider's own token response returns no
+`expires_in`, so the bundle states `assumedLifetimeSeconds` and the cache
+stays clamped to `maximumCacheSeconds`. External provider logging remains a
 deployment risk that this adapter design cannot eliminate.
 
 For the simpler adult-status compatibility case, the same preparation ABI can

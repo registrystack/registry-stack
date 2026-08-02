@@ -233,8 +233,9 @@ $defs:
           clientIdRef: {$ref: '#/$defs/secret-ref'}
           clientSecretRef: {$ref: '#/$defs/secret-ref'}
           scope: {type: string, minLength: 1, maxLength: 512}
-          credentialPlacement: {enum: [basic-header, form-body, query-string]}
+          credentialPlacement: {enum: [basic-header, form-body]}
           maximumCacheSeconds: {type: integer, minimum: 0, maximum: 86400}
+          assumedLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
   fixed-request:
     type: object
     additionalProperties: false
@@ -679,7 +680,7 @@ startup_checks:
 secret_policy:
   permitted: File-provider logical names matching the exact secret-reference grammar only.
   prohibited: private key, password, bearer token, client secret, or expanded environment value in any bundle file
-  query_string_oauth_rule: Query-string client credentials require the explicit query-string placement and complete token URL, query, body, response, and debug-output redaction.
+  oauth_placement_rule: Client credentials travel in the Authorization header or the token request body only. There is no query-string placement, so no credential can reach a token URL, and the token URL, body, response, and debug output are still fully redacted.
   file_provider_rule: Resolve secret:file logical names beneath the configured owner-controlled fileRoot, reject symlinks and path traversal, require regular owner-only files, and parse values as data.
 deployment_rules:
   authentication: Evidence independently validates the bearer token against exact configured issuer, audience, token type, algorithm, and JWKS; upstream identity headers are ignored and rejected if mapped

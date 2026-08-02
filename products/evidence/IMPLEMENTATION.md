@@ -676,8 +676,8 @@ At minimum, pin these acceptance and negative cases:
     and `ambiguous` across the three source shapes; facts exist only on
     `match`.
 18. Event-index envelope errors and incomplete declaration data fail closed.
-19. OAuth token requests and responses are absent from all diagnostics, even
-    when the provider requires credentials in the query string.
+19. OAuth token requests and responses are absent from all diagnostics, and
+    no placement can put client credentials in the token URL.
 20. Live-source tests are ignored by default, read-only, and refuse missing or
     permissively stored credential files.
 21. Adult status passes the complete path with before, on, and after-boundary

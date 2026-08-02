@@ -147,9 +147,12 @@ async fn run_opencrvs() -> Result<(), LiveError> {
     let (token_url, search_url) = opencrvs_urls(required(&config, "OPENCRVS_URL")?)?;
     let client = live_client()?;
 
+    // Form-body placement mirrors the reviewed reference bundle and keeps the
+    // client credentials out of the token URL, where a proxy or ingress log
+    // would capture them.
     let response = client
         .post(token_url)
-        .query(&[
+        .form(&[
             ("client_id", required(&config, "OPENCRVS_CLIENT_ID")?),
             ("client_secret", required(&config, "OPENCRVS_SECRET")?),
             ("grant_type", "client_credentials"),
@@ -165,6 +168,10 @@ async fn run_opencrvs() -> Result<(), LiveError> {
         .as_object()
         .cloned()
         .ok_or(LiveError::Authentication)?;
+    // This check must stay as strict as the product's own token parser in
+    // `source::parse_token_response`. A live check that accepts a response the
+    // product rejects reports a passing profile for a source Evidence cannot
+    // actually reach.
     if !token_object.keys().all(|key| {
         matches!(
             key.as_str(),
@@ -173,19 +180,35 @@ async fn run_opencrvs() -> Result<(), LiveError> {
     }) {
         return Err(LiveError::Authentication);
     }
-    if token_object.remove("token_type").is_some_and(|value| {
-        !value
-            .as_str()
-            .is_some_and(|token_type| token_type.eq_ignore_ascii_case("bearer"))
-    }) {
-        return Err(LiveError::Authentication);
-    }
     let token = token_object
         .remove("access_token")
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .filter(|value| !value.is_empty() && value.len() <= 16 * 1024)
+        .filter(|value| !value.is_empty() && value.len() <= MAX_TOKEN_RESPONSE_BYTES)
         .map(Zeroizing::new)
         .ok_or(LiveError::Authentication)?;
+    // `token_type` is required by RFC 6749 section 5.1 and by the product.
+    if !token_object
+        .remove("token_type")
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .is_some_and(|token_type| token_type.eq_ignore_ascii_case("bearer"))
+    {
+        return Err(LiveError::Authentication);
+    }
+    // `expires_in` is only recommended, so an absent lifetime is accepted here
+    // exactly as the product accepts it under a configured assumed lifetime.
+    // A present lifetime must still be a positive integer.
+    if token_object
+        .remove("expires_in")
+        .is_some_and(|value| value.as_u64().is_none_or(|seconds| seconds == 0))
+    {
+        return Err(LiveError::Authentication);
+    }
+    if token_object
+        .remove("scope")
+        .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
+    {
+        return Err(LiveError::Authentication);
+    }
 
     let tracking_id = required(&config, "OPENCRVS_TEST_TRACKING_ID")?;
     let search_body = opencrvs_tracking_id_search(tracking_id);

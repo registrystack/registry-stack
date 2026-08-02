@@ -1448,6 +1448,19 @@ pub enum SourceAuthentication {
         credential_placement: CredentialPlacement,
         #[serde(rename = "maximumCacheSeconds")]
         maximum_cache_seconds: u64,
+        /// Lifetime assumed when the provider omits `expires_in`.
+        ///
+        /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
+        /// required, so a compliant provider may return only `access_token`
+        /// and `token_type`. The operator states the lifetime here rather than
+        /// the runtime inferring one from the token, and the cache is still
+        /// clamped to `maximumCacheSeconds`.
+        #[serde(
+            rename = "assumedLifetimeSeconds",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        assumed_lifetime_seconds: Option<u64>,
     },
 }
 
@@ -1467,6 +1480,7 @@ impl SourceAuthentication {
                 token_endpoint,
                 scope,
                 maximum_cache_seconds,
+                assumed_lifetime_seconds,
                 ..
             } => {
                 let token_endpoint = validate_source_url(token_endpoint, false)?;
@@ -1475,6 +1489,14 @@ impl SourceAuthentication {
                 }
                 if let Some(scope) = scope {
                     validate_string(scope, 1, 512, "OAuth scope")?;
+                }
+                if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
+                    validate_range(
+                        *assumed_lifetime_seconds,
+                        1,
+                        86_400,
+                        "OAuth assumed token lifetime",
+                    )?;
                 }
                 validate_range(
                     *maximum_cache_seconds,
@@ -1503,12 +1525,16 @@ impl SourceAuthentication {
     }
 }
 
+/// Where the token request carries the client credentials.
+///
+/// RFC 6749 section 2.3.1 defines Basic authentication and the request-body
+/// parameters and states that those parameters must not be placed in the
+/// request URI, so Version 1 offers no query-string placement.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialPlacement {
     BasicHeader,
     FormBody,
-    QueryString,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -3681,6 +3707,7 @@ mod tests {
                 scope: None,
                 credential_placement: CredentialPlacement::FormBody,
                 maximum_cache_seconds: 60,
+                assumed_lifetime_seconds: None,
             };
             assert_eq!(
                 oauth.validate(),
@@ -3688,6 +3715,87 @@ mod tests {
                     "OAuth token endpoint must not contain a query"
                 )),
                 "{query}"
+            );
+        }
+    }
+
+    /// The assumed lifetime is a governed positive duration, so a zero or
+    /// oversized value is a configuration error rather than a silent clamp.
+    #[test]
+    fn oauth_assumed_token_lifetime_is_a_bounded_positive_duration() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+
+        for (assumed_lifetime_seconds, expected) in [
+            (
+                Some(0),
+                Err(ConfigError::Invalid(
+                    "numeric value is outside Version 1 bounds",
+                )),
+            ),
+            (Some(1), Ok(())),
+            (Some(86_400), Ok(())),
+            (
+                Some(86_401),
+                Err(ConfigError::Invalid(
+                    "numeric value is outside Version 1 bounds",
+                )),
+            ),
+            (None, Ok(())),
+        ] {
+            let mut oauth =
+                EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+            oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
+                token_endpoint: "https://source.invalid/token".to_owned(),
+                client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
+                client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
+                    .expect("secret ref"),
+                scope: None,
+                credential_placement: CredentialPlacement::FormBody,
+                maximum_cache_seconds: 60,
+                assumed_lifetime_seconds,
+            };
+            assert_eq!(oauth.validate(), expected, "{assumed_lifetime_seconds:?}");
+        }
+    }
+
+    /// Query-string placement puts the client id and secret in a URL that
+    /// authorization-server, proxy, and ingress logs capture, and RFC 6749
+    /// section 2.3.1 requires those parameters to travel in the request body.
+    /// Version 1 accepts only the two placements the specification defines,
+    /// and the runtime and the published contract must agree on that.
+    #[test]
+    fn oauth_credential_placement_rejects_the_query_string_placement() {
+        let validator = bundle_contract_validator();
+        for (placement, accepted) in [
+            ("basic-header", true),
+            ("form-body", true),
+            ("query-string", false),
+        ] {
+            let authentication = serde_json::json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://source.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientSecretRef": "secret:file/oauth-client-secret",
+                "credentialPlacement": placement,
+                "maximumCacheSeconds": 60,
+            });
+            assert_eq!(
+                serde_json::from_value::<SourceAuthentication>(authentication.clone()).is_ok(),
+                accepted,
+                "{placement} runtime deserialization"
+            );
+
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "{placement} bundle contract"
             );
         }
     }
