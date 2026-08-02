@@ -709,7 +709,12 @@ keys appear at the JWKS endpoint. The audit JSONL path must be on storage whose
 append durability, permissions, capacity, backup, restore, retention, and keyed
 chain verification the operator owns.
 
-`evidence check` validates and compiles the complete bundle. Fixture evaluation
+`evidence check` validates and compiles the complete bundle, and resolves and
+validates the mounted audit, subject-binding, and signing secret material
+exactly as startup does, without opening the audit chain. A deployment whose
+secret material startup would refuse, including a signing key whose `kid` does
+not match `signing.activeKeyId`, fails check. Source credentials are not
+resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.

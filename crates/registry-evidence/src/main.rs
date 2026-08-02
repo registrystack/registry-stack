@@ -28,7 +28,10 @@ use registry_evidence::{
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
-    runtime::{source_failure_problem, EvidenceRuntime, RuntimeInitializationError},
+    runtime::{
+        source_failure_problem, validate_secret_material, EvidenceRuntime,
+        RuntimeInitializationError,
+    },
     secrets::{SecretProvider, SecretResolver},
     selector::{
         resolve_offline_fixture_authorization, resolve_offline_fixture_subjects,
@@ -75,7 +78,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Validate and compile the complete immutable bundle.
+    /// Validate and compile the complete immutable bundle, and validate the
+    /// mounted secret material exactly as startup does.
     Check,
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
@@ -181,6 +185,18 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|_| CliError("bundle compilation failed"))?;
             let _source_plans = compile_source_plans(&bundle.config, &runtime)?;
+            // Deployment secret material is validated exactly as startup
+            // validates it, without opening the audit chain, so a deployment
+            // the server would refuse fails check instead of first start.
+            // Source credentials stay unresolved: readiness owns them.
+            let secrets = SecretResolver::new(
+                [SecretProvider::File],
+                &runtime.config.secret_providers.file.root,
+            )
+            .map_err(|_| runtime_initialization_error(RuntimeInitializationError::Secrets))?;
+            validate_secret_material(&bundle, &secrets)
+                .await
+                .map_err(runtime_initialization_error)?;
             println!(
                 "Evidence deployment {} / {} passed check ({} requirements)",
                 bundle.revision(),
