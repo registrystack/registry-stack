@@ -32,8 +32,10 @@ container path needs no host-side freeze; freezing the project on disk
 remains good practice for the host path.
 
 Neither image declares a Docker `HEALTHCHECK` (distroless, no shell).
-Probe `GET /health` over HTTP from your orchestrator, or uncomment the
-`ports:` lines to reach the listeners from the host.
+Probe over HTTP from your orchestrator: `GET /health` is liveness only,
+and `GET /ready` is the gate that fails closed while any required
+secret or source credential is absent, so route traffic on `/ready`.
+Uncomment the `ports:` lines to reach the listeners from the host.
 
 ## Mint
 
