@@ -12,6 +12,7 @@ pub enum ProblemCode {
     InvalidSelector,
     AuthenticationFailed,
     NotAuthorized,
+    ResponseFormatNotAcceptable,
     EvidenceNotAvailable,
     RateLimited,
     DependencyUnavailable,
@@ -25,6 +26,7 @@ impl ProblemCode {
             Self::InvalidSelector => "invalid_selector",
             Self::AuthenticationFailed => "authentication_failed",
             Self::NotAuthorized => "not_authorized",
+            Self::ResponseFormatNotAcceptable => "response_format_not_acceptable",
             Self::EvidenceNotAvailable => "evidence_not_available",
             Self::RateLimited => "rate_limited",
             Self::DependencyUnavailable => "dependency_unavailable",
@@ -37,6 +39,7 @@ impl ProblemCode {
             Self::MalformedRequest | Self::InvalidSelector => StatusCode::BAD_REQUEST,
             Self::AuthenticationFailed => StatusCode::UNAUTHORIZED,
             Self::NotAuthorized => StatusCode::FORBIDDEN,
+            Self::ResponseFormatNotAcceptable => StatusCode::NOT_ACCEPTABLE,
             Self::EvidenceNotAvailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::DependencyUnavailable | Self::ServiceUnavailable => {
@@ -50,6 +53,7 @@ impl ProblemCode {
             Self::MalformedRequest | Self::InvalidSelector => "Request is not valid",
             Self::AuthenticationFailed => "Authentication failed",
             Self::NotAuthorized => "Request is not authorized",
+            Self::ResponseFormatNotAcceptable => "Requested response format is not acceptable",
             Self::EvidenceNotAvailable => "Evidence could not be produced",
             Self::RateLimited => "Request rate exceeded",
             Self::DependencyUnavailable | Self::ServiceUnavailable => {
@@ -101,6 +105,11 @@ mod tests {
                 "Authentication failed",
             ),
             (ProblemCode::NotAuthorized, 403, "Request is not authorized"),
+            (
+                ProblemCode::ResponseFormatNotAcceptable,
+                406,
+                "Requested response format is not acceptable",
+            ),
             (
                 ProblemCode::EvidenceNotAvailable,
                 422,

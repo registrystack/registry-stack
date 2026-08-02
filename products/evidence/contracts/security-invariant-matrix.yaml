@@ -78,9 +78,9 @@ invariants:
     enforcement: Field allowlists and at most one scoped keyed pseudonym over each complete canonical role/selector bundle.
     negative_test: sec-protected-canaries-redacted
   - id: V1-I16
-    rule: No-match and ambiguous behavior cannot accidentally disclose registry membership.
-    threat: Existence oracle through status, message, diagnostics, count, or avoidable timing.
-    enforcement: Default public collapse to one problem plus closed protected audit class without counts.
+    rule: No-match, ambiguous, required-fact-missing, and derivation-input-inconsistent behavior cannot accidentally disclose registry membership.
+    threat: Existence oracle through status, message, diagnostics, count, avoidable timing, or a distinguishable failure class for a uniquely found record with inconsistent derivation inputs.
+    enforcement: Default public collapse of every unresolved class, including derivation-input inconsistency, to one problem shape plus a closed value-free protected audit category without counts.
     negative_test: sec-unresolved-public-collapse
   - id: V1-I17
     rule: Subject bindings are audience-scoped and not globally linkable.
@@ -103,9 +103,9 @@ invariants:
     enforcement: Bundle combination validation is mandatory independently of configured rate limits.
     negative_test: sec-rate-limit-does-not-legalize-ladder
   - id: V1-I21
-    rule: Every successful production response is a standard JWS over the exact evidence payload.
-    threat: Payload substitution, unsigned success, or unverifiable parallel representations.
-    enforcement: One flattened-JWS response type containing only protected, payload, and signature.
+    rule: Signed flattened JWS over the exact evidence payload is mandatory, available to every authorized grant, and the default response; unsigned output exists only through its exact media type when both the immutable bundle and the complete matched grant permit it.
+    threat: Payload substitution, an unsigned success masquerading as verified evidence, or unverifiable parallel representations.
+    enforcement: One flattened-JWS response type containing only protected, payload, and signature, plus a strict closed Accept matrix resolved before source access.
     negative_test: sec-jws-mutation-and-duplicate-payload
   - id: V1-I22
     rule: Missing or failed signing never falls back to unsigned evidence.
@@ -132,6 +132,31 @@ invariants:
     threat: A public catalog, entitlement oracle, or overbroad metadata response reveals unavailable definitions, authority structure, selectors, source plans, or credentials.
     enforcement: Rust authenticates and rate-limits discovery, projects only complete shapes matching exactly one authority path and valid token-owned selector material through a closed response allowlist, omits unentitled and ambiguous shapes, and performs no provider or evidence-data audit access.
     negative_test: sec-discovery-requester-scoped
+  - id: V1-I27
+    rule: Every request carries one exact canonical 32-byte random nonce that is echoed into Evidence but never stored, uniqueness-checked, or exposed to authorization, rate limits, Rhai, source requests, logs, metrics, traces, or native audit.
+    threat: A malformed or attacker-shaped nonce reaches downstream boundaries, or the nonce becomes a covert identifier channel correlated through audit or source records.
+    enforcement: Strict canonical base64url parsing before authentication, credential acquisition, and source access; the exact value is copied only into the core-constructed Evidence payload.
+    negative_test: sec-request-nonce-strict-and-contained
+  - id: V1-I28
+    rule: The unsigned response format is authorized only when the immutable bundle enables it and the one complete matched grant permits it; API selection, runtime configuration, and other grants create no permission.
+    threat: A caller or operator activates unsigned output around governance, or permissions union across grants.
+    enforcement: Closed bundle responseFormats and per-grant responseFormats validated at startup with signed JWS mandatory, checked together after exact entitlement match and before selector resolution, credentials, or source access; the closed runtime file has no response-format field.
+    negative_test: sec-unsigned-requires-bundle-and-grant
+  - id: V1-I29
+    rule: Final immutable response bytes exist before the disclosure-release audit is durably accepted and are the exact bytes released afterward, for both response formats.
+    threat: Audit describes bytes that were never released, or a response is released without a durable release record.
+    enforcement: The runtime serializes the signed JWS or unsigned envelope to its final bytes, durably appends the release event, then returns those bytes unchanged through the HTTP boundary.
+    negative_test: sec-release-bytes-pre-audited
+  - id: V1-I30
+    rule: Audit records the closed response-protection mode on every native event and a signing key identity exactly for signed disclosure release.
+    threat: An unsigned release is indistinguishable from a signed one in accountability records, or a fabricated signing-key claim appears on unsigned output.
+    enforcement: A mandatory closed responseProtection field with schema-conditional signingKeyId validation in the native audit event.
+    negative_test: sec-audit-response-protection-mode
+  - id: V1-I31
+    rule: Strict signed verification requires the independently retained expected nonce, the exact expected unordered set of unique role-bound subject bindings, and the expected concept identifiers, forms, and cardinalities, returns one generic policy mismatch, and reports cryptographic authenticity separately from current validity.
+    threat: A relying party accepts substituted subjects or outputs under a valid signature, or leaks which hidden comparison failed.
+    enforcement: Verifier policy comparison after signature and schema verification with a single generic policy error and a separate current-validity result.
+    negative_test: sec-verifier-independent-expectations
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.
@@ -171,6 +196,26 @@ cross_cutting:
     negative_test: sec-tls-and-proxy-authority-fixed
   subject_role_order:
     threat: Caller-controlled array position substitutes one subject role for another or changes the signed binding order.
-    enforcement: Rust resolves a unique subject by declared role, rejects duplicate, missing, unknown, and wrong-profile entries, then emits requirement declaration order.
+    enforcement: Rust resolves a unique subject by declared role independently of both grant order and request array order, rejects duplicate, missing, unknown, and wrong-profile entries, then emits requirement declaration order in evidence, audit, and the JWS.
     negative_test: sec-subject-array-order-nonsemantic
+  unsigned_envelope_distinct:
+    threat: A stored unsigned response is mistaken for verified signed evidence.
+    enforcement: The unsigned envelope is self-identifying with a fixed schema, type, integrity marker, warning, and exact vendor media type, contains no JWS member, and is rejected by the strict JWS verifier.
+    negative_test: sec-unsigned-envelope-not-jws
+  secret_file_identity:
+    threat: A group- or world-accessible, symlinked, multi-link, or oversized secret file exposes or substitutes key material.
+    enforcement: File secrets must be regular owner-only files opened without following symlinks, with exact ownership, mode, single-hard-link, and size checks before use.
+    negative_test: sec-secret-file-identity
+  transport_pinning:
+    threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the one-request and TLS contracts.
+    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt.
+    negative_test: sec-transport-backend-and-single-attempt
+  jwks_route_parity:
+    threat: The configured JWKS path and the served discovery route drift apart.
+    enforcement: Bundle validation pins the one Version 1 discovery path and the served route returns the runtime key set at exactly that configured path.
+    negative_test: sec-jwks-route-config-parity
+  script_resource_exhaustion:
+    threat: A hostile or defective reviewed script consumes unbounded execution inside the shared process.
+    enforcement: The engine's normative operation ceiling terminates the invocation with a closed value-free error.
+    negative_test: sec-script-operation-exhaustion
 fixture_index: ../fixtures/conformance/coverage-matrix.yaml

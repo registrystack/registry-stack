@@ -18,7 +18,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::config::{
-    ArtifactPath, ConceptForm, EvidenceConfig, OrderedMap, RuntimeConfig, SelectorField,
+    ArtifactPath, ConceptForm, EvidenceConfig, OrderedMap, RuntimeConfig, SchemaFault,
+    SelectorField,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -28,6 +29,7 @@ pub const MAX_SCRIPT_BYTES: u64 = 64 * 1024;
 pub const MAX_PUBLIC_JWK_BYTES: u64 = 64 * 1024;
 
 const CONFIG_FILE: &str = "evidence.yaml";
+const RUNTIME_FILE: &str = "runtime.yaml";
 const REVISION_DOMAIN: &[u8] = b"registry.evidence.bundle-revision/v1\0";
 const RUNTIME_REVISION_DOMAIN: &[u8] = b"registry.evidence.runtime-revision/v1\0";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
@@ -50,16 +52,132 @@ pub enum BundleError {
     UnsupportedEntry,
     #[error("the Evidence deployment bundle contains a prohibited path")]
     InvalidPath,
-    #[error("the Evidence deployment bundle contains an unknown or unreferenced file")]
-    UnknownFile,
+    #[error("the Evidence deployment bundle artifact closure is invalid: {0}")]
+    UnknownFile(ArtifactFault),
     #[error("the Evidence deployment bundle exceeds a Version 1 size bound")]
     TooLarge,
     #[error("the Evidence deployment configuration is invalid: {0}")]
-    Config(#[from] crate::config::ConfigError),
+    Config(ArtifactFault),
     #[error("an Evidence bundle artifact is invalid: {0}")]
-    InvalidArtifact(&'static str),
-    #[error("an Evidence Rhai script is invalid")]
-    InvalidScript,
+    InvalidArtifact(ArtifactFault),
+    #[error("an Evidence Rhai script is invalid: {0}")]
+    InvalidScript(ArtifactFault),
+}
+
+impl BundleError {
+    /// The value-free diagnostic, when this failure identifies one artifact.
+    ///
+    /// The remaining variants describe the deployment directory itself and are
+    /// already specific enough to act on without naming a file.
+    pub fn artifact_fault(&self) -> Option<&ArtifactFault> {
+        match self {
+            Self::Config(fault)
+            | Self::InvalidArtifact(fault)
+            | Self::InvalidScript(fault)
+            | Self::UnknownFile(fault) => Some(fault),
+            _ => None,
+        }
+    }
+
+    /// Name the artifact being loaded when the failure did not already know it.
+    ///
+    /// Loaders raise their causes where the cause is known and the artifact is
+    /// not, so the enclosing per-artifact loop binds the name on the way out.
+    fn in_artifact(self, artifact: &str) -> Self {
+        match self {
+            Self::Config(fault) => Self::Config(fault.bind(artifact)),
+            Self::InvalidArtifact(fault) => Self::InvalidArtifact(fault.bind(artifact)),
+            Self::InvalidScript(fault) => Self::InvalidScript(fault.bind(artifact)),
+            other => other,
+        }
+    }
+}
+
+/// A value-free deployment diagnostic bound to one bundle-relative artifact.
+///
+/// The artifact name comes from the reviewed bundle layout or from the
+/// operator's runtime file name. It is never taken from document content, and
+/// the fault it carries is value-free by construction.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ArtifactFault {
+    artifact: String,
+    fault: SchemaFault,
+}
+
+impl ArtifactFault {
+    /// A diagnostic whose artifact is already known.
+    pub fn new(artifact: impl Into<String>, fault: SchemaFault) -> Self {
+        Self {
+            artifact: artifact.into(),
+            fault,
+        }
+    }
+
+    /// A cause raised before the artifact being loaded is in scope.
+    fn unbound(cause: &'static str) -> Self {
+        Self {
+            artifact: String::new(),
+            fault: SchemaFault::because(cause),
+        }
+    }
+
+    /// The bundle-relative artifact, empty when no loader claimed the failure.
+    pub fn artifact(&self) -> &str {
+        &self.artifact
+    }
+
+    pub fn fault(&self) -> &SchemaFault {
+        &self.fault
+    }
+
+    fn bind(mut self, artifact: &str) -> Self {
+        if self.artifact.is_empty() {
+            self.artifact = artifact.to_owned();
+        }
+        self
+    }
+}
+
+impl fmt::Display for ArtifactFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.artifact.is_empty() {
+            return fmt::Display::fmt(&self.fault, formatter);
+        }
+        write!(formatter, "artifact {}: {}", self.artifact, self.fault)
+    }
+}
+
+/// An artifact fault whose artifact the caller binds later.
+fn invalid_artifact(cause: &'static str) -> BundleError {
+    BundleError::InvalidArtifact(ArtifactFault::unbound(cause))
+}
+
+/// A script fault whose artifact the caller binds later.
+fn invalid_script(cause: &'static str) -> BundleError {
+    BundleError::InvalidScript(ArtifactFault::unbound(cause))
+}
+
+/// A closure fault naming the artifact when the name is safe to print.
+///
+/// Closure names come from the reviewed configuration or from the bundle
+/// directory listing. A directory listing is operator input, so a name is
+/// quoted only when it matches the reviewed artifact grammar; anything else is
+/// reported without a name rather than echoed.
+fn unknown_file(candidate: &str, cause: &'static str) -> BundleError {
+    if safe_artifact_name(candidate) {
+        BundleError::UnknownFile(ArtifactFault::new(candidate, SchemaFault::because(cause)))
+    } else {
+        BundleError::UnknownFile(ArtifactFault::unbound(cause))
+    }
+}
+
+/// The reviewed bundle-relative artifact grammar, as a printable-name test.
+fn safe_artifact_name(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate.len() <= 128
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +258,7 @@ pub struct RuntimeDocument {
 impl RuntimeDocument {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let path = path.as_ref();
-        if path.file_name().and_then(|name| name.to_str()) != Some("runtime.yaml") {
+        if path.file_name().and_then(|name| name.to_str()) != Some(RUNTIME_FILE) {
             return Err(BundleError::InvalidPath);
         }
         let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
@@ -155,7 +273,9 @@ impl RuntimeDocument {
             crate::config::MAX_CONFIG_BYTES as u64,
             filesystem_read_only,
         )?;
-        let config = RuntimeConfig::parse_yaml(&bytes)?;
+        let config = RuntimeConfig::parse_yaml(&bytes).map_err(|error| {
+            BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
+        })?;
         validate_secret_root(Path::new(&config.secret_providers.file.root))?;
 
         let mut ca_bundles = BTreeMap::new();
@@ -174,7 +294,7 @@ impl RuntimeDocument {
                 MAX_CA_BUNDLE_BYTES,
                 ca_filesystem_read_only,
             )?;
-            validate_ca_bundle(&ca_bytes)?;
+            validate_ca_bundle(&ca_bytes).map_err(|error| error.in_artifact(RUNTIME_FILE))?;
             ca_bundles.insert(profile.to_owned(), ca_bytes);
         }
         let revision = compute_runtime_revision(&bytes, &ca_bundles)?;
@@ -223,7 +343,8 @@ impl Bundle {
         let root = root.as_ref();
         let files = capture_bundle_files(root)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
-        let config = EvidenceConfig::parse_yaml(config_bytes)?;
+        let config = EvidenceConfig::parse_yaml(config_bytes)
+            .map_err(|error| BundleError::Config(ArtifactFault::new(CONFIG_FILE, error.fault())))?;
         validate_file_closure(&config, &files)?;
 
         let scripts = load_scripts(&config, &files)?;
@@ -354,7 +475,10 @@ fn collect_paths(
                     return Err(BundleError::InvalidPath);
                 }
             } else if relative != CONFIG_FILE {
-                return Err(BundleError::UnknownFile);
+                return Err(unknown_file(
+                    &relative,
+                    "bundle root contains a file other than the configuration",
+                ));
             }
         } else if !ALLOWED_DIRECTORIES.contains(&top) {
             return Err(BundleError::InvalidPath);
@@ -544,10 +668,19 @@ fn validate_file_closure(
     }
     expected.extend(reviewed_schema_paths(config, files)?);
     expected.extend(reviewed_bucket_codelist_paths(config, files)?);
-    if files.keys().map(String::as_str).collect::<BTreeSet<_>>()
-        != expected.iter().map(String::as_str).collect()
-    {
-        return Err(BundleError::UnknownFile);
+    let present: BTreeSet<&str> = files.keys().map(String::as_str).collect();
+    let referenced: BTreeSet<&str> = expected.iter().map(String::as_str).collect();
+    if let Some(missing) = referenced.difference(&present).next() {
+        return Err(unknown_file(
+            missing,
+            "the configuration references an artifact the bundle does not contain",
+        ));
+    }
+    if let Some(unreferenced) = present.difference(&referenced).next() {
+        return Err(unknown_file(
+            unreferenced,
+            "the bundle contains an artifact the configuration does not reference",
+        ));
     }
     Ok(())
 }
@@ -589,7 +722,7 @@ fn reviewed_bucket_codelist_paths(
             })
             .collect::<Vec<_>>();
         if matches.len() != 1 {
-            return Err(BundleError::InvalidArtifact(
+            return Err(invalid_artifact(
                 "bucket scheme codelist is missing or ambiguous",
             ));
         }
@@ -623,7 +756,7 @@ fn reviewed_schema_paths(
             })
             .collect::<Vec<_>>();
         if matches.len() != 1 {
-            return Err(BundleError::InvalidArtifact(
+            return Err(invalid_artifact(
                 "reviewed structured schema identifier is missing or ambiguous",
             ));
         }
@@ -658,35 +791,46 @@ fn load_scripts(
     }
     let mut scripts = BTreeMap::new();
     for (path, (entrypoint, arity)) in expected {
-        let bytes = files
-            .get(path)
-            .ok_or(BundleError::InvalidArtifact("missing script"))?;
-        let source = std::str::from_utf8(bytes)
-            .map_err(|_| BundleError::InvalidArtifact("script is not UTF-8"))?
-            .to_owned();
-        reject_prohibited_script_capabilities(&source)?;
-        let mut engine = Engine::new();
-        engine.set_max_expr_depths(64, 64);
-        engine.set_max_call_levels(32);
-        engine.set_max_operations(100_000);
-        engine.set_max_array_size(256);
-        engine.set_max_map_size(256);
-        engine.set_max_string_size(16_384);
-        engine.set_max_modules(0);
-        let ast = engine
-            .compile(&source)
-            .map_err(|_| BundleError::InvalidScript)?;
-        let entrypoint_functions = ast
-            .iter_functions()
-            .filter(|function| function.name == entrypoint)
-            .map(|function| function.params.len())
-            .collect::<Vec<_>>();
-        if entrypoint_functions != [arity] {
-            return Err(BundleError::InvalidScript);
-        }
-        scripts.insert(path.to_owned(), CompiledScript { source, ast });
+        let script = compile_script(path, entrypoint, arity, files)
+            .map_err(|error| error.in_artifact(path))?;
+        scripts.insert(path.to_owned(), script);
     }
     Ok(scripts)
+}
+
+fn compile_script(
+    path: &str,
+    entrypoint: &'static str,
+    arity: usize,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<CompiledScript, BundleError> {
+    let bytes = files.get(path).ok_or(invalid_artifact("missing script"))?;
+    let source = std::str::from_utf8(bytes)
+        .map_err(|_| invalid_artifact("script is not UTF-8"))?
+        .to_owned();
+    reject_prohibited_script_capabilities(&source)?;
+    let mut engine = Engine::new();
+    engine.set_max_expr_depths(64, 64);
+    engine.set_max_call_levels(32);
+    engine.set_max_operations(100_000);
+    engine.set_max_array_size(256);
+    engine.set_max_map_size(256);
+    engine.set_max_string_size(16_384);
+    engine.set_max_modules(0);
+    let ast = engine
+        .compile(&source)
+        .map_err(|_| invalid_script("script does not compile"))?;
+    let entrypoint_functions = ast
+        .iter_functions()
+        .filter(|function| function.name == entrypoint)
+        .map(|function| function.params.len())
+        .collect::<Vec<_>>();
+    if entrypoint_functions != [arity] {
+        return Err(invalid_script(
+            "script does not declare exactly one entrypoint with the required arity",
+        ));
+    }
+    Ok(CompiledScript { source, ast })
 }
 
 fn insert_script_contract<'a>(
@@ -698,7 +842,7 @@ fn insert_script_contract<'a>(
         .insert(path, contract)
         .is_some_and(|existing| existing != contract)
     {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "one script path is assigned incompatible entry points",
         ));
     }
@@ -751,13 +895,13 @@ fn reject_prohibited_script_capabilities(source: &str) -> Result<(), BundleError
             identifier.push(character);
         } else if !identifier.is_empty() {
             if PROHIBITED.contains(&identifier.as_str()) {
-                return Err(BundleError::InvalidScript);
+                return Err(invalid_script("script uses a prohibited capability"));
             }
             identifier.clear();
         }
     }
     if PROHIBITED.contains(&identifier.as_str()) {
-        return Err(BundleError::InvalidScript);
+        return Err(invalid_script("script uses a prohibited capability"));
     }
     Ok(())
 }
@@ -785,91 +929,96 @@ fn load_fact_schemas(
     paths.extend(reviewed_schema_paths(config, files)?);
     let mut schemas = BTreeMap::new();
     for path in paths {
-        let bytes = files
-            .get(&path)
-            .ok_or(BundleError::InvalidArtifact("missing fact schema"))?;
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| BundleError::InvalidArtifact("fact schema is not UTF-8"))?;
-        let schema: JsonValue = serde_norway::from_str(text)
-            .map_err(|_| BundleError::InvalidArtifact("fact schema YAML is invalid"))?;
-        validate_closed_schema(&schema, parameter_paths.contains(path.as_str()))?;
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .should_validate_formats(true)
-            .compile(&schema)
-            .map_err(|_| BundleError::InvalidArtifact("fact schema is not valid JSON Schema"))?;
+        let is_parameter_schema = parameter_paths.contains(path.as_str());
+        let schema = load_fact_schema(&path, is_parameter_schema, files)
+            .map_err(|error| error.in_artifact(&path))?;
         schemas.insert(path, schema);
     }
     for (_, source) in config.sources.iter() {
-        let schema = schemas
-            .get(source.request.adapter_parameters_schema.as_str())
-            .ok_or(BundleError::InvalidArtifact(
-                "missing adapter-parameter schema",
-            ))?;
-        let compiled = JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .should_validate_formats(true)
-            .compile(schema)
-            .map_err(|_| {
-                BundleError::InvalidArtifact("adapter-parameter schema is not valid JSON Schema")
-            })?;
-        let parameters =
-            serde_json::to_value(&source.request.adapter_parameters).map_err(|_| {
-                BundleError::InvalidArtifact("adapter parameters are not JSON-compatible")
-            })?;
-        if !compiled.is_valid(&parameters) {
-            return Err(BundleError::InvalidArtifact(
-                "adapter parameters do not satisfy their closed schema",
-            ));
-        }
+        let schema_path = source.request.adapter_parameters_schema.as_str();
+        validate_adapter_parameters(source, &schemas)
+            .map_err(|error| error.in_artifact(schema_path))?;
     }
     Ok(schemas)
 }
 
+fn load_fact_schema(
+    path: &str,
+    is_parameter_schema: bool,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<JsonValue, BundleError> {
+    let bytes = files
+        .get(path)
+        .ok_or(invalid_artifact("missing fact schema"))?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fact schema is not UTF-8"))?;
+    let schema: JsonValue = serde_norway::from_str(text)
+        .map_err(|_| invalid_artifact("fact schema YAML is invalid"))?;
+    validate_closed_schema(&schema, is_parameter_schema)?;
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&schema)
+        .map_err(|_| invalid_artifact("fact schema is not valid JSON Schema"))?;
+    Ok(schema)
+}
+
+fn validate_adapter_parameters(
+    source: &crate::config::SourceConfig,
+    schemas: &BTreeMap<String, JsonValue>,
+) -> Result<(), BundleError> {
+    let schema = schemas
+        .get(source.request.adapter_parameters_schema.as_str())
+        .ok_or(invalid_artifact("missing adapter-parameter schema"))?;
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(schema)
+        .map_err(|_| invalid_artifact("adapter-parameter schema is not valid JSON Schema"))?;
+    let parameters = serde_json::to_value(&source.request.adapter_parameters)
+        .map_err(|_| invalid_artifact("adapter parameters are not JSON-compatible"))?;
+    if !compiled.is_valid(&parameters) {
+        return Err(invalid_artifact(
+            "adapter parameters do not satisfy their closed schema",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_closed_schema(schema: &JsonValue, allow_empty_root: bool) -> Result<(), BundleError> {
-    let root = schema.as_object().ok_or(BundleError::InvalidArtifact(
-        "fact schema must be an object",
-    ))?;
+    let root = schema
+        .as_object()
+        .ok_or(invalid_artifact("fact schema must be an object"))?;
     if root.get("type").and_then(JsonValue::as_str) != Some("object")
         || root
             .get("additionalProperties")
             .and_then(JsonValue::as_bool)
             != Some(false)
     {
-        return Err(BundleError::InvalidArtifact(
-            "fact schema must close the root object",
-        ));
+        return Err(invalid_artifact("fact schema must close the root object"));
     }
     let properties = root
         .get("properties")
         .and_then(JsonValue::as_object)
-        .ok_or(BundleError::InvalidArtifact(
-            "fact schema must declare properties",
-        ))?;
+        .ok_or(invalid_artifact("fact schema must declare properties"))?;
     if (!allow_empty_root && properties.is_empty()) || properties.len() > 64 {
-        return Err(BundleError::InvalidArtifact(
-            "fact schema property count is invalid",
-        ));
+        return Err(invalid_artifact("fact schema property count is invalid"));
     }
-    let required =
-        root.get("required")
-            .and_then(JsonValue::as_array)
-            .ok_or(BundleError::InvalidArtifact(
-                "fact schema must declare required fields",
-            ))?;
+    let required = root
+        .get("required")
+        .and_then(JsonValue::as_array)
+        .ok_or(invalid_artifact("fact schema must declare required fields"))?;
     let required = required
         .iter()
         .map(JsonValue::as_str)
         .collect::<Option<BTreeSet<_>>>()
-        .ok_or(BundleError::InvalidArtifact(
-            "fact schema required fields are invalid",
-        ))?;
+        .ok_or(invalid_artifact("fact schema required fields are invalid"))?;
     if required.len() != properties.len()
         || properties
             .keys()
             .any(|property| !required.contains(property.as_str()))
     {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "fact schema must require its exact closed field set",
         ));
     }
@@ -877,9 +1026,9 @@ fn validate_closed_schema(schema: &JsonValue, allow_empty_root: bool) -> Result<
 }
 
 fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
-    let object = node.as_object().ok_or(BundleError::InvalidArtifact(
-        "every schema node must be a typed object",
-    ))?;
+    let object = node
+        .as_object()
+        .ok_or(invalid_artifact("every schema node must be a typed object"))?;
     let Some(value_type) = object.get("type").and_then(JsonValue::as_str) else {
         if object
             .keys()
@@ -888,7 +1037,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
         {
             return Ok(());
         }
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "every schema node must declare one type or one bounded const",
         ));
     };
@@ -926,13 +1075,13 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
         ][..],
         "boolean" => &["$schema", "$id", "type", "enum", "const"][..],
         _ => {
-            return Err(BundleError::InvalidArtifact(
+            return Err(invalid_artifact(
                 "schema node type is outside the closed Version 1 subset",
             ));
         }
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "schema node uses a keyword outside the closed Version 1 subset",
         ));
     }
@@ -944,15 +1093,13 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 .and_then(JsonValue::as_bool)
                 != Some(false)
             {
-                return Err(BundleError::InvalidArtifact(
-                    "nested schema objects must be closed",
-                ));
+                return Err(invalid_artifact("nested schema objects must be closed"));
             }
             let properties = object
                 .get("properties")
                 .and_then(JsonValue::as_object)
                 .filter(|properties| !properties.is_empty() && properties.len() <= 64)
-                .ok_or(BundleError::InvalidArtifact(
+                .ok_or(invalid_artifact(
                     "schema objects must declare bounded properties",
                 ))?;
             let required = object
@@ -964,7 +1111,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                         .map(JsonValue::as_str)
                         .collect::<Option<BTreeSet<_>>>()
                 })
-                .ok_or(BundleError::InvalidArtifact(
+                .ok_or(invalid_artifact(
                     "schema objects must declare required properties",
                 ))?;
             if required.len() != properties.len()
@@ -972,7 +1119,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                     .keys()
                     .any(|property| !required.contains(property.as_str()))
             {
-                return Err(BundleError::InvalidArtifact(
+                return Err(invalid_artifact(
                     "schema objects must require their exact property set",
                 ));
             }
@@ -985,37 +1132,32 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 .get("uniqueItems")
                 .is_some_and(|value| value.as_bool() != Some(true))
             {
-                return Err(BundleError::InvalidArtifact(
-                    "schema array uniqueness flag is invalid",
-                ));
+                return Err(invalid_artifact("schema array uniqueness flag is invalid"));
             }
             if let Some(value) = object.get("const") {
                 if !value.is_array() || !schema_const_is_bounded(value) {
-                    return Err(BundleError::InvalidArtifact(
-                        "schema array const is invalid",
-                    ));
+                    return Err(invalid_artifact("schema array const is invalid"));
                 }
             }
-            let maximum = object.get("maxItems").and_then(JsonValue::as_u64).ok_or(
-                BundleError::InvalidArtifact("schema arrays must be bounded"),
-            )?;
+            let maximum = object
+                .get("maxItems")
+                .and_then(JsonValue::as_u64)
+                .ok_or(invalid_artifact("schema arrays must be bounded"))?;
             if maximum == 0 || maximum > 256 {
-                return Err(BundleError::InvalidArtifact(
-                    "schema array bound is invalid",
-                ));
+                return Err(invalid_artifact("schema array bound is invalid"));
             }
             if object
                 .get("minItems")
                 .and_then(JsonValue::as_u64)
                 .is_some_and(|minimum| minimum > maximum)
             {
-                return Err(BundleError::InvalidArtifact(
-                    "schema array bounds are invalid",
-                ));
+                return Err(invalid_artifact("schema array bounds are invalid"));
             }
-            validate_schema_node(object.get("items").ok_or(BundleError::InvalidArtifact(
-                "schema arrays must close their item type",
-            ))?)?;
+            validate_schema_node(
+                object
+                    .get("items")
+                    .ok_or(invalid_artifact("schema arrays must close their item type"))?,
+            )?;
         }
         "string" => {
             if object
@@ -1023,7 +1165,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 .and_then(JsonValue::as_str)
                 .is_some_and(|format| !matches!(format, "date" | "date-time"))
             {
-                return Err(BundleError::InvalidArtifact(
+                return Err(invalid_artifact(
                     "schema string format is outside the closed Version 1 subset",
                 ));
             }
@@ -1048,7 +1190,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 .and_then(JsonValue::as_str)
                 .is_some_and(|value| value.len() <= 65_536);
             if !bounded && !formatted && !enumerated && !constant {
-                return Err(BundleError::InvalidArtifact(
+                return Err(invalid_artifact(
                     "schema strings must be bounded, formatted, or enumerated",
                 ));
             }
@@ -1071,16 +1213,14 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 && !enumerated
                 && !constant
             {
-                return Err(BundleError::InvalidArtifact(
+                return Err(invalid_artifact(
                     "schema integers must be bounded or enumerated",
                 ));
             }
         }
         "boolean" => {
             if object.get("const").is_some_and(|value| !value.is_boolean()) {
-                return Err(BundleError::InvalidArtifact(
-                    "schema boolean const is invalid",
-                ));
+                return Err(invalid_artifact("schema boolean const is invalid"));
             }
             if object.get("enum").is_some_and(|value| {
                 value.as_array().is_none_or(|values| {
@@ -1089,9 +1229,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                         || values.iter().any(|value| !value.is_boolean())
                 })
             }) {
-                return Err(BundleError::InvalidArtifact(
-                    "schema boolean enumeration is invalid",
-                ));
+                return Err(invalid_artifact("schema boolean enumeration is invalid"));
             }
         }
         _ => unreachable!("type was closed above"),
@@ -1144,17 +1282,20 @@ fn load_codelists(
     paths.extend(reviewed_bucket_codelist_paths(config, files)?);
     let mut codelists = BTreeMap::new();
     for path in paths {
-        let bytes = files
-            .get(&path)
-            .ok_or(BundleError::InvalidArtifact("missing codelist"))?;
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| BundleError::InvalidArtifact("codelist is not UTF-8"))?;
-        let document: CodelistDocument = serde_norway::from_str(text)
-            .map_err(|_| BundleError::InvalidArtifact("codelist YAML is invalid"))?;
-        let codelist = document.validate()?;
+        let codelist = load_codelist(&path, files).map_err(|error| error.in_artifact(&path))?;
         codelists.insert(path, codelist);
     }
     Ok(codelists)
+}
+
+fn load_codelist(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Codelist, BundleError> {
+    let bytes = files
+        .get(path)
+        .ok_or(invalid_artifact("missing codelist"))?;
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid_artifact("codelist is not UTF-8"))?;
+    let document: CodelistDocument =
+        serde_norway::from_str(text).map_err(|_| invalid_artifact("codelist YAML is invalid"))?;
+    document.validate()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1206,18 +1347,14 @@ impl MappingCodelistDocument {
     fn validate(self) -> Result<Codelist, BundleError> {
         validate_codelist_header(&self.id, &self.version)?;
         if self.entries.is_empty() || self.entries.len() > 4_096 {
-            return Err(BundleError::InvalidArtifact(
-                "codelist entry count is invalid",
-            ));
+            return Err(invalid_artifact("codelist entry count is invalid"));
         }
         validate_code_collection(&self.allowed_outputs)?;
         for (input, output) in &self.entries {
             validate_code(input)?;
             validate_code(output)?;
             if !self.allowed_outputs.contains(output) {
-                return Err(BundleError::InvalidArtifact(
-                    "codelist mapping output is not allowed",
-                ));
+                return Err(invalid_artifact("codelist mapping output is not allowed"));
             }
         }
         Ok(Codelist::Mapping {
@@ -1236,22 +1373,20 @@ fn validate_codelist_header(id: &str, version: &str) -> Result<(), BundleError> 
         || version.len() > 128
         || version.contains('\0')
     {
-        return Err(BundleError::InvalidArtifact("codelist identity is invalid"));
+        return Err(invalid_artifact("codelist identity is invalid"));
     }
     Ok(())
 }
 
 fn validate_code_collection(codes: &[String]) -> Result<(), BundleError> {
     if codes.is_empty() || codes.len() > 4_096 {
-        return Err(BundleError::InvalidArtifact(
-            "codelist code count is invalid",
-        ));
+        return Err(invalid_artifact("codelist code count is invalid"));
     }
     let mut seen = BTreeSet::new();
     for code in codes {
         validate_code(code)?;
         if !seen.insert(code.as_str()) {
-            return Err(BundleError::InvalidArtifact("codelist code is duplicated"));
+            return Err(invalid_artifact("codelist code is duplicated"));
         }
     }
     Ok(())
@@ -1266,7 +1401,7 @@ fn validate_code(code: &str) -> Result<(), BundleError> {
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
-        return Err(BundleError::InvalidArtifact("codelist code is invalid"));
+        return Err(invalid_artifact("codelist code is invalid"));
     }
     Ok(())
 }
@@ -1285,11 +1420,9 @@ fn validate_codelist_references(
             {
                 let loaded = codelists
                     .get(codelist.as_str())
-                    .ok_or(BundleError::InvalidArtifact("selector codelist is missing"))?;
+                    .ok_or(invalid_artifact("selector codelist is missing"))?;
                 if loaded.version() != codelist_version {
-                    return Err(BundleError::InvalidArtifact(
-                        "selector codelist version mismatch",
-                    ));
+                    return Err(invalid_artifact("selector codelist version mismatch"));
                 }
             }
         }
@@ -1307,9 +1440,7 @@ fn validate_codelist_references(
                     .filter(|codelist| codelist.id() == identifier && codelist.version() == version)
                     .count();
                 if matches != 1 {
-                    return Err(BundleError::InvalidArtifact(
-                        "bucket scheme codelist identity mismatch",
-                    ));
+                    return Err(invalid_artifact("bucket scheme codelist identity mismatch"));
                 }
                 continue;
             }
@@ -1322,11 +1453,9 @@ fn validate_codelist_references(
             let version = concept_constraint_string(&concept.constraints, version_key)?;
             let loaded = codelists
                 .get(path)
-                .ok_or(BundleError::InvalidArtifact("concept codelist is missing"))?;
+                .ok_or(invalid_artifact("concept codelist is missing"))?;
             if loaded.version() != version {
-                return Err(BundleError::InvalidArtifact(
-                    "concept codelist version mismatch",
-                ));
+                return Err(invalid_artifact("concept codelist version mismatch"));
             }
         }
     }
@@ -1343,36 +1472,37 @@ fn load_fixtures(
         if fixtures.contains_key(path) {
             continue;
         }
-        let bytes = files
-            .get(path)
-            .ok_or(BundleError::InvalidArtifact("fixture file is missing"))?;
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| BundleError::InvalidArtifact("fixture file is not UTF-8"))?;
-        let fixture: YamlValue = serde_norway::from_str(text)
-            .map_err(|_| BundleError::InvalidArtifact("fixture YAML is invalid"))?;
-        validate_fixture_coverage(&fixture)?;
+        let fixture = load_fixture(path, files).map_err(|error| error.in_artifact(path))?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
 }
 
+fn load_fixture(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<YamlValue, BundleError> {
+    let bytes = files
+        .get(path)
+        .ok_or(invalid_artifact("fixture file is missing"))?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fixture file is not UTF-8"))?;
+    let fixture: YamlValue =
+        serde_norway::from_str(text).map_err(|_| invalid_artifact("fixture YAML is invalid"))?;
+    validate_fixture_coverage(&fixture)?;
+    Ok(fixture)
+}
+
 fn validate_fixture_coverage(fixture: &YamlValue) -> Result<(), BundleError> {
-    let root = fixture.as_mapping().ok_or(BundleError::InvalidArtifact(
-        "fixture root must be a mapping",
-    ))?;
+    let root = fixture
+        .as_mapping()
+        .ok_or(invalid_artifact("fixture root must be a mapping"))?;
     if root.get("synthetic_only").and_then(YamlValue::as_bool) != Some(true) {
-        return Err(BundleError::InvalidArtifact(
-            "fixtures must be synthetic-only",
-        ));
+        return Err(invalid_artifact("fixtures must be synthetic-only"));
     }
     let cases = root
         .get("cases")
         .and_then(YamlValue::as_sequence)
-        .ok_or(BundleError::InvalidArtifact("fixture cases are missing"))?;
+        .ok_or(invalid_artifact("fixture cases are missing"))?;
     if cases.is_empty() || cases.len() > 256 {
-        return Err(BundleError::InvalidArtifact(
-            "fixture case count is invalid",
-        ));
+        return Err(invalid_artifact("fixture case count is invalid"));
     }
     let mut ids = BTreeSet::new();
     let mut categories = FixtureCategories::default();
@@ -1381,18 +1511,14 @@ fn validate_fixture_coverage(fixture: &YamlValue) -> Result<(), BundleError> {
             .as_mapping()
             .and_then(|mapping| mapping.get("id"))
             .and_then(YamlValue::as_str)
-            .ok_or(BundleError::InvalidArtifact("fixture case id is missing"))?;
+            .ok_or(invalid_artifact("fixture case id is missing"))?;
         if id.is_empty() || id.len() > 128 || !ids.insert(id) {
-            return Err(BundleError::InvalidArtifact(
-                "fixture case id is invalid or duplicated",
-            ));
+            return Err(invalid_artifact("fixture case id is invalid or duplicated"));
         }
         categories.observe(id);
     }
     if !categories.complete() {
-        return Err(BundleError::InvalidArtifact(
-            "fixture category coverage is incomplete",
-        ));
+        return Err(invalid_artifact("fixture category coverage is incomplete"));
     }
     Ok(())
 }
@@ -1439,17 +1565,18 @@ fn load_retired_public_jwks(
 ) -> Result<BTreeMap<String, JsonValue>, BundleError> {
     let mut keys = BTreeMap::new();
     for path in &config.signing.retired_public_jwk_files {
-        let bytes = files
-            .get(path.as_str())
-            .ok_or(BundleError::InvalidArtifact(
-                "retired public JWK is missing",
-            ))?;
-        let object = parse_strict_json_object(bytes)?;
-        let kid = validate_public_jwk(&object, &config.signing.active_key_id)?;
+        let path = path.as_str();
+        let load = || -> Result<(String, JsonMap<String, JsonValue>), BundleError> {
+            let bytes = files
+                .get(path)
+                .ok_or(invalid_artifact("retired public JWK is missing"))?;
+            let object = parse_strict_json_object(bytes)?;
+            let kid = validate_public_jwk(&object, &config.signing.active_key_id)?;
+            Ok((kid, object))
+        };
+        let (kid, object) = load().map_err(|error| error.in_artifact(path))?;
         if keys.insert(kid, JsonValue::Object(object)).is_some() {
-            return Err(BundleError::InvalidArtifact(
-                "retired public JWK kid is duplicated",
-            ));
+            return Err(invalid_artifact("retired public JWK kid is duplicated").in_artifact(path));
         }
     }
     Ok(keys)
@@ -1489,10 +1616,10 @@ fn parse_strict_json_object(bytes: &[u8]) -> Result<JsonMap<String, JsonValue>, 
 
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let object = StrictObject::deserialize(&mut deserializer)
-        .map_err(|_| BundleError::InvalidArtifact("public JWK JSON is invalid"))?;
+        .map_err(|_| invalid_artifact("public JWK JSON is invalid"))?;
     deserializer
         .end()
-        .map_err(|_| BundleError::InvalidArtifact("public JWK has trailing data"))?;
+        .map_err(|_| invalid_artifact("public JWK has trailing data"))?;
     Ok(object.0)
 }
 
@@ -1509,7 +1636,7 @@ fn validate_public_jwk(
             .get("use")
             .is_some_and(|value| value.as_str() != Some("sig"))
     {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "retired JWK is not an allowed public EdDSA key",
         ));
     }
@@ -1522,29 +1649,25 @@ fn validate_public_jwk(
                 && !kid.chars().any(char::is_control)
                 && *kid != active_key_id
         })
-        .ok_or(BundleError::InvalidArtifact("retired JWK kid is invalid"))?;
+        .ok_or(invalid_artifact("retired JWK kid is invalid"))?;
     let x = object
         .get("x")
         .and_then(JsonValue::as_str)
-        .ok_or(BundleError::InvalidArtifact(
-            "retired JWK public coordinate is missing",
-        ))?;
+        .ok_or(invalid_artifact("retired JWK public coordinate is missing"))?;
     let decoded = URL_SAFE_NO_PAD
         .decode(x)
-        .map_err(|_| BundleError::InvalidArtifact("retired JWK public coordinate is invalid"))?;
+        .map_err(|_| invalid_artifact("retired JWK public coordinate is invalid"))?;
     if decoded.len() != 32 {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "retired JWK public coordinate has the wrong size",
         ));
     }
     if let Some(operations) = object.get("key_ops") {
-        let operations = operations.as_array().ok_or(BundleError::InvalidArtifact(
-            "retired JWK key_ops is invalid",
-        ))?;
+        let operations = operations
+            .as_array()
+            .ok_or(invalid_artifact("retired JWK key_ops is invalid"))?;
         if operations.len() != 1 || operations[0].as_str() != Some("verify") {
-            return Err(BundleError::InvalidArtifact(
-                "retired JWK key_ops is not verify-only",
-            ));
+            return Err(invalid_artifact("retired JWK key_ops is not verify-only"));
         }
     }
     Ok(kid.to_owned())
@@ -1561,9 +1684,7 @@ fn concept_constraint_string<'a>(
     constraints
         .get(key)
         .and_then(YamlValue::as_str)
-        .ok_or(BundleError::InvalidArtifact(
-            "concept codelist constraint is invalid",
-        ))
+        .ok_or(invalid_artifact("concept codelist constraint is invalid"))
 }
 
 fn validate_runtime_bindings(
@@ -1581,7 +1702,7 @@ fn validate_runtime_bindings(
         .keys()
         .collect::<BTreeSet<_>>();
     if required != configured {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "runtime TLS trust profiles must exactly bind bundle source profiles",
         ));
     }
@@ -1609,7 +1730,7 @@ fn validate_secret_root(path: &Path) -> Result<(), BundleError> {
 
 fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| BundleError::InvalidArtifact("TLS CA bundle is not UTF-8 PEM"))?;
+        .map_err(|_| invalid_artifact("TLS CA bundle is not UTF-8 PEM"))?;
     let mut in_certificate = false;
     let mut encoded = String::new();
     let mut certificates = 0_usize;
@@ -1622,11 +1743,9 @@ fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
             "-----END CERTIFICATE-----" if in_certificate => {
                 let der = base64::engine::general_purpose::STANDARD
                     .decode(encoded.as_bytes())
-                    .map_err(|_| BundleError::InvalidArtifact("TLS CA bundle PEM is invalid"))?;
+                    .map_err(|_| invalid_artifact("TLS CA bundle PEM is invalid"))?;
                 if der.len() < 4 || der.first() != Some(&0x30) {
-                    return Err(BundleError::InvalidArtifact(
-                        "TLS CA bundle certificate is invalid",
-                    ));
+                    return Err(invalid_artifact("TLS CA bundle certificate is invalid"));
                 }
                 certificates = certificates.checked_add(1).ok_or(BundleError::TooLarge)?;
                 if certificates > 64 {
@@ -1645,14 +1764,14 @@ fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
                 encoded.push_str(line);
             }
             _ => {
-                return Err(BundleError::InvalidArtifact(
+                return Err(invalid_artifact(
                     "TLS CA bundle contains non-certificate PEM data",
                 ));
             }
         }
     }
     if in_certificate || certificates == 0 {
-        return Err(BundleError::InvalidArtifact(
+        return Err(invalid_artifact(
             "TLS CA bundle contains no complete certificate",
         ));
     }
@@ -1928,12 +2047,14 @@ mod tests {
         fs::write(directory.path().join("schemas/duplicate.yaml"), schema)
             .expect("write duplicate schema");
         set_tree_mode(directory.path(), 0o555, 0o444);
-        assert!(matches!(
-            Bundle::load(directory.path()),
-            Err(BundleError::InvalidArtifact(
+        let ambiguous = Bundle::load(directory.path()).expect_err("duplicate schema is rejected");
+        assert!(matches!(ambiguous, BundleError::InvalidArtifact(_)));
+        assert_eq!(
+            ambiguous.artifact_fault().map(ArtifactFault::fault),
+            Some(&SchemaFault::because(
                 "reviewed structured schema identifier is missing or ambiguous"
             ))
-        ));
+        );
     }
 
     #[cfg(unix)]
@@ -1954,11 +2075,29 @@ mod tests {
         )
         .expect("write unknown artifact");
         set_tree_mode(unknown.path(), 0o555, 0o444);
-        assert!(matches!(
-            Bundle::load(unknown.path()),
-            Err(BundleError::UnknownFile)
-        ));
+        let unreferenced = Bundle::load(unknown.path()).expect_err("unknown artifact is rejected");
+        assert!(matches!(unreferenced, BundleError::UnknownFile(_)));
+        let fault = unreferenced.artifact_fault().expect("closure names a file");
+        assert_eq!(fault.artifact(), "fixtures/unreferenced.yaml");
+        assert_eq!(
+            fault.fault().cause(),
+            "the bundle contains an artifact the configuration does not reference"
+        );
         set_tree_mode(unknown.path(), 0o755, 0o444);
+
+        let missing = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", missing.path());
+        fs::remove_file(missing.path().join("derivations/adult-status.rhai"))
+            .expect("remove referenced derivation");
+        set_tree_mode(missing.path(), 0o555, 0o444);
+        let absent = Bundle::load(missing.path()).expect_err("missing artifact is rejected");
+        let fault = absent.artifact_fault().expect("closure names a file");
+        assert_eq!(fault.artifact(), "derivations/adult-status.rhai");
+        assert_eq!(
+            fault.fault().cause(),
+            "the configuration references an artifact the bundle does not contain"
+        );
+        set_tree_mode(missing.path(), 0o755, 0o444);
     }
 
     #[cfg(unix)]

@@ -555,6 +555,7 @@ async fn execute_response(
                     values,
                     EvidenceConstruction {
                         evidence_id: &evidence_id,
+                        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                         purpose: &resolved.purpose,
                         audience: AUDIENCE,
                         issued_at,
@@ -569,21 +570,25 @@ async fn execute_response(
                 .unwrap_or_else(|_| panic!("{label}: evidence signing failed"));
             let jwks = jwks_document(signer.public_jwk(), [])
                 .unwrap_or_else(|_| panic!("{label}: fixture JWKS construction failed"));
+            let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
+                &evidence,
+                registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                Duration::from_secs(31_536_000),
+                issued_at,
+                Duration::from_secs(0),
+            );
+            policy.issued_by = bundle.config.issuer.id.clone();
+            policy.provided_by = bundle.config.service.provider_id.clone();
+            policy.requirement = requirement.id.clone();
+            policy.evidence_type = requirement.evidence_type.clone();
+            policy.purpose = resolved.purpose.clone();
+            policy.audience = AUDIENCE.to_owned();
+            policy.configuration_revision = bundle.revision().to_owned();
             let verified = verify_flattened_jws(
                 &serde_json::to_vec(&signed)
                     .unwrap_or_else(|_| panic!("{label}: signed evidence encoding failed")),
                 &jwks,
-                &EvidenceVerificationPolicy {
-                    issued_by: bundle.config.issuer.id.clone(),
-                    provided_by: bundle.config.service.provider_id.clone(),
-                    requirement: requirement.id.clone(),
-                    evidence_type: requirement.evidence_type.clone(),
-                    purpose: resolved.purpose.clone(),
-                    audience: AUDIENCE.to_owned(),
-                    configuration_revision: bundle.revision().to_owned(),
-                    now: issued_at,
-                    clock_skew: Duration::from_secs(0),
-                },
+                &policy,
             )
             .unwrap_or_else(|_| panic!("{label}: signed evidence verification failed"));
             if expected.signed == Some(false) {
@@ -849,6 +854,10 @@ fn assert_kernel_error(label: &str, expected: &Expected, error: KernelError, der
     let (expected_signal, expected_problem) = match error {
         KernelError::Preparation => ("adapter_input_error", "service_unavailable"),
         KernelError::SourceProtocol => ("source_protocol_error", "dependency_unavailable"),
+        // The public class collapses with the unresolved lookup classes so a
+        // uniquely found record with inconsistent derivation inputs is not
+        // distinguishable from no match.
+        KernelError::DerivationInput => ("derivation_input_error", "evidence_not_available"),
         KernelError::Script if derivation_ran => ("derivation_input_error", "service_unavailable"),
         KernelError::Extraction => ("evidence_not_available", "evidence_not_available"),
         _ => ("service_unavailable", "service_unavailable"),

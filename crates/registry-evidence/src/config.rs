@@ -22,12 +22,212 @@ pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum ConfigError {
-    #[error("configuration YAML does not match the Evidence Version 1 schema")]
-    InvalidYaml,
+    #[error("configuration YAML does not match the Evidence Version 1 schema: {0}")]
+    InvalidYaml(SchemaFault),
     #[error("configuration exceeds the Evidence Version 1 size limit")]
     TooLarge,
     #[error("configuration violates the Evidence Version 1 contract: {0}")]
     Invalid(&'static str),
+}
+
+impl ConfigError {
+    /// The value-free diagnostic for this failure.
+    ///
+    /// Deployment tooling reports this instead of the error itself so that
+    /// every configuration failure carries the same safe shape.
+    pub fn fault(&self) -> SchemaFault {
+        match self {
+            Self::InvalidYaml(fault) => fault.clone(),
+            Self::TooLarge => SchemaFault::because("document exceeds the Version 1 size limit"),
+            Self::Invalid(cause) => SchemaFault::because(cause),
+        }
+    }
+}
+
+/// A one-based text position inside a deployment artifact.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TextLocation {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl fmt::Display for TextLocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "line {} column {}", self.line, self.column)
+    }
+}
+
+/// A value-free reason one deployment document was rejected.
+///
+/// Only three things are kept: a schema path built from mapping keys and
+/// sequence indices, a text location, and one static cause. The decoder's own
+/// message is classified and then discarded, because it quotes scalars, and a
+/// deployment scalar can be a selector value, a secret reference, or a source
+/// identifier.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SchemaFault {
+    location: Option<TextLocation>,
+    path: Option<String>,
+    cause: &'static str,
+}
+
+/// The longest schema path a diagnostic will carry.
+const MAX_SCHEMA_PATH_BYTES: usize = 256;
+
+/// Decoder message prefixes mapped to their value-free cause.
+///
+/// The prefixes are the fixed leading text of `serde` and `serde_norway`
+/// messages. Everything after a prefix can quote document content and is
+/// never read.
+const DECODE_CAUSES: [(&str, &str); 13] = [
+    ("unknown field", "unknown field"),
+    ("missing field", "required field is missing"),
+    ("duplicate field", "duplicate field"),
+    ("duplicate entry", "duplicate mapping key"),
+    ("invalid type", "field has the wrong type"),
+    ("invalid value", "field value is not accepted"),
+    ("invalid length", "field has the wrong length"),
+    (
+        "unknown variant",
+        "field value is not one of the accepted variants",
+    ),
+    (
+        "data did not match any variant",
+        "field value is not one of the accepted variants",
+    ),
+    (
+        "EOF while parsing",
+        "document ends before a value is complete",
+    ),
+    ("recursion limit exceeded", "document nests too deeply"),
+    (
+        "repetition limit exceeded",
+        "document repeats an alias too often",
+    ),
+    (
+        "deserializing from YAML containing more than one document",
+        "document contains more than one YAML document",
+    ),
+];
+
+impl SchemaFault {
+    /// A fault that names only its cause.
+    pub fn because(cause: &'static str) -> Self {
+        Self {
+            location: None,
+            path: None,
+            cause,
+        }
+    }
+
+    pub fn cause(&self) -> &'static str {
+        self.cause
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    pub fn location(&self) -> Option<TextLocation> {
+        self.location
+    }
+
+    /// Reduce a decoder error to a location, a safe schema path, and a cause.
+    fn from_yaml_error(error: &serde_norway::Error, fallback: &'static str) -> Self {
+        let rendered = error.to_string();
+        let (path, message) = split_schema_path(&rendered);
+        Self {
+            location: error.location().map(|location| TextLocation {
+                line: location.line(),
+                column: location.column(),
+            }),
+            path,
+            cause: classify_decode_cause(message, fallback),
+        }
+    }
+}
+
+impl fmt::Display for SchemaFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.cause)?;
+        if let Some(path) = &self.path {
+            write!(formatter, " at {path}")?;
+        }
+        if let Some(location) = self.location {
+            write!(formatter, " ({location})")?;
+        }
+        Ok(())
+    }
+}
+
+/// Split a rendered decoder error into its schema path and its message.
+///
+/// `serde_norway` prefixes a message with the path to the offending value when
+/// it knows one. The candidate prefix is accepted only when it matches the
+/// path grammar, which no message text can satisfy, so a message that merely
+/// contains a colon never becomes a path.
+fn split_schema_path(rendered: &str) -> (Option<String>, &str) {
+    match rendered.split_once(": ") {
+        Some((candidate, message)) if is_safe_schema_path(candidate) => {
+            (Some(candidate.to_owned()), message)
+        }
+        _ => (None, rendered),
+    }
+}
+
+/// Accept only paths built from mapping keys and numeric sequence indices.
+///
+/// Mapping keys are structural names in a reviewed bundle, never values, and
+/// this grammar admits no whitespace, quoting, or punctuation that a quoted
+/// scalar would carry.
+fn is_safe_schema_path(candidate: &str) -> bool {
+    if candidate.is_empty() || candidate.len() > MAX_SCHEMA_PATH_BYTES {
+        return false;
+    }
+    let mut index_digits: Option<usize> = None;
+    for character in candidate.chars() {
+        match index_digits {
+            Some(digits) => match character {
+                '0'..='9' => index_digits = Some(digits + 1),
+                ']' if digits > 0 => index_digits = None,
+                _ => return false,
+            },
+            None => match character {
+                '[' => index_digits = Some(0),
+                '.' | '-' | '_' | '?' => {}
+                _ if character.is_ascii_alphanumeric() => {}
+                _ => return false,
+            },
+        }
+    }
+    index_digits.is_none()
+}
+
+/// Map a decoder message to one static cause, reading only its fixed prefix.
+fn classify_decode_cause(message: &str, fallback: &'static str) -> &'static str {
+    DECODE_CAUSES
+        .iter()
+        .find(|(prefix, _)| message.starts_with(prefix))
+        .map_or(fallback, |(_, cause)| cause)
+}
+
+/// Decode one YAML document into a closed typed schema.
+///
+/// The bytes are parsed as untyped YAML first so that a syntax failure is
+/// reported as a syntax failure rather than as a schema mismatch.
+fn decode_yaml<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, ConfigError> {
+    if let Err(error) = serde_norway::from_str::<YamlValue>(text) {
+        return Err(ConfigError::InvalidYaml(SchemaFault::from_yaml_error(
+            &error,
+            "document is not well-formed YAML",
+        )));
+    }
+    serde_norway::from_str(text).map_err(|error| {
+        ConfigError::InvalidYaml(SchemaFault::from_yaml_error(
+            &error,
+            "document does not match the closed schema",
+        ))
+    })
 }
 
 /// A mapping that rejects duplicate keys and preserves declaration order.
@@ -144,6 +344,11 @@ pub struct EvidenceConfig {
     pub subject_binding: SubjectBindingConfig,
     pub rate_limits: RateLimitConfig,
     pub signing: SigningConfig,
+    /// Closed enabled response formats for the whole immutable bundle. Signed
+    /// flattened JWS is mandatory and the default; unsigned JSON must be
+    /// enabled here and permitted by the complete matched grant.
+    #[serde(default = "default_response_formats")]
+    pub response_formats: Vec<ResponseFormat>,
     pub selector_profiles: OrderedMap<SelectorProfile>,
     pub sources: OrderedMap<SourceConfig>,
     pub authority_profiles: OrderedMap<AuthorityProfile>,
@@ -157,8 +362,9 @@ impl EvidenceConfig {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| ConfigError::InvalidYaml)?;
-        let config: Self = serde_norway::from_str(text).map_err(|_| ConfigError::InvalidYaml)?;
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
+        let config: Self = decode_yaml(text)?;
         config.validate()?;
         Ok(config)
     }
@@ -175,6 +381,7 @@ impl EvidenceConfig {
         self.subject_binding.validate()?;
         self.rate_limits.validate()?;
         self.signing.validate()?;
+        validate_response_formats(&self.response_formats, "bundle response formats")?;
         validate_named_map(&self.selector_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
@@ -500,8 +707,9 @@ impl RuntimeConfig {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| ConfigError::InvalidYaml)?;
-        let config: Self = serde_norway::from_str(text).map_err(|_| ConfigError::InvalidYaml)?;
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
+        let config: Self = decode_yaml(text)?;
         config.validate()?;
         Ok(config)
     }
@@ -1514,6 +1722,12 @@ pub struct AuthorityGrant {
     pub requirement: String,
     pub purpose: String,
     pub audience_from: AudienceFrom,
+    /// Closed response formats this complete grant permits. Selection through
+    /// the API creates no permission; the bundle formats and this grant must
+    /// both allow the requested format. Formats are never unioned across
+    /// grants.
+    #[serde(default = "default_response_formats")]
+    pub response_formats: Vec<ResponseFormat>,
     pub subjects: Vec<GrantedSubject>,
 }
 
@@ -1521,7 +1735,44 @@ impl AuthorityGrant {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_uri(&self.requirement)?;
         validate_purpose(&self.purpose)?;
+        validate_response_formats(&self.response_formats, "authority grant response formats")?;
         validate_len(self.subjects.len(), 1, 8, "authority grant subjects")
+    }
+}
+
+/// Closed Version 1 response-format vocabulary.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResponseFormat {
+    SignedJws,
+    UnsignedJson,
+}
+
+fn default_response_formats() -> Vec<ResponseFormat> {
+    vec![ResponseFormat::SignedJws]
+}
+
+fn validate_response_formats(
+    formats: &[ResponseFormat],
+    description: &'static str,
+) -> Result<(), ConfigError> {
+    validate_len(formats.len(), 1, 2, description)?;
+    let mut seen = BTreeSet::new();
+    for format in formats {
+        if !seen.insert(format_discriminant(*format)) {
+            return invalid("response formats must be unique");
+        }
+    }
+    if !formats.contains(&ResponseFormat::SignedJws) {
+        return invalid("signed JWS must remain an enabled response format");
+    }
+    Ok(())
+}
+
+fn format_discriminant(format: ResponseFormat) -> u8 {
+    match format {
+        ResponseFormat::SignedJws => 0,
+        ResponseFormat::UnsignedJson => 1,
     }
 }
 
@@ -1961,7 +2212,7 @@ fn validate_configurable_header_name(name: &str) -> Result<(), ConfigError> {
     if name.is_empty()
         || name.len() > 64
         || !name.bytes().all(is_http_token_byte)
-        || is_reserved_header_name(&name.to_ascii_lowercase())
+        || is_reserved_header_name(name)
     {
         return invalid("configured header name is prohibited");
     }
@@ -1989,40 +2240,139 @@ fn is_http_token_byte(byte: u8) -> bool {
         )
 }
 
-fn is_reserved_header_name(name: &str) -> bool {
-    matches!(
-        name,
-        "authorization"
-            | "proxy-authorization"
-            | "host"
-            | "cookie"
-            | "set-cookie"
-            | "content-length"
-            | "content-type"
-            | "transfer-encoding"
-            | "expect"
-            | "connection"
-            | "keep-alive"
-            | "te"
-            | "trailer"
-            | "upgrade"
-            | "proxy-connection"
-            | "forwarded"
-            | "via"
-            | "x-real-ip"
-            | "traceparent"
-            | "tracestate"
-            | "baggage"
-            | "x-request-id"
-            | "x-correlation-id"
-            | "x-amzn-trace-id"
-            | "x-original-url"
-            | "x-rewrite-url"
-            | "x-http-method-override"
-            | "x-original-method"
-    ) || name.starts_with("x-forwarded-")
-        || name.starts_with("proxy-")
-        || name.starts_with("x-b3-")
+/// The complete closed set of header names no bundle may configure.
+///
+/// Authentication, host and routing, cookie, framing, hop-by-hop, forwarding,
+/// proxy, and tracing headers are owned by Rust or by the operator's network
+/// path. A bundle that could set them could redirect a source request, forge a
+/// client identity, or smuggle a second request past the reviewed contract.
+const RESERVED_HEADER_NAMES: [&str; 38] = [
+    "authorization",
+    "proxy-authorization",
+    "www-authenticate",
+    "proxy-authenticate",
+    "host",
+    "cookie",
+    "set-cookie",
+    "content-length",
+    "content-type",
+    "transfer-encoding",
+    "expect",
+    "connection",
+    "keep-alive",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-connection",
+    "forwarded",
+    "via",
+    "x-real-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "true-client-ip",
+    "cf-connecting-ip",
+    "fastly-client-ip",
+    "x-appengine-user-ip",
+    "x-azure-clientip",
+    "traceparent",
+    "tracestate",
+    "baggage",
+    "b3",
+    "x-cloud-trace-context",
+    "x-request-id",
+    "x-correlation-id",
+    "x-amzn-trace-id",
+    "x-original-url",
+    "x-rewrite-url",
+    "x-original-method",
+];
+
+/// The complete closed set of reserved header-name prefix families.
+///
+/// A prefix family is denied before any exact name so that a new vendor
+/// forwarding or tracing member cannot be configured before this contract
+/// learns its exact name.
+const RESERVED_HEADER_PREFIXES: [&str; 7] = [
+    "x-forwarded-",
+    "proxy-",
+    "sec-",
+    "x-b3-",
+    "x-envoy-",
+    "x-datadog-",
+    "x-http-method",
+];
+
+/// Representative reserved names, case variants, and prefix-family members.
+///
+/// Both the startup configuration contract and the source plan compiler are
+/// tested against this one list, which is how their shared classifier is
+/// proven to be a single closed deny set rather than two drifting copies.
+pub const RESERVED_HEADER_CONTRACT_CASES: [&str; 51] = [
+    "Authorization",
+    "authorization",
+    "AUTHORIZATION",
+    "Proxy-Authorization",
+    "Proxy-Authenticate",
+    "WWW-Authenticate",
+    "Host",
+    "Cookie",
+    "Set-Cookie",
+    "Content-Length",
+    "Content-Type",
+    "Transfer-Encoding",
+    "Expect",
+    "Connection",
+    "Keep-Alive",
+    "TE",
+    "Trailer",
+    "Upgrade",
+    "Proxy-Connection",
+    "Forwarded",
+    "Via",
+    "X-Real-IP",
+    "X-Client-IP",
+    "x-client-ip",
+    "X-Cluster-Client-IP",
+    "True-Client-IP",
+    "true-client-ip",
+    "CF-Connecting-IP",
+    "cf-connecting-ip",
+    "Fastly-Client-IP",
+    "X-Appengine-User-IP",
+    "X-Azure-ClientIP",
+    "TraceParent",
+    "Tracestate",
+    "Baggage",
+    "b3",
+    "B3",
+    "X-Cloud-Trace-Context",
+    "X-Request-ID",
+    "X-Correlation-ID",
+    "X-Amzn-Trace-ID",
+    "X-Original-URL",
+    "X-Rewrite-URL",
+    "X-HTTP-Method-Override",
+    "X-Original-Method",
+    "X-Forwarded-For",
+    "X-Forwarded-Proto",
+    "X-B3-TraceId",
+    "X-Envoy-External-Address",
+    "X-Datadog-Trace-Id",
+    "Sec-Fetch-Mode",
+];
+
+/// The one closed reserved-header classifier.
+///
+/// `name` may be in any ASCII case. Configuration validation rejects a
+/// reserved name at startup and source plan compilation rejects it again
+/// before any credential is resolved, so both call sites share this function
+/// rather than duplicating the deny set.
+pub(crate) fn is_reserved_header_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    RESERVED_HEADER_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || RESERVED_HEADER_NAMES.contains(&name.as_str())
 }
 
 fn validate_path_template(
@@ -2790,6 +3140,124 @@ mod tests {
         serde_json::to_value(value).expect("bundle instance converts to JSON")
     }
 
+    /// Canary scalars planted in a malformed document.
+    ///
+    /// A diagnostic that ever reproduces one of these has leaked a deployment
+    /// value, which is exactly what the safe-diagnostic contract forbids.
+    const CANARY_VALUES: [&str; 4] = [
+        "s3cr3t-selector-value",
+        "urn:gov:example:canary:subject:9910",
+        "secret:file/canary-private-key",
+        "https://canary.internal.example",
+    ];
+
+    #[test]
+    fn decode_failures_report_a_safe_path_a_location_and_a_value_free_cause() {
+        let reference = include_str!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml");
+        let unknown_nested = reference.replacen(
+            "      timeoutMilliseconds: 3000",
+            "      timeoutMilliseconds: 3000\n      surprise: s3cr3t-selector-value",
+            1,
+        );
+        assert_ne!(unknown_nested, reference, "nested mutation applies");
+        let cases: [(&str, String, &str, Option<&str>, bool); 6] = [
+            (
+                "malformed YAML",
+                format!("version: 1\nbroken: [{}\n", CANARY_VALUES[0]),
+                "document is not well-formed YAML",
+                None,
+                true,
+            ),
+            (
+                "unknown top-level field",
+                format!("version: 1\nbogusField: {}\n", CANARY_VALUES[1]),
+                "unknown field",
+                None,
+                true,
+            ),
+            (
+                "unknown nested field",
+                unknown_nested,
+                "unknown field",
+                Some("sources.registered-birth-date.request"),
+                true,
+            ),
+            (
+                "wrong type",
+                format!("version: {}\n", CANARY_VALUES[2]),
+                "field has the wrong type",
+                Some("version"),
+                true,
+            ),
+            (
+                "missing field",
+                "version: 1\n".to_owned(),
+                "required field is missing",
+                None,
+                true,
+            ),
+            (
+                "more than one document",
+                format!("version: 1\n---\nversion: {}\n", CANARY_VALUES[3]),
+                "document contains more than one YAML document",
+                None,
+                false,
+            ),
+        ];
+        for (label, document, expected_cause, expected_path, expects_location) in cases {
+            let error = EvidenceConfig::parse_yaml(document.as_bytes())
+                .err()
+                .unwrap_or_else(|| panic!("{label} was accepted"));
+            let ConfigError::InvalidYaml(fault) = &error else {
+                panic!("{label} was not reported as a decode failure: {error}");
+            };
+            assert_eq!(fault.cause(), expected_cause, "{label} cause");
+            assert_eq!(fault.path(), expected_path, "{label} path");
+            assert_eq!(
+                fault.location().is_some(),
+                expects_location,
+                "{label} location presence"
+            );
+            let rendered = error.to_string();
+            for canary in CANARY_VALUES {
+                assert!(
+                    !rendered.contains(canary),
+                    "{label} diagnostic leaked a document value: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_paths_are_accepted_only_when_they_carry_no_document_value() {
+        for safe in [
+            "version",
+            "sources.registered-birth-date.request",
+            "sources.a.request.fixedHeaders[0].name",
+            "requirements[12].concepts[3].id",
+            "sources.a.?",
+        ] {
+            assert!(is_safe_schema_path(safe), "{safe} is a schema path");
+        }
+        for unsafe_candidate in [
+            "",
+            "invalid type",
+            "invalid value",
+            "sources.urn:gov:example",
+            "sources.\"quoted key\"",
+            "sources.a[]",
+            "sources.a[x]",
+            "sources.a[0",
+            "sources.a/b",
+            &"a".repeat(MAX_SCHEMA_PATH_BYTES + 1),
+        ] {
+            assert!(
+                !is_safe_schema_path(unsafe_candidate),
+                "{unsafe_candidate} is not a schema path"
+            );
+        }
+    }
+
     #[test]
     fn exact_secret_reference_grammars_are_closed() {
         for valid in ["secret:file/a", "secret:file/source-token_v2.json"] {
@@ -2831,6 +3299,64 @@ mod tests {
             include_bytes!("../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml").as_slice(),
         ] {
             EvidenceConfig::parse_yaml(yaml).expect("acceptance definition must validate");
+        }
+    }
+
+    #[test]
+    fn requirement_validity_cannot_exceed_the_signing_maximum() {
+        // Startup validation is the enforcement point: runtime construction
+        // derives validUntil from the validated requirement validity, so no
+        // constructed assertion can exceed the bundle signing maximum and no
+        // redundant signing-time check exists.
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
+        let shrunk_maximum = yaml.replace(
+            "maximumAssertionValiditySeconds: 86400",
+            "maximumAssertionValiditySeconds: 3600",
+        );
+        assert!(matches!(
+            EvidenceConfig::parse_yaml(shrunk_maximum.as_bytes()),
+            Err(ConfigError::Invalid(
+                "requirement validity exceeds signing maximum validity"
+            ))
+        ));
+    }
+
+    #[test]
+    fn response_formats_are_closed_unique_and_keep_signed_mandatory() {
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        for (from, to) in [
+            // The bundle cannot drop the mandatory signed format.
+            (
+                "\nresponseFormats: [signed-jws, unsigned-json]",
+                "\nresponseFormats: [unsigned-json]",
+            ),
+            // Formats must be unique.
+            (
+                "\nresponseFormats: [signed-jws, unsigned-json]",
+                "\nresponseFormats: [signed-jws, signed-jws]",
+            ),
+            // A grant cannot drop the mandatory signed format either.
+            (
+                "        responseFormats: [signed-jws, unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
+                "        responseFormats: [unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
+            ),
+            // The vocabulary is closed.
+            (
+                "\nresponseFormats: [signed-jws, unsigned-json]",
+                "\nresponseFormats: [signed-jws, jws-detached]",
+            ),
+        ] {
+            let mutated = yaml.replace(from, to);
+            assert_ne!(mutated, yaml, "{to}");
+            assert!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
+                "{to}"
+            );
         }
     }
 
@@ -3224,10 +3750,19 @@ outboundTls:
         ] {
             let mut candidate = valid.to_vec();
             candidate.extend_from_slice(format!("{governed_key}: {{}}\n").as_bytes());
+            let rejection = RuntimeConfig::parse_yaml(&candidate)
+                .expect_err("runtime accepted governed bundle key {governed_key}");
+            let ConfigError::InvalidYaml(fault) = &rejection else {
+                panic!("runtime accepted governed bundle key {governed_key}: {rejection}");
+            };
             assert_eq!(
-                RuntimeConfig::parse_yaml(&candidate),
-                Err(ConfigError::InvalidYaml),
-                "runtime accepted governed bundle key {governed_key}"
+                fault.cause(),
+                "unknown field",
+                "governed bundle key {governed_key} was rejected for the wrong reason"
+            );
+            assert!(
+                fault.location().is_some(),
+                "governed bundle key {governed_key} was rejected without a location"
             );
             assert!(
                 !validator.is_valid(&bundle_contract_instance(&candidate)),
@@ -3248,25 +3783,13 @@ outboundTls:
             "/records/prefix-{record_reference}",
             "/records/{missing}",
             "/records/../{record_reference}",
+            "/records/{record_reference}/{record_reference}",
         ] {
             assert!(validate_path_template(invalid_template, &bindings).is_err());
         }
 
         assert!(validate_configurable_header_name("X-API-Version").is_ok());
-        for forbidden in [
-            "Authorization",
-            "Host",
-            "Content-Length",
-            "Expect",
-            "Cookie",
-            "Proxy-Authorization",
-            "X-Forwarded-For",
-            "X-Original-URL",
-            "X-Rewrite-URL",
-            "X-HTTP-Method-Override",
-            "X-Original-Method",
-            "TraceParent",
-        ] {
+        for forbidden in RESERVED_HEADER_CONTRACT_CASES {
             assert!(
                 validate_configurable_header_name(forbidden).is_err(),
                 "{forbidden}"

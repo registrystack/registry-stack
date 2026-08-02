@@ -16,13 +16,17 @@ codes:
   invalid_selector: {status: 400, title: Request is not valid}
   authentication_failed: {status: 401, title: Authentication failed}
   not_authorized: {status: 403, title: Request is not authorized}
+  response_format_not_acceptable: {status: 406, title: Requested response format is not acceptable}
   evidence_not_available: {status: 422, title: Evidence could not be produced}
   rate_limited: {status: 429, title: Request rate exceeded}
   dependency_unavailable: {status: 503, title: Service temporarily unavailable}
   service_unavailable: {status: 503, title: Service temporarily unavailable}
+response_format_rules:
+  negotiation: Missing Accept, */*, and exact application/jose+json select signed JWS. Only exact application/vnd.registrystack.evidence-unsigned+json selects the unsigned envelope. Duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns response_format_not_acceptable before source access.
+  authorization: A recognized unsigned request that the immutable bundle or the complete matched grant does not permit returns the ordinary not_authorized problem before credential acquisition or source access, without revealing which layer withheld permission.
 existence_disclosure:
   default_public_collapse:
-    internal_classes: [no_match, ambiguous, required_fact_missing]
+    internal_classes: [no_match, ambiguous, required_fact_missing, derivation_input_unresolved]
     public_code: evidence_not_available
     same_status: 422
     same_title: Evidence could not be produced

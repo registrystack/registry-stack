@@ -37,6 +37,8 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
 selectorProfiles:
   tracked-entity-reference-v1:
     maximumAggregateBytes: 64
@@ -97,6 +99,7 @@ authorityProfiles:
       - requirement: urn:gov:example:requirement:adult-status:v1
         purpose: benefit-eligibility
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: subject
             selectorProfile: tracked-entity-reference-v1

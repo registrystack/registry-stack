@@ -51,7 +51,10 @@ entries:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: request_parts_debug_redacts_query_and_body_values}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
   - id: sec-unresolved-public-collapse
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_existence_disclosure_mode_governs_the_public_collapse}
+      - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
   - id: sec-subject-binding-scope
     tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
   - id: sec-runtime-bundle-mutation-absent
@@ -130,4 +133,53 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: runtime_ca_capture_rejects_symlink_malformed_and_mutable_files}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: ambient_proxy_variables_are_ignored_in_an_isolated_process}
   - id: sec-subject-array-order-nonsemantic
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: multi_role_request_order_is_not_semantic_and_output_uses_declaration_order}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: multi_role_request_order_is_not_semantic_and_output_uses_declaration_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: reordered_grant_subjects_resolve_by_role_and_emit_declaration_order}
+      - {file: crates/registry-evidence/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+  - id: sec-request-nonce-strict-and-contained
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: request_nonce_canonicality_is_exact}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_nonce_is_strict_and_never_reaches_source_or_audit}
+      - {file: crates/registry-evidence/src/server.rs, name: request_json_is_strict_and_closed}
+  - id: sec-unsigned-requires-bundle-and-grant
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_output_requires_both_bundle_and_grant_permission}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: accept_negotiation_is_closed_and_fails_before_source_access}
+      - {file: crates/registry-evidence/src/server.rs, name: accept_negotiation_matrix_is_closed_and_exact}
+      - {file: crates/registry-evidence/src/config.rs, name: response_formats_are_closed_unique_and_keep_signed_mandatory}
+  - id: sec-release-bytes-pre-audited
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_unsigned_response_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_returns_a_problem_and_never_an_unsigned_body}
+  - id: sec-audit-response-protection-mode
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: all_four_definitions_pass_the_explicitly_authorized_unsigned_path}
+  - id: sec-verifier-independent-expectations
+    tests:
+      - {file: crates/registry-evidence/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
+      - {file: crates/registry-evidence/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+      - {file: crates/registry-evidence/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
+      - {file: crates/registry-evidence/src/verifier.rs, name: authenticity_is_reported_separately_from_current_validity}
+      - {file: crates/registry-evidence/src/verifier.rs, name: assertion_lifetime_above_the_accepted_maximum_fails}
+  - id: sec-unsigned-envelope-not-jws
+    tests:
+      - {file: crates/registry-evidence/src/verifier.rs, name: unsigned_envelope_is_rejected_by_the_strict_jws_verifier}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
+  - id: sec-secret-file-identity
+    tests:
+      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_uses_open_file_owner_and_exact_mode_checks}
+      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
+      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
+      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_read_is_bounded}
+  - id: sec-transport-backend-and-single-attempt
+    tests:
+      - {file: crates/registry-evidence/src/source.rs, name: evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_reset_transport_failure_yields_exactly_one_connection_attempt}
+  - id: sec-jwks-route-config-parity
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: configured_jwks_path_is_mechanically_the_served_route}]
+  - id: sec-script-operation-exhaustion
+    tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]

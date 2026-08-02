@@ -5,6 +5,7 @@ type: object
 additionalProperties: false
 required:
   - schema
+  - requestNonce
   - id
   - type
   - supportsRequirement
@@ -21,6 +22,7 @@ required:
   - supportedValues
 properties:
   schema: {const: registry.assertion-evidence/v1}
+  requestNonce: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
   id: {type: string, format: uri, maxLength: 512}
   type: {const: Evidence}
   supportsRequirement: {type: string, format: uri, maxLength: 512}
@@ -101,4 +103,9 @@ $comment: >-
   codelist, precision, cardinality, sizes, structured fields, and uniqueness.
   A value accepted by this transport schema but not by that declaration is
   rejected before evidence construction. Subject selector profiles and values
-  never appear in evidence.
+  never appear in evidence. requestNonce is the exact echo of the caller's
+  request nonce and is covered by the JWS signature in the signed format. It
+  is not part of the audience-scoped subject binding, and its reuse is not
+  rejected; challenge-style transaction binding exists only when the relying
+  party independently retains the original request and requires the expected
+  nonce during verification.

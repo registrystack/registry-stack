@@ -36,6 +36,8 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
 selectorProfiles:
   synthetic-subject-v1:
     maximumAggregateBytes: 64
@@ -80,6 +82,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:supported-values:v1
         purpose: conformance
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - {role: subject, selectorProfile: synthetic-subject-v1, valueOrigin: request}
 requirements:

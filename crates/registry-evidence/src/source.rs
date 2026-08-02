@@ -427,7 +427,17 @@ fn build_client(
         .timeout(timeout)
         .connect_timeout(timeout.min(Duration::from_secs(10)))
         .redirect(reqwest::redirect::Policy::none())
-        .no_proxy();
+        .no_proxy()
+        // Select rustls explicitly. Cargo unifies reqwest's feature set across
+        // the whole workspace, so another workspace member enabling
+        // reqwest's native-tls feature must not silently change which TLS
+        // backend this client uses.
+        .use_rustls_tls()
+        // Evidence source execution is exactly one request per plan step; a
+        // transport-level retry would duplicate an outbound call the caller
+        // did not ask for and is not accounted for in the one-request
+        // contract.
+        .retry(reqwest::retry::never());
     if let Some(profile_name) = source.tls_trust_profile.as_deref() {
         let (tls, captured_ca_bundles) = outbound_tls.ok_or(SourceError::InvalidPlan)?;
         if !tls.system_roots {
@@ -688,41 +698,13 @@ fn compile_fixed_headers(
     Ok(headers)
 }
 
+/// Reject a bundle-configured header name before any credential is resolved.
+///
+/// Startup configuration validation already rejects these names. This is the
+/// defensive second check on the request path, and it deliberately calls the
+/// one shared closed classifier so the two deny sets cannot drift apart.
 fn reserved_configured_header(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "host"
-            | "cookie"
-            | "set-cookie"
-            | "content-length"
-            | "content-type"
-            | "transfer-encoding"
-            | "expect"
-            | "connection"
-            | "keep-alive"
-            | "te"
-            | "trailer"
-            | "upgrade"
-            | "proxy-connection"
-            | "forwarded"
-            | "via"
-            | "x-real-ip"
-            | "traceparent"
-            | "tracestate"
-            | "baggage"
-            | "x-request-id"
-            | "x-correlation-id"
-            | "x-amzn-trace-id"
-            | "x-original-url"
-            | "x-rewrite-url"
-            | "x-http-method-override"
-            | "x-original-method"
-    ) || name.starts_with("x-forwarded-")
-        || name.starts_with("proxy-")
-        || name.starts_with("x-b3-")
+    crate::config::is_reserved_header_name(name)
 }
 
 fn compile_authentication(
@@ -1568,6 +1550,114 @@ mod tests {
             .await
             .expect("request journal is available")
             .is_empty());
+    }
+
+    /// Spins up a TLS server whose certificate is signed by a private
+    /// certificate authority that the client under test is never told to
+    /// trust. The resulting handshake failure is specific to whichever TLS
+    /// backend the client actually uses, which makes it a proof that the
+    /// backend selected in `build_client` is the one in effect at runtime.
+    async fn spawn_untrusted_tls_server(
+        server_subject_alt_name: &str,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let mut ca_parameters = rcgen::CertificateParams::new(Vec::<String>::new())
+            .expect("private CA parameters are valid");
+        ca_parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca_key = rcgen::KeyPair::generate().expect("private CA key generates");
+        let ca_certificate = ca_parameters
+            .self_signed(&ca_key)
+            .expect("private CA certificate generates");
+
+        let server_parameters =
+            rcgen::CertificateParams::new(vec![server_subject_alt_name.to_owned()])
+                .expect("server certificate parameters are valid");
+        let server_key = rcgen::KeyPair::generate().expect("server key generates");
+        let server_certificate = server_parameters
+            .signed_by(&server_key, &ca_certificate, &ca_key)
+            .expect("private CA signs server certificate");
+        let private_key = tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(
+            tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(server_key.serialize_der()),
+        );
+        let server_config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![server_certificate.der().clone()], private_key)
+            .expect("TLS server configuration builds");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("TLS test server binds");
+        let address = listener.local_addr().expect("TLS server address");
+        let handle = tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            // The client is expected to abort the handshake once it
+            // evaluates the certificate chain, so no request or response
+            // handling is needed here.
+            let _ = acceptor.accept(stream).await;
+        });
+        (address, handle)
+    }
+
+    #[tokio::test]
+    async fn evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority()
+    {
+        let (address, _server) = spawn_untrusted_tls_server("127.0.0.1").await;
+        let source: SourceConfig = serde_json::from_value(json!({
+            "transport": "http-json",
+            "baseUrl": format!("https://{address}"),
+            "posture": "source-derived",
+            "authentication": {
+                "kind": "static-bearer",
+                "tokenRef": "secret:file/missing-source-token"
+            },
+            "request": {
+                "method": "POST",
+                "path": "/data",
+                "fixedHeaders": [],
+                "selectorInputs": [{
+                    "role": "subject",
+                    "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]
+                }],
+                "prepareScript": "adapters/prepare.rhai",
+                "adapterParameters": {},
+                "adapterParametersSchema": "schemas/parameters.schema.yaml",
+                "preparationLimits": {
+                    "query": "forbidden",
+                    "jsonBody": "required",
+                    "maximumJsonDepth": 4,
+                    "maximumCollectionItems": 4,
+                    "maximumStringBytes": 64,
+                    "maximumNormalizedBytes": 1024
+                },
+                "projection": ["/ok"],
+                "redirects": "deny",
+                "timeoutMilliseconds": 2000,
+                "maximumResponseBytes": 1024,
+                "concurrencyLimit": 1
+            },
+            "extractScript": "adapters/extract.rhai",
+            "factSchema": "schemas/facts.schema.yaml"
+        }))
+        .expect("source config deserializes");
+        let client = build_client(Duration::from_secs(5), &source, None).expect("client builds");
+        let error = client
+            .get(format!("https://{address}/"))
+            .send()
+            .await
+            .expect_err("an unrecognized certificate authority is rejected");
+        let mut messages = Vec::new();
+        let mut current: &dyn std::error::Error = &error;
+        while let Some(source) = current.source() {
+            messages.push(source.to_string());
+            current = source;
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("invalid peer certificate")),
+            "expected a rustls certificate-validation error in the source chain, got: {messages:?}"
+        );
     }
 
     #[tokio::test]

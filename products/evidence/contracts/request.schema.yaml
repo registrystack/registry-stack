@@ -3,8 +3,11 @@ $id: https://registrystack.org/schemas/evidence/request-v1.json
 title: Evidence request Version 1
 type: object
 additionalProperties: false
-required: [requirement, purpose, subjects]
+required: [requestNonce, requirement, purpose, subjects]
 properties:
+  requestNonce:
+    type: string
+    pattern: '^[A-Za-z0-9_-]{43}$'
   requirement:
     type: string
     format: uri
@@ -62,3 +65,11 @@ $comment: >-
   mistyped, empty, oversized, wrong-origin, or unauthorized values fail before
   credential acquisition or source access. Array position is not semantic;
   duplicate, missing, unknown, or wrong-profile roles fail before access audit.
+  requestNonce is the canonical unpadded base64url encoding of exactly 32
+  bytes generated independently for each request by a cryptographically secure
+  random source; a padded, wrong-length, or noncanonical value fails before
+  credential acquisition or source access. The nonce is uninterpreted
+  correlation data echoed into the Evidence payload. It is never stored,
+  never uniqueness-checked, and never reaches authorization, rate limits,
+  Rhai, source requests, logs, metrics, traces, or native audit. Callers must
+  not encode identifiers, selectors, secrets, or document digests into it.

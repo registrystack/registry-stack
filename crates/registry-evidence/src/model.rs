@@ -1,13 +1,45 @@
 use std::{collections::BTreeMap, fmt};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use schemars::JsonSchema;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{Number, Value};
 use utoipa::ToSchema;
 
+/// Exact encoded length of the required caller-generated request nonce: the
+/// canonical unpadded base64url form of 32 random bytes.
+pub const REQUEST_NONCE_ENCODED_LENGTH: usize = 43;
+const REQUEST_NONCE_DECODED_LENGTH: usize = 32;
+
+/// Deterministic canonical nonce for offline fixture evaluation and internal
+/// non-released request shapes. Real callers generate a fresh random value
+/// for every request.
+pub const OFFLINE_EVALUATION_REQUEST_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+/// Accept only the canonical 43-character unpadded base64url encoding of
+/// exactly 32 bytes. Padding, wrong length, non-alphabet bytes, and a
+/// noncanonical final symbol all fail.
+pub fn request_nonce_is_canonical(nonce: &str) -> bool {
+    if nonce.len() != REQUEST_NONCE_ENCODED_LENGTH
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return false;
+    }
+    match URL_SAFE_NO_PAD.decode(nonce) {
+        Ok(decoded) => decoded.len() == REQUEST_NONCE_DECODED_LENGTH,
+        Err(_) => false,
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRequest {
+    /// Uninterpreted caller-generated correlation nonce. It is echoed into the
+    /// Evidence payload and never reaches authorization, rate limits, Rhai,
+    /// source requests, logs, metrics, traces, or native audit.
+    pub request_nonce: String,
     pub requirement: String,
     pub purpose: String,
     /// Unordered role set encoded as an array. Roles are resolved by name and
@@ -122,6 +154,9 @@ pub enum SelectorValue {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Evidence {
     pub schema: String,
+    /// Exact echo of the caller's request nonce for request-response
+    /// correlation. The runtime does not store it or reject reuse.
+    pub request_nonce: String,
     pub id: String,
     #[serde(rename = "type")]
     pub evidence_type_name: EvidenceObjectType,
@@ -301,6 +336,37 @@ pub struct FlattenedJws {
     pub signature: String,
 }
 
+/// Self-identifying unsigned response envelope. It deliberately does not
+/// serialize as the signed Evidence payload by itself and carries no JWS
+/// member, so the strict JWS verifier rejects it.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnsignedEvidenceEnvelope {
+    pub schema: String,
+    #[serde(rename = "type")]
+    pub envelope_type: UnsignedEnvelopeType,
+    pub integrity_protection: UnsignedIntegrityProtection,
+    pub warning: UnsignedEnvelopeWarning,
+    pub evidence: Evidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+pub enum UnsignedEnvelopeType {
+    UnsignedEvidenceEnvelope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnsignedIntegrityProtection {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnsignedEnvelopeWarning {
+    NotCryptographicallyVerifiable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct JwksDocument {
@@ -360,6 +426,7 @@ redacted_debug!(
     EntityReferenceValue,
     StructuredValue,
     FlattenedJws,
+    UnsignedEvidenceEnvelope,
     LookupResult,
 );
 
@@ -390,6 +457,7 @@ mod tests {
     #[test]
     fn request_rejects_query_material_and_unknown_fields() {
         let input = serde_json::json!({
+            "requestNonce": "A".repeat(43),
             "requirement": "urn:example:requirement:v1",
             "purpose": "casework",
             "subjects": [{
@@ -401,6 +469,7 @@ mod tests {
         assert!(serde_json::from_value::<EvidenceRequest>(input).is_err());
 
         let caller_grant_reference = serde_json::json!({
+            "requestNonce": "A".repeat(43),
             "requirement": "urn:example:requirement:v1",
             "purpose": "casework",
             "grantId": "caller-selected-grant",
@@ -411,12 +480,47 @@ mod tests {
             }]
         });
         assert!(serde_json::from_value::<EvidenceRequest>(caller_grant_reference).is_err());
+
+        let missing_nonce = serde_json::json!({
+            "requirement": "urn:example:requirement:v1",
+            "purpose": "casework",
+            "subjects": [{
+                "role": "subject",
+                "selector": {"profile": "profile-v1", "values": {"opaque": "value"}}
+            }]
+        });
+        assert!(serde_json::from_value::<EvidenceRequest>(missing_nonce).is_err());
+    }
+
+    #[test]
+    fn request_nonce_canonicality_is_exact() {
+        assert!(request_nonce_is_canonical(
+            "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I"
+        ));
+        assert!(request_nonce_is_canonical(&"A".repeat(43)));
+
+        let noncanonical_final_symbol = format!("{}B", "A".repeat(42));
+        for invalid in [
+            "",
+            "short",
+            &"A".repeat(42),
+            &"A".repeat(44),
+            &format!("{}=", "A".repeat(42)),
+            &format!("{}+", "A".repeat(42)),
+            &format!("{}/", "A".repeat(42)),
+            &format!("{} ", "A".repeat(42)),
+            &format!("{}\u{e9}", "A".repeat(42)),
+            noncanonical_final_symbol.as_str(),
+        ] {
+            assert!(!request_nonce_is_canonical(invalid), "{invalid:?}");
+        }
     }
 
     #[test]
     fn evidence_has_no_selector_echo_field() {
         let serialized = serde_json::to_value(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_string(),
+            request_nonce: "A".repeat(43),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:requirement:v1".to_string(),
@@ -447,6 +551,7 @@ mod tests {
     #[test]
     fn debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads() {
         let request = EvidenceRequest {
+            request_nonce: "protected-request-nonce-canary".to_owned(),
             requirement: "urn:example:protected-requirement-canary".to_owned(),
             purpose: "protected-purpose-canary".to_owned(),
             subjects: vec![RequestedSubject {
@@ -462,6 +567,7 @@ mod tests {
         };
         let evidence = Evidence {
             schema: "protected-schema-canary".to_owned(),
+            request_nonce: "protected-request-nonce-canary".to_owned(),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "protected-requirement-canary".to_owned(),
@@ -500,9 +606,18 @@ mod tests {
             definitions: Vec::new(),
         };
 
+        let unsigned_envelope = UnsignedEvidenceEnvelope {
+            schema: crate::EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1.to_owned(),
+            envelope_type: UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
+            integrity_protection: UnsignedIntegrityProtection::None,
+            warning: UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
+            evidence: evidence.clone(),
+        };
+
         for diagnostic in [
             format!("{request:?}"),
             format!("{definitions:?}"),
+            format!("{unsigned_envelope:?}"),
             format!(
                 "{:?}",
                 SelectorValue::String("protected-selector-canary".to_owned())

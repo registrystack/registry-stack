@@ -29,6 +29,11 @@ signing:
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
 
+# The acceptance deployment deliberately enables the governed unsigned format
+# so every coequal definition proves both response paths. Production reference
+# bundles list only signed-jws.
+responseFormats: [signed-jws, unsigned-json]
+
 selectorProfiles:
   person-demographics-v1:
     maximumAggregateBytes: 420
@@ -164,21 +169,25 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:adult-status:v1
         purpose: fixture-eligibility
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
         subjects:
           - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}
       - requirement: urn:example:fixture:requirement:residence-region:v1
         purpose: fixture-routing
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
         subjects:
           - {role: subject, selectorProfile: residence-record-v1, valueOrigin: request}
       - requirement: urn:example:fixture:requirement:professional-licence-status:v1
         purpose: fixture-registration
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
         subjects:
           - {role: subject, selectorProfile: licence-register-v1, valueOrigin: request}
       - requirement: urn:example:fixture:requirement:legal-parent-relationship:v1
         purpose: fixture-enrolment
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
         subjects:
           - {role: child, selectorProfile: civil-record-reference-v1, valueOrigin: request}
           - role: candidate-parent

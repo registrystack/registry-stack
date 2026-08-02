@@ -1,4 +1,5 @@
 {
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
   "requirement": "urn:example:fixture:requirement:residence-region:v1",
   "purpose": "fixture-routing",
   "subjects": [

@@ -37,6 +37,8 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
 selectorProfiles:
   opencrvs-tracking-id-v1:
     maximumAggregateBytes: 64
@@ -160,6 +162,7 @@ authorityProfiles:
       - requirement: urn:gov:example:requirement:adult-status-from-birth:v1
         purpose: eligibility-assessment
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: subject
             selectorProfile: opencrvs-tracking-id-v1
@@ -167,6 +170,7 @@ authorityProfiles:
       - requirement: urn:gov:example:requirement:registered-parent-relationship:v1
         purpose: family-relationship-verification
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: child
             selectorProfile: opencrvs-tracking-id-v1
@@ -179,6 +183,7 @@ authorityProfiles:
       - requirement: urn:gov:example:requirement:identify-registered-parents:v1
         purpose: family-case-record
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: child
             selectorProfile: opencrvs-tracking-id-v1

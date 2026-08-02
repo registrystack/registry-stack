@@ -42,7 +42,14 @@ pub const MAXIMUM_JSON_BODY_DEPTH: usize = 32;
 const MAXIMUM_BUCKETS: usize = 64;
 const MAXIMUM_ENTITY_REFERENCE_ITEMS: usize = 64;
 const MAXIMUM_REQUIRED_CODE_BYTES: usize = 64;
+/// One past the largest signed 64-bit integer, as the exclusive magnitude bound for any
+/// ordinary floating-point number that crosses a runtime boundary.
+const INTEGER_MAGNITUDE_LIMIT: f64 = 9_223_372_036_854_775_808.0;
+/// Host-owned wrapper applied to every index operand by the startup source review.
+const INDEX_GUARD_FUNCTION: &str = "__evidence_index";
 
+/// Host-private marker for a `required` value that was absent. Scripts cannot name,
+/// construct, catch, or observe it, and it carries no script-supplied text.
 #[derive(Clone, Copy, Debug)]
 struct RequiredUnavailable;
 
@@ -564,6 +571,9 @@ impl RhaiRuntime {
                 .collect(),
         );
         validate_json_bound(&facts_value, MAXIMUM_RESULT_BYTES)?;
+        if !json_numbers_are_supported(&facts_value) {
+            return Err(RhaiRuntimeError::InputBound);
+        }
         let facts =
             rhai::serde::to_dynamic(facts_value).map_err(|_| RhaiRuntimeError::InputBound)?;
         validate_adapter_object(selectors)?;
@@ -591,10 +601,10 @@ impl RhaiRuntime {
         if source.len() > MAXIMUM_RESULT_BYTES {
             return Err(RhaiRuntimeError::InputBound);
         }
-        validate_script_source(source)?;
+        let guarded = guarded_script_source(source)?;
         let ast = self
             .engine
-            .compile(source)
+            .compile(&guarded)
             .map_err(|_| RhaiRuntimeError::Compilation)?;
         let mut names = BTreeSet::new();
         let mut entry_points = 0usize;
@@ -651,7 +661,9 @@ fn register_language_essentials(engine: &mut Engine) {
         })
         .register_fn("push", bounded_array_push)
         .register_fn("replace", literal_string_replace)
-        .register_fn("parse_integer", parse_integer);
+        .register_fn("parse_integer", parse_integer)
+        .register_fn(INDEX_GUARD_FUNCTION, guard_index)
+        .register_fn(INDEX_GUARD_FUNCTION, guard_index_key);
 }
 
 fn register_evidence_primitives(engine: &mut Engine) {
@@ -816,32 +828,34 @@ fn codelist_lookup(handle: CodelistHandle, code: &str) -> Dynamic {
 }
 
 fn list_contains(values: Array, needle: Dynamic) -> Result<bool, Box<EvalAltResult>> {
-    if values.len() > MAXIMUM_ARRAY_ITEMS {
-        return Err(primitive_error("collection_out_of_bounds"));
-    }
     let needle = scalar_value(&needle).ok_or_else(|| primitive_error("invalid_scalar"))?;
-    for value in values {
-        let value = scalar_value(&value).ok_or_else(|| primitive_error("invalid_scalar"))?;
-        if value == needle {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    let values = bounded_scalar_values(&values)?;
+    Ok(values.contains(&needle))
 }
 
 fn set_contains(values: Array, needle: Dynamic) -> Result<bool, Box<EvalAltResult>> {
-    if values.len() > MAXIMUM_ARRAY_ITEMS {
-        return Err(primitive_error("collection_out_of_bounds"));
-    }
     let needle = scalar_value(&needle).ok_or_else(|| primitive_error("invalid_scalar"))?;
+    let values = bounded_scalar_values(&values)?;
     let mut unique = BTreeSet::new();
     for value in values {
-        let value = scalar_value(&value).ok_or_else(|| primitive_error("invalid_scalar"))?;
-        if !unique.insert(value.clone()) {
+        if !unique.insert(value) {
             return Err(primitive_error("set_contains_duplicate"));
         }
     }
     Ok(unique.contains(&needle))
+}
+
+/// Validates the whole bounded collection before any containment answer exists, so a
+/// value that violates the declared `array<scalar>` input fails even when an earlier
+/// item already matches.
+fn bounded_scalar_values(values: &Array) -> Result<Vec<ScalarValue>, Box<EvalAltResult>> {
+    if values.len() > MAXIMUM_ARRAY_ITEMS {
+        return Err(primitive_error("collection_out_of_bounds"));
+    }
+    values
+        .iter()
+        .map(|value| scalar_value(value).ok_or_else(|| primitive_error("invalid_scalar")))
+        .collect()
 }
 
 fn bounded_array_push(array: &mut Array, value: Dynamic) -> Result<(), Box<EvalAltResult>> {
@@ -901,6 +915,14 @@ fn parse_integer(value: &str) -> Result<INT, Box<EvalAltResult>> {
         .map_err(|_| primitive_error("invalid_integer"))
 }
 
+/// Returns the value, or terminates the invocation with the host-private unavailable
+/// signal.
+///
+/// The second argument is validated as a safe shape and then deliberately discarded.
+/// Shape validation cannot prove that a code is a reviewed bundle literal rather than a
+/// value derived from protected source data, so carrying it into any observable failure
+/// would open a disclosure channel. Every unavailable termination therefore collapses to
+/// the same value-free class in public problems, audit, and service logs.
 fn required(value: Dynamic, error_code: &str) -> Result<Dynamic, Box<EvalAltResult>> {
     if !is_safe_error_code(error_code) {
         return Err(primitive_error("invalid_required_error_code"));
@@ -987,7 +1009,7 @@ where
         "ambiguous" if has_exact_keys(&map, &["outcome"]) => Ok(LookupResult::Ambiguous),
         "match" if has_exact_keys(&map, &["outcome", "facts"]) => {
             let facts_dynamic = map.get("facts").ok_or(RhaiRuntimeError::ExtractionResult)?;
-            if !dynamic_is_json(facts_dynamic) {
+            if !dynamic_is_json(facts_dynamic, FloatAdmission::AdapterSurface) {
                 return Err(RhaiRuntimeError::ExtractionResult);
             }
             let facts: Value = rhai::serde::from_dynamic(facts_dynamic)
@@ -1085,7 +1107,7 @@ fn decode_derived_value(value: Dynamic) -> Result<DerivedValue, RhaiRuntimeError
             ));
         }
     }
-    if !dynamic_is_json(&value) {
+    if !dynamic_is_json(&value, FloatAdmission::Rejected) {
         return Err(RhaiRuntimeError::DerivationResult);
     }
     let json = rhai::serde::from_dynamic::<Value>(&value)
@@ -1095,7 +1117,32 @@ fn decode_derived_value(value: Dynamic) -> Result<DerivedValue, RhaiRuntimeError
     Ok(DerivedValue::Json(json))
 }
 
-fn validate_script_source(source: &str) -> Result<(), RhaiRuntimeError> {
+/// Reviews the reviewed-language surface and returns the source with every index
+/// operand routed through the host-owned index guard. The raw engine remains the
+/// capability boundary; this lexical review is an enforceable language contract over
+/// governed bundle scripts and is not claimed as a sandbox perimeter.
+fn guarded_script_source(source: &str) -> Result<String, RhaiRuntimeError> {
+    validate_top_level_functions(source)?;
+    let mut insertions = review_script_bytes(source)?;
+    insertions.sort_by_key(|(offset, _)| *offset);
+    let mut guarded = String::with_capacity(source.len());
+    let mut copied = 0usize;
+    for (offset, guard) in insertions {
+        guarded.push_str(&source[copied..offset]);
+        match guard {
+            IndexGuard::Open => {
+                guarded.push_str(INDEX_GUARD_FUNCTION);
+                guarded.push('(');
+            }
+            IndexGuard::Close => guarded.push(')'),
+        }
+        copied = offset;
+    }
+    guarded.push_str(&source[copied..]);
+    Ok(guarded)
+}
+
+fn validate_top_level_functions(source: &str) -> Result<(), RhaiRuntimeError> {
     let mut cursor = ScriptCursor::new(source);
     while cursor.skip_trivia()? {
         let _private = cursor.consume_word("private");
@@ -1112,11 +1159,19 @@ fn validate_script_source(source: &str) -> Result<(), RhaiRuntimeError> {
         cursor.skip_trivia()?;
         cursor.consume_balanced(b'{', b'}')?;
     }
+    Ok(())
+}
 
+/// Walks the script the way Rhai 1.25.1 tokenizes it, rejects the forbidden constructs,
+/// and reports where the index guard must wrap an index operand.
+fn review_script_bytes(source: &str) -> Result<Vec<(usize, IndexGuard)>, RhaiRuntimeError> {
     let mut cursor = ScriptCursor::new(source);
+    let mut insertions = Vec::new();
+    let mut braces = Vec::new();
     let mut previous_significant = None;
+    let mut previous_ends_value = false;
     while cursor.index < cursor.bytes.len() {
-        if cursor.skip_noise()? {
+        if cursor.skip_comment()? {
             continue;
         }
         let byte = cursor.bytes[cursor.index];
@@ -1124,46 +1179,155 @@ fn validate_script_source(source: &str) -> Result<(), RhaiRuntimeError> {
             cursor.index += 1;
             continue;
         }
-        if is_identifier_start(byte) {
-            let start = cursor.index;
-            cursor.index += 1;
-            while cursor.index < cursor.bytes.len()
-                && is_identifier_continue(cursor.bytes[cursor.index])
-            {
+        match byte {
+            b'"' | b'\'' => {
+                cursor.skip_quoted()?;
+                previous_significant = Some(byte);
+                previous_ends_value = true;
+            }
+            b'`' => return Err(RhaiRuntimeError::Compilation),
+            b'#' => {
+                cursor.consume_map_literal_start()?;
+                braces.push(BraceKind::MapLiteral);
+                previous_significant = Some(b'{');
+                previous_ends_value = false;
+            }
+            b'{' => {
+                if expects_operand(previous_significant) {
+                    return Err(RhaiRuntimeError::Compilation);
+                }
                 cursor.index += 1;
+                braces.push(BraceKind::Block);
+                previous_significant = Some(b'{');
+                previous_ends_value = false;
             }
-            let word = &source[start..cursor.index];
-            if word == "Fn"
-                || matches!(word, "call" | "curry") && previous_significant == Some(b'.')
-            {
-                return Err(RhaiRuntimeError::Compilation);
+            b'}' => {
+                let kind = braces.pop().ok_or(RhaiRuntimeError::Compilation)?;
+                cursor.index += 1;
+                previous_significant = Some(b'}');
+                previous_ends_value = kind == BraceKind::MapLiteral;
             }
-            previous_significant = word.as_bytes().last().copied();
-            continue;
-        }
-        if byte == b'[' {
-            let mut lookahead = ScriptCursor {
-                source,
-                bytes: cursor.bytes,
-                index: cursor.index + 1,
-            };
-            lookahead.skip_trivia()?;
-            if lookahead.bytes.get(lookahead.index) == Some(&b'-') {
-                lookahead.index += 1;
-                lookahead.skip_trivia()?;
-                if lookahead
-                    .bytes
-                    .get(lookahead.index)
-                    .is_some_and(u8::is_ascii_digit)
+            b'[' if previous_ends_value => {
+                let close = cursor.matching_bracket()?;
+                cursor.index += 1;
+                if cursor.negative_literal_follows()? {
+                    return Err(RhaiRuntimeError::Compilation);
+                }
+                insertions.push((cursor.index, IndexGuard::Open));
+                insertions.push((close, IndexGuard::Close));
+                previous_significant = Some(b'[');
+                previous_ends_value = false;
+            }
+            _ if is_identifier_start(byte) => {
+                let word = cursor.take_identifier();
+                if word == "Fn"
+                    || word == INDEX_GUARD_FUNCTION
+                    || matches!(word, "call" | "curry") && previous_significant == Some(b'.')
+                    || word == "if" && expects_operand(previous_significant)
                 {
                     return Err(RhaiRuntimeError::Compilation);
                 }
+                previous_significant = word.as_bytes().last().copied();
+                previous_ends_value = !keyword_precedes_value(word);
+            }
+            _ => {
+                cursor.index += 1;
+                previous_significant = Some(byte);
+                previous_ends_value = matches!(byte, b')' | b']') || byte.is_ascii_digit();
             }
         }
-        previous_significant = Some(byte);
-        cursor.index += 1;
     }
-    Ok(())
+    if !braces.is_empty() {
+        return Err(RhaiRuntimeError::Compilation);
+    }
+    Ok(insertions)
+}
+
+/// Whether the previous significant byte leaves an expression waiting for an operand.
+///
+/// Rhai indexes a block or an `if` chain that sits in operand position, so `}` there ends
+/// a value while `}` at statement position does not. A byte scanner cannot tell those two
+/// closing braces apart, and a missing guard would restore negative indexing. Both forms
+/// are therefore outside the reviewed language, which keeps every remaining `[` exactly
+/// classifiable.
+fn expects_operand(previous_significant: Option<u8>) -> bool {
+    matches!(
+        previous_significant,
+        Some(
+            b'=' | b'('
+                | b','
+                | b':'
+                | b'['
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'/'
+                | b'%'
+                | b'<'
+                | b'>'
+                | b'!'
+                | b'&'
+                | b'|'
+                | b'^'
+                | b'?'
+        )
+    )
+}
+
+/// Reserved words after which `[` opens an array literal instead of indexing a value.
+fn keyword_precedes_value(word: &str) -> bool {
+    matches!(
+        word,
+        "as" | "break"
+            | "case"
+            | "catch"
+            | "const"
+            | "continue"
+            | "do"
+            | "else"
+            | "export"
+            | "fn"
+            | "for"
+            | "if"
+            | "import"
+            | "in"
+            | "let"
+            | "loop"
+            | "private"
+            | "return"
+            | "switch"
+            | "throw"
+            | "try"
+            | "until"
+            | "while"
+    )
+}
+
+#[derive(Clone, Copy)]
+enum IndexGuard {
+    Open,
+    Close,
+}
+
+/// Whether a closing brace ends a map literal, which is a value, or a block, which is
+/// not. The distinction decides whether a following `[` indexes or opens an array.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BraceKind {
+    Block,
+    MapLiteral,
+}
+
+/// Rejects a negative array index however it was computed, because Rhai counts a
+/// negative index from the end of the array.
+fn guard_index(index: INT) -> Result<INT, Box<EvalAltResult>> {
+    if index < 0 {
+        return Err(primitive_error("negative_index"));
+    }
+    Ok(index)
+}
+
+fn guard_index_key(key: ImmutableString) -> ImmutableString {
+    key
 }
 
 struct ScriptCursor<'a> {
@@ -1206,8 +1370,88 @@ impl<'a> ScriptCursor<'a> {
                 Ok(true)
             }
             Some(b'`') => Err(RhaiRuntimeError::Compilation),
+            Some(b'#') => {
+                self.check_map_literal_start()?;
+                Ok(false)
+            }
             _ => Ok(false),
         }
+    }
+
+    /// Rhai 1.25.1 reads `#"..."#` and `##"..."##` as raw strings, whose bodies may
+    /// contain quotes. Only `#{` stays inside the reviewed language, so every other `#`
+    /// fails rather than letting this scanner and the Rhai tokenizer disagree about
+    /// where a string ends.
+    fn check_map_literal_start(&self) -> Result<(), RhaiRuntimeError> {
+        if self.bytes.get(self.index + 1) != Some(&b'{') {
+            return Err(RhaiRuntimeError::Compilation);
+        }
+        Ok(())
+    }
+
+    fn consume_map_literal_start(&mut self) -> Result<(), RhaiRuntimeError> {
+        self.check_map_literal_start()?;
+        self.index += 2;
+        Ok(())
+    }
+
+    /// Position of the `]` that closes the bracket at the cursor.
+    fn matching_bracket(&self) -> Result<usize, RhaiRuntimeError> {
+        let mut cursor = ScriptCursor {
+            source: self.source,
+            bytes: self.bytes,
+            index: self.index,
+        };
+        let mut depth = 0usize;
+        while cursor.index < cursor.bytes.len() {
+            if cursor.skip_noise()? {
+                continue;
+            }
+            match cursor.bytes[cursor.index] {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(cursor.index);
+                    }
+                }
+                _ => {}
+            }
+            cursor.index += 1;
+        }
+        Err(RhaiRuntimeError::Compilation)
+    }
+
+    /// Whether the expression at the cursor opens with a negative numeric literal.
+    fn negative_literal_follows(&self) -> Result<bool, RhaiRuntimeError> {
+        let mut lookahead = ScriptCursor {
+            source: self.source,
+            bytes: self.bytes,
+            index: self.index,
+        };
+        lookahead.skip_trivia()?;
+        if lookahead.bytes.get(lookahead.index) != Some(&b'-') {
+            return Ok(false);
+        }
+        lookahead.index += 1;
+        lookahead.skip_trivia()?;
+        Ok(lookahead
+            .bytes
+            .get(lookahead.index)
+            .is_some_and(u8::is_ascii_digit))
+    }
+
+    fn take_identifier(&mut self) -> &'a str {
+        let start = self.index;
+        self.index += 1;
+        while self
+            .bytes
+            .get(self.index)
+            .is_some_and(|byte| is_identifier_continue(*byte))
+        {
+            self.index += 1;
+        }
+        &self.source[start..self.index]
     }
 
     fn skip_comment(&mut self) -> Result<bool, RhaiRuntimeError> {
@@ -1465,7 +1709,7 @@ fn decode_request_parts(
     let body = if map["body"].is_unit() {
         None
     } else {
-        if !dynamic_is_json(&map["body"]) {
+        if !dynamic_is_json(&map["body"], FloatAdmission::AdapterSurface) {
             return Err(RhaiRuntimeError::PreparationResult);
         }
         let body = rhai::serde::from_dynamic::<Value>(&map["body"])
@@ -1578,29 +1822,54 @@ fn json_value_within_limits(
     )
 }
 
+/// Numeric admission for JSON decoded into Rhai. An integer token outside the signed
+/// 64-bit range fails here instead of reaching a script as a precision-losing float; a
+/// provider identifier beyond that range must be represented as a string.
 fn json_numbers_are_supported(value: &Value) -> bool {
     match value {
-        Value::Number(value) => {
-            value.is_i64() || value.is_f64() && value.as_f64().is_some_and(f64::is_finite)
-        }
+        Value::Number(value) => value.is_i64() || value.as_f64().is_some_and(is_supported_float),
         Value::Array(values) => values.iter().all(json_numbers_are_supported),
         Value::Object(values) => values.values().all(json_numbers_are_supported),
         _ => true,
     }
 }
 
-fn dynamic_is_json(value: &Dynamic) -> bool {
+/// An ordinary float is carried only when it is finite and its magnitude stays inside the
+/// signed 64-bit integer range, which keeps every admitted number distinguishable from a
+/// silently truncated large integer token.
+fn is_supported_float(value: f64) -> bool {
+    value.is_finite() && value.abs() < INTEGER_MAGNITUDE_LIMIT
+}
+
+/// Whether ordinary Rhai floats may appear in a decoded value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FloatAdmission {
+    /// Request preparation and source extraction carry provider-shaped JSON, which may
+    /// contain finite ordinary floats.
+    AdapterSurface,
+    /// Public derived values use the declared integer or exact Decimal forms only.
+    Rejected,
+}
+
+fn dynamic_is_json(value: &Dynamic, floats: FloatAdmission) -> bool {
     if value.is_unit() || value.is_bool() || value.is_int() || value.is_string() {
         return true;
     }
     if value.is_float() {
-        return value.as_float().is_ok_and(f64::is_finite);
+        return floats == FloatAdmission::AdapterSurface
+            && value.as_float().is_ok_and(is_supported_float);
     }
     if value.is_array() {
-        return value.clone_cast::<Array>().iter().all(dynamic_is_json);
+        return value
+            .clone_cast::<Array>()
+            .iter()
+            .all(|value| dynamic_is_json(value, floats));
     }
     if value.is_map() {
-        return value.clone_cast::<Map>().values().all(dynamic_is_json);
+        return value
+            .clone_cast::<Map>()
+            .values()
+            .all(|value| dynamic_is_json(value, floats));
     }
     false
 }
@@ -2402,10 +2671,11 @@ mod tests {
                         [#{
                             concept_id: "surface",
                             value: [
-                                1.5 + 2.0, 1 + 2.5, 2.5 + 1,
-                                5.0 % 2.0, 2.0 ** 3.0,
+                                1.5 + 2.0 == 3.5, 1 + 2.5 == 3.5, 2.5 + 1 == 3.5,
+                                5.0 % 2.0 == 1.0, 2.0 ** 3.0 == 8.0,
                                 1.5 < 2.0, 1 < 2.0, 2.0 >= 1,
                                 "ab" + "cd", "abc" - "b", text,
+                                type_of(1.5), type_of(1),
                                 type_of(parse_date("2026-08-02")),
                                 type_of(parse_instant("2026-08-02T00:00:00Z")),
                                 type_of(evaluation_context.legal_local_time),
@@ -2425,20 +2695,91 @@ mod tests {
                 &script,
                 &BTreeMap::new(),
                 &json!({}),
-                context(json!({}), BTreeMap::from([("codes".to_string(), codelist)])),
+                context(
+                    json!({}),
+                    BTreeMap::from([("codes".to_string(), codelist.clone())]),
+                ),
             )
             .expect("derives");
         assert!(matches!(
             &values[0].value,
             DerivedValue::Json(value)
                 if value == &json!([
-                    3.5, 3.5, 3.5, 1.0, 8.0,
+                    true, true, true, true, true,
                     true, true, true,
                     "abcd", "ac", "source-adapter",
+                    "f64", "i64",
                     "Date", "Instant", "LegalLocalTime", "Decimal",
                     "EntityReferenceSeed", "CodelistHandle"
                 ])
         ));
+
+        // The float arithmetic surface still exists inside a script, but an ordinary
+        // float result is not a public derived value.
+        let float_output = runtime
+            .compile_derivation(
+                "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"surface\", value: 1.5 + 2.0 }] }",
+            )
+            .expect("compiles");
+        assert!(matches!(
+            runtime.derive(
+                &float_output,
+                &BTreeMap::new(),
+                &json!({}),
+                context(json!({}), BTreeMap::from([("codes".to_string(), codelist)]))
+            ),
+            Err(RhaiRuntimeError::DerivationResult)
+        ));
+    }
+
+    #[test]
+    fn operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error() {
+        let runtime = runtime();
+        // Unbounded loop syntax is disabled, so exhaustion is driven by
+        // nesting bounded iteration over the largest admissible fact array:
+        // 256 * 256 iterations exceeds the 100,000-operation ceiling.
+        let script = runtime
+            .compile_derivation(
+                r#"
+                    fn derive(facts, selectors, evaluation_context) {
+                        let total = 0;
+                        for outer in facts.items {
+                            for inner in facts.items {
+                                total += 1;
+                            }
+                        }
+                        [#{ concept_id: "count", value: total }]
+                    }
+                "#,
+            )
+            .expect("compiles");
+        // A small input proves the script itself is well-formed, so the
+        // failure below is the operation ceiling and nothing else.
+        let small = BTreeMap::from([("items".to_string(), json!([1, 2, 3, 4]))]);
+        let values = runtime
+            .derive(
+                &script,
+                &small,
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            )
+            .expect("the bounded variant derives");
+        assert!(matches!(&values[0].value, DerivedValue::Json(value) if value == &json!(16)));
+
+        let items = (0..256).collect::<Vec<i64>>();
+        let facts = BTreeMap::from([("items".to_string(), json!(items))]);
+        let error = runtime
+            .derive(
+                &script,
+                &facts,
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            )
+            .expect_err("operation exhaustion terminates the invocation");
+        assert!(matches!(error, RhaiRuntimeError::Invocation));
+        let diagnostic = format!("{error} {error:?}");
+        assert!(!diagnostic.contains("operations"));
+        assert!(!diagnostic.contains("256"));
     }
 
     #[test]
@@ -2899,6 +3240,454 @@ mod tests {
                 Err(error) => panic!("unexpected compilation result: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn list_contains_validates_every_element_before_any_answer() {
+        for unsupported in [
+            Dynamic::UNIT,
+            Dynamic::from(Map::new()),
+            Dynamic::from(Array::new()),
+            Dynamic::from(1.5_f64),
+            Dynamic::from(EntityReferenceSeed::new("seed").expect("seed")),
+        ] {
+            assert!(
+                list_contains(
+                    vec![Dynamic::from("A"), unsupported.clone()],
+                    Dynamic::from("A")
+                )
+                .is_err(),
+                "a match before an invalid element answered instead of failing"
+            );
+            assert!(list_contains(
+                vec![unsupported.clone(), Dynamic::from("A")],
+                Dynamic::from("A")
+            )
+            .is_err());
+            assert!(
+                set_contains(vec![Dynamic::from("A"), unsupported], Dynamic::from("A")).is_err()
+            );
+        }
+
+        assert!(list_contains(
+            vec![Dynamic::from("A"), Dynamic::from("A")],
+            Dynamic::from("A")
+        )
+        .expect("duplicates are containment, not a set"));
+
+        let mixed = vec![
+            Dynamic::from(1_i64),
+            Dynamic::from("1"),
+            Dynamic::from(true),
+        ];
+        for needle in [
+            Dynamic::from(1_i64),
+            Dynamic::from("1"),
+            Dynamic::from(true),
+        ] {
+            assert!(list_contains(mixed.clone(), needle).expect("valid scalars"));
+        }
+        for absent in [
+            Dynamic::from(2_i64),
+            Dynamic::from("true"),
+            Dynamic::from(false),
+        ] {
+            assert!(!list_contains(mixed.clone(), absent).expect("valid scalars"));
+        }
+
+        let decimals = vec![Dynamic::from(Decimal::parse("1.25").expect("decimal"))];
+        assert!(list_contains(
+            decimals.clone(),
+            Dynamic::from(Decimal::parse("1.25").expect("decimal"))
+        )
+        .expect("exact decimal comparison"));
+        assert!(!list_contains(
+            decimals.clone(),
+            Dynamic::from(Decimal::parse("1.26").expect("decimal"))
+        )
+        .expect("exact decimal comparison"));
+        assert!(!list_contains(
+            vec![Dynamic::from(integer_to_decimal(1))],
+            Dynamic::from(1_i64)
+        )
+        .expect("decimal and integer stay distinct"));
+
+        assert!(list_contains(
+            vec![Dynamic::from("A"); MAXIMUM_ARRAY_ITEMS + 1],
+            Dynamic::from("A")
+        )
+        .is_err());
+        assert!(list_contains(vec![Dynamic::from("A")], Dynamic::UNIT).is_err());
+    }
+
+    #[test]
+    fn negative_array_indexes_fail_instead_of_selecting_from_the_end() {
+        let runtime = runtime();
+        let facts = || BTreeMap::from([("values".to_string(), json!(["first", "last"]))]);
+        let derivation = |index: &str| {
+            format!(
+                r#"fn derive(facts, selectors, evaluation_context) {{
+                    let position = {index};
+                    [#{{ concept_id: "x", value: facts.values[position] }}]
+                }}"#
+            )
+        };
+
+        let computed_negative = runtime
+            .compile_derivation(&derivation(
+                "compare_dates(evaluation_context.legal_local_date, parse_date(\"2100-01-01\"))",
+            ))
+            .expect("computed index compiles");
+        assert!(
+            matches!(
+                runtime.derive(
+                    &computed_negative,
+                    &facts(),
+                    &json!({}),
+                    context(json!({}), BTreeMap::new())
+                ),
+                Err(RhaiRuntimeError::Invocation)
+            ),
+            "a computed negative index selected from the end"
+        );
+
+        let computed_forward = runtime
+            .compile_derivation(&derivation(
+                "compare_dates(parse_date(\"2100-01-01\"), evaluation_context.legal_local_date)",
+            ))
+            .expect("computed index compiles");
+        let values = runtime
+            .derive(
+                &computed_forward,
+                &facts(),
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            )
+            .expect("a non-negative computed index still resolves");
+        assert!(matches!(&values[0].value, DerivedValue::Json(value) if value == &json!("last")));
+
+        let computed_key = runtime
+            .compile_extraction(
+                r#"fn extract(source_response, parameters) {
+                    let field = parameters.field;
+                    #{ outcome: "match", facts: #{ code: source_response["record"][field] } }
+                }"#,
+            )
+            .expect("computed map key compiles");
+        assert_eq!(
+            runtime.extract(
+                &computed_key,
+                &json!({"record": {"code": "A"}}),
+                &json!({"field": "code"}),
+                &|_: &Value| true,
+            ),
+            Ok(LookupResult::Match(BTreeMap::from([(
+                "code".to_string(),
+                json!("A")
+            )])))
+        );
+
+        assert_eq!(
+            runtime
+                .compile_derivation(&derivation("0"))
+                .and_then(|script| runtime
+                    .compile_derivation(
+                        "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"x\", value: facts.values[-1] }] }",
+                    )
+                    .map(|_| script))
+                .unwrap_err(),
+            RhaiRuntimeError::Compilation
+        );
+        assert!(
+            runtime
+                .compile_derivation(
+                    r#"fn derive(facts, selectors, evaluation_context) {
+                        let offsets = [-1, 0];
+                        [#{ concept_id: "x", value: list_contains(offsets, 0) }]
+                    }"#,
+                )
+                .is_ok(),
+            "a negative number inside an array literal is not an index"
+        );
+    }
+
+    #[test]
+    fn script_scanner_agrees_with_rhai_string_comment_and_pointer_tokenization() {
+        let runtime = runtime();
+        for rejected in [
+            // Rhai reads #"A"B"# as one raw string; a scanner that treats every quote as a
+            // plain delimiter desynchronizes and hides the code between two raw strings.
+            "let a = #\"A\"B\"#; parameters.call(); let c = #\"D\"E\"#;",
+            "let a = #\"raw\"#;",
+            "let a = ##\"raw \"# still raw\"##;",
+            "let a = `interpolated ${parameters}`;",
+            "let a = Fn(\"helper\");",
+            "parameters.call();",
+            "parameters.curry(1);",
+            "let a = parameters.values[-1];",
+            "let a = parameters.values[ - 1];",
+            "let a = 1; /* unterminated",
+            "let a = __evidence_index(1);",
+            // Rhai indexes a block or an if chain in operand position, so its closing
+            // brace ends a value that a byte scanner cannot distinguish from the closing
+            // brace of a statement block.
+            "let v = [10, 20]; let a = if true { v } else { v }[-1];",
+            "let a = if true { 1 } else { 2 };",
+            "let a = { 1 };",
+        ] {
+            let source = format!(
+                "fn prepare(selectors, parameters) {{ {rejected} #{{ query: [], body: () }} }}"
+            );
+            assert!(
+                runtime.compile_preparation(&source).is_err(),
+                "accepted: {rejected}"
+            );
+        }
+        for accepted in [
+            "// Fn(\"helper\") and values[-1]\n",
+            "/* Fn(\"helper\") and values[-1] */",
+            "let a = \"values[-1] Fn\";",
+            "let a = 'x';",
+            "let a = [-1, 0];",
+            "let a = #{ inner: [1] }[\"inner\"][0];",
+            // A statement block is followed by an array literal, not by an index.
+            "if true { let b = 1; }\n [-1, 0];",
+            "for x in [1, 2] { let b = x; }",
+            "if true { let b = 1; } else if false { let b = 2; }",
+        ] {
+            let source = format!(
+                "fn prepare(selectors, parameters) {{ {accepted} #{{ query: [], body: () }} }}"
+            );
+            assert!(
+                runtime.compile_preparation(&source).is_ok(),
+                "rejected: {accepted}"
+            );
+        }
+        assert_eq!(
+            runtime
+                .compile_preparation(
+                    "let leaked = 1; fn prepare(selectors, parameters) { #{ query: [], body: () } }",
+                )
+                .unwrap_err(),
+            RhaiRuntimeError::Compilation
+        );
+
+        // Only index operands are rewritten, and every one of them is.
+        assert_eq!(
+            guarded_script_source(
+                "fn f(a) { let b = a[\"k\"][0]; let c = [1, 2]; let d = #{ k: [1] }[\"k\"]; }"
+            )
+            .expect("reviewed"),
+            "fn f(a) { let b = a[__evidence_index(\"k\")][__evidence_index(0)]; \
+             let c = [1, 2]; let d = #{ k: [1] }[__evidence_index(\"k\")]; }"
+        );
+        assert_eq!(
+            guarded_script_source("fn f(a) { let b = a[a[\"i\"]]; }").expect("reviewed"),
+            "fn f(a) { let b = a[__evidence_index(a[__evidence_index(\"i\")])]; }"
+        );
+    }
+
+    #[test]
+    fn public_derived_values_reject_ordinary_floats() {
+        let runtime = runtime();
+        for float in [
+            "1.5",
+            "1.0",
+            "[1.5]",
+            "#{ ratio: 1.5 }",
+            "0.0 / 0.0",
+            "1.5 + 2.0",
+        ] {
+            let source =
+                format!("fn derive(facts, selectors, evaluation_context) {{ [#{{ concept_id: \"x\", value: {float} }}] }}");
+            let script = runtime.compile_derivation(&source).expect("compiles");
+            assert!(
+                matches!(
+                    runtime.derive(
+                        &script,
+                        &BTreeMap::new(),
+                        &json!({}),
+                        context(json!({}), BTreeMap::new())
+                    ),
+                    Err(RhaiRuntimeError::DerivationResult)
+                ),
+                "ordinary float accepted at the derivation output gate: {float}"
+            );
+        }
+
+        let declared = runtime
+            .compile_derivation(
+                r#"fn derive(facts, selectors, evaluation_context) {
+                    [
+                        #{ concept_id: "integer", value: 2 },
+                        #{ concept_id: "exact", value: decimal("1.25") }
+                    ]
+                }"#,
+            )
+            .expect("compiles");
+        let values = runtime
+            .derive(
+                &declared,
+                &BTreeMap::new(),
+                &json!({}),
+                context(json!({}), BTreeMap::new()),
+            )
+            .expect("declared numeric forms remain available");
+        assert!(matches!(&values[0].value, DerivedValue::Json(value) if value == &json!(2)));
+        assert!(
+            matches!(&values[1].value, DerivedValue::Decimal(value) if value.canonical() == "1.25")
+        );
+
+        let extraction = runtime
+            .compile_extraction(
+                "fn extract(source_response, parameters) { #{ outcome: \"match\", facts: #{ ratio: source_response.ratio } } }",
+            )
+            .expect("compiles");
+        assert_eq!(
+            runtime.extract(
+                &extraction,
+                &json!({"ratio": 1.25}),
+                &json!({}),
+                &|_: &Value| true
+            ),
+            Ok(LookupResult::Match(BTreeMap::from([(
+                "ratio".to_string(),
+                json!(1.25)
+            )])))
+        );
+
+        let limits = request_limits(
+            RequestPartRequirement::Optional,
+            RequestPartRequirement::Optional,
+        );
+        let preparation = runtime
+            .compile_preparation(
+                "fn prepare(selectors, parameters) { #{ query: [], body: #{ ratio: 1.25 } } }",
+            )
+            .expect("compiles");
+        assert_eq!(
+            runtime
+                .prepare(&preparation, &json!({}), &json!({}), &limits)
+                .expect("finite adapter floats remain available")
+                .body,
+            Some(json!({"ratio": 1.25}))
+        );
+        let non_finite = runtime
+            .compile_preparation(
+                "fn prepare(selectors, parameters) { #{ query: [], body: #{ ratio: 0.0 / 0.0 } } }",
+            )
+            .expect("compiles");
+        assert_eq!(
+            runtime.prepare(&non_finite, &json!({}), &json!({}), &limits),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+    }
+
+    #[test]
+    fn out_of_range_json_integer_tokens_fail_before_rhai() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_extraction(
+                "fn extract(source_response, parameters) { #{ outcome: \"no_match\" } }",
+            )
+            .expect("compiles");
+        let response = |token: &str| {
+            serde_json::from_str::<Value>(&format!("{{\"value\": {token}}}")).expect("parses")
+        };
+        for accepted in [
+            "0",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "1.25",
+            "1e3",
+        ] {
+            assert_eq!(
+                runtime.extract(&script, &response(accepted), &json!({}), &|_: &Value| true),
+                Ok(LookupResult::NoMatch),
+                "{accepted}"
+            );
+        }
+        for rejected in [
+            "9223372036854775808",
+            "18446744073709551615",
+            "99999999999999999999999",
+            "1e30",
+        ] {
+            assert_eq!(
+                runtime.extract(&script, &response(rejected), &json!({}), &|_: &Value| true),
+                Err(RhaiRuntimeError::InputBound),
+                "{rejected}"
+            );
+        }
+        assert_eq!(
+            runtime.extract(
+                &script,
+                &json!({"value": "99999999999999999999999"}),
+                &json!({}),
+                &|_: &Value| true
+            ),
+            Ok(LookupResult::NoMatch),
+            "an identifier outside the signed 64-bit range must arrive as a string"
+        );
+
+        let derivation = runtime
+            .compile_derivation(
+                "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"x\", value: true }] }",
+            )
+            .expect("compiles");
+        assert!(matches!(
+            runtime.derive(
+                &derivation,
+                &BTreeMap::from([(
+                    "value".to_string(),
+                    response("99999999999999999999999")["value"].clone()
+                )]),
+                &json!({}),
+                context(json!({}), BTreeMap::new())
+            ),
+            Err(RhaiRuntimeError::InputBound)
+        ));
+    }
+
+    #[test]
+    fn required_unavailability_carries_no_supplied_code_into_any_surface() {
+        let runtime = runtime();
+        for code in ["required_fact_missing", "other_missing_input_9"] {
+            let source = format!(
+                "fn derive(facts, selectors, evaluation_context) {{ [#{{ concept_id: \"x\", value: required(facts.absent, \"{code}\") }}] }}"
+            );
+            let script = runtime.compile_derivation(&source).expect("compiles");
+            let error = runtime
+                .derive(
+                    &script,
+                    &BTreeMap::new(),
+                    &json!({}),
+                    context(json!({}), BTreeMap::new()),
+                )
+                .expect_err("unavailable");
+            assert_eq!(error, RhaiRuntimeError::Unavailable);
+            let rendered = format!("{error} {error:?}");
+            assert!(!rendered.contains(code), "supplied code reached a surface");
+        }
+
+        // A code that fails review validation stops before the unavailable signal.
+        let unsafe_code = runtime
+            .compile_derivation(
+                "fn derive(facts, selectors, evaluation_context) { [#{ concept_id: \"x\", value: required(facts.absent, \"Protected Value\") }] }",
+            )
+            .expect("compiles");
+        assert!(matches!(
+            runtime.derive(
+                &unsafe_code,
+                &BTreeMap::new(),
+                &json!({}),
+                context(json!({}), BTreeMap::new())
+            ),
+            Err(RhaiRuntimeError::Invocation)
+        ));
+        assert!(required(Dynamic::from(1_i64), "Protected Value").is_err());
+        assert!(required(Dynamic::from(1_i64), "").is_err());
+        assert!(required(Dynamic::from(1_i64), "safe_code").is_ok());
     }
 
     fn boundary(minimum: &str, maximum: &str, code: &str) -> Dynamic {

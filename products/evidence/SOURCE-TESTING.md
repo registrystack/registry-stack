@@ -1,0 +1,401 @@
+# Evidence Source Testing
+
+Status: Approved Version 1 source-testing contract
+Date: 2026-08-02
+
+## Purpose
+
+Evidence must prove that its source boundary is generic without building a
+connector framework or emulating entire source products. Testing therefore has
+three ordered layers:
+
+1. offline requirement fixtures for extraction and derivation semantics;
+2. deterministic local HTTP mocks for materially different source contracts;
+3. explicit, read-only local smoke tests against public demo systems.
+
+Only the first two layers run in ordinary CI. A live smoke test supplements the
+mock contract. It never replaces it and never decides whether a commit is
+correct.
+
+## Compatibility matrix
+
+| Profile | Request | Response | Authentication | Generality pressure |
+|---|---|---|---|---|
+| `flat-rest` | Reviewed JSON preparation with identifier or compound selectors | Flat JSON object | Static Bearer | Closed selector inputs and direct fact extraction |
+| `dhis2-tracker` | `GET` with prepared filters, fixed `fields`, and `pageSize` | Pager, `trackedEntities` collection, nested attributes | HTTP Basic | Query rendering, encoding, cardinality, collection handling, and controlled codes |
+| `opencrvs-event-search` | Prepared bounded JSON `POST` for one tracking ID | Nested event index and country-configured declaration | OAuth 2.0 client credentials, then Bearer | Credential bootstrap, exact event lookup, nested extraction, and relational derivation |
+
+The product names identify compatibility-shaped test profiles. They do not
+promise a maintained vendor connector, reproduce a whole server, or certify
+support for every release and configuration.
+
+They are test-only names. Production Rust, Cargo dependencies and features,
+public configuration schemas, routes, and CLI options contain no DHIS2 or
+OpenCRVS specialization. The compatibility test must fail if either product is
+introduced into production source, Cargo metadata, or generated public
+contracts.
+
+The DHIS2 profile follows the version 2.43 Tracker contract because the first
+public demo target is a stable 2.43 deployment. It requests only configured
+fields and sets a result limit that can distinguish one match from ambiguity.
+It does not follow pages to enumerate people.
+
+The OpenCRVS profile follows the documented Event Search flow: acquire a
+short-lived system-client token, then submit one bounded JSON search for an
+exact child tracking ID. Malformed envelopes, zero results, multiple
+results, and incomplete configured declaration facts all fail according to the
+reviewed requirement rule.
+
+The matrix includes four generic selector contracts independent of those
+product-shaped profiles:
+
+- one opaque identifier;
+- one compound selector with no identifier;
+- one compound profile with an additional configured disambiguator;
+- one relationship request with two independently role-bound selectors.
+
+Selector field names, exact field sets, scalar types, value origins, and
+permitted script inputs come from trusted test YAML. Reviewed preparation
+scripts render the wire request. The core does not know what a
+name, civil identifier, licence number, or birth date means. Alternative
+sufficient field sets use separate named profiles instead of caller-selected
+field combinations.
+
+## What the mocks contain
+
+Each profile uses a small local HTTP mock and invented, obviously synthetic raw
+provider responses. Rust applies the same configured extended JSON Pointer
+projection used in production before extraction. A `field-projected` fixture
+models a wire response containing only requested fields. A
+`record-transformed` fixture may contain additional fields before local
+projection.
+Every `record-transformed` fixture also includes at least one unrelated
+synthetic canary to prove excess transient data cannot cross extraction,
+derivation, error, audit, log, metric, trace, snapshot, or evidence boundaries.
+Do not capture a public demo response and redact it after the fact.
+
+The shared cases are:
+
+- one exact match;
+- no match;
+- two matches or a total count greater than one;
+- identifier-only and no-identifier compound selectors;
+- missing, extra, unknown, mistyped, empty, oversized, and unauthorized
+  selector values rejected before credentials or source access;
+- an additional disambiguating field accepted only as a distinct configured
+  profile, never as a caller-added field;
+- two role-bound selectors with swapped-role and substitution failures;
+- required fact absent;
+- wrong fact type or controlled code;
+- malformed JSON and wrong media type;
+- `401`, `403`, `429`, and `5xx`;
+- timeout, redirect, and response larger than the configured maximum;
+- credentials rejected without any credential value in diagnostics;
+- raw selector values and source values absent from logs, audit, errors, and
+  snapshots; audit may contain only the configured profile id and one scoped
+  keyed pseudonym over the complete role and selector bundle.
+- broad candidates, scores, near-match hints, and comparison diagnostics absent
+  from evidence, errors, responses, logs, and audit;
+- exact relationship membership succeeds and fails using an independently
+  authorized candidate selector, while incomplete parent sets, mismatched
+  namespaces, role substitution, and ambiguous child lookup stop without an
+  authoritative negative assertion.
+
+Profile-specific cases include:
+
+- DHIS2 pager and `trackedEntities` shape, nested attribute lookup by configured
+  identifier, fixed `fields`, and refusal to enumerate a second page;
+- OpenCRVS token expiry, malformed token response, exact child-event body,
+  bounded event result, configured declaration fields, and missing or malformed
+  parent references.
+- fixed and selector-bound path expansion, fixed headers, Basic, static Bearer,
+  static API-key, OAuth client credentials, system-root and private-CA TLS,
+  projection conflicts, and proof that ambient proxy variables are ignored.
+
+The mocks assert the received wire request. Preparation Rhai sees only the
+source-required authorized selectors and closed parameters. Extraction Rhai
+sees only the bounded projected JSON response and parameters. Neither can inspect
+credentials, request headers, URLs, or the source client.
+
+Extraction maps the response to exactly `match(FactSet)`, `no_match`, or
+`ambiguous`. It may interpret a provider result count or at most two minimally
+projected results when the provider cannot return count plus one result. It
+must not receive a broad candidate set or select between results. Derivation
+runs only on `match` and may compare the facts with only its declared
+authorized selector inputs using the reviewed requirement rule. `ambiguous` stops without
+derivation, page traversal, a second evidence-data request, or a success
+response in any format.
+
+The same suite runs every initial assertion case from `CONCEPT.md` through the
+complete Evidence service. At least one case runs against two mock source
+shapes with only YAML and Rhai changes, proving that a source swap does not
+require Rust changes.
+
+Across those cases, adult status uses a no-identifier compound selector,
+residence uses an identifier profile, professional licence uses a compound
+sector selector, and legal-parent relationship uses a child record reference
+plus an independently role-bound candidate reference. These assignments exist
+only in test bundles and do not create production domain types.
+
+## Local public-demo smoke tests
+
+For the operator-facing first checkpoint, expected outputs, and the explicit
+post-checkpoint gap list, see [`FIRST-CURL-TEST.md`](FIRST-CURL-TEST.md).
+
+Live tests are implemented in a separate ignored integration-test target. The
+required order is:
+
+```text
+cargo test --locked -p registry-evidence
+cargo test --locked -p registry-evidence --test live_sources dhis2 -- --ignored
+cargo test --locked -p registry-evidence --test live_sources opencrvs -- --ignored
+```
+
+The package test includes `source_contracts`; it must be green before either
+live command is run.
+
+The live target requires an explicit profile name and local configuration. It
+must skip, rather than improvise, when required values or an approved synthetic
+subject selector are absent.
+
+Live tests are read-only. They may authenticate, request a token, and perform a
+bounded record lookup. They must not create, update, register, certify, print,
+archive, or delete records. They must not use a browser session, a human login,
+or interactive two-factor credentials. OpenCRVS may itself record the
+system-client search in its remote audit log; that expected server-side audit
+effect and any request quota are part of the operator's decision to run the
+test.
+
+### DHIS2 public demo
+
+Initial target:
+`https://play.im.dhis2.org/stable-2-43-0-1/`
+
+The local profile accepts these names, with values supplied outside the
+repository:
+
+```text
+DHIS2_BASE_URL
+DHIS2_USERNAME
+DHIS2_PASSWORD
+DHIS2_TEST_PROGRAM_ID
+DHIS2_TEST_ORG_UNIT_ID
+DHIS2_TEST_TRACKED_ENTITY_ID
+```
+
+The owner-only file path is supplied through
+`EVIDENCE_DHIS2_LIVE_ENV_FILE`. The smoke test first verifies authentication
+through a safe metadata request, then performs one fixed Tracker read scoped by
+the reviewed program, organisation unit, and synthetic/demo tracked-entity
+selector with minimum `fields`. It never searches broadly to find a convenient
+person. Public demonstration credentials are intentionally not reproduced in
+repository material.
+
+### OpenCRVS public demo
+
+The owner-only file path is supplied through
+`EVIDENCE_OPENCRVS_LIVE_ENV_FILE`. Its exact required keys are:
+
+```text
+OPENCRVS_CLIENT_ID
+OPENCRVS_SECRET
+OPENCRVS_URL
+OPENCRVS_TEST_TRACKING_ID
+```
+
+The selector value and any alternative tracking or national identifier remain
+local. They are never placed in a fixture, test name, snapshot, log, audit
+record, error, or command line.
+
+The live runner derives only the documented authentication and event-search
+hosts from the configured base domain. It requests a client-credentials token
+and then makes one bounded, exact event lookup that consumes only the count and
+facts needed by the test. It does not retrieve a certificate or perform a
+broad person search.
+
+These live checks prove only that the selected demo version still accepts the
+documented authentication and bounded lookup shape. The DHIS2 check does not
+run the deployable adult-status derivation or prove its complete minimization
+and response-protection path. The OpenCRVS check does not prove country-specific parent
+reference fields, authoritative relationship-set completeness, parent
+membership semantics, or the deployable family requirements. Deterministic
+mocks and executable project fixtures own those contracts. A passing live
+check must not be described as certification of a complete deployment project.
+
+### Direct curl diagnosis
+
+Use these snippets only to diagnose an upstream API when the ignored live test
+cannot establish why a deployment differs. They are not Evidence service
+acceptance proof: they do not exercise authorization, audit, scripts, output
+validation, signing, or disclosure release. Run them in a shell that does not
+record terminal input. Values are prompted, sent to `curl` through standard
+input with `--config -`, held only in shell memory, and unset at the end. The
+commands print only shape, cardinality, and exact-match booleans.
+
+For a bounded DHIS2 Tracker collection lookup:
+
+```bash
+(
+  set -eu
+  trap 'unset EVIDENCE_DIAG_EXPECTED DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD DHIS2_PROGRAM_ID DHIS2_ORG_UNIT_ID DHIS2_TRACKED_ENTITY_ID DHIS2_USER_CONFIG DHIS2_PROGRAM_CONFIG DHIS2_ORG_CONFIG DHIS2_ENTITY_CONFIG' EXIT HUP INT TERM
+  curl_config_escape() { sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  curl_config_value_is_safe() {
+    [[ $1 != *$'\n'* && $1 != *$'\r'* ]] &&
+      ! printf %s "$1" | LC_ALL=C grep -q '[[:cntrl:]]'
+  }
+  read -rp 'DHIS2 HTTPS base URL: ' DHIS2_BASE_URL
+  read -rp 'DHIS2 username: ' DHIS2_USERNAME
+  read -rsp 'DHIS2 password: ' DHIS2_PASSWORD; printf '\n'
+  read -rsp 'Program id: ' DHIS2_PROGRAM_ID; printf '\n'
+  read -rsp 'Organisation unit id: ' DHIS2_ORG_UNIT_ID; printf '\n'
+  read -rsp 'Tracked entity id: ' DHIS2_TRACKED_ENTITY_ID; printf '\n'
+  test -n "$DHIS2_USERNAME" && test -n "$DHIS2_PASSWORD" || { printf 'Non-empty credentials required\n' >&2; exit 1; }
+  if ! curl_config_value_is_safe "$DHIS2_USERNAME" || ! curl_config_value_is_safe "$DHIS2_PASSWORD"; then
+    printf 'Credential contains a prohibited control byte\n' >&2
+    exit 1
+  fi
+  printf %s "$DHIS2_BASE_URL" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$' || { printf 'Conservative HTTPS base URL required\n' >&2; exit 1; }
+  for value in "$DHIS2_PROGRAM_ID" "$DHIS2_ORG_UNIT_ID" "$DHIS2_TRACKED_ENTITY_ID"; do
+    printf %s "$value" | grep -Eq '^[A-Za-z0-9._:-]{1,256}$' || { printf 'Conservative identifier shape required\n' >&2; exit 1; }
+  done
+  DHIS2_USER_CONFIG=$(printf '%s:%s' "$DHIS2_USERNAME" "$DHIS2_PASSWORD" | curl_config_escape)
+  DHIS2_PROGRAM_CONFIG=$(printf %s "$DHIS2_PROGRAM_ID" | curl_config_escape)
+  DHIS2_ORG_CONFIG=$(printf %s "$DHIS2_ORG_UNIT_ID" | curl_config_escape)
+  DHIS2_ENTITY_CONFIG=$(printf %s "$DHIS2_TRACKED_ENTITY_ID" | curl_config_escape)
+  export EVIDENCE_DIAG_EXPECTED=$DHIS2_TRACKED_ENTITY_ID
+  curl --config - <<EOF | jq '{collection_shape_ok: ((.trackedEntities | type) == "array"), cardinality_ok: ((.trackedEntities | type) == "array" and (.trackedEntities | length) <= 2), exact_match_ok: ((.trackedEntities | type) == "array" and (.trackedEntities | length) == 1 and .trackedEntities[0].trackedEntity == env.EVIDENCE_DIAG_EXPECTED)}'
+silent
+show-error
+fail
+no-location
+max-redirs = 0
+proto = "=https"
+connect-timeout = 5
+max-time = 15
+get
+user = "$DHIS2_USER_CONFIG"
+header = "Accept: application/json"
+data-urlencode = "program=$DHIS2_PROGRAM_CONFIG"
+data-urlencode = "orgUnits=$DHIS2_ORG_CONFIG"
+data-urlencode = "trackedEntities=$DHIS2_ENTITY_CONFIG"
+data-urlencode = "fields=trackedEntity"
+data-urlencode = "pageSize=2"
+data-urlencode = "page=1"
+data-urlencode = "totalPages=true"
+url = "${DHIS2_BASE_URL%/}/api/tracker/trackedEntities"
+EOF
+)
+```
+
+For OpenCRVS client-credentials bootstrap and one bounded Event Search request:
+
+```bash
+(
+  set -eu
+  trap 'unset EVIDENCE_DIAG_EXPECTED OPENCRVS_DOMAIN OPENCRVS_CLIENT_ID OPENCRVS_CLIENT_SECRET OPENCRVS_TRACKING_ID OPENCRVS_CLIENT_ID_CONFIG OPENCRVS_CLIENT_SECRET_CONFIG OPENCRVS_TOKEN_RESULT OPENCRVS_ACCESS_TOKEN OPENCRVS_TOKEN_CONFIG OPENCRVS_BODY OPENCRVS_BODY_CONFIG' EXIT HUP INT TERM
+  curl_config_escape() { sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  curl_config_value_is_safe() {
+    [[ $1 != *$'\n'* && $1 != *$'\r'* ]] &&
+      ! printf %s "$1" | LC_ALL=C grep -q '[[:cntrl:]]'
+  }
+  read -rp 'OpenCRVS deployment domain, without scheme: ' OPENCRVS_DOMAIN
+  read -rp 'OpenCRVS client id: ' OPENCRVS_CLIENT_ID
+  read -rsp 'OpenCRVS client secret: ' OPENCRVS_CLIENT_SECRET; printf '\n'
+  read -rsp 'Child tracking id: ' OPENCRVS_TRACKING_ID; printf '\n'
+  test -n "$OPENCRVS_CLIENT_ID" && test -n "$OPENCRVS_CLIENT_SECRET" || { printf 'Non-empty credentials required\n' >&2; exit 1; }
+  if ! curl_config_value_is_safe "$OPENCRVS_CLIENT_ID" || ! curl_config_value_is_safe "$OPENCRVS_CLIENT_SECRET"; then
+    printf 'Credential contains a prohibited control byte\n' >&2
+    exit 1
+  fi
+  printf %s "$OPENCRVS_DOMAIN" | grep -Eq '^([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$' || { printf 'Conservative deployment domain required\n' >&2; exit 1; }
+  printf %s "$OPENCRVS_TRACKING_ID" | grep -Eq '^[A-Za-z0-9._:-]{1,256}$' || { printf 'Conservative tracking-id shape required\n' >&2; exit 1; }
+  case "$OPENCRVS_DOMAIN" in gateway.*|register.*|auth.*|events.*) OPENCRVS_DOMAIN=${OPENCRVS_DOMAIN#*.} ;; esac
+  OPENCRVS_CLIENT_ID_CONFIG=$(printf %s "$OPENCRVS_CLIENT_ID" | curl_config_escape)
+  OPENCRVS_CLIENT_SECRET_CONFIG=$(printf %s "$OPENCRVS_CLIENT_SECRET" | curl_config_escape)
+  OPENCRVS_TOKEN_RESULT=$(
+    curl --config - <<EOF | jq -ce 'if ((.access_token | type) == "string" and (.access_token | length) > 0 and ((.token_type // "Bearer") | ascii_downcase) == "bearer") then {token_shape_ok: true, access_token: .access_token} else error("token shape rejected") end'
+silent
+show-error
+fail
+no-location
+max-redirs = 0
+proto = "=https"
+connect-timeout = 5
+max-time = 15
+get
+request = "POST"
+data-urlencode = "client_id=$OPENCRVS_CLIENT_ID_CONFIG"
+data-urlencode = "client_secret=$OPENCRVS_CLIENT_SECRET_CONFIG"
+data-urlencode = "grant_type=client_credentials"
+url = "https://auth.$OPENCRVS_DOMAIN/token"
+EOF
+  )
+  printf %s "$OPENCRVS_TOKEN_RESULT" | jq '{token_shape_ok}'
+  OPENCRVS_ACCESS_TOKEN=$(printf %s "$OPENCRVS_TOKEN_RESULT" | jq -er .access_token)
+  if ! curl_config_value_is_safe "$OPENCRVS_ACCESS_TOKEN"; then
+    printf 'Token contains a prohibited control byte\n' >&2
+    exit 1
+  fi
+  OPENCRVS_TOKEN_CONFIG=$(printf 'Authorization: Bearer %s' "$OPENCRVS_ACCESS_TOKEN" | curl_config_escape)
+  export EVIDENCE_DIAG_EXPECTED=$OPENCRVS_TRACKING_ID
+  OPENCRVS_BODY=$(jq -cn '{query: {type: "and", clauses: [{eventType: "birth", status: {type: "exact", term: "REGISTERED"}, trackingId: {type: "exact", term: env.EVIDENCE_DIAG_EXPECTED}}]}, limit: 2, offset: 0}')
+  OPENCRVS_BODY_CONFIG=$(printf %s "$OPENCRVS_BODY" | curl_config_escape)
+  curl --config - <<EOF | jq '{collection_shape_ok: ((.results | type) == "array" and (.total | type) == "number"), cardinality_ok: ((.results | type) == "array" and (.results | length) <= 2 and .total <= 2), exact_match_ok: ((.results | type) == "array" and (.results | length) == 1 and .total == 1 and .results[0].trackingId == env.EVIDENCE_DIAG_EXPECTED)}'
+silent
+show-error
+fail
+no-location
+max-redirs = 0
+proto = "=https"
+connect-timeout = 5
+max-time = 15
+request = "POST"
+header = "$OPENCRVS_TOKEN_CONFIG"
+header = "Content-Type: application/json"
+header = "Accept: application/json"
+data = "$OPENCRVS_BODY_CONFIG"
+url = "https://events.$OPENCRVS_DOMAIN/events/search"
+EOF
+)
+```
+
+## Credential and live-data rules
+
+The live runner must:
+
+1. Require a credential file outside the repository or values injected by a
+   secret manager.
+2. Refuse a credential file readable or writable by group or other users. On
+   Unix, `0600` is the expected mode.
+3. Parse an exact allowlist of `KEY=value` entries. Do not execute or `source`
+   the file as shell code.
+4. Reject duplicate, unknown, empty, or malformed required keys.
+5. Never accept credential values as command-line arguments.
+6. Disable HTTP debug output and redact complete token URLs, query strings,
+   authorization headers, request bodies containing credentials, and token
+   responses.
+7. Keep tokens and source responses in memory only for the bounded request and
+   never write recordings, snapshots, failure artifacts, or temporary files.
+8. Print only the profile, safe phase, HTTP status category, duration, and
+   pass, skip, or inconclusive result.
+
+## Interpreting outcomes
+
+| Result | Interpretation |
+|---|---|
+| Contract mock fails | Product or test-contract regression; blocks completion |
+| Mock passes, live authentication fails | Local credential, client scope, or demo state issue |
+| Mock passes, live response shape differs | Possible upstream version or configuration drift; inspect public documentation before changing fixtures |
+| Live server is unavailable, rate-limited, or times out | Inconclusive public-demo result, not a product failure |
+| Live test returns more data than configured | Minimization failure; stop and review before retaining any output |
+
+Any upstream-driven contract change is first represented as a new sanitized
+mock case. Only then may the source configuration or Rhai adapter change. Core
+Rust changes require evidence that the behavior is generic across more than one
+source shape.
+
+## Public references
+
+- DHIS2, [Tracker API 2.43](https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/tracker.html).
+- OpenCRVS, [Record Search clients](https://documentation.opencrvs.org/v1.8/technology/interoperability/create-a-client/record-search-clients).
+- OpenCRVS, [Authenticate a client](https://documentation.opencrvs.org/technology/interoperability/authenticate-a-client).

@@ -19,6 +19,11 @@ const MAX_PROTECTED_BYTES: usize = 8 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
 const MAX_TRUSTED_KEYS: usize = 33;
 
+/// Complete relying-procedure expectations for strict verification.
+///
+/// Every expectation comes from independent trusted state such as the relying
+/// procedure, a previously trusted binding, or a trusted requirement contract.
+/// Copying values out of the JWS under verification proves nothing.
 #[derive(Debug, Clone)]
 pub struct EvidenceVerificationPolicy {
     pub issued_by: String,
@@ -28,8 +33,128 @@ pub struct EvidenceVerificationPolicy {
     pub purpose: String,
     pub audience: String,
     pub configuration_revision: String,
+    /// The exact nonce from the independently retained original request.
+    pub request_nonce: String,
+    /// Expected role-bound opaque subject bindings as an unordered set of
+    /// unique pairs. Subject order alone is never semantic.
+    pub expected_subjects: Vec<ExpectedSubject>,
+    /// Expected concept identifiers, value forms, and cardinalities.
+    pub expected_outputs: Vec<ExpectedOutput>,
+    /// Longest acceptable `validUntil - issuedAt` interval.
+    pub maximum_assertion_lifetime: Duration,
     pub now: DateTime<Utc>,
     pub clock_skew: Duration,
+}
+
+impl EvidenceVerificationPolicy {
+    /// Build expectations from evidence accepted in an original trusted
+    /// transaction, for later re-verification of the stored response.
+    ///
+    /// This is only meaningful when `evidence` was itself verified and
+    /// accepted at transaction time and then retained under the relying
+    /// party's record policy. Parsing an untrusted JWS and passing its own
+    /// values back as expectations proves nothing. The expected nonce comes
+    /// from the independently retained original request, never from the
+    /// response.
+    pub fn from_accepted_transaction(
+        evidence: &Evidence,
+        retained_request_nonce: &str,
+        maximum_assertion_lifetime: Duration,
+        now: DateTime<Utc>,
+        clock_skew: Duration,
+    ) -> Self {
+        Self {
+            issued_by: evidence.issued_by.clone(),
+            provided_by: evidence.provided_by.clone(),
+            requirement: evidence.supports_requirement.clone(),
+            evidence_type: evidence.is_conformant_to.clone(),
+            purpose: evidence.purpose.clone(),
+            audience: evidence.audience.clone(),
+            configuration_revision: evidence.configuration_revision.clone(),
+            request_nonce: retained_request_nonce.to_owned(),
+            expected_subjects: evidence
+                .subjects
+                .iter()
+                .map(|subject| ExpectedSubject {
+                    role: subject.role.clone(),
+                    binding: subject.binding.clone(),
+                })
+                .collect(),
+            expected_outputs: evidence
+                .supported_values
+                .iter()
+                .map(|value| ExpectedOutput {
+                    concept: value.provides_value_for.clone(),
+                    form: expected_form_of(&value.value),
+                })
+                .collect(),
+            maximum_assertion_lifetime,
+            now,
+            clock_skew,
+        }
+    }
+}
+
+fn expected_form_of(value: &crate::model::PublicValue) -> ExpectedValueForm {
+    use crate::model::{BucketForm, PublicValue};
+    match value {
+        PublicValue::Boolean(_) => ExpectedValueForm::Boolean,
+        PublicValue::Integer(_) => ExpectedValueForm::Integer,
+        PublicValue::String(_) => ExpectedValueForm::String,
+        PublicValue::Bucket(bucket) => {
+            if bucket.form == BucketForm::DateBucket {
+                ExpectedValueForm::DateBucket
+            } else {
+                ExpectedValueForm::TimeBucket
+            }
+        }
+        PublicValue::EntityReference(_) => ExpectedValueForm::EntityReference,
+        PublicValue::Structured(_) => ExpectedValueForm::Structured,
+        PublicValue::List(items) => ExpectedValueForm::List {
+            minimum_items: items.len(),
+            maximum_items: items.len(),
+        },
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ExpectedSubject {
+    pub role: String,
+    pub binding: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpectedOutput {
+    pub concept: String,
+    pub form: ExpectedValueForm,
+}
+
+/// Closed expected form for one disclosed Supported Value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedValueForm {
+    Boolean,
+    Integer,
+    String,
+    DateBucket,
+    TimeBucket,
+    EntityReference,
+    Structured,
+    List {
+        minimum_items: usize,
+        maximum_items: usize,
+    },
+}
+
+/// Result of verifying a stored signed response.
+///
+/// A returned report means the trusted key signed the exact payload and every
+/// policy expectation held. Current usability is reported separately so an
+/// expired assertion can remain cryptographically authentic without being
+/// treated as current evidence.
+#[derive(Debug)]
+pub struct VerificationReport {
+    pub evidence: Evidence,
+    pub currently_valid: bool,
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +184,28 @@ struct ProtectedHeader {
     cty: String,
 }
 
+/// Strict one-call verification: cryptographic authenticity, every policy
+/// expectation, and current validity must all hold.
 pub fn verify_flattened_jws(
     serialized_jws: &[u8],
     trusted_jwks: &JwksDocument,
     policy: &EvidenceVerificationPolicy,
 ) -> Result<Evidence, VerificationError> {
+    let report = verify_flattened_jws_report(serialized_jws, trusted_jwks, policy)?;
+    if !report.currently_valid {
+        return Err(VerificationError::Time);
+    }
+    Ok(report.evidence)
+}
+
+/// Verify a stored signed response against a pinned trusted key set and the
+/// complete independent policy, reporting cryptographic authenticity
+/// separately from current validity.
+pub fn verify_flattened_jws_report(
+    serialized_jws: &[u8],
+    trusted_jwks: &JwksDocument,
+    policy: &EvidenceVerificationPolicy,
+) -> Result<VerificationReport, VerificationError> {
     if serialized_jws.is_empty() || serialized_jws.len() > MAX_JWS_BYTES {
         return Err(VerificationError::MalformedJws);
     }
@@ -111,8 +253,11 @@ pub fn verify_flattened_jws(
     }
     let evidence: Evidence =
         serde_json::from_value(payload_strict).map_err(|_| VerificationError::Payload)?;
-    validate_policy(&evidence, policy)?;
-    Ok(evidence)
+    let currently_valid = validate_policy(&evidence, policy)?;
+    Ok(VerificationReport {
+        evidence,
+        currently_valid,
+    })
 }
 
 fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, VerificationError> {
@@ -136,10 +281,17 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
     Ok(output)
 }
 
+/// Compare every policy expectation after signature and schema verification.
+///
+/// Every mismatch, including the expected nonce, expected role-bound subject
+/// set, and expected output contract, returns the one generic policy error so
+/// verification does not reveal which hidden comparison failed. The returned
+/// boolean is current validity, which is reported separately from
+/// authenticity and policy conformance.
 fn validate_policy(
     evidence: &Evidence,
     policy: &EvidenceVerificationPolicy,
-) -> Result<(), VerificationError> {
+) -> Result<bool, VerificationError> {
     if evidence.schema != EVIDENCE_SCHEMA_V1
         || evidence.issued_by != policy.issued_by
         || evidence.provided_by != policy.provided_by
@@ -150,32 +302,121 @@ fn validate_policy(
         || evidence.configuration_revision != policy.configuration_revision
         || evidence.subjects.is_empty()
         || evidence.supported_values.is_empty()
+        || evidence.request_nonce != policy.request_nonce
     {
         return Err(VerificationError::Policy);
     }
+    validate_expected_subjects(evidence, policy)?;
+    validate_expected_outputs(evidence, policy)?;
 
     let issued = parse_time(&evidence.issued_at)?;
     let observed = parse_time(&evidence.observed_at)?;
     let valid_until = parse_time(&evidence.valid_until)?;
     let skew =
         chrono::Duration::from_std(policy.clock_skew).map_err(|_| VerificationError::Time)?;
+    let maximum_lifetime = chrono::Duration::from_std(policy.maximum_assertion_lifetime)
+        .map_err(|_| VerificationError::Time)?;
+    let expiration_with_skew = valid_until
+        .checked_add_signed(skew)
+        .ok_or(VerificationError::Time)?;
+    // Internal chronology and the accepted-lifetime ceiling are hard errors;
+    // an internally inconsistent or over-long assertion is never acceptable.
+    if issued < observed
+        || valid_until <= observed
+        || valid_until <= issued
+        || valid_until - issued > maximum_lifetime
+    {
+        return Err(VerificationError::Time);
+    }
     let latest_acceptable_issue = policy
         .now
         .checked_add_signed(skew)
         .ok_or(VerificationError::Time)?;
-    let expiration_with_skew = valid_until
-        .checked_add_signed(skew)
-        .ok_or(VerificationError::Time)?;
-    if issued < observed
-        || issued > latest_acceptable_issue
-        || observed > latest_acceptable_issue
-        || valid_until <= observed
-        || valid_until <= issued
-        || policy.now >= expiration_with_skew
-    {
-        return Err(VerificationError::Time);
+    let currently_valid = issued <= latest_acceptable_issue
+        && observed <= latest_acceptable_issue
+        && policy.now < expiration_with_skew;
+    Ok(currently_valid)
+}
+
+/// Compare the unordered set of unique expected `(role, binding)` pairs.
+fn validate_expected_subjects(
+    evidence: &Evidence,
+    policy: &EvidenceVerificationPolicy,
+) -> Result<(), VerificationError> {
+    let mut expected = policy.expected_subjects.clone();
+    expected.sort();
+    if expected.is_empty() || expected.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(VerificationError::Policy);
+    }
+    let mut actual = evidence
+        .subjects
+        .iter()
+        .map(|subject| ExpectedSubject {
+            role: subject.role.clone(),
+            binding: subject.binding.clone(),
+        })
+        .collect::<Vec<_>>();
+    actual.sort();
+    if actual != expected {
+        return Err(VerificationError::Policy);
     }
     Ok(())
+}
+
+/// Compare the expected concept identifiers, value forms, and cardinalities.
+fn validate_expected_outputs(
+    evidence: &Evidence,
+    policy: &EvidenceVerificationPolicy,
+) -> Result<(), VerificationError> {
+    let expected = &policy.expected_outputs;
+    if expected.is_empty() || evidence.supported_values.len() != expected.len() {
+        return Err(VerificationError::Policy);
+    }
+    let mut concepts = BTreeMap::new();
+    for output in expected {
+        if concepts
+            .insert(output.concept.as_str(), &output.form)
+            .is_some()
+        {
+            return Err(VerificationError::Policy);
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for value in &evidence.supported_values {
+        let concept = value.provides_value_for.as_str();
+        let Some(form) = concepts.get(concept) else {
+            return Err(VerificationError::Policy);
+        };
+        if !seen.insert(concept) || !value_matches_form(&value.value, form) {
+            return Err(VerificationError::Policy);
+        }
+    }
+    Ok(())
+}
+
+fn value_matches_form(value: &crate::model::PublicValue, form: &ExpectedValueForm) -> bool {
+    use crate::model::{BucketForm, PublicValue};
+    match (value, form) {
+        (PublicValue::Boolean(_), ExpectedValueForm::Boolean)
+        | (PublicValue::Integer(_), ExpectedValueForm::Integer)
+        | (PublicValue::String(_), ExpectedValueForm::String)
+        | (PublicValue::EntityReference(_), ExpectedValueForm::EntityReference)
+        | (PublicValue::Structured(_), ExpectedValueForm::Structured) => true,
+        (PublicValue::Bucket(bucket), ExpectedValueForm::DateBucket) => {
+            bucket.form == BucketForm::DateBucket
+        }
+        (PublicValue::Bucket(bucket), ExpectedValueForm::TimeBucket) => {
+            bucket.form == BucketForm::TimeBucket
+        }
+        (
+            PublicValue::List(items),
+            ExpectedValueForm::List {
+                minimum_items,
+                maximum_items,
+            },
+        ) => items.len() >= *minimum_items && items.len() <= *maximum_items,
+        _ => false,
+    }
 }
 
 fn parse_time(input: &str) -> Result<DateTime<Utc>, VerificationError> {
@@ -251,9 +492,12 @@ mod tests {
         )
     }
 
+    const FIXTURE_NONCE: &str = "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I";
+
     fn fixture_evidence() -> Evidence {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
+            request_nonce: FIXTURE_NONCE.to_string(),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:requirement:v1".to_string(),
@@ -290,18 +534,21 @@ mod tests {
         let jws = signer.sign_json(&evidence).await.expect("evidence signs");
         let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
         let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
-        let policy = EvidenceVerificationPolicy {
-            issued_by: evidence.issued_by,
-            provided_by: evidence.provided_by,
-            requirement: evidence.supports_requirement,
-            evidence_type: evidence.is_conformant_to,
-            purpose: evidence.purpose,
-            audience: evidence.audience,
-            configuration_revision: evidence.configuration_revision,
-            now,
-            clock_skew: Duration::from_secs(30),
-        };
+        let policy = policy_for(&evidence, now);
         (serialized, jwks, policy)
+    }
+
+    /// Build expectations equal to one known evidence value. Production
+    /// relying parties obtain these from independent trusted state; the test
+    /// simulates that state from the fixture it controls.
+    fn policy_for(evidence: &Evidence, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
+        EvidenceVerificationPolicy::from_accepted_transaction(
+            evidence,
+            &evidence.request_nonce,
+            Duration::from_secs(48 * 60 * 60),
+            now,
+            Duration::from_secs(30),
+        )
     }
 
     async fn signed_fixture() -> (Vec<u8>, JwksDocument, EvidenceVerificationPolicy) {
@@ -378,7 +625,8 @@ mod tests {
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
-        let (_, _, policy) = signed_fixture().await;
+        let (_, _, mut policy) = signed_fixture().await;
+        policy.expected_outputs[0].form = ExpectedValueForm::Integer;
 
         for number in ["1.0", "1e0"] {
             let payload = base.replace("\"value\":false", &format!("\"value\":{number}"));
@@ -612,6 +860,198 @@ mod tests {
                 Err(expected)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn expected_nonce_must_match_and_reuse_is_not_replay_prevention() {
+        let (jws, jwks, policy) = signed_fixture().await;
+
+        // Changing the expected nonce fails with the generic policy mismatch.
+        let mut wrong_expectation = policy.clone();
+        wrong_expectation.request_nonce = "B".repeat(43);
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &wrong_expectation),
+            Err(VerificationError::Policy)
+        );
+
+        // Changing the signed nonce fails: re-signing a mutated payload with
+        // the same trusted key still mismatches the retained expectation.
+        let mut mutated = fixture_evidence();
+        mutated.request_nonce = "B".repeat(43);
+        let header = json!({
+            "alg": "EdDSA",
+            "kid": "evidence-key-1",
+            "typ": EVIDENCE_JWS_TYP,
+            "cty": EVIDENCE_JWS_CTY
+        });
+        let (mutated_jws, public) = sign_with_protected_header(PRIVATE_JWK, header, &mutated).await;
+        let mutated_jwks = jwks_document(public, []).expect("JWKS builds");
+        assert_eq!(
+            verify_flattened_jws(&mutated_jws, &mutated_jwks, &policy),
+            Err(VerificationError::Policy)
+        );
+
+        // The runtime does not store nonces, so verifying the same stored
+        // response twice with the same expectation succeeds. The nonce proves
+        // correlation with the retained request, never one-time use.
+        assert!(verify_flattened_jws(&jws, &jwks, &policy).is_ok());
+        assert!(verify_flattened_jws(&jws, &jwks, &policy).is_ok());
+    }
+
+    #[tokio::test]
+    async fn expected_subject_set_is_unordered_unique_and_exact() {
+        let mut evidence = fixture_evidence();
+        evidence.subjects = vec![
+            SubjectBinding {
+                role: "child".to_string(),
+                binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),
+            },
+            SubjectBinding {
+                role: "candidate-parent".to_string(),
+                binding: format!("urn:evidence:subject:v1_{}", "B".repeat(43)),
+            },
+        ];
+        let (jws, jwks, policy) = signed_evidence(
+            evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+
+        // Subject order alone is non-semantic.
+        let mut reordered = policy.clone();
+        reordered.expected_subjects.reverse();
+        assert!(verify_flattened_jws(&jws, &jwks, &reordered).is_ok());
+
+        // Missing, extra, duplicated, substituted, and wrong-key-version
+        // expectations all fail with the one generic policy mismatch.
+        let mut missing = policy.clone();
+        missing.expected_subjects.pop();
+        let mut extra = policy.clone();
+        extra.expected_subjects.push(ExpectedSubject {
+            role: "witness".to_string(),
+            binding: format!("urn:evidence:subject:v1_{}", "C".repeat(43)),
+        });
+        let mut duplicated = policy.clone();
+        let first = duplicated.expected_subjects[0].clone();
+        duplicated.expected_subjects.push(first);
+        let mut substituted = policy.clone();
+        substituted.expected_subjects[0].binding =
+            format!("urn:evidence:subject:v1_{}", "D".repeat(43));
+        let mut wrong_key_version = policy.clone();
+        wrong_key_version.expected_subjects[0].binding = wrong_key_version.expected_subjects[0]
+            .binding
+            .replace(":v1_", ":v2_");
+        let mut empty = policy.clone();
+        empty.expected_subjects.clear();
+        for broken in [
+            missing,
+            extra,
+            duplicated,
+            substituted,
+            wrong_key_version,
+            empty,
+        ] {
+            assert_eq!(
+                verify_flattened_jws(&jws, &jwks, &broken),
+                Err(VerificationError::Policy)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn expected_output_contract_is_exact_after_signature_verification() {
+        let (jws, jwks, policy) = signed_fixture().await;
+
+        let mut missing = policy.clone();
+        missing.expected_outputs.clear();
+        let mut extra = policy.clone();
+        extra.expected_outputs.push(ExpectedOutput {
+            concept: "urn:example:other-concept".to_string(),
+            form: ExpectedValueForm::Boolean,
+        });
+        let mut duplicated = policy.clone();
+        duplicated.expected_outputs.push(ExpectedOutput {
+            concept: policy.expected_outputs[0].concept.clone(),
+            form: ExpectedValueForm::Boolean,
+        });
+        let mut wrong_concept = policy.clone();
+        wrong_concept.expected_outputs[0].concept = "urn:example:unexpected".to_string();
+        let mut wrong_form = policy.clone();
+        wrong_form.expected_outputs[0].form = ExpectedValueForm::String;
+        let mut wrong_cardinality = policy.clone();
+        wrong_cardinality.expected_outputs[0].form = ExpectedValueForm::List {
+            minimum_items: 2,
+            maximum_items: 4,
+        };
+        for broken in [
+            missing,
+            extra,
+            duplicated,
+            wrong_concept,
+            wrong_form,
+            wrong_cardinality,
+        ] {
+            assert_eq!(
+                verify_flattened_jws(&jws, &jwks, &broken),
+                Err(VerificationError::Policy)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticity_is_reported_separately_from_current_validity() {
+        // Verified after expiry: still authentic and policy-conformant, but
+        // not current evidence.
+        let (jws, jwks, mut policy) = signed_fixture().await;
+        policy.now = "2026-08-04T00:00:00Z".parse().expect("time parses");
+        let report = verify_flattened_jws_report(&jws, &jwks, &policy)
+            .expect("expired assertion remains cryptographically authentic");
+        assert!(!report.currently_valid);
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::Time)
+        );
+
+        // While current, both entry points agree.
+        let (jws, jwks, policy) = signed_fixture().await;
+        let report = verify_flattened_jws_report(&jws, &jwks, &policy).expect("report verifies");
+        assert!(report.currently_valid);
+
+        // A mutated payload is not authentic in either entry point.
+        let mut value: serde_json::Value = serde_json::from_slice(&jws).expect("JWS parses");
+        let payload = value["payload"].as_str().expect("payload").to_string();
+        value["payload"] = Value::String(format!("A{}", &payload[1..]));
+        let mutated = serde_json::to_vec(&value).expect("serializes");
+        assert!(verify_flattened_jws_report(&mutated, &jwks, &policy).is_err());
+    }
+
+    #[tokio::test]
+    async fn assertion_lifetime_above_the_accepted_maximum_fails() {
+        let (jws, jwks, mut policy) = signed_fixture().await;
+        policy.maximum_assertion_lifetime = Duration::from_secs(60 * 60);
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::Time)
+        );
+        assert!(verify_flattened_jws_report(&jws, &jwks, &policy).is_err());
+    }
+
+    #[tokio::test]
+    async fn unsigned_envelope_is_rejected_by_the_strict_jws_verifier() {
+        let (_, jwks, policy) = signed_fixture().await;
+        let envelope = crate::model::UnsignedEvidenceEnvelope {
+            schema: crate::EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1.to_owned(),
+            envelope_type: crate::model::UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
+            integrity_protection: crate::model::UnsignedIntegrityProtection::None,
+            warning: crate::model::UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
+            evidence: fixture_evidence(),
+        };
+        let serialized = serde_json::to_vec(&envelope).expect("envelope serializes");
+        assert_eq!(
+            verify_flattened_jws(&serialized, &jwks, &policy),
+            Err(VerificationError::MalformedJws)
+        );
+        assert!(verify_flattened_jws_report(&serialized, &jwks, &policy).is_err());
     }
 
     #[tokio::test]

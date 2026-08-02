@@ -71,6 +71,22 @@
     {
       "properties": {
         "code": {
+          "const": "response_format_not_acceptable"
+        },
+        "status": {
+          "const": 406
+        },
+        "title": {
+          "const": "Requested response format is not acceptable"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
           "const": "evidence_not_available"
         },
         "status": {
@@ -140,6 +156,7 @@
         "invalid_selector",
         "authentication_failed",
         "not_authorized",
+        "response_format_not_acceptable",
         "evidence_not_available",
         "rate_limited",
         "dependency_unavailable",
@@ -156,6 +173,7 @@
         400,
         401,
         403,
+        406,
         422,
         429,
         503
@@ -167,6 +185,7 @@
         "Request is not valid",
         "Authentication failed",
         "Request is not authorized",
+        "Requested response format is not acceptable",
         "Evidence could not be produced",
         "Request rate exceeded",
         "Service temporarily unavailable"
@@ -179,6 +198,7 @@
         "https://registrystack.org/problems/evidence/invalid_selector",
         "https://registrystack.org/problems/evidence/authentication_failed",
         "https://registrystack.org/problems/evidence/not_authorized",
+        "https://registrystack.org/problems/evidence/response_format_not_acceptable",
         "https://registrystack.org/problems/evidence/evidence_not_available",
         "https://registrystack.org/problems/evidence/rate_limited",
         "https://registrystack.org/problems/evidence/dependency_unavailable",

@@ -71,10 +71,10 @@ primitives:
     behavior: Exact code lookup with no normalization; returns only the configured output code.
   list_contains:
     signature: '[array<scalar>, scalar] -> boolean'
-    behavior: Exact typed equality over at most 256 items.
+    behavior: Exact typed equality over at most 256 items. Every item is validated as a scalar before any answer is produced, so an invalid item fails even when an earlier item matches.
   set_contains:
     signature: '[array<scalar>, scalar] -> boolean'
-    behavior: Exact typed equality over at most 256 items; a duplicate input item fails because the array represents a set.
+    behavior: Exact typed equality over at most 256 items. Every item is validated as a scalar before any answer is produced, and a duplicate input item fails because the array represents a set.
   array_push:
     signature: 'array.push(value) -> unit'
     behavior: Appends one local value when the resulting array remains within the 256-item bound; otherwise fails without a partial output.
@@ -83,14 +83,16 @@ primitives:
     behavior: Mutates the local receiver by replacing every exact non-overlapping literal occurrence, with no regex or Unicode normalization, when the result remains within the 16384-byte string bound.
   required:
     signature: '[Option<T>, string] -> T'
-    behavior: Returns the value or fails with the supplied safe bundle-owned error code; protected data may not be used as the code.
+    behavior: Returns the value, or terminates the invocation with the host-private unavailable signal. The second argument must have a safe bundle-owned code shape; it is validated and then discarded, because shape validation cannot prove a code is a reviewed literal rather than derived protected data. No supplied code is observable in evidence, problems, audit, logs, or diagnostics.
   is_missing:
     signature: Option<T> -> boolean
     behavior: Explicit missing-value test with no implicit coercion.
 global_rules:
   - Primitives are pure, deterministic, typed, bounded, and domain-neutral.
   - Strings are compared as exact UTF-8 values; no Unicode normalization, case folding, transliteration, or phonetics occurs.
-  - Decimal operations use the Rust-owned exact Decimal type; Rhai floating-point arithmetic is not accepted at the output gate.
+  - Decimal operations use the Rust-owned exact Decimal type. Ordinary floats remain available in request preparation and source extraction and are rejected for every public derived value; exact numbers use the declared integer or Decimal forms.
+  - Array and map indexing is routed through a host-owned guard; a negative index fails whether it is written literally or computed.
+  - JSON numbers are admitted only as signed 64-bit integers or finite floats; an integer token outside the signed 64-bit range fails before Rhai, and a provider identifier outside that range must be represented as a string.
   - EntityReferenceSeed is a protected projection input, not public data; only the core can HMAC-project it to an audience-scoped reference.
   - Query names and values remain strings. parse_integer exists only for provider text and does not introduce implicit integer-to-string or value-to-string conversion.
   - Array and string mutation affects only the fresh invocation-local copy and cannot modify the governed bundle, another script stage, or another request.

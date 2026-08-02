@@ -193,6 +193,10 @@
       "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
       "type": "string"
     },
+    "requestNonce": {
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
     "schema": {
       "const": "registry.assertion-evidence/v1"
     },
@@ -227,6 +231,7 @@
   },
   "required": [
     "schema",
+    "requestNonce",
     "id",
     "type",
     "supportsRequirement",

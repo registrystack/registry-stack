@@ -133,6 +133,10 @@
             "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
             "type": "string"
           },
+          "requestNonce": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
           "schema": {
             "enum": [
               "registry.assertion-evidence/v1"
@@ -173,6 +177,7 @@
         },
         "required": [
           "schema",
+          "requestNonce",
           "id",
           "type",
           "supportsRequirement",
@@ -429,6 +434,10 @@
             "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
             "type": "string"
           },
+          "requestNonce": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
           "requirement": {
             "format": "uri",
             "maxLength": 512,
@@ -445,6 +454,7 @@
           }
         },
         "required": [
+          "requestNonce",
           "requirement",
           "purpose",
           "subjects"
@@ -825,6 +835,34 @@
             "properties": {
               "code": {
                 "enum": [
+                  "response_format_not_acceptable"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  406
+                ],
+                "type": "integer"
+              },
+              "title": {
+                "enum": [
+                  "Requested response format is not acceptable"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                ],
+                "type": "string"
+              }
+            }
+          },
+          {
+            "properties": {
+              "code": {
+                "enum": [
                   "evidence_not_available"
                 ],
                 "type": "string"
@@ -941,6 +979,7 @@
               "invalid_selector",
               "authentication_failed",
               "not_authorized",
+              "response_format_not_acceptable",
               "evidence_not_available",
               "rate_limited",
               "dependency_unavailable",
@@ -957,6 +996,7 @@
               400,
               401,
               403,
+              406,
               422,
               429,
               503
@@ -968,6 +1008,7 @@
               "Request is not valid",
               "Authentication failed",
               "Request is not authorized",
+              "Requested response format is not acceptable",
               "Evidence could not be produced",
               "Request rate exceeded",
               "Service temporarily unavailable"
@@ -980,6 +1021,7 @@
               "https://registrystack.org/problems/evidence/invalid_selector",
               "https://registrystack.org/problems/evidence/authentication_failed",
               "https://registrystack.org/problems/evidence/not_authorized",
+              "https://registrystack.org/problems/evidence/response_format_not_acceptable",
               "https://registrystack.org/problems/evidence/evidence_not_available",
               "https://registrystack.org/problems/evidence/rate_limited",
               "https://registrystack.org/problems/evidence/dependency_unavailable",
@@ -1134,6 +1176,47 @@
           "providesValueFor",
           "value"
         ],
+        "type": "object"
+      },
+      "UnsignedEvidenceEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "integrityProtection": {
+            "enum": [
+              "none"
+            ],
+            "type": "string"
+          },
+          "schema": {
+            "enum": [
+              "registry.unsigned-evidence-envelope/v1"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "UnsignedEvidenceEnvelope"
+            ],
+            "type": "string"
+          },
+          "warning": {
+            "enum": [
+              "not-cryptographically-verifiable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "type",
+          "integrityProtection",
+          "warning",
+          "evidence"
+        ],
+        "title": "Evidence unsigned response envelope Version 1",
         "type": "object"
       }
     },
@@ -1296,6 +1379,7 @@
     },
     "/v1/evidence": {
       "post": {
+        "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
         "operationId": "createEvidence",
         "requestBody": {
           "content": {
@@ -1314,15 +1398,29 @@
                 "schema": {
                   "$ref": "#/components/schemas/FlattenedJws"
                 }
+              },
+              "application/vnd.registrystack.evidence-unsigned+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsignedEvidenceEnvelope"
+                }
               }
             },
-            "description": "Signed Evidence as flattened JWS JSON Serialization",
+            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized self-identifying unsigned envelope",
             "headers": {
               "Cache-Control": {
                 "description": "Evidence responses are never cacheable.",
                 "schema": {
                   "enum": [
                     "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
                   ],
                   "type": "string"
                 }
@@ -1420,6 +1518,15 @@
                   ],
                   "type": "string"
                 }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
               }
             }
           },
@@ -1475,6 +1582,15 @@
                   "type": "string"
                 }
               },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
               "WWW-Authenticate": {
                 "schema": {
                   "enum": [
@@ -1526,13 +1642,85 @@
                 }
               }
             },
-            "description": "Request is not authorized",
+            "description": "Request is not authorized, including a recognized response format the bundle or matched grant does not permit",
             "headers": {
               "Cache-Control": {
                 "description": "Evidence responses are never cacheable.",
                 "schema": {
                   "enum": [
                     "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "response_format_not_acceptable"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            406
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Requested response format is not acceptable"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Media negotiation is outside the closed Accept matrix",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
                   ],
                   "type": "string"
                 }
@@ -1587,6 +1775,15 @@
                 "schema": {
                   "enum": [
                     "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
                   ],
                   "type": "string"
                 }
@@ -1649,6 +1846,15 @@
                 "schema": {
                   "enum": [
                     "1"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
                   ],
                   "type": "string"
                 }
@@ -1746,6 +1952,15 @@
                   ],
                   "type": "string"
                 }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
               }
             }
           }
@@ -1755,7 +1970,7 @@
             "bearerAuth": []
           }
         ],
-        "summary": "Produce signed evidence for one authorized fixed requirement"
+        "summary": "Produce evidence for one authorized fixed requirement"
       }
     },
     "/v1/evidence-definitions": {

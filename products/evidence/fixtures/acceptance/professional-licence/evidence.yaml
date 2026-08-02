@@ -6,6 +6,8 @@ audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyV
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing: {format: flattened-jws-json, algorithm: EdDSA, activeKeyId: fixture-key-2026-01, activeKeyRef: secret:file/signing-key, retiredPublicJwkFiles: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
+responseFormats: [signed-jws]
+
 selectorProfiles:
   licence-register-v1:
     maximumAggregateBytes: 128
@@ -44,6 +46,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:professional-licence-status:v1
         purpose: fixture-registration
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects: [{role: subject, selectorProfile: licence-register-v1, valueOrigin: request}]
 requirements:
   - id: urn:example:fixture:requirement:professional-licence-status:v1

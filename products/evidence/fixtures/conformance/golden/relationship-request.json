@@ -1,4 +1,5 @@
 {
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
   "requirement": "urn:example:fixture:requirement:legal-parent-relationship:v1",
   "purpose": "fixture-enrolment",
   "subjects": [

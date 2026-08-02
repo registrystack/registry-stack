@@ -25,6 +25,8 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
 selectorProfiles:
   person-demographics-v1:
     maximumAggregateBytes: 420
@@ -65,6 +67,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:adult-status:v1
         purpose: fixture-eligibility
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]
 requirements:
   - id: urn:example:fixture:requirement:adult-status:v1

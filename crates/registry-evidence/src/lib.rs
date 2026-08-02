@@ -28,6 +28,9 @@ mod runtime_tests;
 
 pub const EVIDENCE_SCHEMA_V1: &str = "registry.assertion-evidence/v1";
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
+pub const EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1: &str = "registry.unsigned-evidence-envelope/v1";
 pub const EVIDENCE_JWS_TYP: &str = "evidence+jws";
 pub const EVIDENCE_JWS_CTY: &str = "application/evidence+json";
 pub const EVIDENCE_JWS_MEDIA_TYPE: &str = "application/jose+json";
+pub const EVIDENCE_UNSIGNED_MEDIA_TYPE: &str =
+    "application/vnd.registrystack.evidence-unsigned+json";

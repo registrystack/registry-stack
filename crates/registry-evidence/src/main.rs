@@ -2,26 +2,29 @@
 
 use std::{
     collections::BTreeMap,
-    fmt,
+    fmt, fs,
     path::{Component, Path, PathBuf},
     process::ExitCode,
     str::FromStr,
     sync::Arc,
 };
 
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
-    bundle::{Bundle, BundleError, DeploymentInputs, RuntimeDocument},
+    bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
     config::{ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
     },
-    model::{LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue, SubjectBinding},
+    model::{
+        JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
+        SubjectBinding,
+    },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
     runtime::{source_failure_problem, EvidenceRuntime, RuntimeInitializationError},
@@ -35,9 +38,13 @@ use registry_evidence::{
     source::{
         project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
     },
-    verifier::{verify_flattened_jws, EvidenceVerificationPolicy},
+    verifier::{
+        verify_flattened_jws, verify_flattened_jws_report, EvidenceVerificationPolicy,
+        ExpectedOutput, ExpectedSubject, ExpectedValueForm, VerificationError,
+    },
 };
-use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
+use registry_platform_crypto::{parse_json_strict, LocalJwkSigner, PrivateJwk};
+use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
 
@@ -75,6 +82,21 @@ enum Command {
     },
     /// Start the native Evidence HTTP service.
     Serve,
+    /// Re-verify one stored signed response offline against a pinned key set.
+    Verify {
+        /// Stored flattened JWS JSON response file.
+        #[arg(long)]
+        jws: PathBuf,
+        /// Pinned trusted JWKS document. This file is the complete trust set.
+        #[arg(long)]
+        jwks: PathBuf,
+        /// Relying-procedure verification policy document.
+        #[arg(long)]
+        policy: PathBuf,
+        /// Verification instant as strict RFC 3339 UTC; system time by default.
+        #[arg(long)]
+        at: Option<String>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,6 +110,34 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// A command failure: a fixed operator message, or one artifact diagnostic.
+///
+/// The diagnostic names a bundle-relative artifact, a schema path, and a text
+/// location so an operator can find the defect. It carries no document value,
+/// which is what keeps a failed `check` safe to paste into a ticket.
+#[derive(Debug, PartialEq, Eq)]
+enum CommandError {
+    Cli(CliError),
+    Deployment(&'static str, ArtifactFault),
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cli(error) => fmt::Display::fmt(error, formatter),
+            Self::Deployment(message, fault) => write!(formatter, "{message}: {fault}"),
+        }
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+impl From<CliError> for CommandError {
+    fn from(error: CliError) -> Self {
+        Self::Cli(error)
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct FixtureSummary {
     evaluated_cases: usize,
@@ -96,7 +146,7 @@ struct FixtureSummary {
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(Cli::parse()).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("evidence: {error}");
             ExitCode::FAILURE
@@ -104,7 +154,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), CliError> {
+async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
@@ -119,7 +169,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 runtime.revision(),
                 bundle.config.requirements.len()
             );
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Evaluate { fixture } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
@@ -133,7 +183,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 "Evidence fixture passed ({} evaluated cases)",
                 summary.evaluated_cases
             );
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Command::Serve => {
             let runtime = Arc::new(
@@ -143,22 +193,39 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             );
             server::serve(runtime, shutdown_signal())
                 .await
-                .map_err(|_| CliError("service failed"))
+                .map_err(|_| CommandError::Cli(CliError("service failed")))?;
+            Ok(ExitCode::SUCCESS)
         }
+        Command::Verify {
+            jws,
+            jwks,
+            policy,
+            at,
+        } => Ok(verify_stored_response(&jws, &jwks, &policy, at.as_deref())?),
     }
 }
 
-fn deployment_load_error(error: BundleError) -> CliError {
-    match error {
-        BundleError::Unavailable => CliError("deployment input is unavailable"),
-        BundleError::NotImmutable => CliError("deployment input is not immutable"),
-        BundleError::UnsupportedEntry => CliError("deployment contains an unsupported entry"),
-        BundleError::InvalidPath => CliError("deployment contains an invalid path binding"),
-        BundleError::UnknownFile => CliError("deployment artifact closure is invalid"),
-        BundleError::TooLarge => CliError("deployment exceeds a Version 1 size bound"),
-        BundleError::Config(_) => CliError("deployment configuration is invalid"),
-        BundleError::InvalidArtifact(_) => CliError("deployment artifact is invalid"),
-        BundleError::InvalidScript => CliError("deployment script is invalid"),
+/// Report a startup failure with the artifact diagnostic it carries.
+///
+/// The failure class stays a fixed operator message. When the loader knew
+/// which artifact failed, the value-free diagnostic is appended so that
+/// `evidence check` names a file, a schema path, and a text location instead
+/// of only a class. Public HTTP problems are unaffected and stay generic.
+fn deployment_load_error(error: BundleError) -> CommandError {
+    let message = match &error {
+        BundleError::Unavailable => "deployment input is unavailable",
+        BundleError::NotImmutable => "deployment input is not immutable",
+        BundleError::UnsupportedEntry => "deployment contains an unsupported entry",
+        BundleError::InvalidPath => "deployment contains an invalid path binding",
+        BundleError::UnknownFile(_) => "deployment artifact closure is invalid",
+        BundleError::TooLarge => "deployment exceeds a Version 1 size bound",
+        BundleError::Config(_) => "deployment configuration is invalid",
+        BundleError::InvalidArtifact(_) => "deployment artifact is invalid",
+        BundleError::InvalidScript(_) => "deployment script is invalid",
+    };
+    match error.artifact_fault() {
+        Some(fault) => CommandError::Deployment(message, fault.clone()),
+        None => CommandError::Cli(CliError(message)),
     }
 }
 
@@ -213,8 +280,256 @@ fn compile_source_plans_with_runtime(
     Ok(plans)
 }
 
+/// Resolve on the first operator stop signal.
+///
+/// A service manager and a container runtime both stop a process with
+/// SIGTERM, and an interactive operator uses Ctrl-C. Both resolve here, so the
+/// same drain runs either way: the server stops accepting, finishes its
+/// in-flight evaluations, and closes the audit chain before the process exits.
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "evidence: SIGTERM handler unavailable ({error}); stopping on Ctrl-C only"
+                );
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Longest accepted verification input.
+///
+/// A stored response, a pinned key set, and a relying-procedure policy are all
+/// small documents, so a larger file is refused before it is read rather than
+/// pulled into memory because a path was mistyped.
+const MAX_VERIFY_INPUT_BYTES: u64 = 1024 * 1024;
+
+/// Exit status for a response that is authentic but no longer current.
+const NOT_CURRENT_EXIT_CODE: u8 = 3;
+
+/// The one class reported for an input document that cannot be read or parsed.
+const VERIFY_MALFORMED: CliError = CliError("stored response verification failed (malformed)");
+
+/// One relying-procedure verification policy document.
+///
+/// Every expectation is required. An optional expectation would silently skip
+/// a comparison, so the document is closed and complete; only the clock skew
+/// may be omitted, and omitting it means zero tolerance.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VerificationPolicyDocument {
+    issued_by: String,
+    provided_by: String,
+    requirement: String,
+    evidence_type: String,
+    purpose: String,
+    audience: String,
+    configuration_revision: String,
+    /// The exact nonce from the independently retained original request.
+    request_nonce: String,
+    expected_subjects: Vec<ExpectedSubjectDocument>,
+    expected_outputs: Vec<ExpectedOutputDocument>,
+    maximum_assertion_lifetime_seconds: u64,
+    #[serde(default)]
+    clock_skew_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedSubjectDocument {
+    role: String,
+    binding: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedOutputDocument {
+    concept: String,
+    form: ExpectedFormDocument,
+}
+
+/// The closed expected value-form vocabulary, as written in a policy document.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ExpectedFormDocument {
+    Boolean,
+    Integer,
+    String,
+    DateBucket,
+    TimeBucket,
+    EntityReference,
+    Structured,
+    List(ExpectedListDocument),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedListDocument {
+    minimum_items: usize,
+    maximum_items: usize,
+}
+
+impl VerificationPolicyDocument {
+    fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
+        EvidenceVerificationPolicy {
+            issued_by: self.issued_by,
+            provided_by: self.provided_by,
+            requirement: self.requirement,
+            evidence_type: self.evidence_type,
+            purpose: self.purpose,
+            audience: self.audience,
+            configuration_revision: self.configuration_revision,
+            request_nonce: self.request_nonce,
+            expected_subjects: self
+                .expected_subjects
+                .into_iter()
+                .map(|subject| ExpectedSubject {
+                    role: subject.role,
+                    binding: subject.binding,
+                })
+                .collect(),
+            expected_outputs: self
+                .expected_outputs
+                .into_iter()
+                .map(|output| ExpectedOutput {
+                    concept: output.concept,
+                    form: expected_value_form(output.form),
+                })
+                .collect(),
+            maximum_assertion_lifetime: std::time::Duration::from_secs(
+                self.maximum_assertion_lifetime_seconds,
+            ),
+            now,
+            clock_skew: std::time::Duration::from_secs(self.clock_skew_seconds),
+        }
+    }
+}
+
+fn expected_value_form(document: ExpectedFormDocument) -> ExpectedValueForm {
+    match document {
+        ExpectedFormDocument::Boolean => ExpectedValueForm::Boolean,
+        ExpectedFormDocument::Integer => ExpectedValueForm::Integer,
+        ExpectedFormDocument::String => ExpectedValueForm::String,
+        ExpectedFormDocument::DateBucket => ExpectedValueForm::DateBucket,
+        ExpectedFormDocument::TimeBucket => ExpectedValueForm::TimeBucket,
+        ExpectedFormDocument::EntityReference => ExpectedValueForm::EntityReference,
+        ExpectedFormDocument::Structured => ExpectedValueForm::Structured,
+        ExpectedFormDocument::List(bounds) => ExpectedValueForm::List {
+            minimum_items: bounds.minimum_items,
+            maximum_items: bounds.maximum_items,
+        },
+    }
+}
+
+/// Re-verify one stored signed response offline.
+///
+/// The pinned key set file is the complete trust set: this command opens no
+/// socket, resolves no metadata, and fetches no key. Every expectation comes
+/// from the operator's policy document, which belongs to independently
+/// retained trusted state such as the original request and an accepted
+/// original transaction. The printed lines are the verification instant, the
+/// authenticity answer, and, for an authentic response, current usability.
+/// A failure reports only its closed class, so re-verification never becomes
+/// an oracle for which hidden comparison failed.
+fn verify_stored_response(
+    jws_path: &Path,
+    jwks_path: &Path,
+    policy_path: &Path,
+    at: Option<&str>,
+) -> Result<ExitCode, CliError> {
+    let instant = verification_instant(at)?;
+    println!(
+        "verified-at: {}",
+        instant.to_rfc3339_opts(SecondsFormat::Secs, true)
+    );
+
+    let stored = read_verification_input(jws_path)?;
+    let trusted: JwksDocument = serde_json::from_value(
+        parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
+    let document: VerificationPolicyDocument =
+        serde_norway::from_slice(&read_verification_input(policy_path)?)
+            .map_err(|_| VERIFY_MALFORMED)?;
+    let policy = document.into_policy(instant);
+
+    match verify_flattened_jws_report(&stored, &trusted, &policy) {
+        Ok(report) => {
+            println!("authentic: yes");
+            if !report.currently_valid {
+                println!("currently-valid: no");
+                return Ok(ExitCode::from(NOT_CURRENT_EXIT_CODE));
+            }
+            println!("currently-valid: yes");
+            // Inspection output for the operator who already holds the stored
+            // response. It appears only once the trusted key signed the exact
+            // payload, every expectation held, and the assertion is current.
+            let inspected = serde_json::to_string_pretty(&report.evidence)
+                .map_err(|_| verification_error_class(VerificationError::Payload))?;
+            println!("{inspected}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            println!("authentic: no");
+            Err(verification_error_class(error))
+        }
+    }
+}
+
+/// Resolve the verification instant from `--at`, or from system time.
+///
+/// `--at` is strict RFC 3339 at zero offset, so an operator cannot silently
+/// re-verify against a local wall clock and read the result as UTC.
+fn verification_instant(at: Option<&str>) -> Result<DateTime<Utc>, CliError> {
+    const NOT_UTC: CliError = CliError("verification instant is not strict RFC 3339 UTC");
+
+    let Some(text) = at else {
+        return Ok(Utc::now());
+    };
+    let parsed = DateTime::parse_from_rfc3339(text).map_err(|_| NOT_UTC)?;
+    if parsed.offset().local_minus_utc() != 0 {
+        return Err(NOT_UTC);
+    }
+    Ok(parsed.with_timezone(&Utc))
+}
+
+/// Read one bounded verification input file.
+fn read_verification_input(path: &Path) -> Result<Vec<u8>, CliError> {
+    let metadata = fs::metadata(path).map_err(|_| VERIFY_MALFORMED)?;
+    if !metadata.is_file() || metadata.len() > MAX_VERIFY_INPUT_BYTES {
+        return Err(VERIFY_MALFORMED);
+    }
+    fs::read(path).map_err(|_| VERIFY_MALFORMED)
+}
+
+/// Report one verification failure as its closed class and nothing more.
+fn verification_error_class(error: VerificationError) -> CliError {
+    match error {
+        VerificationError::MalformedJws => VERIFY_MALFORMED,
+        VerificationError::ProtectedHeader => {
+            CliError("stored response verification failed (protected-header)")
+        }
+        VerificationError::Key => CliError("stored response verification failed (key)"),
+        VerificationError::Signature => CliError("stored response verification failed (signature)"),
+        VerificationError::Payload => CliError("stored response verification failed (payload)"),
+        VerificationError::Policy => CliError("stored response verification failed (policy)"),
+        VerificationError::Time => CliError("stored response verification failed (time)"),
+    }
 }
 
 async fn evaluate_fixture(
@@ -863,6 +1178,7 @@ async fn sign_and_verify_fixture_evidence(
             values,
             EvidenceConstruction {
                 evidence_id: &evidence_id,
+                request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                 purpose: &resolved.purpose,
                 audience: OFFLINE_AUDIENCE,
                 issued_at,
@@ -877,21 +1193,25 @@ async fn sign_and_verify_fixture_evidence(
         .map_err(|_| CliError("fixture evidence signing failed"))?;
     let jwks = jwks_document(signer.public_jwk(), [])
         .map_err(|_| CliError("fixture verification key construction failed"))?;
+    let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
+        &evidence,
+        registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+        std::time::Duration::from_secs(31_536_000),
+        issued_at,
+        std::time::Duration::ZERO,
+    );
+    policy.issued_by = bundle.config.issuer.id.clone();
+    policy.provided_by = bundle.config.service.provider_id.clone();
+    policy.requirement = requirement.id.clone();
+    policy.evidence_type = requirement.evidence_type.clone();
+    policy.purpose = resolved.purpose.clone();
+    policy.audience = OFFLINE_AUDIENCE.to_owned();
+    policy.configuration_revision = bundle.revision().to_owned();
     let verified = verify_flattened_jws(
         &serde_json::to_vec(&signed)
             .map_err(|_| CliError("fixture signed evidence is not representable"))?,
         &jwks,
-        &EvidenceVerificationPolicy {
-            issued_by: bundle.config.issuer.id.clone(),
-            provided_by: bundle.config.service.provider_id.clone(),
-            requirement: requirement.id.clone(),
-            evidence_type: requirement.evidence_type.clone(),
-            purpose: resolved.purpose.clone(),
-            audience: OFFLINE_AUDIENCE.to_owned(),
-            configuration_revision: bundle.revision().to_owned(),
-            now: issued_at,
-            clock_skew: std::time::Duration::ZERO,
-        },
+        &policy,
     )
     .map_err(|_| CliError("fixture signed evidence verification failed"))?;
     serde_json::to_value(verified)
@@ -987,6 +1307,10 @@ fn validate_reference_error(
     let (internal, public_problem) = match error {
         KernelError::Preparation => ("adapter_input_error", "service_unavailable"),
         KernelError::SourceProtocol => ("source_protocol_error", "dependency_unavailable"),
+        // Derivation-input inconsistency over a uniquely found record
+        // collapses publicly with the unresolved classes; the internal
+        // category stays a value-free operator diagnostic.
+        KernelError::DerivationInput => ("derivation_input_error", "evidence_not_available"),
         KernelError::Script if derivation_ran => ("derivation_input_error", "service_unavailable"),
         KernelError::Extraction => ("evidence_not_available", "evidence_not_available"),
         _ => ("service_unavailable", "service_unavailable"),
@@ -1507,7 +1831,8 @@ fn validate_case_outcome(
             (problem, &outcome),
             (
                 "evidence_not_available",
-                Err(registry_evidence::kernel::KernelError::Extraction)
+                Err(registry_evidence::kernel::KernelError::Extraction
+                    | registry_evidence::kernel::KernelError::DerivationInput)
             ) | (
                 "dependency_unavailable",
                 Err(registry_evidence::kernel::KernelError::SourceProtocol)

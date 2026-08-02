@@ -17,20 +17,22 @@ use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditEvent, EvidenceAuditLog,
+        ResponseProtection,
     },
     auth::{AuthenticatedContext, Authenticator},
     bundle::{Bundle, DeploymentInputs},
     config::{
-        AuthorityKind, ConceptForm, RequirementKind, RuntimeConfig, SelectorField, SelectorInput,
-        SubjectCardinality, ValueOrigin,
+        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig, SelectorField,
+        SelectorInput, SubjectCardinality, ValueOrigin,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection},
     model::{
-        EvidenceDefinition, EvidenceDefinitionConcept, EvidenceDefinitionSelector,
-        EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField,
-        FlattenedJws, JwksDocument, RequestedSelector, RequestedSubject, SelectorValue,
-        SubjectBinding,
+        request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
+        EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
+        EvidenceRequest, EvidenceSelectorField, FlattenedJws, JwksDocument, RequestedSelector,
+        RequestedSubject, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
+        UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
     },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
@@ -42,7 +44,8 @@ use crate::{
     },
     signing::{jwks_document, EvidenceSigner},
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
-    EVIDENCE_DEFINITIONS_SCHEMA_V1,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
+    EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const MAX_OPERATION_BYTES: usize = 128;
@@ -97,6 +100,44 @@ impl std::fmt::Display for RuntimeFailure {
 }
 
 impl std::error::Error for RuntimeFailure {}
+
+/// One released response: the exact final immutable bytes that were serialized
+/// before the durable disclosure-release audit event, plus their exact media
+/// type. The HTTP boundary returns these bytes unchanged.
+pub struct ReleasedEvidence {
+    format: ResponseFormat,
+    media_type: &'static str,
+    bytes: Vec<u8>,
+}
+
+impl ReleasedEvidence {
+    pub fn format(&self) -> ResponseFormat {
+        self.format
+    }
+
+    pub fn media_type(&self) -> &'static str {
+        self.media_type
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl std::fmt::Debug for ReleasedEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReleasedEvidence")
+            .field("format", &self.format)
+            .field("media_type", &self.media_type)
+            .field("bytes", &"<redacted>")
+            .finish()
+    }
+}
 
 /// All runtime state is derived from one captured immutable bundle revision.
 pub struct EvidenceRuntime {
@@ -331,7 +372,11 @@ impl EvidenceRuntime {
 
         let mut definitions = Vec::new();
         for (requirement, purpose, subjects) in candidates {
+            // Discovery only probes the authorization boundary; this internal
+            // request shape is never evaluated or released, so it carries the
+            // fixed non-random placeholder nonce.
             let request = EvidenceRequest {
+                request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
                 requirement,
                 purpose,
                 subjects: subjects
@@ -478,14 +523,40 @@ impl EvidenceRuntime {
         })
     }
 
-    /// Run the fixed authenticated path through signing and durable release audit.
+    /// Run the fixed authenticated signed-default path and return the JWS.
+    ///
+    /// This convenience wrapper deserializes the exact released bytes; the
+    /// HTTP boundary uses [`EvidenceRuntime::evaluate_with_format`] so the
+    /// bytes serialized before release audit are the bytes returned.
     pub async fn evaluate(
         &self,
         operation: &str,
         access_token: &str,
         request: &EvidenceRequest,
     ) -> Result<FlattenedJws, RuntimeFailure> {
-        self.evaluate_at(operation, access_token, request, None)
+        let released = self
+            .evaluate_at(
+                operation,
+                access_token,
+                request,
+                ResponseFormat::SignedJws,
+                None,
+            )
+            .await?;
+        serde_json::from_slice(released.bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-serialization"))
+    }
+
+    /// Run the fixed authenticated path for one explicitly resolved response
+    /// format through serialization and durable release audit.
+    pub async fn evaluate_with_format(
+        &self,
+        operation: &str,
+        access_token: &str,
+        request: &EvidenceRequest,
+        format: ResponseFormat,
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
+        self.evaluate_at(operation, access_token, request, format, None)
             .await
     }
 
@@ -495,10 +566,17 @@ impl EvidenceRuntime {
         operation: &str,
         access_token: &str,
         request: &EvidenceRequest,
+        format: ResponseFormat,
         evaluation_time: chrono::DateTime<Utc>,
-    ) -> Result<FlattenedJws, RuntimeFailure> {
-        self.evaluate_at(operation, access_token, request, Some(evaluation_time))
-            .await
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
+        self.evaluate_at(
+            operation,
+            access_token,
+            request,
+            format,
+            Some(evaluation_time),
+        )
+        .await
     }
 
     async fn evaluate_at(
@@ -506,13 +584,19 @@ impl EvidenceRuntime {
         operation: &str,
         access_token: &str,
         request: &EvidenceRequest,
+        format: ResponseFormat,
         evaluation_time: Option<chrono::DateTime<Utc>>,
-    ) -> Result<FlattenedJws, RuntimeFailure> {
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
         if operation.len() < 16
             || operation.len() > MAX_OPERATION_BYTES
             || operation.bytes().any(|byte| byte.is_ascii_whitespace())
         {
             return Err(failure(ProblemCode::ServiceUnavailable, "operation-id"));
+        }
+        // The nonce is validated before authentication and never used again
+        // until evidence construction echoes it.
+        if !request_nonce_is_canonical(&request.request_nonce) {
+            return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
         }
         let started = Instant::now();
         let context = self
@@ -541,6 +625,14 @@ impl EvidenceRuntime {
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
         let matched = match_entitlement(self.bundle(), request, &context).map_err(map_authority)?;
+        // The immutable bundle and the one complete matched grant must both
+        // permit the requested format. API selection creates no permission,
+        // and the denial does not reveal which layer withheld it.
+        if !self.bundle().config.response_formats.contains(&format)
+            || !matched.permits_response_format(format)
+        {
+            return Err(failure(ProblemCode::NotAuthorized, "response-format"));
+        }
         let selector_limit_input = canonical_pair(
             context.principal().as_bytes(),
             matched.authority_profile().as_bytes(),
@@ -567,7 +659,8 @@ impl EvidenceRuntime {
             }
         };
 
-        let material = self.audit_material(&scope, requester_pseudonym, &context, &resolved)?;
+        let material =
+            self.audit_material(&scope, requester_pseudonym, &context, &resolved, format)?;
         let (source_id, adapter_id) = self.source_identity(&request.requirement)?;
         let mut access_event = material.event(
             operation,
@@ -681,7 +774,9 @@ impl EvidenceRuntime {
                 let category = kernel_failure_category(error);
                 let problem = kernel_failure_problem(error);
                 let decision = match error {
-                    KernelError::Extraction => AuditDecision::FactMissing,
+                    KernelError::Extraction | KernelError::DerivationInput => {
+                        AuditDecision::FactMissing
+                    }
                     KernelError::SourceProtocol => AuditDecision::DependencyFailure,
                     _ => AuditDecision::EvaluationFailure,
                 };
@@ -722,6 +817,7 @@ impl EvidenceRuntime {
             values,
             EvidenceConstruction {
                 evidence_id: &evidence_id,
+                request_nonce: &request.request_nonce,
                 purpose: &request.purpose,
                 audience: context.evidence_audience(),
                 issued_at,
@@ -752,20 +848,94 @@ impl EvidenceRuntime {
             .iter()
             .map(|value| value.provides_value_for.clone())
             .collect::<Vec<_>>();
-        let signed = match self.signer.sign_json(&evidence).await {
-            Ok(signed) => signed,
-            Err(_) => {
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::SigningFailure,
-                    "signing",
-                    &source_id,
-                    &adapter_id,
-                    started,
+
+        // Serialize the final immutable response bytes before the durable
+        // disclosure-release audit; the released bytes are exactly these. A
+        // signed-path failure never downgrades to unsigned output.
+        let (bytes, media_type, signing_key_id) = match format {
+            ResponseFormat::SignedJws => {
+                let signed = match self.signer.sign_json(&evidence).await {
+                    Ok(signed) => signed,
+                    Err(_) => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::SigningFailure,
+                            "signing",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(ProblemCode::ServiceUnavailable, "signing"));
+                    }
+                };
+                let bytes = serde_json::to_vec(&signed)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-serialization"));
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::SigningFailure,
+                            "release-serialization",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(error);
+                    }
+                };
+                (
+                    bytes,
+                    EVIDENCE_JWS_MEDIA_TYPE,
+                    Some(self.signer.key_id().to_owned()),
                 )
-                .await?;
-                return Err(failure(ProblemCode::ServiceUnavailable, "signing"));
+            }
+            ResponseFormat::UnsignedJson => {
+                // No signing operation runs, but the ordinary signing
+                // dependency must still be ready for the deployment.
+                if !self.signer.ready() {
+                    self.append_failure(
+                        &material,
+                        operation,
+                        AuditDecision::SigningFailure,
+                        "signing",
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(ProblemCode::ServiceUnavailable, "signing"));
+                }
+                let envelope = UnsignedEvidenceEnvelope {
+                    schema: EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1.to_owned(),
+                    envelope_type: UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
+                    integrity_protection: UnsignedIntegrityProtection::None,
+                    warning: UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
+                    evidence,
+                };
+                let bytes = serde_json::to_vec(&envelope)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-serialization"));
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::EvaluationFailure,
+                            "release-serialization",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(error);
+                    }
+                };
+                (bytes, EVIDENCE_UNSIGNED_MEDIA_TYPE, None)
             }
         };
 
@@ -779,12 +949,16 @@ impl EvidenceRuntime {
         release.adapter_id = Some(adapter_id);
         release.disclosed_concepts = Some(disclosed_concepts);
         release.evidence_id = Some(evidence_id);
-        release.signing_key_id = Some(self.signer.key_id().to_owned());
+        release.signing_key_id = signing_key_id;
         self.audit
             .append(release)
             .await
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-audit"))?;
-        Ok(signed)
+        Ok(ReleasedEvidence {
+            format,
+            media_type,
+            bytes,
+        })
     }
 
     fn source_identity(&self, requirement_id: &str) -> Result<(String, String), RuntimeFailure> {
@@ -812,6 +986,7 @@ impl EvidenceRuntime {
         requester_pseudonym: String,
         context: &AuthenticatedContext,
         resolved: &ResolvedAuthorization,
+        format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
         let actor_pseudonym = context
             .actor()
@@ -853,6 +1028,7 @@ impl EvidenceRuntime {
                 grant_pseudonym,
             },
             subjects,
+            response_protection: map_response_protection(format),
         })
     }
 
@@ -918,6 +1094,7 @@ struct AuditMaterial {
     actor_pseudonym: Option<String>,
     authority: AuditAuthority,
     subjects: Vec<AuditSubject>,
+    response_protection: ResponseProtection,
 }
 
 impl AuditMaterial {
@@ -937,11 +1114,19 @@ impl AuditMaterial {
             self.requester_pseudonym.clone(),
             self.authority.clone(),
             self.subjects.clone(),
+            self.response_protection,
             decision,
             duration_milliseconds,
         );
         event.actor_pseudonym = self.actor_pseudonym.clone();
         event
+    }
+}
+
+fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
+    match format {
+        ResponseFormat::SignedJws => ResponseProtection::Signed,
+        ResponseFormat::UnsignedJson => ResponseProtection::Unsigned,
     }
 }
 
@@ -1138,6 +1323,7 @@ fn kernel_failure_category(error: KernelError) -> &'static str {
     match error {
         KernelError::Preparation => "request-preparation",
         KernelError::Extraction => "fact-unavailable",
+        KernelError::DerivationInput => "derivation-input",
         KernelError::SourceProtocol => "source-protocol",
         KernelError::Script => "script-failure",
         KernelError::Output => "output-gate",
@@ -1145,10 +1331,14 @@ fn kernel_failure_category(error: KernelError) -> &'static str {
     }
 }
 
+/// Map a closed kernel failure to its public problem class. The unresolved
+/// classes, including derivation-input inconsistency over a uniquely found
+/// record, collapse to one public shape so status codes cannot become an
+/// existence oracle. Native audit keeps only a value-free category.
 fn kernel_failure_problem(error: KernelError) -> ProblemCode {
     match error {
         KernelError::Preparation => ProblemCode::ServiceUnavailable,
-        KernelError::Extraction => ProblemCode::EvidenceNotAvailable,
+        KernelError::Extraction | KernelError::DerivationInput => ProblemCode::EvidenceNotAvailable,
         KernelError::SourceProtocol => ProblemCode::DependencyUnavailable,
         KernelError::Script
         | KernelError::Output
@@ -1303,5 +1493,21 @@ mod tests {
                 ProblemCode::ServiceUnavailable
             );
         }
+    }
+
+    #[test]
+    fn derivation_input_inconsistency_collapses_with_the_unresolved_classes() {
+        assert_eq!(
+            kernel_failure_problem(KernelError::DerivationInput),
+            kernel_failure_problem(KernelError::Extraction)
+        );
+        assert_eq!(
+            kernel_failure_problem(KernelError::DerivationInput),
+            ProblemCode::EvidenceNotAvailable
+        );
+        assert_ne!(
+            kernel_failure_category(KernelError::DerivationInput),
+            kernel_failure_category(KernelError::Extraction)
+        );
     }
 }

@@ -8,6 +8,9 @@ mapping:
   Evidence.schema:
     source: evidence_extension
     rule: Fixed profile discriminator registry.assertion-evidence/v1.
+  Evidence.requestNonce:
+    source: evidence_extension
+    rule: Exact echo of the caller-supplied request nonce; uninterpreted correlation data with no CCCEV-native counterpart, never a subject binding, identifier, or freshness proof.
   Evidence.id:
     source: dct:identifier
     rule: Core-created globally unique evidence identifier.

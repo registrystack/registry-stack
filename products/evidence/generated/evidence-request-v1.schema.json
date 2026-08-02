@@ -1,5 +1,5 @@
 {
-  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access.",
+  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it.",
   "$defs": {
     "scalar-selector-value": {
       "oneOf": [
@@ -69,6 +69,10 @@
       "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
       "type": "string"
     },
+    "requestNonce": {
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
     "requirement": {
       "format": "uri",
       "maxLength": 512,
@@ -85,6 +89,7 @@
     }
   },
   "required": [
+    "requestNonce",
     "requirement",
     "purpose",
     "subjects"

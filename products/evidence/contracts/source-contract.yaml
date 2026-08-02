@@ -41,6 +41,47 @@ evidence_data_request:
     forbidden_collisions:
       - authentication, host and routing, cookies, body framing, content length and type
       - connection and hop-by-hop, forwarding, proxy, tracing, and configured API-key headers
+    classifier: One closed ASCII-case-insensitive deny set shared by startup configuration validation and source plan compilation. Prefix families are denied before exact names, and both checks run before any credential is resolved.
+    denied_prefix_families: [x-forwarded-, proxy-, sec-, x-b3-, x-envoy-, x-datadog-, x-http-method]
+    denied_names:
+      - authorization
+      - proxy-authorization
+      - www-authenticate
+      - proxy-authenticate
+      - host
+      - cookie
+      - set-cookie
+      - content-length
+      - content-type
+      - transfer-encoding
+      - expect
+      - connection
+      - keep-alive
+      - te
+      - trailer
+      - upgrade
+      - proxy-connection
+      - forwarded
+      - via
+      - x-real-ip
+      - x-client-ip
+      - x-cluster-client-ip
+      - true-client-ip
+      - cf-connecting-ip
+      - fastly-client-ip
+      - x-appengine-user-ip
+      - x-azure-clientip
+      - traceparent
+      - tracestate
+      - baggage
+      - b3
+      - x-cloud-trace-context
+      - x-request-id
+      - x-correlation-id
+      - x-amzn-trace-id
+      - x-original-url
+      - x-rewrite-url
+      - x-original-method
     core_headers: Rust owns authentication and framing and adds Content-Type application/json for a JSON body.
     script_authority: prohibited
   url_security:

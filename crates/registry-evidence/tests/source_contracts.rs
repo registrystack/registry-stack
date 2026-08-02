@@ -6,6 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
     AcquisitionPosture, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy, PreparationLimits,
-    SourceConfig,
+    SourceConfig, RESERVED_HEADER_CONTRACT_CASES,
 };
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
@@ -382,6 +383,31 @@ async fn spawn_private_ca_tls_server(
         pem("CERTIFICATE", ca_certificate.der().as_ref()).into_bytes(),
         handle,
     )
+}
+
+/// Accepts TCP connections, counts each one, and resets it (`RST`, not a
+/// graceful close) before any HTTP bytes are exchanged. Used to prove that a
+/// transport failure on a source's very first connection attempt does not
+/// trigger a second, silent connection.
+async fn spawn_reset_on_connect_server() -> (std::net::SocketAddr, Arc<AtomicUsize>, JoinHandle<()>)
+{
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reset server binds");
+    let address = listener.local_addr().expect("reset server address");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&attempts);
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.set_zero_linger();
+            drop(stream);
+        }
+    });
+    (address, attempts, handle)
 }
 
 #[tokio::test]
@@ -1109,6 +1135,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                 values,
                 EvidenceConstruction {
                     evidence_id: "urn:ulid:01J4BRXQ0ZZZZZZZZZZZZZZZZZ",
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                     purpose: "fixture-routing",
                     audience: "https://relying.invalid/residence-procedure",
                     issued_at: observed_at,
@@ -1125,22 +1152,22 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             .await
             .expect("real residence Evidence signs");
         let serialized = serde_json::to_vec(&jws).expect("flattened JWS serializes");
-        let verified = verify_flattened_jws(
-            &serialized,
-            &jwks,
-            &EvidenceVerificationPolicy {
-                issued_by: "urn:example:fixture:issuer:authority".to_owned(),
-                provided_by: "urn:example:fixture:provider:evidence".to_owned(),
-                requirement: requirement.to_owned(),
-                evidence_type: "urn:example:fixture:evidence-type:residence-region:v1".to_owned(),
-                purpose: "fixture-routing".to_owned(),
-                audience: "https://relying.invalid/residence-procedure".to_owned(),
-                configuration_revision: kernel.bundle().revision().to_owned(),
-                now: observed_at,
-                clock_skew: Duration::from_secs(0),
-            },
-        )
-        .expect("signed residence Evidence verifies under the exact relying policy");
+        let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
+            &evidence,
+            registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+            Duration::from_secs(31_536_000),
+            observed_at,
+            Duration::from_secs(0),
+        );
+        policy.issued_by = "urn:example:fixture:issuer:authority".to_owned();
+        policy.provided_by = "urn:example:fixture:provider:evidence".to_owned();
+        policy.requirement = requirement.to_owned();
+        policy.evidence_type = "urn:example:fixture:evidence-type:residence-region:v1".to_owned();
+        policy.purpose = "fixture-routing".to_owned();
+        policy.audience = "https://relying.invalid/residence-procedure".to_owned();
+        policy.configuration_revision = kernel.bundle().revision().to_owned();
+        let verified = verify_flattened_jws(&serialized, &jwks, &policy)
+            .expect("signed residence Evidence verifies under the exact relying policy");
         assert_eq!(
             verified.supported_values[0].value,
             PublicValue::String("REGION-NORTH".to_owned())
@@ -1828,40 +1855,7 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
 #[test]
 fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation() {
     let (_root, secrets) = resolver(&[("key", "secret")]);
-    for header_name in [
-        "Authorization",
-        "Proxy-Authorization",
-        "Host",
-        "Cookie",
-        "Set-Cookie",
-        "Content-Length",
-        "Content-Type",
-        "Transfer-Encoding",
-        "Expect",
-        "Connection",
-        "Keep-Alive",
-        "TE",
-        "Trailer",
-        "Upgrade",
-        "Proxy-Connection",
-        "Forwarded",
-        "Via",
-        "X-Real-IP",
-        "X-Forwarded-For",
-        "X-Forwarded-Proto",
-        "Proxy-Authenticate",
-        "Traceparent",
-        "Tracestate",
-        "Baggage",
-        "X-Request-ID",
-        "X-Correlation-ID",
-        "X-Amzn-Trace-ID",
-        "X-Original-URL",
-        "X-Rewrite-URL",
-        "X-HTTP-Method-Override",
-        "X-Original-Method",
-        "X-B3-TraceId",
-    ] {
+    for header_name in RESERVED_HEADER_CONTRACT_CASES {
         let source = source_config(
             "http://127.0.0.1:18080",
             json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
@@ -1871,7 +1865,8 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
         );
         assert_eq!(
             SourceExecutor::new(&source, Arc::clone(&secrets)).err(),
-            Some(SourceError::InvalidPlan)
+            Some(SourceError::InvalidPlan),
+            "reserved fixed header {header_name} is rejected"
         );
     }
     let duplicate = source_config(
@@ -1901,15 +1896,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
         Some(SourceError::InvalidPlan),
         "fixed and authentication headers cannot collide"
     );
-    for api_key_header in [
-        "Authorization",
-        "Host",
-        "Content-Type",
-        "X-Forwarded-For",
-        "Proxy-Authenticate",
-        "Traceparent",
-        "X-B3-TraceId",
-    ] {
+    for api_key_header in RESERVED_HEADER_CONTRACT_CASES {
         let source = source_config(
             "http://127.0.0.1:18080",
             json!({"kind": "static-api-key", "headerName": api_key_header, "valueRef": "secret:file/key"}),
@@ -2013,6 +2000,36 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     mismatch_server
         .await
         .expect("mismatched TLS server task completes");
+}
+
+#[tokio::test]
+async fn a_reset_transport_failure_yields_exactly_one_connection_attempt() {
+    let (address, attempts, server) = spawn_reset_on_connect_server().await;
+    let source = fixed_source(
+        &format!("http://127.0.0.1:{}", address.port()),
+        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+    );
+    let (_root, secrets) = resolver(&[("token", "token")]);
+    let result = SourceExecutor::new(&source, secrets)
+        .expect("reset-transport source compiles")
+        .execute(
+            &[selector("record")],
+            &RequestParts {
+                query: vec![],
+                body: Some(json!({})),
+            },
+        )
+        .await;
+    assert_eq!(result, Err(SourceError::Transport));
+    // Give the listener a moment to observe a second connection attempt, if
+    // one were made, before asserting the final count.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a reset transport failure must not be retried"
+    );
+    server.abort();
 }
 
 #[test]

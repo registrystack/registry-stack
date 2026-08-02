@@ -21,7 +21,9 @@ use axum::{
     body::{to_bytes, Body},
     extract::State,
     http::{
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
+        header::{
+            ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, VARY,
+        },
         HeaderMap, HeaderValue, Request, StatusCode,
     },
     middleware::{from_fn, Next},
@@ -36,12 +38,12 @@ use tokio::{net::TcpListener, sync::Semaphore};
 use ulid::Ulid;
 
 use crate::{
-    config::ListenerConfig,
+    config::{ListenerConfig, ResponseFormat},
     contracts::request_contract_accepts,
-    model::EvidenceRequest,
+    model::{request_nonce_is_canonical, EvidenceRequest},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
-    EVIDENCE_JWS_MEDIA_TYPE,
+    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -252,15 +254,32 @@ where
     result
 }
 
+/// Every `/v1/evidence` response varies on the negotiated `Accept` value.
 async fn create_evidence(
     State(state): State<Arc<ServerState>>,
     request: Request<Body>,
 ) -> Response {
+    let mut response = create_evidence_negotiated(state, request).await;
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Accept"));
+    response
+}
+
+async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Body>) -> Response {
     let operation = operation_id();
     let started = Instant::now();
 
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
+        Err(code) => return problem_response(code, &operation),
+    };
+    // Strict media negotiation resolves the requested response format before
+    // the body is read and long before credential acquisition or source
+    // access. Selection creates no permission; the bundle and matched grant
+    // decide authorization later.
+    let format = match resolve_response_format(request.headers()) {
+        Ok(format) => format,
         Err(code) => return problem_response(code, &operation),
     };
     if !has_exact_content_type(request.headers(), JSON_MEDIA_TYPE)
@@ -322,12 +341,18 @@ async fn create_evidence(
                     &evaluation_operation,
                     &access_token,
                     &evidence_request,
+                    format,
                     evaluation_time,
                 )
                 .await;
         }
         runtime
-            .evaluate(&evaluation_operation, &access_token, &evidence_request)
+            .evaluate_with_format(
+                &evaluation_operation,
+                &access_token,
+                &evidence_request,
+                format,
+            )
             .await
     });
     let result = match evaluation.await {
@@ -336,11 +361,35 @@ async fn create_evidence(
     };
 
     match result {
-        Ok(jws) => match serialize_response(StatusCode::OK, EVIDENCE_JWS_MEDIA_TYPE, &jws) {
-            Some(response) => response,
-            None => problem_response(ProblemCode::ServiceUnavailable, &operation),
-        },
+        // Release exactly the immutable bytes serialized before the durable
+        // disclosure-release audit event, with their exact media type.
+        Ok(released) => {
+            let media_type = released.media_type();
+            bytes_response(StatusCode::OK, media_type, released.into_bytes())
+        }
         Err(failure) => runtime_failure_response(failure, &operation),
+    }
+}
+
+/// Resolve the closed Version 1 `Accept` matrix. Missing, `*/*`, and the exact
+/// signed media type select signed JWS; only the exact unsigned vendor media
+/// type selects the unsigned envelope. Duplicate, combined, parameterized,
+/// weighted, or unknown negotiation is not acceptable.
+fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
+    let mut values = headers.get_all(ACCEPT).iter();
+    let Some(value) = values.next() else {
+        return Ok(ResponseFormat::SignedJws);
+    };
+    if values.next().is_some() {
+        return Err(ProblemCode::ResponseFormatNotAcceptable);
+    }
+    match value.as_bytes() {
+        b"*/*" => Ok(ResponseFormat::SignedJws),
+        value if value == EVIDENCE_JWS_MEDIA_TYPE.as_bytes() => Ok(ResponseFormat::SignedJws),
+        value if value == EVIDENCE_UNSIGNED_MEDIA_TYPE.as_bytes() => {
+            Ok(ResponseFormat::UnsignedJson)
+        }
+        _ => Err(ProblemCode::ResponseFormatNotAcceptable),
     }
 }
 
@@ -438,7 +487,14 @@ fn parse_evidence_request(bytes: &[u8]) -> Result<EvidenceRequest, ProblemCode> 
         Ok(false) => return Err(ProblemCode::MalformedRequest),
         Err(_) => return Err(ProblemCode::ServiceUnavailable),
     }
-    serde_json::from_value(value).map_err(|_| ProblemCode::MalformedRequest)
+    let request: EvidenceRequest =
+        serde_json::from_value(value).map_err(|_| ProblemCode::MalformedRequest)?;
+    // The transport schema pins length and alphabet; canonicality of the
+    // final base64url symbol is checked here, before authentication.
+    if !request_nonce_is_canonical(&request.request_nonce) {
+        return Err(ProblemCode::MalformedRequest);
+    }
+    Ok(request)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Result<&str, ProblemCode> {
@@ -450,10 +506,13 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, ProblemCode> {
     let value = value
         .to_str()
         .map_err(|_| ProblemCode::AuthenticationFailed)?;
-    let token = value
-        .strip_prefix("Bearer ")
+    // The HTTP authentication grammar matches the scheme case-insensitively.
+    // The single-header, single-space, and token-value rules stay exact.
+    let (scheme, token) = value
+        .split_once(' ')
         .ok_or(ProblemCode::AuthenticationFailed)?;
-    if token.is_empty()
+    if !scheme.eq_ignore_ascii_case("Bearer")
+        || token.is_empty()
         || token
             .bytes()
             .any(|byte| byte.is_ascii_whitespace() || byte == b',')
@@ -558,8 +617,21 @@ mod tests {
             "three.parts.value"
         );
 
+        // The authentication scheme is case-insensitive per the HTTP grammar.
+        for scheme in ["bearer", "BEARER", "BeArEr"] {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("{scheme} three.parts.value"))
+                    .expect("test header is valid"),
+            );
+            assert_eq!(
+                bearer_token(&headers).expect("case-insensitive scheme accepted"),
+                "three.parts.value"
+            );
+        }
+
         for invalid in [
-            "bearer three.parts.value",
+            "Basic three.parts.value",
             "Bearer",
             "Bearer  three.parts.value",
             "Bearer three.parts.value ",
@@ -584,9 +656,12 @@ mod tests {
         );
     }
 
+    const TEST_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
     #[test]
     fn request_json_is_strict_and_closed() {
         let valid = br#"{
+            "requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "requirement":"urn:example:requirement:v1",
             "purpose":"review",
             "subjects":[{
@@ -596,7 +671,8 @@ mod tests {
         }"#;
         assert!(parse_evidence_request(valid).is_ok());
         for number in ["1.0", "1e0"] {
-            let request = r#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":NUMBER}}}]}"#
+            let request = r#"{"requestNonce":"NONCE","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":NUMBER}}}]}"#
+                .replace("NONCE", TEST_NONCE)
                 .replace("NUMBER", number);
             let parsed = parse_evidence_request(request.as_bytes())
                 .expect("schema-valid integral JSON number is accepted");
@@ -611,30 +687,100 @@ mod tests {
         }
         assert_eq!(
             parse_evidence_request(
-                br#"{"requirement":"a","requirement":"b","purpose":"p","subjects":[]}"#
+                br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"a","requirement":"b","purpose":"p","subjects":[]}"#
             ),
             Err(ProblemCode::MalformedRequest)
         );
         assert_eq!(
             parse_evidence_request(
-                br#"{"requirement":"a","purpose":"p","subjects":[],"query":"hidden"}"#
+                br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"a","purpose":"p","subjects":[],"query":"hidden"}"#
             ),
             Err(ProblemCode::MalformedRequest)
         );
 
+        let base = r#"{"requestNonce":"NONCE","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#;
         for invalid in [
-            br#"{"requirement":"not a URI","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
-            br#"{"requirement":"urn:example:requirement:v1","purpose":"Uppercase","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
-            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[]}"#.as_slice(),
-            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"Uppercase","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
-            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{}}}]}"#.as_slice(),
-            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":9007199254740992}}}]}"#.as_slice(),
+            base.replace("\"requestNonce\":\"NONCE\",", ""),
+            base.replace("NONCE", ""),
+            base.replace("NONCE", &"A".repeat(42)),
+            base.replace("NONCE", &"A".repeat(44)),
+            base.replace("NONCE", &format!("{}=", "A".repeat(42))),
+            base.replace("NONCE", &format!("{}+", "A".repeat(42))),
+            base.replace("NONCE", &format!("{}B", "A".repeat(42))),
+            format!(
+                r#"{{"requestNonce":"{TEST_NONCE}","requestNonce":"{TEST_NONCE}","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{{"role":"subject","selector":{{"profile":"opaque-v1","values":{{"opaque":"value"}}}}}}]}}"#
+            ),
+        ] {
+            assert_eq!(
+                parse_evidence_request(invalid.as_bytes()),
+                Err(ProblemCode::MalformedRequest),
+                "{invalid}"
+            );
+        }
+
+        for invalid in [
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"not a URI","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"urn:example:requirement:v1","purpose":"Uppercase","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[]}"#.as_slice(),
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"Uppercase","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{}}}]}"#.as_slice(),
+            br#"{"requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":9007199254740992}}}]}"#.as_slice(),
         ] {
             assert_eq!(
                 parse_evidence_request(invalid),
                 Err(ProblemCode::MalformedRequest)
             );
         }
+    }
+
+    #[test]
+    fn accept_negotiation_matrix_is_closed_and_exact() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            resolve_response_format(&headers),
+            Ok(ResponseFormat::SignedJws)
+        );
+
+        for (value, expected) in [
+            ("*/*", ResponseFormat::SignedJws),
+            ("application/jose+json", ResponseFormat::SignedJws),
+            (
+                "application/vnd.registrystack.evidence-unsigned+json",
+                ResponseFormat::UnsignedJson,
+            ),
+        ] {
+            headers.insert(ACCEPT, HeaderValue::from_static(value));
+            assert_eq!(resolve_response_format(&headers), Ok(expected), "{value}");
+        }
+
+        for invalid in [
+            "application/json",
+            "application/jose+json, application/json",
+            "application/jose+json;q=0.9",
+            "application/vnd.registrystack.evidence-unsigned+json; charset=utf-8",
+            "application/*",
+            "*/*;q=1",
+            " application/jose+json",
+            "APPLICATION/JOSE+JSON",
+        ] {
+            headers.insert(
+                ACCEPT,
+                HeaderValue::from_str(invalid).expect("test header is valid"),
+            );
+            assert_eq!(
+                resolve_response_format(&headers),
+                Err(ProblemCode::ResponseFormatNotAcceptable),
+                "{invalid}"
+            );
+        }
+
+        headers.clear();
+        headers.append(ACCEPT, HeaderValue::from_static("application/jose+json"));
+        headers.append(ACCEPT, HeaderValue::from_static("application/jose+json"));
+        assert_eq!(
+            resolve_response_format(&headers),
+            Err(ProblemCode::ResponseFormatNotAcceptable)
+        );
     }
 
     #[tokio::test]

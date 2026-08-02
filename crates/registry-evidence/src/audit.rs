@@ -44,6 +44,14 @@ pub enum AuditDecision {
     SigningFailure,
 }
 
+/// Closed non-secret response-protection mode resolved with authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResponseProtection {
+    Signed,
+    Unsigned,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthorityKind {
@@ -87,6 +95,7 @@ pub struct EvidenceAuditEvent {
     pub actor_pseudonym: Option<String>,
     pub authority: AuditAuthority,
     pub subjects: Vec<AuditSubject>,
+    pub response_protection: ResponseProtection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +114,7 @@ pub struct EvidenceAuditEvent {
 
 impl EvidenceAuditEvent {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         operation: String,
         phase: AuditPhase,
@@ -114,6 +124,7 @@ impl EvidenceAuditEvent {
         requester_pseudonym: String,
         authority: AuditAuthority,
         subjects: Vec<AuditSubject>,
+        response_protection: ResponseProtection,
         decision: AuditDecision,
         duration_milliseconds: u64,
     ) -> Self {
@@ -130,6 +141,7 @@ impl EvidenceAuditEvent {
             actor_pseudonym: None,
             authority,
             subjects,
+            response_protection,
             source_id: None,
             adapter_id: None,
             decision,
@@ -142,15 +154,17 @@ impl EvidenceAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
-        let any_release_field = self.disclosed_concepts.is_some()
-            || self.evidence_id.is_some()
-            || self.signing_key_id.is_some();
-        let all_release_fields = self.disclosed_concepts.is_some()
-            && self.evidence_id.is_some()
-            && self.signing_key_id.is_some();
+        let any_release_field = self.disclosed_concepts.is_some() || self.evidence_id.is_some();
+        let all_release_fields = self.disclosed_concepts.is_some() && self.evidence_id.is_some();
         if (self.phase == AuditPhase::DisclosureRelease && !all_release_fields)
             || (self.phase != AuditPhase::DisclosureRelease && any_release_field)
         {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        // A signing key identity exists exactly for signed disclosure release.
+        let signing_key_required = self.phase == AuditPhase::DisclosureRelease
+            && self.response_protection == ResponseProtection::Signed;
+        if self.signing_key_id.is_some() != signing_key_required {
             return Err(EvidenceAuditError::InvalidEvent);
         }
         if self.subjects.is_empty()
@@ -764,6 +778,7 @@ mod tests {
                         .expect("pseudonym builds"),
                 ),
             }],
+            ResponseProtection::Signed,
             AuditDecision::Authorized,
             5,
         )
@@ -808,6 +823,7 @@ mod tests {
                         .to_owned(),
                 ),
             }],
+            response_protection: ResponseProtection::Signed,
             source_id: Some("source-a".to_owned()),
             adapter_id: Some("adapter-a".to_owned()),
             decision: AuditDecision::Authorized,
@@ -841,6 +857,31 @@ mod tests {
             serde_json::to_value(&release).expect("release event serializes"),
             fixture["disclosure_release"]
         );
+
+        let mut unsigned_release = release.clone();
+        unsigned_release.event_id = "urn:example:fixture:audit:release-002".to_owned();
+        unsigned_release.occurred_at = "2026-08-02T00:00:02Z".to_owned();
+        unsigned_release.response_protection = ResponseProtection::Unsigned;
+        unsigned_release.signing_key_id = None;
+        unsigned_release
+            .validate_phase_fields()
+            .expect("fixture unsigned release event satisfies native phase rules");
+        assert_eq!(
+            serde_json::to_value(&unsigned_release).expect("unsigned release event serializes"),
+            fixture["unsigned_disclosure_release"]
+        );
+        unsigned_release.signing_key_id = Some("fixture-key-2026-01".to_owned());
+        assert!(matches!(
+            unsigned_release.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
+
+        let mut signed_release_without_key = release.clone();
+        signed_release_without_key.signing_key_id = None;
+        assert!(matches!(
+            signed_release_without_key.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
 
         let mut release_fields_on_access = access;
         release_fields_on_access.disclosed_concepts = release.disclosed_concepts.clone();
@@ -878,7 +919,10 @@ mod tests {
                 "credential-token-or-private-key",
                 "candidate-count-score-hint-or-comparison",
                 "release-fields-on-access-event",
-                "missing-release-fields-on-release-event"
+                "missing-release-fields-on-release-event",
+                "signing-key-on-unsigned-release-event",
+                "missing-signing-key-on-signed-release-event",
+                "request-nonce-in-any-event"
             ])
         );
     }

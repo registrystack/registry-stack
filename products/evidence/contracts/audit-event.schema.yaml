@@ -15,6 +15,7 @@ required:
   - requesterPseudonym
   - authority
   - subjects
+  - responseProtection
   - decision
   - durationMilliseconds
 properties:
@@ -47,6 +48,7 @@ properties:
         role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
         selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
         selectorBundlePseudonym: {$ref: '#/$defs/pseudonym'}
+  responseProtection: {enum: [signed, unsigned]}
   sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   decision:
@@ -66,16 +68,24 @@ $defs:
     pattern: '^hmac-sha256:v[1-9][0-9]*:[a-f0-9]{64}$'
 allOf:
   - if: {properties: {phase: {const: disclosure-release}}}
-    then: {required: [disclosedConcepts, evidenceId, signingKeyId]}
+    then: {required: [disclosedConcepts, evidenceId]}
     else:
       not:
         anyOf:
           - {required: [disclosedConcepts]}
           - {required: [evidenceId]}
           - {required: [signingKeyId]}
+  - if:
+      properties:
+        phase: {const: disclosure-release}
+        responseProtection: {const: signed}
+    then: {required: [signingKeyId]}
+  - if: {properties: {responseProtection: {const: unsigned}}}
+    then: {not: {required: [signingKeyId]}}
 audit_rules:
   access_gate: access-attempt is durably accepted after authorization and before credential acquisition or source access
-  release_gate: disclosure-release is durably accepted after signing and before response release
+  release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released
+  response_protection: every event records the closed non-secret responseProtection mode resolved with authorization; signingKeyId exists exactly for signed disclosure release and is forbidden for unsigned output
   failure_policy: sink failure blocks the applicable step
   chain_verification: The complete keyed chain is verified at startup and after restart; steady-state appends and readiness verify the pinned file identity, modification fingerprint, expected length, and verified tail without rescanning the growing file.
   external_mutation: Any external replacement or modification fails readiness and future appends closed until a restart completes full keyed-chain verification.
@@ -86,5 +96,6 @@ audit_rules:
     - raw principal, actor, grant, selector, source, or supported values
     - separate hashes of low-entropy selector fields
     - credentials, tokens, request or response bodies
+    - the request nonce
     - candidate count, candidates, scores, hints, or comparisons
     - script inputs, outputs, stacks, or signing material

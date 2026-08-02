@@ -14,8 +14,8 @@ use crate::{
     },
     bundle::{Bundle, Codelist},
     config::{
-        AuthorityKind, GrantedSubject, SelectorField as ConfiguredField, SelectorProfile,
-        ValueOrigin, MAX_SAFE_INTEGER,
+        AuthorityKind, GrantedSubject, ResponseFormat, SelectorField as ConfiguredField,
+        SelectorProfile, ValueOrigin, MAX_SAFE_INTEGER,
     },
     model::{EvidenceRequest, RequestedSubject, SelectorValue},
 };
@@ -281,6 +281,7 @@ impl fmt::Debug for ResolvedAuthorization {
 pub struct MatchedEntitlement {
     authority_profile: String,
     authority_kind: AuthorityKind,
+    response_formats: Vec<ResponseFormat>,
     subjects: Vec<GrantedSubject>,
 }
 
@@ -291,6 +292,12 @@ impl MatchedEntitlement {
 
     pub fn authority_kind(&self) -> AuthorityKind {
         self.authority_kind
+    }
+
+    /// Report whether this one complete matched grant permits the requested
+    /// response format. Permissions are never unioned across grants.
+    pub fn permits_response_format(&self, format: ResponseFormat) -> bool {
+        self.response_formats.contains(&format)
     }
 
     pub(crate) fn subjects(&self) -> &[GrantedSubject] {
@@ -364,6 +371,7 @@ pub fn match_entitlement(
             matched.push(MatchedEntitlement {
                 authority_profile: authority_profile.to_owned(),
                 authority_kind: authority.kind,
+                response_formats: grant.response_formats.clone(),
                 subjects: grant.subjects.clone(),
             });
         }
@@ -387,7 +395,19 @@ pub fn resolve_selectors(
     context: &AuthenticatedContext,
     matched: &MatchedEntitlement,
 ) -> Result<ResolvedAuthorization, AuthorizationError> {
-    let subjects = resolve_grant_subjects(bundle, &matched.subjects, &request.subjects, context)?;
+    let requirement = bundle
+        .config
+        .requirements
+        .iter()
+        .find(|candidate| candidate.id == request.requirement)
+        .ok_or(AuthorizationError::Unauthorized)?;
+    let subjects = resolve_grant_subjects(
+        bundle,
+        requirement,
+        &matched.subjects,
+        &request.subjects,
+        context,
+    )?;
     let uses_authenticated_grant = matched
         .subjects
         .iter()
@@ -495,6 +515,7 @@ pub fn resolve_offline_fixture_authorization(
         fixture_subjects_from_selectors(bundle, requirement, purpose, common, case)?
     };
     let request = EvidenceRequest {
+        request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
         requirement: requirement.id.clone(),
         purpose: purpose.to_owned(),
         subjects,
@@ -739,8 +760,11 @@ fn same_subject_tuples(granted: &[GrantedSubject], requested: &[RequestedSubject
         })
 }
 
+/// Resolve subjects by unique role and emit the requirement's declaration
+/// order. Neither grant order nor request array order is semantic.
 fn resolve_grant_subjects(
     bundle: &Bundle,
+    requirement: &crate::config::RequirementConfig,
     granted: &[GrantedSubject],
     requested: &[RequestedSubject],
     context: &AuthenticatedContext,
@@ -753,10 +777,18 @@ fn resolve_grant_subjects(
     {
         return Err(AuthorizationError::Unauthorized);
     }
+    if granted.len() != requirement.subject_roles.len() {
+        return Err(AuthorizationError::Unauthorized);
+    }
 
-    granted
+    requirement
+        .subject_roles
         .iter()
-        .map(|grant| {
+        .map(|declared| {
+            let grant = granted
+                .iter()
+                .find(|grant| grant.role == declared.role)
+                .ok_or(AuthorizationError::Unauthorized)?;
             let subject = requested
                 .iter()
                 .find(|subject| subject.role == grant.role)

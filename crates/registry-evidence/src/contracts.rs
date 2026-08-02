@@ -17,6 +17,7 @@ use thiserror::Error;
 
 use crate::model::{
     Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
+    UnsignedEvidenceEnvelope,
 };
 
 pub const OPENAPI_FILE: &str = "registry-evidence.openapi.json";
@@ -24,6 +25,7 @@ pub const REQUEST_SCHEMA_FILE: &str = "evidence-request-v1.schema.json";
 pub const EVIDENCE_SCHEMA_FILE: &str = "evidence-v1.schema.json";
 pub const DEFINITIONS_SCHEMA_FILE: &str = "evidence-definitions-v1.schema.json";
 pub const JWS_SCHEMA_FILE: &str = "flattened-jws-v1.schema.json";
+pub const UNSIGNED_ENVELOPE_SCHEMA_FILE: &str = "evidence-unsigned-envelope-v1.schema.json";
 pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
 
@@ -34,13 +36,21 @@ const EVIDENCE_SCHEMA_ID: &str =
 const DEFINITIONS_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/definitions-v1.json";
 const JWS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/flattened-jws-v1.json";
+const UNSIGNED_ENVELOPE_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/unsigned-envelope-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
-const PROBLEM_VARIANTS: [(&str, u16, &str); 8] = [
+const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
+const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
     ("malformed_request", 400, "Request is not valid"),
     ("invalid_selector", 400, "Request is not valid"),
     ("authentication_failed", 401, "Authentication failed"),
     ("not_authorized", 403, "Request is not authorized"),
+    (
+        "response_format_not_acceptable",
+        406,
+        "Requested response format is not acceptable",
+    ),
     (
         "evidence_not_available",
         422,
@@ -88,21 +98,32 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     let evidence = evidence_schema();
     let definitions = definitions_schema();
     let jws = jws_schema();
+    let unsigned = unsigned_envelope_schema();
     let problem = problem_schema();
     let jwks = jwks_schema();
     assert_model_shape::<EvidenceRequest>("EvidenceRequest", &request, true)?;
     assert_model_shape::<Evidence>("Evidence", &evidence, true)?;
     assert_model_shape::<EvidenceDefinitions>("EvidenceDefinitions", &definitions, true)?;
     assert_model_shape::<FlattenedJws>("FlattenedJws", &jws, false)?;
+    assert_model_shape::<UnsignedEvidenceEnvelope>("UnsignedEvidenceEnvelope", &unsigned, false)?;
     assert_model_shape::<ProblemBody>("ProblemBody", &problem, false)?;
     assert_model_shape::<JwksDocument>("JwksDocument", &jwks, false)?;
-    let openapi = openapi_document(&request, &evidence, &definitions, &jws, &problem, &jwks);
+    let openapi = openapi_document(
+        &request,
+        &evidence,
+        &definitions,
+        &jws,
+        &unsigned,
+        &problem,
+        &jwks,
+    );
 
     let values = [
         (REQUEST_SCHEMA_FILE, request),
         (EVIDENCE_SCHEMA_FILE, evidence),
         (DEFINITIONS_SCHEMA_FILE, definitions),
         (JWS_SCHEMA_FILE, jws),
+        (UNSIGNED_ENVELOPE_SCHEMA_FILE, unsigned),
         (PROBLEM_SCHEMA_FILE, problem),
         (JWKS_SCHEMA_FILE, jwks),
         (OPENAPI_FILE, openapi),
@@ -227,8 +248,9 @@ fn request_schema() -> Value {
         "title": "Evidence request Version 1",
         "type": "object",
         "additionalProperties": false,
-        "required": ["requirement", "purpose", "subjects"],
+        "required": ["requestNonce", "requirement", "purpose", "subjects"],
         "properties": {
+            "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
             "requirement": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
             "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
             "subjects": {
@@ -265,7 +287,7 @@ fn request_schema() -> Value {
                 ]
             }
         },
-        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access."
+        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it."
     })
 }
 
@@ -413,12 +435,13 @@ fn evidence_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "id", "type", "supportsRequirement", "isConformantTo",
+            "schema", "requestNonce", "id", "type", "supportsRequirement", "isConformantTo",
             "issuedBy", "providedBy", "issuedAt", "observedAt", "validUntil",
             "purpose", "audience", "configurationRevision", "subjects", "supportedValues"
         ],
         "properties": {
             "schema": {"const": "registry.assertion-evidence/v1"},
+            "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
             "id": {"type": "string", "format": "uri", "maxLength": 512},
             "type": {"const": "Evidence"},
             "supportsRequirement": {"type": "string", "format": "uri", "maxLength": 512},
@@ -522,6 +545,25 @@ fn jws_schema() -> Value {
     })
 }
 
+fn unsigned_envelope_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": UNSIGNED_ENVELOPE_SCHEMA_ID,
+        "title": "Evidence unsigned response envelope Version 1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "type", "integrityProtection", "warning", "evidence"],
+        "properties": {
+            "schema": {"const": "registry.unsigned-evidence-envelope/v1"},
+            "type": {"const": "UnsignedEvidenceEnvelope"},
+            "integrityProtection": {"const": "none"},
+            "warning": {"const": "not-cryptographically-verifiable"},
+            "evidence": {"$ref": EVIDENCE_SCHEMA_ID}
+        },
+        "$comment": "Transport-authenticated convenience representation selected only by its exact vendor media type when the immutable bundle and the complete matched grant permit it. Once separated from its HTTPS exchange it provides no issuer-authenticity, integrity, non-repudiation, or later-verification property. The nested evidence is the same closed core object that would be JWS encoded. There is no protected, payload, or signature member, so the strict JWS verifier rejects this representation; tooling that parses it must return an explicitly unverified result."
+    })
+}
+
 fn problem_schema() -> Value {
     let mut schema = json!({
         "$schema": SCHEMA_DIALECT,
@@ -538,6 +580,7 @@ fn problem_schema() -> Value {
                     "https://registrystack.org/problems/evidence/invalid_selector",
                     "https://registrystack.org/problems/evidence/authentication_failed",
                     "https://registrystack.org/problems/evidence/not_authorized",
+                    "https://registrystack.org/problems/evidence/response_format_not_acceptable",
                     "https://registrystack.org/problems/evidence/evidence_not_available",
                     "https://registrystack.org/problems/evidence/rate_limited",
                     "https://registrystack.org/problems/evidence/dependency_unavailable",
@@ -546,11 +589,13 @@ fn problem_schema() -> Value {
             },
             "title": {"type": "string", "enum": [
                 "Request is not valid", "Authentication failed", "Request is not authorized",
+                "Requested response format is not acceptable",
                 "Evidence could not be produced", "Request rate exceeded", "Service temporarily unavailable"
             ]},
-            "status": {"type": "integer", "enum": [400, 401, 403, 422, 429, 503]},
+            "status": {"type": "integer", "enum": [400, 401, 403, 406, 422, 429, 503]},
             "code": {"type": "string", "enum": [
                 "malformed_request", "invalid_selector", "authentication_failed", "not_authorized",
+                "response_format_not_acceptable",
                 "evidence_not_available", "rate_limited", "dependency_unavailable", "service_unavailable"
             ]},
             "operation": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"}
@@ -753,11 +798,29 @@ fn response_headers(extra: Option<(&str, Value)>) -> Value {
     Value::Object(headers)
 }
 
+/// Headers for every `/v1/evidence` response, which varies on `Accept`.
+fn evidence_response_headers(extra: Option<(&str, Value)>) -> Value {
+    let mut headers = response_headers(extra);
+    headers
+        .as_object_mut()
+        .expect("response headers are an object")
+        .insert(
+            "Vary".to_string(),
+            json!({
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {"type": "string", "enum": ["Accept"]}
+            }),
+        );
+    headers
+}
+
+#[allow(clippy::too_many_arguments)]
 fn openapi_document(
     request: &Value,
     evidence: &Value,
     definitions: &Value,
     jws: &Value,
+    unsigned: &Value,
     problem: &Value,
     jwks: &Value,
 ) -> Value {
@@ -798,6 +861,20 @@ fn openapi_document(
         ],
     );
     insert_schema_family(&mut schemas, "FlattenedJws", jws, &[]);
+    insert_schema_family(&mut schemas, "UnsignedEvidenceEnvelope", unsigned, &[]);
+    if let Some(reference) = schemas
+        .get_mut("UnsignedEvidenceEnvelope")
+        .and_then(Value::as_object_mut)
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("evidence"))
+        .and_then(Value::as_object_mut)
+    {
+        reference.insert(
+            "$ref".to_string(),
+            Value::String("#/components/schemas/Evidence".to_string()),
+        );
+    }
     if let Some(properties) = schemas
         .get_mut("FlattenedJws")
         .and_then(Value::as_object_mut)
@@ -858,7 +935,8 @@ fn openapi_document(
             "/v1/evidence": {
                 "post": {
                     "operationId": "createEvidence",
-                    "summary": "Produce signed evidence for one authorized fixed requirement",
+                    "summary": "Produce evidence for one authorized fixed requirement",
+                    "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
                     "security": [{"bearerAuth": []}],
                     "requestBody": {
                         "required": true,
@@ -866,42 +944,50 @@ fn openapi_document(
                     },
                     "responses": {
                         "200": {
-                            "description": "Signed Evidence as flattened JWS JSON Serialization",
-                            "headers": response_headers(None),
-                            "content": {"application/jose+json": {"schema": {"$ref": "#/components/schemas/FlattenedJws"}}}
+                            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized self-identifying unsigned envelope",
+                            "headers": evidence_response_headers(None),
+                            "content": {
+                                "application/jose+json": {"schema": {"$ref": "#/components/schemas/FlattenedJws"}},
+                                "application/vnd.registrystack.evidence-unsigned+json": {"schema": {"$ref": "#/components/schemas/UnsignedEvidenceEnvelope"}}
+                            }
                         },
                         "400": {
                             "description": "Malformed request or invalid selector",
-                            "headers": response_headers(None),
+                            "headers": evidence_response_headers(None),
                             "content": problem_content(&["malformed_request", "invalid_selector"])
                         },
                         "401": {
                             "description": "Authentication failed",
-                            "headers": response_headers(Some(("WWW-Authenticate", json!({
+                            "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
                                 "schema": {"type": "string", "enum": ["Bearer"]}
                             })))),
                             "content": problem_content(&["authentication_failed"])
                         },
                         "403": {
-                            "description": "Request is not authorized",
-                            "headers": response_headers(None),
+                            "description": "Request is not authorized, including a recognized response format the bundle or matched grant does not permit",
+                            "headers": evidence_response_headers(None),
                             "content": problem_content(&["not_authorized"])
+                        },
+                        "406": {
+                            "description": "Media negotiation is outside the closed Accept matrix",
+                            "headers": evidence_response_headers(None),
+                            "content": problem_content(&["response_format_not_acceptable"])
                         },
                         "422": {
                             "description": "Evidence could not be produced",
-                            "headers": response_headers(None),
+                            "headers": evidence_response_headers(None),
                             "content": problem_content(&["evidence_not_available"])
                         },
                         "429": {
                             "description": "Request rate exceeded",
-                            "headers": response_headers(Some(("Retry-After", json!({
+                            "headers": evidence_response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
                             "content": problem_content(&["rate_limited"])
                         },
                         "503": {
                             "description": "Dependency or service temporarily unavailable",
-                            "headers": response_headers(None),
+                            "headers": evidence_response_headers(None),
                             "content": problem_content(&["dependency_unavailable", "service_unavailable"])
                         },
                     }
@@ -1020,6 +1106,16 @@ mod tests {
                 .compile(&schema)
                 .expect("generated schema compiles");
         }
+
+        // The unsigned envelope references the Evidence payload schema by its
+        // canonical identifier, so that document is registered for offline
+        // compilation.
+        JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .with_document(EVIDENCE_SCHEMA_ID.to_string(), evidence_schema())
+            .compile(&unsigned_envelope_schema())
+            .expect("generated unsigned envelope schema compiles");
     }
 
     #[test]
@@ -1029,6 +1125,7 @@ mod tests {
             &evidence_schema(),
             &definitions_schema(),
             &jws_schema(),
+            &unsigned_envelope_schema(),
             &problem_schema(),
             &jwks_schema(),
         );
@@ -1052,6 +1149,7 @@ mod tests {
             &evidence_schema(),
             &definitions_schema(),
             &jws_schema(),
+            &unsigned_envelope_schema(),
             &problem_schema(),
             &jwks_schema(),
         );
@@ -1071,6 +1169,26 @@ mod tests {
                 ["application/jose+json"]
                 .is_object()
         );
+        assert!(
+            document["paths"]["/v1/evidence"]["post"]["responses"]["200"]["content"]
+                ["application/vnd.registrystack.evidence-unsigned+json"]
+                .is_object()
+        );
+        assert_eq!(
+            document["paths"]["/v1/evidence"]["post"]["responses"]["406"]["content"]
+                ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
+            json!(["response_format_not_acceptable"])
+        );
+        for response in document["paths"]["/v1/evidence"]["post"]["responses"]
+            .as_object()
+            .expect("evidence responses are an object")
+            .values()
+        {
+            assert_eq!(
+                response["headers"]["Vary"]["schema"]["enum"],
+                json!(["Accept"])
+            );
+        }
         assert!(
             document["paths"]["/v1/evidence-definitions"]["get"]["responses"]["200"]["content"]
                 ["application/json"]
@@ -1141,6 +1259,7 @@ mod tests {
             (
                 request_schema(),
                 json!({
+                    "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
                     "requirement": "urn:example:requirement:v1",
                     "purpose": "casework",
                     "subjects": [{
@@ -1153,6 +1272,7 @@ mod tests {
                 evidence_schema(),
                 json!({
                     "schema": "registry.assertion-evidence/v1",
+                    "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
                     "id": "urn:ulid:01K1EXAMPLE0000000000000000",
                     "type": "Evidence",
                     "supportsRequirement": "urn:example:requirement:v1",

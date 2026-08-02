@@ -13,7 +13,7 @@ use chrono::Utc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
 use registry_evidence::audit::{
     AuditAuthority, AuditDecision, AuditPhase, AuditSubject, AuthorityKind as AuditAuthorityKind,
-    EvidenceAuditEvent, EvidenceAuditLog,
+    EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
 };
 use registry_evidence::auth::{AuthenticatedContext, AuthenticationClaimsConfig, Authenticator};
 use registry_evidence::bundle::{Bundle, BundleError, DeploymentInputs};
@@ -22,7 +22,7 @@ use registry_evidence::kernel::{
     EvidenceConstruction, KernelOutcome, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
-    EvidenceRequest, FlattenedJws, RequestedSelector, RequestedSubject, SelectorValue,
+    Evidence, EvidenceRequest, FlattenedJws, RequestedSelector, RequestedSubject, SelectorValue,
     SubjectBinding,
 };
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
@@ -117,6 +117,7 @@ impl PreparedService {
             requester.clone(),
             authority.clone(),
             audit_subjects.clone(),
+            ResponseProtection::Signed,
             AuditDecision::Authorized,
             0,
         );
@@ -200,6 +201,7 @@ impl PreparedService {
                 values,
                 EvidenceConstruction {
                     evidence_id: &evidence_id,
+                    request_nonce: &request.request_nonce,
                     purpose: &request.purpose,
                     audience: context.evidence_audience(),
                     issued_at,
@@ -228,6 +230,7 @@ impl PreparedService {
             requester,
             authority,
             audit_subjects,
+            ResponseProtection::Signed,
             AuditDecision::Released,
             0,
         );
@@ -368,20 +371,30 @@ async fn every_selector_profile_runs_the_complete_signed_service_path() {
             .iter()
             .find(|candidate| candidate.id == request.requirement)
             .expect("requirement is configured");
+        let unverified: Evidence = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(&jws.payload)
+                .expect("payload decodes"),
+        )
+        .expect("payload parses for expectations");
+        let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
+            &unverified,
+            &request.request_nonce,
+            Duration::from_secs(48 * 60 * 60),
+            Utc::now(),
+            Duration::from_secs(30),
+        );
+        policy.issued_by = service.bundle.config.issuer.id.clone();
+        policy.provided_by = service.bundle.config.service.provider_id.clone();
+        policy.requirement = request.requirement.clone();
+        policy.evidence_type = requirement.evidence_type.clone();
+        policy.purpose = request.purpose.clone();
+        policy.audience = EVIDENCE_AUDIENCE.to_owned();
+        policy.configuration_revision = service.bundle.revision().to_owned();
         let evidence = verify_flattened_jws(
             &serialized,
             &jwks_document(service.signer.public_jwk(), []).expect("JWKS builds"),
-            &EvidenceVerificationPolicy {
-                issued_by: service.bundle.config.issuer.id.clone(),
-                provided_by: service.bundle.config.service.provider_id.clone(),
-                requirement: request.requirement.clone(),
-                evidence_type: requirement.evidence_type.clone(),
-                purpose: request.purpose.clone(),
-                audience: EVIDENCE_AUDIENCE.to_owned(),
-                configuration_revision: service.bundle.revision().to_owned(),
-                now: Utc::now(),
-                clock_skew: Duration::from_secs(30),
-            },
+            &policy,
         )
         .expect("signed service result verifies under the relying policy");
         assert_eq!(
@@ -1162,6 +1175,7 @@ fn opaque_request(values: Option<BTreeMap<String, SelectorValue>>) -> EvidenceRe
 
 fn request(requirement: &str, subjects: Vec<RequestedSubject>) -> EvidenceRequest {
     EvidenceRequest {
+        request_nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
         requirement: requirement.to_owned(),
         purpose: PURPOSE.to_owned(),
         subjects,

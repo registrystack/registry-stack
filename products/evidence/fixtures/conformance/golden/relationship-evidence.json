@@ -1,5 +1,6 @@
 {
   "schema": "registry.assertion-evidence/v1",
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
   "id": "urn:example:fixture:evidence:relationship-001",
   "type": "Evidence",
   "supportsRequirement": "urn:example:fixture:requirement:legal-parent-relationship:v1",

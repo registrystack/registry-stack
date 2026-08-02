@@ -31,15 +31,18 @@ use wiremock::{
 
 use crate::{
     auth::{AuthenticationClaimsConfig, Authenticator},
+    config::ResponseFormat,
+    contracts::evidence_contract_accepts,
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
-        PublicValue, RequestedSelector, RequestedSubject, SelectorValue,
+        PublicValue, RequestedSelector, RequestedSubject, SelectorValue, UnsignedEvidenceEnvelope,
     },
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeInitializationError},
     server::{build_app, build_app_at_for_test, serve_listener_for_test},
     signing::EvidenceSigner,
     verifier::{verify_flattened_jws, EvidenceVerificationPolicy},
+    EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"acceptance-auth-key"}"#;
@@ -89,7 +92,28 @@ struct UnavailableReadinessSigner {
 #[ignore = "operator-driven local curl checkpoint"]
 async fn first_curl_exercises_and_verifies_the_evidence_server() {
     let fixture = acceptance_runtime().await;
-    mount_adult_source(&fixture.server, None).await;
+    // The documented optional unsigned curl may run before the signed one, so
+    // the deterministic source accepts one or two identical lookups.
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(header("accept", "application/json"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(json!({
+            "lookup": {
+                "given_name": "Amina",
+                "family_name": "Diallo",
+                "birth_date": "2000-01-01"
+            },
+            "fields": ["date_of_birth"],
+            "limit": 2
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1..=2)
+        .mount(&fixture.server)
+        .await;
 
     let request = adult_request();
     let token = access_token(Some(parent_grant_claims()));
@@ -104,7 +128,8 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
     }
     let definitions_path = state_root.join("definitions.json");
     let response_path = state_root.join("response.json");
-    for stale in [&definitions_path, &response_path] {
+    let unsigned_path = state_root.join("response-unsigned.json");
+    for stale in [&definitions_path, &response_path, &unsigned_path] {
         match fs::remove_file(stale) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -199,7 +224,7 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
     let evidence = verify_flattened_jws(
         &serialized,
         fixture.runtime.jwks(),
-        &verification_policy(&fixture.runtime, &request),
+        &verification_policy(&fixture.runtime, &request, &serialized),
     )
     .expect("curl response JWS verifies against the running Evidence JWKS");
     assert_eq!(
@@ -215,11 +240,41 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         .await
         .expect("first-curl server task joins")
         .expect("first-curl server stops cleanly");
+
+    // The optional unsigned leg, when the operator ran it, produced its own
+    // self-identifying envelope and its own pair of durable audit events.
+    let unsigned_leg_ran = match fs::read(&unsigned_path) {
+        Ok(bytes) => {
+            let envelope: UnsignedEvidenceEnvelope = serde_json::from_slice(&bytes)
+                .expect("unsigned first-curl output parses as the closed envelope");
+            assert_eq!(envelope.evidence.request_nonce, request.request_nonce);
+            assert!(
+                verify_flattened_jws(
+                    &bytes,
+                    fixture.runtime.jwks(),
+                    &verification_policy(&fixture.runtime, &request, &serialized),
+                )
+                .is_err(),
+                "the strict JWS verifier must reject the unsigned envelope"
+            );
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => panic!("unsigned first-curl output could not be read: {error}"),
+    };
     let audit = fs::read_to_string(&fixture.audit_path).expect("first-curl audit is readable");
-    assert_eq!(audit.lines().count(), 2);
-    println!(
-        "PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200, its JWS verified, adult-status was true, minimization held, and both audit events were durable."
-    );
+    let expected_audit_lines = if unsigned_leg_ran { 4 } else { 2 };
+    assert_eq!(audit.lines().count(), expected_audit_lines);
+    assert!(!audit.contains(&request.request_nonce));
+    if unsigned_leg_ran {
+        println!(
+            "PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200 in both formats, the JWS verified, the unsigned envelope was self-identifying and rejected by the JWS verifier, adult-status was true, minimization held, and all four audit events were durable."
+        );
+    } else {
+        println!(
+            "PASS: authenticated discovery listed four safe request shapes, Evidence returned HTTP 200, its JWS verified, adult-status was true, minimization held, and both audit events were durable."
+        );
+    }
 }
 
 #[async_trait]
@@ -437,7 +492,7 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
         let evidence = verify_flattened_jws(
             &serialized,
             fixture.runtime.jwks(),
-            &verification_policy(&fixture.runtime, request),
+            &verification_policy(&fixture.runtime, request, &serialized),
         )
         .expect("router response verifies");
         assert_eq!(
@@ -697,7 +752,7 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
     let evidence = verify_flattened_jws(
         &serialized,
         fixture.runtime.jwks(),
-        &verification_policy(&fixture.runtime, &request),
+        &verification_policy(&fixture.runtime, &request, &serialized),
     )
     .expect("captured-revision assertion verifies");
     assert_eq!(evidence.configuration_revision, captured_revision);
@@ -1018,6 +1073,701 @@ async fn signing_failure_is_transient_audited_and_never_releases_unsigned_eviden
 }
 
 #[tokio::test]
+async fn configured_jwks_path_is_mechanically_the_served_route() {
+    let fixture = acceptance_runtime().await;
+    let configured_path = fixture.runtime.bundle().config.signing.jwks_path.clone();
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http.get(&configured_path).await;
+    response.assert_status_ok();
+    assert_eq!(response.header("content-type"), "application/jwk-set+json");
+    let keys = response.json::<crate::model::JwksDocument>();
+    assert_eq!(&keys, fixture.runtime.jwks());
+}
+
+/// The declared existence-disclosure mode is an enforced invariant, not an
+/// inert field: every enabled requirement declares the one closed collapse
+/// mode, and the runtime's unresolved outcomes for that mode share one public
+/// problem shape whether the record was absent, ambiguous, or uniquely found
+/// with inconsistent derivation inputs.
+#[tokio::test]
+async fn declared_existence_disclosure_mode_governs_the_public_collapse() {
+    let fixture = acceptance_runtime().await;
+    for requirement in &fixture.runtime.bundle().config.requirements {
+        assert_eq!(
+            requirement.existence_disclosure,
+            crate::config::ExistenceDisclosure::CollapseUnresolved,
+            "{}",
+            requirement.id
+        );
+    }
+
+    mount_parent_source(
+        &fixture.server,
+        json!({"total": 1, "records": [{
+            "returned_child_reference": "synthetic-other-child-record",
+            "parent_references": ["synthetic-parent-reference-001"],
+            "reference_namespace": "urn:example:fixture:person-reference",
+            "relationship_set_contract": "urn:example:fixture:legal-parent-set:v1",
+            "relationship_set_complete": true
+        }]}),
+    )
+    .await;
+    let mismatch = fixture
+        .runtime
+        .evaluate(
+            "operation-existence-derivation-mismatch",
+            &access_token(Some(parent_grant_claims())),
+            &parent_request(),
+        )
+        .await
+        .expect_err("a returned-child mismatch is not signed evidence");
+    assert_eq!(mismatch.problem(), ProblemCode::EvidenceNotAvailable);
+
+    fixture.server.reset().await;
+    mount_parent_source(&fixture.server, json!({"total": 0, "records": []})).await;
+    let unknown = fixture
+        .runtime
+        .evaluate(
+            "operation-existence-unknown-record",
+            &access_token(Some(parent_grant_claims())),
+            &parent_request(),
+        )
+        .await
+        .expect_err("an unknown record is not signed evidence");
+
+    // A uniquely found record with inconsistent derivation inputs is publicly
+    // indistinguishable from no record at all.
+    assert_eq!(mismatch.problem(), unknown.problem());
+    let operation = "operation-existence-problem-shape-check-000001";
+    assert_eq!(
+        serde_json::to_value(mismatch.problem().body(operation)).expect("problem serializes"),
+        serde_json::to_value(unknown.problem().body(operation)).expect("problem serializes"),
+    );
+}
+
+#[tokio::test]
+async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let token = access_token(None);
+
+    // Missing, empty, short, long, padded, wrong-alphabet, oversized, and
+    // noncanonical final-symbol nonces fail as malformed requests before
+    // authorization, credential acquisition, or source access.
+    let base = serde_json::to_value(adult_request()).expect("request serializes");
+    let mut variants = Vec::new();
+    let mut missing = base.clone();
+    missing
+        .as_object_mut()
+        .expect("request is an object")
+        .remove("requestNonce");
+    variants.push(missing);
+    for nonce in [
+        String::new(),
+        "A".repeat(42),
+        "A".repeat(44),
+        format!("{}=", "A".repeat(42)),
+        format!("{}+", "A".repeat(42)),
+        format!("{}B", "A".repeat(42)),
+        "A".repeat(4096),
+    ] {
+        let mut variant = base.clone();
+        variant["requestNonce"] = json!(nonce);
+        variants.push(variant);
+    }
+    for variant in variants {
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&variant)
+            .await;
+        assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["code"], json!("malformed_request"));
+    }
+    // A duplicate requestNonce member fails strict JSON parsing.
+    let duplicate = build_app(Arc::clone(&fixture.runtime))
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/v1/evidence")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"requestNonce":"{0}","requestNonce":"{0}","requirement":"urn:example:fixture:requirement:adult-status:v1","purpose":"fixture-eligibility","subjects":[{{"role":"subject","selector":{{"profile":"person-demographics-v1","values":{{"given_name":"Amina","family_name":"Diallo","birth_date":"2000-01-01"}}}}}}]}}"#,
+                    "A".repeat(43)
+                )))
+                .expect("duplicate-nonce request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(duplicate.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "invalid nonces must fail before credential acquisition or source access"
+    );
+    assert!(
+        fs::read_to_string(&fixture.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "invalid nonces must not fabricate audit events"
+    );
+
+    // A unique canary nonce is echoed exactly into the signed payload and
+    // reaches nothing else: not the source request, not native audit.
+    mount_adult_source(&fixture.server, None).await;
+    let request = adult_request();
+    let nonce = request.request_nonce.clone();
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&request)
+        .await;
+    response.assert_status_ok();
+    let jws = response.json::<FlattenedJws>();
+    let payload = URL_SAFE_NO_PAD
+        .decode(&jws.payload)
+        .expect("payload decodes");
+    let evidence: Evidence = serde_json::from_slice(&payload).expect("payload parses");
+    assert_eq!(evidence.request_nonce, nonce, "exact nonce echo");
+
+    let audit = wait_for_audit_counts(&fixture.audit_path, 1, 1).await;
+    assert!(
+        !audit.contains(&nonce),
+        "the request nonce must never be recorded in native audit"
+    );
+    for received in fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+    {
+        assert!(!received.url.as_str().contains(&nonce));
+        assert!(!String::from_utf8_lossy(&received.body).contains(&nonce));
+        for header_name in received.headers.keys() {
+            let value = received.headers[header_name].to_str().unwrap_or_default();
+            assert!(!value.contains(&nonce));
+        }
+    }
+}
+
+#[tokio::test]
+async fn accept_negotiation_is_closed_and_fails_before_source_access() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let token = access_token(None);
+
+    for invalid in [
+        "application/json",
+        "application/jose+json, application/vnd.registrystack.evidence-unsigned+json",
+        "application/jose+json;q=0.9",
+        "application/vnd.registrystack.evidence-unsigned+json; charset=utf-8",
+        "application/*",
+        "text/html",
+    ] {
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", invalid)
+            .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+            .await;
+        assert_eq!(
+            response.status_code(),
+            axum::http::StatusCode::NOT_ACCEPTABLE,
+            "{invalid}"
+        );
+        assert_eq!(
+            response.json::<Value>()["code"],
+            json!("response_format_not_acceptable")
+        );
+        assert_eq!(response.header("vary"), "Accept");
+    }
+    assert!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "unsupported negotiation must fail before source access"
+    );
+    assert!(fs::read_to_string(&fixture.audit_path)
+        .expect("audit is readable")
+        .is_empty());
+
+    // Missing Accept, */*, and the exact signed media type all select JWS.
+    mount_adult_source(&fixture.server, None).await;
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", "*/*")
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    response.assert_status_ok();
+    assert_eq!(response.header("content-type"), "application/jose+json");
+    assert_eq!(response.header("vary"), "Accept");
+}
+
+#[tokio::test]
+async fn unsigned_output_requires_both_bundle_and_grant_permission() {
+    // Grant permits unsigned but the immutable bundle does not enable it.
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nresponseFormats: [signed-jws, unsigned-json]",
+        "\nresponseFormats: [signed-jws]",
+        1,
+    );
+    fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("bundle-restricted runtime initializes"),
+    );
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+    let bundle_denied = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", EVIDENCE_UNSIGNED_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    assert_eq!(
+        bundle_denied.status_code(),
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let bundle_denied_body = bundle_denied.json::<Value>();
+    assert_eq!(bundle_denied_body["code"], json!("not_authorized"));
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+
+    // The bundle enables unsigned but the matched grant withholds it. Another
+    // grant's permission cannot be unioned in, and the denial is identical.
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]",
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws]",
+        1,
+    );
+    fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("grant-restricted runtime initializes"),
+    );
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let grant_denied = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", EVIDENCE_UNSIGNED_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    assert_eq!(
+        grant_denied.status_code(),
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let grant_denied_body = grant_denied.json::<Value>();
+    assert_eq!(grant_denied_body["code"], json!("not_authorized"));
+    // The two denials must not reveal which layer withheld permission.
+    assert_eq!(bundle_denied_body["code"], grant_denied_body["code"]);
+    assert_eq!(bundle_denied_body["title"], grant_denied_body["title"]);
+    assert_eq!(bundle_denied_body["status"], grant_denied_body["status"]);
+    // The signed default remains available under the restricted grant.
+    mount_adult_source(&prepared.server, None).await;
+    let signed = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    signed.assert_status_ok();
+    assert_eq!(signed.header("content-type"), "application/jose+json");
+
+    // Runtime configuration is closed and cannot enable a response format.
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let mut runtime_document =
+        fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
+    runtime_document.push_str("responseFormats: [signed-jws, unsigned-json]\n");
+    make_file_writable(&prepared.runtime_path);
+    fs::write(&prepared.runtime_path, runtime_document).expect("runtime override is written");
+    make_file_read_only(&prepared.runtime_path);
+    let error =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect_err("a runtime response-format override must fail startup closed");
+    assert!(matches!(error, RuntimeInitializationError::Bundle));
+}
+
+#[tokio::test]
+async fn unsigned_envelope_is_exact_audited_and_never_a_signing_fallback() {
+    let fixture = acceptance_runtime().await;
+    mount_adult_source(&fixture.server, None).await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let token = access_token(None);
+    let request = adult_request();
+    let nonce = request.request_nonce.clone();
+
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", EVIDENCE_UNSIGNED_MEDIA_TYPE)
+        .json(&serde_json::to_value(&request).expect("request serializes"))
+        .await;
+    response.assert_status_ok();
+    assert_eq!(
+        response.header("content-type"),
+        EVIDENCE_UNSIGNED_MEDIA_TYPE
+    );
+    assert_eq!(response.header("vary"), "Accept");
+    assert_eq!(response.header("cache-control"), "no-store");
+
+    let body = response.text();
+    let value: Value = serde_json::from_str(&body).expect("unsigned body is JSON");
+    let members = value
+        .as_object()
+        .expect("envelope is an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        members,
+        BTreeSet::from([
+            "schema".to_owned(),
+            "type".to_owned(),
+            "integrityProtection".to_owned(),
+            "warning".to_owned(),
+            "evidence".to_owned(),
+        ]),
+        "the envelope has no JWS member and no signing-key claim"
+    );
+    assert_eq!(
+        value["schema"],
+        json!("registry.unsigned-evidence-envelope/v1")
+    );
+    assert_eq!(value["type"], json!("UnsignedEvidenceEnvelope"));
+    assert_eq!(value["integrityProtection"], json!("none"));
+    assert_eq!(value["warning"], json!("not-cryptographically-verifiable"));
+    let envelope: UnsignedEvidenceEnvelope =
+        serde_json::from_str(&body).expect("envelope parses strictly");
+    assert_eq!(envelope.evidence.request_nonce, nonce);
+    assert!(
+        evidence_contract_accepts(&value["evidence"]).expect("evidence contract is available"),
+        "the nested evidence is the same closed core object"
+    );
+
+    // The strict JWS verifier rejects the unsigned representation.
+    let mut policy = verification_policy_stub(&fixture.runtime, &request);
+    policy.request_nonce = nonce;
+    assert!(verify_flattened_jws(body.as_bytes(), fixture.runtime.jwks(), &policy).is_err());
+
+    // Audit records the closed protection mode; the release event carries no
+    // signing key identity for unsigned output.
+    let audit = wait_for_audit_counts(&fixture.audit_path, 1, 1).await;
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .collect::<Vec<_>>();
+    let access = events
+        .iter()
+        .find(|event| event["record"]["phase"] == json!("access-attempt"))
+        .expect("access event exists");
+    let release = events
+        .iter()
+        .find(|event| event["record"]["phase"] == json!("disclosure-release"))
+        .expect("release event exists");
+    assert_eq!(access["record"]["responseProtection"], json!("unsigned"));
+    assert_eq!(release["record"]["responseProtection"], json!("unsigned"));
+    assert!(release["record"]["signingKeyId"].is_null());
+    assert!(release["record"]["evidenceId"].is_string());
+    assert!(release["record"]["disclosedConcepts"].is_array());
+    assert!(!audit.contains(&envelope.evidence.request_nonce));
+
+    // An unready ordinary signing dependency also denies unsigned output.
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    let provider: Arc<dyn SigningProvider> = Arc::new(UnavailableReadinessSigner { delegate });
+    let unready_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(unready_signer);
+    mount_adult_source(&prepared.server, None).await;
+    let error = runtime
+        .evaluate_with_format(
+            "operation-unsigned-unready-signing",
+            &access_token(None),
+            &adult_request(),
+            ResponseFormat::UnsignedJson,
+        )
+        .await
+        .expect_err("unsigned output still requires the signing dependency to be ready");
+    assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+}
+
+#[tokio::test]
+async fn signing_failure_returns_a_problem_and_never_an_unsigned_body() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailAfterSelfTestSigner {
+        delegate,
+        calls: AtomicUsize::new(0),
+    });
+    let failing_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(failing_signer);
+    mount_adult_source(&prepared.server, None).await;
+
+    let http = TestServer::new(build_app(Arc::new(runtime)));
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(response.header("content-type"), "application/problem+json");
+    let text = response.text();
+    assert!(
+        !text.contains("integrityProtection") && !text.contains("UnsignedEvidenceEnvelope"),
+        "a signed-path failure must never downgrade to unsigned output"
+    );
+}
+
+#[tokio::test]
+async fn disclosure_audit_failure_prevents_unsigned_response_release() {
+    let fixture = acceptance_runtime().await;
+    mount_adult_source(&fixture.server, Some(Duration::from_millis(500))).await;
+    let runtime = Arc::clone(&fixture.runtime);
+    let token = access_token(None);
+    let request = adult_request();
+    let evaluation = tokio::spawn(async move {
+        runtime
+            .evaluate_with_format(
+                "operation-unsigned-audit-failure",
+                &token,
+                &request,
+                ResponseFormat::UnsignedJson,
+            )
+            .await
+    });
+
+    wait_for_source_request_count(&fixture.server, 1).await;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.audit_path)
+        .and_then(|mut file| file.write_all(b"{}\n"))
+        .expect("audit tamper writes after access acceptance");
+    let error = evaluation
+        .await
+        .expect("evaluation task completes")
+        .expect_err("release audit failure cannot return an unsigned response");
+    assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+}
+
+#[tokio::test]
+async fn all_four_definitions_pass_the_explicitly_authorized_unsigned_path() {
+    let fixture = acceptance_runtime().await;
+    mount_success_sources(&fixture.server, true).await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    let cases = [
+        (access_token(None), adult_request()),
+        (access_token(None), residence_request()),
+        (access_token(None), licence_request()),
+        (access_token(Some(parent_grant_claims())), parent_request()),
+    ];
+    for (token, request) in cases {
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_UNSIGNED_MEDIA_TYPE)
+            .json(&serde_json::to_value(&request).expect("request serializes"))
+            .await;
+        response.assert_status_ok();
+        assert_eq!(
+            response.header("content-type"),
+            EVIDENCE_UNSIGNED_MEDIA_TYPE
+        );
+        let envelope: UnsignedEvidenceEnvelope =
+            serde_json::from_str(&response.text()).expect("envelope parses strictly");
+        assert_eq!(envelope.evidence.request_nonce, request.request_nonce);
+        assert!(!envelope.evidence.supported_values.is_empty());
+        assert_eq!(
+            envelope.evidence.subjects.len(),
+            request.subjects.len(),
+            "unsigned output binds the same declaration-ordered roles"
+        );
+    }
+    let audit = wait_for_audit_counts(&fixture.audit_path, 4, 4).await;
+    assert_eq!(
+        audit.matches("\"responseProtection\":\"unsigned\"").count(),
+        8,
+        "every unsigned access and release event records the closed mode"
+    );
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+#[tokio::test]
+async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        r#"        subjects:
+          - {role: child, selectorProfile: civil-record-reference-v1, valueOrigin: request}
+          - role: candidate-parent
+            selectorProfile: person-reference-v1
+            valueOrigin: authenticated-grant
+            valueClaims:
+              person_reference: grant.candidate_parent.person_reference"#,
+        r#"        subjects:
+          - role: candidate-parent
+            selectorProfile: person-reference-v1
+            valueOrigin: authenticated-grant
+            valueClaims:
+              person_reference: grant.candidate_parent.person_reference
+          - {role: child, selectorProfile: civil-record-reference-v1, valueOrigin: request}"#,
+        1,
+    );
+    fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("a valid bundle with reordered grant subjects initializes"),
+    );
+    mount_parent_source(
+        &prepared.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+
+    // The request array order is also reversed independently of grant order.
+    let mut request = parent_request();
+    request.subjects.reverse();
+    let jws = runtime
+        .evaluate(
+            "operation-reordered-grant-subjects",
+            &access_token(Some(parent_grant_claims())),
+            &request,
+        )
+        .await
+        .expect("reordered grant subjects resolve by unique role");
+    let payload = URL_SAFE_NO_PAD
+        .decode(&jws.payload)
+        .expect("Evidence payload is base64url");
+    let evidence: Evidence = serde_json::from_slice(&payload).expect("Evidence payload is JSON");
+    assert_eq!(evidence.subjects[0].role, "child");
+    assert_eq!(evidence.subjects[1].role, "candidate-parent");
+
+    // Audit subjects also use requirement declaration order.
+    let audit = wait_for_audit_counts(&prepared.audit_path, 1, 1).await;
+    let first_event =
+        serde_json::from_str::<Value>(audit.lines().next().expect("audit has events"))
+            .expect("audit line is JSON");
+    let roles = first_event["record"]["subjects"]
+        .as_array()
+        .expect("audit subjects are an array")
+        .iter()
+        .map(|subject| subject["role"].as_str().expect("role is text").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(roles, ["child", "candidate-parent"]);
+
+    // The verifier accepts the expected subject set in any expectation order.
+    let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let mut policy = verification_policy_stub(&runtime, &request);
+    policy.request_nonce = request.request_nonce.clone();
+    policy.expected_subjects = evidence
+        .subjects
+        .iter()
+        .rev()
+        .map(|subject| crate::verifier::ExpectedSubject {
+            role: subject.role.clone(),
+            binding: subject.binding.clone(),
+        })
+        .collect();
+    policy.expected_outputs = evidence
+        .supported_values
+        .iter()
+        .map(|value| crate::verifier::ExpectedOutput {
+            concept: value.provides_value_for.clone(),
+            form: crate::verifier::ExpectedValueForm::Boolean,
+        })
+        .collect();
+    verify_flattened_jws(&serialized, runtime.jwks(), &policy)
+        .expect("declaration-ordered subjects verify against unordered expectations");
+}
+
+/// Policy scaffold with the independent bundle-derived fields filled in and
+/// empty subject and output expectations for the caller to complete.
+fn verification_policy_stub(
+    runtime: &EvidenceRuntime,
+    request: &EvidenceRequest,
+) -> EvidenceVerificationPolicy {
+    let requirement = runtime
+        .bundle()
+        .config
+        .requirements
+        .iter()
+        .find(|candidate| candidate.id == request.requirement)
+        .expect("requirement is loaded");
+    EvidenceVerificationPolicy {
+        issued_by: runtime.bundle().config.issuer.id.clone(),
+        provided_by: runtime.bundle().config.service.provider_id.clone(),
+        requirement: request.requirement.clone(),
+        evidence_type: requirement.evidence_type.clone(),
+        purpose: request.purpose.clone(),
+        audience: EVIDENCE_AUDIENCE.to_owned(),
+        configuration_revision: runtime.bundle().revision().to_owned(),
+        request_nonce: request.request_nonce.clone(),
+        expected_subjects: Vec::new(),
+        expected_outputs: Vec::new(),
+        maximum_assertion_lifetime: Duration::from_secs(48 * 60 * 60),
+        now: Utc::now(),
+        clock_skew: Duration::from_secs(30),
+    }
+}
+
+#[tokio::test]
 async fn multi_role_request_order_is_not_semantic_and_output_uses_declaration_order() {
     let fixture = acceptance_runtime().await;
     mount_parent_source(
@@ -1311,7 +2061,7 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
         let evidence = verify_flattened_jws(
             &serialized,
             fixture.runtime.jwks(),
-            &verification_policy(&fixture.runtime, &request),
+            &verification_policy(&fixture.runtime, &request, &serialized),
         )
         .expect("released JWS verifies under the exact relying-procedure policy");
         assert_eq!(evidence.subjects.len(), role_count);
@@ -1340,19 +2090,21 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
     )
     .await;
     let non_parent_token = access_token(Some(parent_grant_claims_for(non_parent)));
+    let false_request = parent_request();
     let false_jws = fixture
         .runtime
         .evaluate(
             "operation-acceptance-parent-false",
             &non_parent_token,
-            &parent_request(),
+            &false_request,
         )
         .await
         .expect("exact non-membership in the complete governed parent set is signed");
+    let false_serialized = serde_json::to_vec(&false_jws).expect("JWS serializes");
     let false_evidence = verify_flattened_jws(
-        &serde_json::to_vec(&false_jws).expect("JWS serializes"),
+        &false_serialized,
         fixture.runtime.jwks(),
-        &verification_policy(&fixture.runtime, &parent_request()),
+        &verification_policy(&fixture.runtime, &false_request, &false_serialized),
     )
     .expect("negative Evidence verifies");
     assert_eq!(
@@ -1743,7 +2495,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                 response.assert_status_ok();
                 let jws = response.json::<FlattenedJws>();
                 let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
-                let mut policy = verification_policy(&fixture.runtime, &request);
+                let mut policy = verification_policy(&fixture.runtime, &request, &serialized);
                 policy.now = evaluation_time;
                 let evidence = verify_flattened_jws(&serialized, fixture.runtime.jwks(), &policy)
                     .expect("matrix JWS verifies");
@@ -2289,10 +3041,21 @@ fn parent_request_with_candidate_values() -> EvidenceRequest {
 
 fn request(requirement: &str, purpose: &str, subjects: Vec<RequestedSubject>) -> EvidenceRequest {
     EvidenceRequest {
+        request_nonce: fresh_request_nonce(),
         requirement: requirement.to_owned(),
         purpose: purpose.to_owned(),
         subjects,
     }
+}
+
+/// A unique canonical nonce per constructed request, so exact-echo and
+/// non-propagation assertions cannot pass by collision.
+fn fresh_request_nonce() -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let mut bytes = [0u8; 32];
+    let unique = ulid::Ulid::new().to_bytes();
+    bytes[..16].copy_from_slice(&unique);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn requested_subject<'a, I>(role: &str, profile: &str, values: Option<I>) -> RequestedSubject
@@ -2313,9 +3076,15 @@ where
     }
 }
 
+/// Independent policy expectations for one live response. The identity,
+/// requirement, purpose, audience, revision, and nonce expectations come from
+/// the bundle and the retained request; the subject-binding and output-shape
+/// expectations are lifted from the response as an accepted first
+/// transaction, exactly as a relying party stores them for later checks.
 fn verification_policy(
     runtime: &EvidenceRuntime,
     request: &EvidenceRequest,
+    serialized_jws: &[u8],
 ) -> EvidenceVerificationPolicy {
     let requirement = runtime
         .bundle()
@@ -2324,17 +3093,27 @@ fn verification_policy(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .expect("requirement is loaded");
-    EvidenceVerificationPolicy {
-        issued_by: runtime.bundle().config.issuer.id.clone(),
-        provided_by: runtime.bundle().config.service.provider_id.clone(),
-        requirement: request.requirement.clone(),
-        evidence_type: requirement.evidence_type.clone(),
-        purpose: request.purpose.clone(),
-        audience: EVIDENCE_AUDIENCE.to_owned(),
-        configuration_revision: runtime.bundle().revision().to_owned(),
-        now: Utc::now(),
-        clock_skew: Duration::from_secs(30),
-    }
+    let jws: FlattenedJws = serde_json::from_slice(serialized_jws).expect("flattened JWS is JSON");
+    let payload = URL_SAFE_NO_PAD
+        .decode(jws.payload)
+        .expect("flattened JWS payload is base64url");
+    let evidence: Evidence =
+        serde_json::from_slice(&payload).expect("Evidence payload parses for expectations");
+    let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
+        &evidence,
+        &request.request_nonce,
+        Duration::from_secs(48 * 60 * 60),
+        Utc::now(),
+        Duration::from_secs(30),
+    );
+    policy.issued_by = runtime.bundle().config.issuer.id.clone();
+    policy.provided_by = runtime.bundle().config.service.provider_id.clone();
+    policy.requirement = request.requirement.clone();
+    policy.evidence_type = requirement.evidence_type.clone();
+    policy.purpose = request.purpose.clone();
+    policy.audience = EVIDENCE_AUDIENCE.to_owned();
+    policy.configuration_revision = runtime.bundle().revision().to_owned();
+    policy
 }
 
 fn assert_minimized_payload(serialized_jws: &[u8]) {

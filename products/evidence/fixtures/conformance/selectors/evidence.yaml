@@ -36,6 +36,8 @@ signing:
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
 selectorProfiles:
   opaque-record-v1:
     maximumAggregateBytes: 96
@@ -194,17 +196,20 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:classification:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - {role: subject, selectorProfile: opaque-record-v1, valueOrigin: request}
       - requirement: urn:example:fixture:requirement:relationship:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - {role: subject-a, selectorProfile: opaque-record-v1, valueOrigin: request}
           - {role: subject-b, selectorProfile: demographics-v1, valueOrigin: request}
       - requirement: urn:example:fixture:requirement:opaque:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - {role: subject, selectorProfile: opaque-coordinates-v1, valueOrigin: request}
   subject-bound-v1:
@@ -214,6 +219,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:property:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: subject
             selectorProfile: demographics-v1
@@ -229,6 +235,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:property-with-event:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - role: subject
             selectorProfile: demographics-with-event-v1
@@ -245,6 +252,7 @@ authorityProfiles:
       - requirement: urn:example:fixture:requirement:relationship:v1
         purpose: fixture-procedure
         audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
         subjects:
           - {role: subject-a, selectorProfile: opaque-coordinates-v1, valueOrigin: request}
           - {role: subject-b, selectorProfile: demographics-with-event-v1, valueOrigin: request}

@@ -90,7 +90,7 @@ cases:
     expected:
       lookup: match
       error: derivation_input_error
-      publicProblem: service_unavailable
+      publicProblem: evidence_not_available
       derivationRuns: true
       signed: false
   - {id: source-failure, sourceFailure: timeout, expected: {publicProblem: dependency_unavailable, signed: false}}

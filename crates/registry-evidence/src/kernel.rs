@@ -53,6 +53,11 @@ pub enum KernelError {
     Requirement,
     #[error("the Evidence extraction failed")]
     Extraction,
+    /// A uniquely resolved record reached derivation with missing, mistyped,
+    /// or inconsistent inputs. Publicly this collapses with the unresolved
+    /// lookup classes so callers cannot learn that a record exists.
+    #[error("the Evidence derivation inputs are unresolved")]
+    DerivationInput,
     #[error("the Evidence request preparation failed")]
     Preparation,
     #[error("the source response violates its fixed protocol contract")]
@@ -111,6 +116,9 @@ pub struct ValueProjection<'a> {
 /// Core-owned envelope inputs supplied by the authenticated release pipeline.
 pub struct EvidenceConstruction<'a> {
     pub evidence_id: &'a str,
+    /// Exact caller nonce to echo. It is copied verbatim into the payload and
+    /// is not part of the subject binding, audit, or any diagnostic surface.
+    pub request_nonce: &'a str,
     pub purpose: &'a str,
     pub audience: &'a str,
     pub issued_at: DateTime<Utc>,
@@ -402,6 +410,7 @@ impl OfflineKernel {
             .derive(script, facts, selectors, evaluation_context)
             .map_err(|error| match error {
                 RhaiRuntimeError::Unavailable => KernelError::Extraction,
+                RhaiRuntimeError::DerivationInput => KernelError::DerivationInput,
                 RhaiRuntimeError::SourceProtocol => KernelError::Script,
                 _ => KernelError::Script,
             })?;
@@ -489,6 +498,7 @@ impl OfflineKernel {
 
         Ok(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
+            request_nonce: input.request_nonce.to_owned(),
             id: input.evidence_id.to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: requirement.id.clone(),
@@ -899,6 +909,7 @@ fn validate_evidence_inputs(
     if input.evidence_id.is_empty()
         || input.evidence_id.len() > MAXIMUM_EVIDENCE_IDENTIFIER_BYTES
         || url::Url::parse(input.evidence_id).is_err()
+        || !crate::model::request_nonce_is_canonical(input.request_nonce)
         || input.audience.is_empty()
         || input.audience.len() > MAXIMUM_EVIDENCE_IDENTIFIER_BYTES
         || url::Url::parse(input.audience).is_err()
@@ -1529,6 +1540,7 @@ mod tests {
             .expect("values validate");
         let construction = || EvidenceConstruction {
             evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+            request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
             purpose: &requirement.purposes[0],
             audience: AUDIENCE,
             issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
@@ -2051,6 +2063,7 @@ mod tests {
                 values,
                 EvidenceConstruction {
                     evidence_id: "urn:ulid:01K1SUPPORTEDVALUES0000000000",
+                    request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                     purpose: "conformance",
                     audience: AUDIENCE,
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
@@ -2073,17 +2086,13 @@ mod tests {
         let verified = verify_flattened_jws(
             &serialized,
             &jwks,
-            &EvidenceVerificationPolicy {
-                issued_by: evidence.issued_by.clone(),
-                provided_by: evidence.provided_by.clone(),
-                requirement: evidence.supports_requirement.clone(),
-                evidence_type: evidence.is_conformant_to.clone(),
-                purpose: evidence.purpose.clone(),
-                audience: evidence.audience.clone(),
-                configuration_revision: evidence.configuration_revision.clone(),
-                now: "2026-08-02T12:00:00Z".parse().expect("time"),
-                clock_skew: StdDuration::from_secs(30),
-            },
+            &EvidenceVerificationPolicy::from_accepted_transaction(
+                &evidence,
+                &evidence.request_nonce,
+                StdDuration::from_secs(48 * 60 * 60),
+                "2026-08-02T12:00:00Z".parse().expect("time"),
+                StdDuration::from_secs(30),
+            ),
         )
         .expect("signed Evidence verifies");
         assert_eq!(
