@@ -568,7 +568,8 @@ the privacy and trust invariants.
   minimized, audited path without a second evaluator or signing fallback.
 - Add request and response limits, safe problem responses, per-principal rate
   controls, dependency timeouts, and shutdown behavior.
-- Generate JSON Schema and OpenAPI from code and add drift checks.
+- Generate JSON Schema and OpenAPI from code and add drift checks, and publish
+  the generated OpenAPI document unauthenticated at `GET /openapi.json`.
 - Test all four acceptance definitions through the real router and HTTP client
   while multiple definitions are enabled in one process.
 

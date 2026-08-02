@@ -1294,6 +1294,91 @@
         "summary": "Report process liveness without dependency access"
       }
     },
+    "/openapi.json": {
+      "get": {
+        "description": "The generated public contract for this service. This route is intentionally unauthenticated: the served bytes are the released generated artifact and describe no deployment, definition, or authority.",
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/openapi+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The generated Version 1 OpenAPI document",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service_unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            503
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Service temporarily unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/service_unavailable"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The document could not be produced",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Fetch this OpenAPI document"
+      }
+    },
     "/ready": {
       "get": {
         "operationId": "getReadiness",

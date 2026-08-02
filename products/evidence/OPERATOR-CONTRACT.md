@@ -138,8 +138,8 @@ The publication workflow is:
 
 Version one does not implement a public, cross-requester, searchable, mutable,
 or federated catalog, a registration editor, or a `describe` CLI command.
-`/health`, `/ready`, public problems, and JWKS never reveal enabled definitions
-or selector profiles.
+`/health`, `/ready`, `/openapi.json`, public problems, and JWKS never reveal
+enabled definitions or selector profiles.
 
 ## Requester authority and purpose
 
@@ -432,9 +432,15 @@ The native operations are:
 GET /v1/evidence-definitions
 POST /v1/evidence
 GET /health
+GET /openapi.json
 GET /ready
 GET /.well-known/evidence/jwks.json
 ```
+
+`GET /openapi.json` publishes the generated public contract as
+`application/openapi+json`. It carries no credential requirement because the
+served bytes are the released generated artifact: the same document shipped in
+`products/evidence/generated/`, independent of the deployed bundle.
 
 A successful `GET /v1/evidence-definitions` response uses `application/json`
 and the closed requester-scoped definition schema. It requires the same strict

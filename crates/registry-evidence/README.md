@@ -21,9 +21,15 @@ the native HTTP service:
 POST /v1/evidence
 GET  /v1/evidence-definitions
 GET  /health
+GET  /openapi.json
 GET  /ready
 GET  /.well-known/evidence/jwks.json
 ```
+
+`GET /openapi.json` returns the generated public contract as
+`application/openapi+json`. It is unauthenticated and byte-identical to the
+released artifact under `products/evidence/generated/`, so it describes no
+deployment, definition, or authority.
 
 `POST /v1/evidence` requires a `requestNonce`: the canonical unpadded base64url
 encoding of exactly 32 random bytes, freshly generated per request. The runtime

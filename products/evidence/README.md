@@ -86,12 +86,13 @@ Discovery performs no provider request and creates no evidence-data audit
 event. Metadata never grants authority; `POST /v1/evidence` authenticates and
 authorizes the complete tuple again.
 
-The generated OpenAPI defines both operations. Operators still publish static
-onboarding material through their API catalog, developer portal, configuration
-repository, or bilateral process for token acquisition, human descriptions,
-legal context, endpoint trust, and verifier policy. The public JWKS at
-`/.well-known/evidence/jwks.json` supplies verification keys only. The complete
-contract and change rules are in
+The generated OpenAPI defines both operations, and the running service publishes
+that same document unauthenticated at `GET /openapi.json`. Operators still
+publish static onboarding material through their API catalog, developer portal,
+configuration repository, or bilateral process for token acquisition, human
+descriptions, legal context, endpoint trust, and verifier policy. The public
+JWKS at `/.well-known/evidence/jwks.json` supplies verification keys only. The
+complete contract and change rules are in
 [the operator contract](OPERATOR-CONTRACT.md#discovery-of-available-evidence).
 
 ## Requesting evidence

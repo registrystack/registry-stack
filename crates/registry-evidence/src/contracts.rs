@@ -69,6 +69,7 @@ const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
     ),
 ];
 
+static SERVED_OPENAPI: OnceLock<Option<String>> = OnceLock::new();
 static REQUEST_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
 static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
 static DEFINITIONS_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
@@ -146,6 +147,27 @@ pub fn write_documents(output: &Path) -> Result<(), ContractGenerationError> {
             .map_err(|source| ContractGenerationError::Output { path, source })?;
     }
     Ok(())
+}
+
+/// The generated OpenAPI document the running service publishes.
+///
+/// It is built once from the same generator as [`documents`], so the served
+/// description is the committed release artifact and cannot drift from it.
+pub(crate) fn served_openapi_document() -> Option<&'static str> {
+    SERVED_OPENAPI
+        .get_or_init(|| {
+            pretty_json(&openapi_document(
+                &request_schema(),
+                &evidence_schema(),
+                &definitions_schema(),
+                &jws_schema(),
+                &unsigned_envelope_schema(),
+                &problem_schema(),
+                &jwks_schema(),
+            ))
+            .ok()
+        })
+        .as_deref()
 }
 
 /// Validate an inbound public request against the exact generated Version 1 schema.
@@ -1060,6 +1082,26 @@ fn openapi_document(
                     }
                 }
             },
+            "/openapi.json": {
+                "get": {
+                    "operationId": "getOpenApi",
+                    "summary": "Fetch this OpenAPI document",
+                    "description": "The generated public contract for this service. This route is intentionally unauthenticated: the served bytes are the released generated artifact and describe no deployment, definition, or authority.",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "The generated Version 1 OpenAPI document",
+                            "headers": response_headers(None),
+                            "content": {"application/openapi+json": {"schema": {"type": "object"}}}
+                        },
+                        "503": {
+                            "description": "The document could not be produced",
+                            "headers": response_headers(None),
+                            "content": problem_content(&["service_unavailable"])
+                        }
+                    }
+                }
+            },
             "/.well-known/evidence/jwks.json": {
                 "get": {
                     "operationId": "getEvidenceJwks",
@@ -1143,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn openapi_has_only_the_five_version_one_routes_and_exact_success_media() {
+    fn openapi_has_only_the_version_one_routes_and_exact_success_media() {
         let document = openapi_document(
             &request_schema(),
             &evidence_schema(),
@@ -1159,10 +1201,20 @@ mod tests {
             [
                 "/.well-known/evidence/jwks.json",
                 "/health",
+                "/openapi.json",
                 "/ready",
                 "/v1/evidence",
                 "/v1/evidence-definitions"
             ]
+        );
+        assert!(
+            document["paths"]["/openapi.json"]["get"]["responses"]["200"]["content"]
+                ["application/openapi+json"]
+                .is_object()
+        );
+        assert_eq!(
+            document["paths"]["/openapi.json"]["get"]["security"],
+            json!([])
         );
         assert!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["200"]["content"]
@@ -1236,6 +1288,15 @@ mod tests {
             document["paths"]["/ready"]["get"]["responses"]["503"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
             json!(["service_unavailable"])
+        );
+    }
+
+    #[test]
+    fn the_served_openapi_document_is_the_generated_release_artifact() {
+        let generated = documents().expect("generated contracts build");
+        assert_eq!(
+            served_openapi_document().expect("served OpenAPI document builds"),
+            generated[OPENAPI_FILE]
         );
     }
 

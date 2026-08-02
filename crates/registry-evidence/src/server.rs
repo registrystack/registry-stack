@@ -39,7 +39,7 @@ use ulid::Ulid;
 
 use crate::{
     config::{ListenerConfig, ResponseFormat},
-    contracts::request_contract_accepts,
+    contracts::{request_contract_accepts, served_openapi_document},
     model::{request_nonce_is_canonical, EvidenceRequest},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
@@ -49,6 +49,7 @@ use crate::{
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
+const OPENAPI_MEDIA_TYPE: &str = "application/openapi+json";
 const RETRY_AFTER_SECONDS: &str = "1";
 
 #[derive(Clone)]
@@ -62,7 +63,7 @@ struct ServerState {
     evaluation_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Build the five-route Version 1 application from one immutable runtime.
+/// Build the complete Version 1 application from one immutable runtime.
 #[cfg(test)]
 pub(crate) fn build_app(runtime: Arc<EvidenceRuntime>) -> Router {
     build_app_with_tracker(runtime).0
@@ -105,6 +106,7 @@ fn build_app_with_tracker_at(
         .route("/v1/evidence", post(create_evidence))
         .route("/v1/evidence-definitions", get(discover_evidence))
         .route("/health", get(health))
+        .route("/openapi.json", get(openapi))
         .route("/ready", get(ready))
         .route("/.well-known/evidence/jwks.json", get(jwks))
         .fallback(unknown_route)
@@ -450,6 +452,19 @@ async fn discover_evidence(
 
 async fn health() -> Response {
     static_json_response(StatusCode::OK, r#"{"status":"ok"}"#)
+}
+
+/// Publish the generated public contract. The document is static release
+/// material, so this route takes no credential and reaches no dependency.
+async fn openapi() -> Response {
+    match served_openapi_document() {
+        Some(document) => bytes_response(
+            StatusCode::OK,
+            OPENAPI_MEDIA_TYPE,
+            document.as_bytes().to_vec(),
+        ),
+        None => problem_response(ProblemCode::ServiceUnavailable, &operation_id()),
+    }
 }
 
 async fn ready(State(state): State<Arc<ServerState>>) -> Response {

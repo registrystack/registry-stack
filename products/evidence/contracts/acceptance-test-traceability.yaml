@@ -162,7 +162,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/tests/deployment_projects.rs, name: reference_deployment_projects_execute_the_closed_fixture_contract}
       - {file: crates/registry-evidence/src/bundle.rs, name: deployment_reference_projects_are_complete_compilable_bundles}
-      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_five_version_one_routes_and_exact_success_media}
+      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
     note: >-
       The mapped tests prove the positive half only: source-product behavior is
       reached through governed bundles and scripts without editing Rust, and the
@@ -175,12 +175,15 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/contracts.rs, name: every_json_schema_is_valid_draft_2020_12}
       - {file: crates/registry-evidence/src/contracts.rs, name: openapi_document_is_valid_utoipa_model}
-      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_five_version_one_routes_and_exact_success_media}
+      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
       - {file: crates/registry-evidence/src/contracts.rs, name: schemas_accept_the_exact_public_wire_shapes}
+      - {file: crates/registry-evidence/src/contracts.rs, name: the_served_openapi_document_is_the_generated_release_artifact}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: openapi_route_serves_the_generated_contract_without_authentication_or_source_access}
     note: >-
       These tests pin the generated contract content and its agreement with the
-      public Rust wire types. Byte-for-byte reproduction against the committed
-      artifacts under products/evidence/generated/ is proven by
+      public Rust wire types, including the document the running service
+      publishes at GET /openapi.json. Byte-for-byte reproduction against the
+      committed artifacts under products/evidence/generated/ is proven by
       products/evidence/scripts/check-contracts.sh, not by a cargo test.
   - id: acceptance-row-29
     summary: Every declared Supported Value form rejects wrong scalar types, unknown codes, invalid entity references, excessive precision, oversized strings and lists, prohibited duplicates, and wrong cardinalities, and each valid form survives Evidence construction, JWS serialization, and verification without type loss.
@@ -414,4 +417,4 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_requires_authentication_and_returns_no_unentitled_definitions}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
-      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_five_version_one_routes_and_exact_success_media}
+      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}

@@ -518,6 +518,52 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
 }
 
 #[tokio::test]
+async fn openapi_route_serves_the_generated_contract_without_authentication_or_source_access() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    let document = http.get("/openapi.json").await;
+    document.assert_status_ok();
+    assert_eq!(document.header("content-type"), "application/openapi+json");
+    assert_eq!(document.header("cache-control"), "no-store");
+
+    // The served bytes are the committed release artifact, not a second
+    // hand-maintained description of the same routes.
+    let generated = crate::contracts::documents().expect("generated contracts build");
+    assert_eq!(document.text(), generated[crate::contracts::OPENAPI_FILE]);
+
+    // The document is static public material: it names no definition, reveals
+    // no deployment revision, and reaches no source.
+    let served = document.json::<Value>();
+    assert_eq!(served["openapi"], json!("3.1.0"));
+    assert!(served["paths"]["/openapi.json"]["get"].is_object());
+    assert!(!document
+        .text()
+        .contains(&fixture.runtime.bundle().revision().to_string()));
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+
+    // Only GET is in the contract; anything else joins the closed unknown-route
+    // problem response.
+    let rejected = http.post("/openapi.json").await;
+    assert_eq!(
+        rejected.status_code(),
+        ProblemCode::MalformedRequest.status()
+    );
+    assert_eq!(
+        rejected.json::<Value>()["code"],
+        json!(ProblemCode::MalformedRequest.code())
+    );
+
+    let audit = fs::read_to_string(&fixture.audit_path).expect("durable audit is readable");
+    assert!(audit.is_empty());
+}
+
+#[tokio::test]
 async fn discovery_requires_authentication_and_returns_no_unentitled_definitions() {
     let fixture = acceptance_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
