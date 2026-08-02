@@ -19,6 +19,7 @@ members = [
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
+    "crates/registry-mint",
     "crates/registry-notary-core",
     "crates/registry-notary-client",
     "crates/registry-notary-server",
@@ -56,6 +57,7 @@ registry-config-report = { path = "crates/registry-config-report", version = "0.
 registry-evidence = { path = "crates/registry-evidence", version = "0.16.2" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.16.2" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.16.2" }
+registry-mint = { path = "crates/registry-mint", version = "0.16.2" }
 registry-notary-client = { path = "crates/registry-notary-client", version = "0.16.2" }
 registry-notary-core = { path = "crates/registry-notary-core", version = "0.16.2" }
 registry-relay = { path = "crates/registry-relay", version = "0.16.2" }

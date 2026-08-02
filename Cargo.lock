@@ -5432,6 +5432,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-mint"
+version = "0.16.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-test",
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "http",
+ "jsonwebtoken",
+ "registry-evidence",
+ "registry-platform-canonical-json",
+ "registry-platform-crypto",
+ "registry-platform-oidc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-notary"
 version = "0.16.2"
 dependencies = [

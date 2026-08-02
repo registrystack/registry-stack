@@ -85,7 +85,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertFalse(outputs["docs_archives"])
 
-    def test_evidence_code_and_product_contracts_select_one_shard_and_drift_gate(self) -> None:
+    def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
         for path in (
             "crates/registry-evidence/src/source.rs",
             "products/evidence/contracts/source-contract.yaml",
@@ -96,9 +96,12 @@ class CiChangesTest(unittest.TestCase):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["evidence_contracts"])
                 self.assertIn("registry-evidence", outputs["rust_packages"])
+                # registry-mint dev-depends on registry-evidence so its
+                # compatibility test proves Evidence accepts a minted token.
+                # Changing Evidence must therefore run the mint shard too.
                 self.assertEqual(
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-                    {"evidence"},
+                    {"evidence", "mint"},
                 )
 
     def test_evidence_contract_gate_is_required_by_the_rust_aggregate(self) -> None:

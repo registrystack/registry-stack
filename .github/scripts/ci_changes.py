@@ -43,6 +43,7 @@ SHARDS = {
     ),
     "relay": ("registry-relay",),
     "evidence": ("registry-evidence",),
+    "mint": ("registry-mint",),
     "developer-tools": (
         "registry-config-report",
         "registry-language-server",
