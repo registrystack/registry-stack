@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [matched]
+properties:
+  matched: {type: boolean}

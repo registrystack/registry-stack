@@ -1,0 +1,39 @@
+# Shape of the projected event-search response, checked before extraction runs.
+# maxItems states the same page ceiling the request asks for, so an oversized
+# page is refused before any record reaches the script.
+type: object
+additionalProperties: false
+required: [total, results]
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000000
+  results:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      # Nothing can be required of every record here. Projection drops a leaf
+      # the record did not carry, and an ambiguous page is decided before any
+      # record is read, so a record on that page need not be complete. Which
+      # leaves a single matched record must carry stays with the script.
+      required: []
+      properties:
+        type:
+          type: string
+          minLength: 1
+          maxLength: 64
+        status:
+          type: string
+          minLength: 1
+          maxLength: 64
+        trackingId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        dateOfEvent:
+          type: string
+          format: date

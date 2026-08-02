@@ -4,7 +4,7 @@ ownership:
   governed_bundle:
     - fixed source origin, acquisition posture, authentication kind, and logical secret references
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
-    - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters and schemas
+    - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
     - preparation channel policy and bounds, response projection, redirect denial, timeout, response byte limit, and concurrency limit
     - optional logical TLS trust-profile name
   runtime_yaml:
@@ -14,7 +14,7 @@ ownership:
   runtime_override: prohibited
   scripts:
     prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors and closed parameters.
-    extract: Maps only the bounded projected response and closed parameters to the closed lookup union.
+    extract: Maps only the bounded projected response, already inside its declared response schema, and closed parameters to the closed lookup union.
     prohibited: source, origin, method, path, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
 evidence_data_request:
   count: Exactly one per evaluation after successful authorization, durable access audit, and complete RequestParts validation.
@@ -104,6 +104,16 @@ projection:
     - Empty, invalid, duplicate, decoded-duplicate, ancestor/descendant-overlap, wildcard-overlap, or structurally incompatible paths fail startup.
     - Wire byte and parsing bounds apply before projection; Rhai bounds apply again to the projected tree.
   posture_rule: The declared acquisition posture describes the pre-projection wire response. Local projection never upgrades a record-transformed source claim.
+response_shape:
+  owner: Core runtime.
+  stage: After projection and before conversion to Rhai, so no response outside its declared shape reaches a script.
+  artifact: One required bundle-relative responseSchema per source, in the same closed JSON Schema subset as adapterParametersSchema and factSchema and validated by the same startup checks.
+  role_relaxation: A response schema may list fewer required members than it declares properties, because projection legitimately drops a selected leaf the record did not carry. The adapter-parameter and fact roles keep the exact required-equals-properties rule.
+  nullable_form: A response schema node may write its type as the pair [T, "null"]. A source reports an explicit null where it holds no value and projection carries that null through verbatim, so the shape has to be able to say so. This is the only union the subset admits and only in the response role; null reaches the script as the same unit marker is_missing already reads.
+  division_of_labour:
+    schema: Member presence where the shape can guarantee it, member types, array bounds and uniqueness, string bounds and formats, and enumerated or constant values.
+    script: Relations between fields the shape cannot state, such as how a reported total agrees with the records returned, page-count arithmetic, and which values must agree with the closed adapter parameters.
+  failure: A projected response outside its declared shape is a source-protocol failure, indistinguishable in public output from any other one.
 cardinality:
   preferred: Provider count plus at most one bounded result, field-projected where supported.
   fallback: At most two minimally projected results solely to distinguish a unique result from ambiguity.
@@ -159,6 +169,7 @@ acquisition_postures:
 failure_classes:
   transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
+  response_shape: [missing-required-member, unexpected-member, wrong-member-type, out-of-bounds-value, oversized-array, duplicate-array-member]
   semantic: [no-match, ambiguous, required-fact-missing, wrong-fact-type, unknown-controlled-code]
   graphql_envelope_rule: Any top-level errors member, including partial data with errors, fails closed.
 persistence:

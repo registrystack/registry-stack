@@ -60,5 +60,6 @@ request:
   timeoutMilliseconds: 3000
   maximumResponseBytes: 262144
   concurrencyLimit: 4
+responseSchema: response.schema.yaml
 extractScript: extract.rhai
 factSchema: facts.schema.yaml

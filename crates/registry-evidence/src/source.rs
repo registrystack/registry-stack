@@ -1502,6 +1502,7 @@ mod tests {
                 "maximumResponseBytes": 1024,
                 "concurrencyLimit": 1
             },
+            "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",
             "factSchema": "schemas/facts.schema.yaml"
         }))
@@ -1630,6 +1631,7 @@ mod tests {
                 "maximumResponseBytes": 1024,
                 "concurrencyLimit": 1
             },
+            "responseSchema": "schemas/response.schema.yaml",
             "extractScript": "adapters/extract.rhai",
             "factSchema": "schemas/facts.schema.yaml"
         }))

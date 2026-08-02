@@ -123,6 +123,8 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    # Shape contract for the projected response, checked before extraction runs.
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/facts.schema.yaml
 

@@ -42,6 +42,8 @@ pub const MAXIMUM_JSON_BODY_DEPTH: usize = 32;
 const MAXIMUM_BUCKETS: usize = 64;
 const MAXIMUM_ENTITY_REFERENCE_ITEMS: usize = 64;
 const MAXIMUM_REQUIRED_CODE_BYTES: usize = 64;
+const MAXIMUM_POINTER_BYTES: usize = 256;
+const MAXIMUM_POINTER_SEGMENTS: usize = 16;
 /// One past the largest signed 64-bit integer, as the exclusive magnitude bound for any
 /// ordinary floating-point number that crosses a runtime boundary.
 const INTEGER_MAGNITUDE_LIMIT: f64 = 9_223_372_036_854_775_808.0;
@@ -691,7 +693,85 @@ fn register_evidence_primitives(engine: &mut Engine) {
         .register_fn("list_contains", list_contains)
         .register_fn("set_contains", set_contains)
         .register_fn("required", required)
-        .register_fn("is_missing", is_missing);
+        .register_fn("is_missing", is_missing)
+        .register_fn("get_path", get_path);
+}
+
+/// Resolves one RFC 6901 JSON Pointer against a decoded value, the same pointer
+/// grammar source projection already uses, so one document shape is described one way.
+///
+/// Absence at any step is reported as the unit marker `is_missing` and `required`
+/// already understand, because a projected response legitimately omits a selected
+/// leaf. A malformed or oversized pointer is instead a fault in the script's own
+/// text, so it fails closed rather than passing as absence.
+fn get_path(value: Dynamic, pointer: &str) -> Result<Dynamic, Box<EvalAltResult>> {
+    let mut current = value;
+    for token in parse_json_pointer(pointer)? {
+        let next = if let Some(map) = current.read_lock::<Map>() {
+            map.get(token.as_str()).cloned()
+        } else if let Some(array) = current.read_lock::<Array>() {
+            array.get(reference_token_index(&token)?).cloned()
+        } else {
+            None
+        };
+        match next {
+            Some(value) => current = value,
+            None => return Ok(Dynamic::UNIT),
+        }
+    }
+    Ok(current)
+}
+
+/// Splits a pointer into its unescaped reference tokens under fixed ceilings. Index
+/// tokens stay unchecked here because only the value being traversed says which
+/// tokens address an array.
+fn parse_json_pointer(pointer: &str) -> Result<Vec<String>, Box<EvalAltResult>> {
+    if pointer.len() > MAXIMUM_POINTER_BYTES {
+        return Err(primitive_error("pointer_out_of_bounds"));
+    }
+    if pointer.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(body) = pointer.strip_prefix('/') else {
+        return Err(primitive_error("invalid_pointer"));
+    };
+    let tokens: Vec<&str> = body.split('/').collect();
+    if tokens.len() > MAXIMUM_POINTER_SEGMENTS {
+        return Err(primitive_error("pointer_out_of_bounds"));
+    }
+    tokens.into_iter().map(unescape_reference_token).collect()
+}
+
+fn unescape_reference_token(token: &str) -> Result<String, Box<EvalAltResult>> {
+    let mut unescaped = String::with_capacity(token.len());
+    let mut characters = token.chars();
+    while let Some(character) = characters.next() {
+        if character != '~' {
+            unescaped.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('0') => unescaped.push('~'),
+            Some('1') => unescaped.push('/'),
+            _ => return Err(primitive_error("invalid_pointer")),
+        }
+    }
+    Ok(unescaped)
+}
+
+/// Accepts only the canonical decimal index RFC 6901 defines, which leaves no way to
+/// express the negative index Rhai would otherwise count from the end of an array.
+fn reference_token_index(token: &str) -> Result<usize, Box<EvalAltResult>> {
+    let canonical = token == "0"
+        || (!token.is_empty()
+            && !token.starts_with('0')
+            && token.bytes().all(|byte| byte.is_ascii_digit()));
+    if !canonical {
+        return Err(primitive_error("invalid_pointer"));
+    }
+    token
+        .parse()
+        .map_err(|_| primitive_error("pointer_out_of_bounds"))
 }
 
 fn parse_date(input: &str) -> Result<CalendarDate, Box<EvalAltResult>> {
@@ -3087,6 +3167,135 @@ mod tests {
                 }"#,
             )
             .is_err());
+    }
+
+    #[test]
+    fn get_path_resolves_bounded_pointers_and_reports_absence_as_missing() {
+        let runtime = runtime();
+        let response = json!({
+            "total": 1,
+            "person": {"date_of_birth": "1970-01-01", "names": [{"given": "A"}, {"given": "B"}]},
+            "a/b": "slash",
+            "m~n": "tilde"
+        });
+
+        fn resolved(runtime: &RhaiRuntime, response: &Value, body: &str) -> Value {
+            let script = runtime
+                .compile_extraction(&format!(
+                    "fn extract(source_response, parameters) {{
+                        #{{ outcome: \"match\", facts: #{{ value: {body} }} }}
+                    }}"
+                ))
+                .expect("compiles");
+            match runtime.extract(&script, response, &json!({}), &|_: &Value| true) {
+                Ok(LookupResult::Match(facts)) => facts["value"].clone(),
+                other => panic!("expected a match, got {other:?}"),
+            }
+        }
+
+        for (body, expected) in [
+            (r#"get_path(source_response, "/total")"#, json!(1)),
+            (
+                r#"get_path(source_response, "/person/date_of_birth")"#,
+                json!("1970-01-01"),
+            ),
+            (
+                r#"get_path(source_response, "/person/names/1/given")"#,
+                json!("B"),
+            ),
+            (r#"get_path(source_response, "/a~1b")"#, json!("slash")),
+            (r#"get_path(source_response, "/m~0n")"#, json!("tilde")),
+            (
+                r#"get_path(get_path(source_response, "/person"), "/date_of_birth")"#,
+                json!("1970-01-01"),
+            ),
+            (r#"len(get_path(source_response, ""))"#, json!(4)),
+        ] {
+            assert_eq!(resolved(&runtime, &response, body), expected, "{body}");
+        }
+
+        // Absence of any kind is the script's decision to make, so it arrives as the
+        // same unit marker `is_missing` and `required` already understand.
+        for body in [
+            r#"get_path(source_response, "/absent")"#,
+            r#"get_path(source_response, "/person/absent/deeper")"#,
+            r#"get_path(source_response, "/person/names/9")"#,
+            r#"get_path(source_response, "/total/deeper")"#,
+        ] {
+            assert_eq!(
+                resolved(&runtime, &response, &format!("is_missing({body})")),
+                json!(true),
+                "{body}"
+            );
+        }
+
+        let unavailable = runtime
+            .compile_extraction(
+                r#"fn extract(source_response, parameters) {
+                    #{ outcome: "match", facts: #{ value: required(get_path(source_response, "/absent"), "required_fact_missing") } }
+                }"#,
+            )
+            .expect("compiles");
+        assert_eq!(
+            runtime.extract(&unavailable, &response, &json!({}), &|_: &Value| true),
+            Err(RhaiRuntimeError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn get_path_rejects_malformed_and_oversized_pointers() {
+        let runtime = runtime();
+        let response = json!({"total": 1, "person": {"names": [{"given": "A"}]}});
+
+        let long_pointer = format!("/{}", "x".repeat(MAXIMUM_POINTER_BYTES));
+        let deep_pointer = "/x".repeat(MAXIMUM_POINTER_SEGMENTS + 1);
+        for pointer in [
+            "total",               // no leading separator
+            "/person/names/-1",    // negative index, however it was written
+            "/person/names/01",    // non-canonical index
+            "/person/names/0x1",   // non-numeric index
+            "/person/names/ 0",    // padded index
+            "/bad~",               // dangling escape
+            "/bad~2",              // undefined escape
+            long_pointer.as_str(), // beyond the pointer byte ceiling
+            deep_pointer.as_str(), // beyond the pointer segment ceiling
+        ] {
+            let script = runtime
+                .compile_extraction(&format!(
+                    "fn extract(source_response, parameters) {{
+                        #{{ outcome: \"match\", facts: #{{ value: get_path(source_response, \"{pointer}\") }} }}
+                    }}"
+                ))
+                .expect("compiles");
+            assert_eq!(
+                runtime.extract(&script, &response, &json!({}), &|_: &Value| true),
+                Err(RhaiRuntimeError::Invocation),
+                "{pointer}"
+            );
+        }
+
+        // The ceilings admit the largest well-formed pointer, so the rejections above
+        // are boundary decisions rather than an accidentally narrower primitive.
+        for pointer in [
+            format!("/{}", "x".repeat(MAXIMUM_POINTER_BYTES - 1)),
+            "/x".repeat(MAXIMUM_POINTER_SEGMENTS),
+        ] {
+            let script = runtime
+                .compile_extraction(&format!(
+                    "fn extract(source_response, parameters) {{
+                        #{{ outcome: \"match\", facts: #{{ value: is_missing(get_path(source_response, \"{pointer}\")) }} }}
+                    }}"
+                ))
+                .expect("compiles");
+            assert_eq!(
+                runtime.extract(&script, &response, &json!({}), &|_: &Value| true),
+                Ok(LookupResult::Match(BTreeMap::from([(
+                    "value".to_string(),
+                    json!(true)
+                )]))),
+                "{pointer}"
+            );
+        }
     }
 
     #[test]

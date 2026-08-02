@@ -224,6 +224,10 @@ cross_cutting:
     threat: The configured JWKS path and the served discovery route drift apart.
     enforcement: Bundle validation pins the one Version 1 discovery path and the served route returns the runtime key set at exactly that configured path.
     negative_test: sec-jwks-route-config-parity
+  source_response_shape:
+    threat: A source response outside the shape its adapter was reviewed against reaches the extraction script, so a defect or omission in hand-written protocol checking becomes the only thing standing between a malformed response and fact construction.
+    enforcement: Every source declares a required responseSchema in the closed Version 1 subset. Rust validates the projected response against it after projection and before conversion to Rhai; a response outside its declared shape is a source-protocol failure and no script runs.
+    negative_test: sec-source-response-shape-enforced
   script_resource_exhaustion:
     threat: A hostile or defective reviewed script consumes unbounded execution inside the shared process.
     enforcement: The engine's normative operation ceiling terminates the invocation with a closed value-free error.

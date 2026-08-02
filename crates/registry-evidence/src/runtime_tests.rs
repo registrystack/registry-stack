@@ -3321,8 +3321,8 @@ async fn runtime_rejects_an_extra_extracted_fact_before_derivation_or_release() 
     let mut adapter = fs::read_to_string(&adapter_path).expect("adapter is readable");
     replace_exact(
         &mut adapter,
-        "facts: #{date_of_birth: source_response[\"date_of_birth\"]}",
-        "facts: #{date_of_birth: source_response[\"date_of_birth\"], unexpected_private_fact: \"PrivacyCanary\"}",
+        "facts: #{date_of_birth: date_of_birth}",
+        "facts: #{date_of_birth: date_of_birth, unexpected_private_fact: \"PrivacyCanary\"}",
         1,
     );
     fs::write(adapter_path, adapter).expect("test adapter replacement succeeds");

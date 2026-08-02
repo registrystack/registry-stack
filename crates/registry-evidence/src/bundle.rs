@@ -640,6 +640,7 @@ fn validate_file_closure(
         expected.insert(source.request.prepare_script.as_str().to_owned());
         expected.insert(source.extract_script.as_str().to_owned());
         expected.insert(source.request.adapter_parameters_schema.as_str().to_owned());
+        expected.insert(source.response_schema.as_str().to_owned());
         expected.insert(source.fact_schema.as_str().to_owned());
     }
     for requirement in &config.requirements {
@@ -906,6 +907,20 @@ fn reject_prohibited_script_capabilities(source: &str) -> Result<(), BundleError
     Ok(())
 }
 
+/// Which contract one bundle schema artifact carries. Configuration keeps the
+/// three roles disjoint, so every path resolves to exactly one of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SchemaRole {
+    /// Closed startup parameters; the empty parameter set is legitimate.
+    AdapterParameters,
+    /// Shape of one projected source response. Projection drops a missing
+    /// selected leaf, so a declared property may legitimately be absent.
+    Response,
+    /// Closed fact set handed to derivation, and the reviewed concept schemas held
+    /// to the same rule; every declared property is required.
+    Facts,
+}
+
 fn load_fact_schemas(
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
@@ -915,12 +930,18 @@ fn load_fact_schemas(
         .iter()
         .map(|(_, source)| source.request.adapter_parameters_schema.as_str())
         .collect::<BTreeSet<_>>();
+    let response_paths = config
+        .sources
+        .iter()
+        .map(|(_, source)| source.response_schema.as_str())
+        .collect::<BTreeSet<_>>();
     let mut paths = config
         .sources
         .iter()
         .flat_map(|(_, source)| {
             [
                 source.fact_schema.as_str(),
+                source.response_schema.as_str(),
                 source.request.adapter_parameters_schema.as_str(),
             ]
         })
@@ -929,9 +950,15 @@ fn load_fact_schemas(
     paths.extend(reviewed_schema_paths(config, files)?);
     let mut schemas = BTreeMap::new();
     for path in paths {
-        let is_parameter_schema = parameter_paths.contains(path.as_str());
-        let schema = load_fact_schema(&path, is_parameter_schema, files)
-            .map_err(|error| error.in_artifact(&path))?;
+        let role = if parameter_paths.contains(path.as_str()) {
+            SchemaRole::AdapterParameters
+        } else if response_paths.contains(path.as_str()) {
+            SchemaRole::Response
+        } else {
+            SchemaRole::Facts
+        };
+        let schema =
+            load_fact_schema(&path, role, files).map_err(|error| error.in_artifact(&path))?;
         schemas.insert(path, schema);
     }
     for (_, source) in config.sources.iter() {
@@ -944,7 +971,7 @@ fn load_fact_schemas(
 
 fn load_fact_schema(
     path: &str,
-    is_parameter_schema: bool,
+    role: SchemaRole,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<JsonValue, BundleError> {
     let bytes = files
@@ -954,7 +981,7 @@ fn load_fact_schema(
         std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fact schema is not UTF-8"))?;
     let schema: JsonValue = serde_norway::from_str(text)
         .map_err(|_| invalid_artifact("fact schema YAML is invalid"))?;
-    validate_closed_schema(&schema, is_parameter_schema)?;
+    validate_closed_schema(&schema, role)?;
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
@@ -985,7 +1012,8 @@ fn validate_adapter_parameters(
     Ok(())
 }
 
-fn validate_closed_schema(schema: &JsonValue, allow_empty_root: bool) -> Result<(), BundleError> {
+fn validate_closed_schema(schema: &JsonValue, role: SchemaRole) -> Result<(), BundleError> {
+    let allow_empty_root = role == SchemaRole::AdapterParameters;
     let root = schema
         .as_object()
         .ok_or(invalid_artifact("fact schema must be an object"))?;
@@ -1013,23 +1041,63 @@ fn validate_closed_schema(schema: &JsonValue, allow_empty_root: bool) -> Result<
         .map(JsonValue::as_str)
         .collect::<Option<BTreeSet<_>>>()
         .ok_or(invalid_artifact("fact schema required fields are invalid"))?;
-    if required.len() != properties.len()
-        || properties
-            .keys()
-            .any(|property| !required.contains(property.as_str()))
+    if required
+        .iter()
+        .any(|field| !properties.contains_key(*field))
+        || (role != SchemaRole::Response
+            && properties
+                .keys()
+                .any(|property| !required.contains(property.as_str())))
     {
         return Err(invalid_artifact(
             "fact schema must require its exact closed field set",
         ));
     }
-    validate_schema_node(schema)
+    validate_schema_node(schema, role)
 }
 
-fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
+/// Reads the one type a schema node declares, and returns `None` for a node that
+/// declares a bounded const instead.
+///
+/// A response schema may write that type as the pair `[T, "null"]`. Sources do
+/// report an explicit null where they hold no value, and the projection carries
+/// that null through verbatim, so a response shape has to be able to say so. The
+/// pair is the only union the subset admits, and only in the response role: a
+/// fact or an adapter parameter is never null. `null` reaches the script as the
+/// same unit marker `is_missing` already reads, so one script test covers both an
+/// absent leaf and an explicitly null one.
+fn schema_node_type(
+    object: &JsonMap<String, JsonValue>,
+    role: SchemaRole,
+) -> Result<Option<&str>, BundleError> {
+    match object.get("type") {
+        Some(JsonValue::String(name)) => Ok(Some(name.as_str())),
+        Some(JsonValue::Array(members)) => {
+            let [JsonValue::String(name), JsonValue::String(null_member)] = members.as_slice()
+            else {
+                return Err(invalid_artifact(
+                    "schema node type is outside the closed Version 1 subset",
+                ));
+            };
+            if role != SchemaRole::Response || null_member != "null" || name == "null" {
+                return Err(invalid_artifact(
+                    "schema node type is outside the closed Version 1 subset",
+                ));
+            }
+            Ok(Some(name.as_str()))
+        }
+        Some(_) => Err(invalid_artifact(
+            "schema node type is outside the closed Version 1 subset",
+        )),
+        None => Ok(None),
+    }
+}
+
+fn validate_schema_node(node: &JsonValue, role: SchemaRole) -> Result<(), BundleError> {
     let object = node
         .as_object()
         .ok_or(invalid_artifact("every schema node must be a typed object"))?;
-    let Some(value_type) = object.get("type").and_then(JsonValue::as_str) else {
+    let Some(value_type) = schema_node_type(object, role)? else {
         if object
             .keys()
             .all(|key| matches!(key.as_str(), "$schema" | "$id" | "const"))
@@ -1114,17 +1182,20 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 .ok_or(invalid_artifact(
                     "schema objects must declare required properties",
                 ))?;
-            if required.len() != properties.len()
-                || properties
-                    .keys()
-                    .any(|property| !required.contains(property.as_str()))
+            if required
+                .iter()
+                .any(|field| !properties.contains_key(*field))
+                || (role != SchemaRole::Response
+                    && properties
+                        .keys()
+                        .any(|property| !required.contains(property.as_str())))
             {
                 return Err(invalid_artifact(
                     "schema objects must require their exact property set",
                 ));
             }
             for property in properties.values() {
-                validate_schema_node(property)?;
+                validate_schema_node(property, role)?;
             }
         }
         "array" => {
@@ -1157,6 +1228,7 @@ fn validate_schema_node(node: &JsonValue) -> Result<(), BundleError> {
                 object
                     .get("items")
                     .ok_or(invalid_artifact("schema arrays must close their item type"))?,
+                role,
             )?;
         }
         "string" => {
@@ -1935,7 +2007,7 @@ mod tests {
             assert!(bundle.configuration_revision().starts_with("sha256:"));
             assert_eq!(bundle.configuration_revision().len(), 71);
             assert_eq!(bundle.scripts.len(), 3);
-            assert_eq!(bundle.fact_schemas.len(), 2);
+            assert_eq!(bundle.fact_schemas.len(), 3);
             assert_eq!(bundle.fixtures.len(), 1);
 
             set_tree_mode(directory.path(), 0o755, 0o444);
@@ -1953,7 +2025,7 @@ mod tests {
         assert_eq!(bundle.config.requirements.len(), 4);
         assert_eq!(bundle.config.sources.len(), 4);
         assert_eq!(bundle.scripts.len(), 12);
-        assert_eq!(bundle.fact_schemas.len(), 8);
+        assert_eq!(bundle.fact_schemas.len(), 12);
         assert_eq!(bundle.fixtures.len(), 4);
         assert_eq!(bundle.codelists.len(), 3);
 

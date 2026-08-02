@@ -1,0 +1,19 @@
+# Closed schema for the projected source response of source-a. The runtime
+# checks it before the extract script runs, so the script maps a response whose
+# shape it can rely on and never re-checks presence or type by hand.
+#
+# Unlike the facts schema, a declared property need not be required: projection
+# drops a selected leaf the source did not return, so an optional leaf here is
+# the honest description of the boundary. Require only what the source always
+# returns, and let the script decide what an absent leaf means.
+type: object
+additionalProperties: false
+required: [total]
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000000
+  event_date:
+    type: string
+    format: date

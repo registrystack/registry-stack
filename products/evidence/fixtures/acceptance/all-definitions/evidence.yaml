@@ -81,6 +81,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/adult-status-response.schema.yaml
     extractScript: adapters/adult-status-source.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
   source-b:
@@ -104,6 +105,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/residence-region-response.schema.yaml
     extractScript: adapters/residence-region-source.rhai
     factSchema: schemas/residence-region-facts.schema.yaml
   source-c:
@@ -130,6 +132,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 131072
       concurrencyLimit: 8
+    responseSchema: schemas/professional-licence-response.schema.yaml
     extractScript: adapters/professional-licence-source.rhai
     factSchema: schemas/professional-licence-facts.schema.yaml
   source-d:
@@ -158,6 +161,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/legal-parent-relationship-response.schema.yaml
     extractScript: adapters/legal-parent-relationship-source.rhai
     factSchema: schemas/legal-parent-relationship-facts.schema.yaml
 

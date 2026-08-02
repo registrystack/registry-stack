@@ -18,6 +18,8 @@ resource_limits:
   maximum_query_pairs: 64
   maximum_query_name_bytes: 64
   maximum_query_value_bytes: 4096
+  maximum_pointer_bytes: 256
+  maximum_pointer_segments: 16
   maximum_json_body_depth: 32
   timeout_behavior: operation limit is normative; any outer wall-time limit only aborts and never changes results
 primitives:
@@ -87,6 +89,9 @@ primitives:
   is_missing:
     signature: Option<T> -> boolean
     behavior: Explicit missing-value test with no implicit coercion.
+  get_path:
+    signature: '[value, string] -> Option<value>'
+    behavior: Resolves one bounded RFC 6901 JSON Pointer against a local value and returns the value found, or the missing marker when any segment resolves to nothing. Only ~0 and ~1 escapes are recognized. An array segment must be a non-negative decimal integer with no leading zero. A pointer that is not resolvable syntax, exceeds 256 bytes, or exceeds 16 segments is a script fault and fails the invocation rather than answering missing.
 global_rules:
   - Primitives are pure, deterministic, typed, bounded, and domain-neutral.
   - Strings are compared as exact UTF-8 values; no Unicode normalization, case folding, transliteration, or phonetics occurs.

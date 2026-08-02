@@ -1,16 +1,11 @@
+// The response schema has already refused anything outside the declared shape,
+// so what remains here is what a shape cannot state: how total relates to the
+// records returned, and which values must agree with the adapter parameters.
 fn extract(source_response, parameters) {
-    if len(source_response) != 2 ||
-       !source_response.contains("total") ||
-       !source_response.contains("results") ||
-       type_of(source_response["total"]) != "i64" ||
-       source_response["total"] < 0 ||
-       type_of(source_response["results"]) != "array" ||
-       source_response["results"].len > parameters["resultLimit"] {
-        throw("source_protocol_error");
-    }
-
     let total = source_response["total"];
     let results = source_response["results"];
+    if results.len > parameters["resultLimit"] { throw("source_protocol_error"); }
+
     if total == 0 {
         if results.len != 0 { throw("source_protocol_error"); }
         return #{outcome: "no_match"};
@@ -22,14 +17,13 @@ fn extract(source_response, parameters) {
     if results.len != 1 { throw("source_protocol_error"); }
 
     let result = results[0];
-    if !result.contains("type") ||
-       !result.contains("status") ||
-       result["type"] != parameters["eventType"] ||
+    // The shape cannot require these of every record, because the ambiguous
+    // page is decided before any record is read. The date field is named by an
+    // adapter parameter, so its presence is parameter-dependent besides.
+    if result["type"] != parameters["eventType"] ||
        result["status"] != parameters["registeredStatus"] ||
-       !result.contains("trackingId") ||
-       type_of(result["trackingId"]) != "string" ||
-       !result.contains(parameters["dateField"]) ||
-       type_of(result[parameters["dateField"]]) != "string" {
+       is_missing(result["trackingId"]) ||
+       !result.contains(parameters["dateField"]) {
         throw("source_protocol_error");
     }
 

@@ -1,0 +1,28 @@
+# Shape of the projected event-search response, checked by Rust before
+# extract/2 runs. Neither parent reference is required: a registered record may
+# name one parent or two, and how many suffice is a requirement decision the
+# script keeps.
+type: object
+additionalProperties: false
+required: [total, results]
+properties:
+  total: {type: integer, minimum: 0, maximum: 1000000}
+  results:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [type, status, trackingId, declaration]
+      properties:
+        type: {type: string, minLength: 1, maxLength: 64}
+        status: {type: string, minLength: 1, maxLength: 64}
+        trackingId: {type: string, minLength: 1, maxLength: 64}
+        declaration:
+          type: object
+          additionalProperties: false
+          required: []
+          properties:
+            mother.personReference: {type: string, minLength: 1, maxLength: 128}
+            father.personReference: {type: string, minLength: 1, maxLength: 128}

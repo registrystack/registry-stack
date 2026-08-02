@@ -191,6 +191,10 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_reset_transport_failure_yields_exactly_one_connection_attempt}
   - id: sec-jwks-route-config-parity
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: configured_jwks_path_is_mechanically_the_served_route}]
+  - id: sec-source-response-shape-enforced
+    tests:
+      - {file: crates/registry-evidence/src/kernel.rs, name: a_projected_response_outside_its_declared_shape_fails_before_extraction}
+      - {file: crates/registry-evidence/src/config.rs, name: source_schema_roles_are_mandatory_distinct_and_directory_scoped}
   - id: sec-script-operation-exhaustion
     tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]
   - id: sec-reserved-header-aliases-closed

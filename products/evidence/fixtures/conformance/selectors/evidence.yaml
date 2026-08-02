@@ -85,6 +85,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/classification-source.rhai
     factSchema: schemas/facts.schema.yaml
   context-source:
@@ -109,6 +110,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/context-source.rhai
     factSchema: schemas/facts.schema.yaml
   grant-source:
@@ -133,6 +135,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/grant-source.rhai
     factSchema: schemas/facts.schema.yaml
   relationship-source:
@@ -162,6 +165,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/relationship-source.rhai
     factSchema: schemas/facts.schema.yaml
   opaque-source:
@@ -186,6 +190,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/opaque-source.rhai
     factSchema: schemas/facts.schema.yaml
 authorityProfiles:

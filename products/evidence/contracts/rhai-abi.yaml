@@ -33,7 +33,7 @@ functions:
   extraction:
     signature: extract(projected_source_response, adapter_parameters) -> LookupResult
     input:
-      projected_source_response: Parsed JSON from the one completed evidence-data request after pre-projection response bounds and the Rust-enforced extended JSON Pointer allowlist. The projected tree handed to extraction is limited to 65536 serialized bytes; the 1 MiB wire-response maximum bounds the pre-projection response and the two limits are compatible layers. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float; provider identifiers outside that range must be represented as strings.
+      projected_source_response: Parsed JSON from the one completed evidence-data request after pre-projection response bounds, the Rust-enforced extended JSON Pointer allowlist, and validation against the source's declared responseSchema, so a response outside its declared shape never reaches this script. The projected tree handed to extraction is limited to 65536 serialized bytes; the 1 MiB wire-response maximum bounds the pre-projection response and the two limits are compatible layers. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float; provider identifiers outside that range must be represented as strings.
       adapter_parameters: A fresh copy of the same closed non-secret parameters supplied to preparation.
       prohibited:
         - selectors or prepared request parts

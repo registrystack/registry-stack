@@ -513,6 +513,7 @@ sources:
       redirects: deny
       timeout: PT3S
       maximum_response_bytes: 65536
+    response_schema: schemas/civil-registry-response.schema.yaml
     extract_script: adapters/civil-registry-extract.rhai
     fact_schema: schemas/civil-registry-facts.schema.yaml
 
@@ -568,6 +569,15 @@ Pointer projection before extraction. Unselected object keys are removed,
 array order and length are preserved, and missing leaves remain missing. The
 acquisition posture still describes the pre-projection wire response. Exact
 projection grammar and conflict rules are part of the reviewed adapter ABI.
+
+Rust then validates the projected tree against the source's required response
+schema, a closed JSON Schema in the same subset as the adapter-parameter and
+fact schemas. A response outside the shape the adapter was reviewed against is
+a source-protocol failure and no script runs, so hand-written protocol checking
+is not the only thing standing between a malformed response and fact
+construction. What stays with the script is what a shape cannot state, such as
+how a reported total agrees with the records returned and which values must
+agree with the closed adapter parameters.
 
 A Version 1 source must provide a bounded lookup that can establish zero, one,
 or multiple results from the configured selector. If an existing system cannot

@@ -102,6 +102,8 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 262144
       concurrencyLimit: 8
+    # Shape contract for the projected response, checked before extraction runs.
+    responseSchema: schemas/birth-adult-response.schema.yaml
     extractScript: adapters/birth-adult-extract.rhai
     factSchema: schemas/birth-adult-facts.schema.yaml
   registered-birth-parents:
@@ -164,6 +166,8 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 262144
       concurrencyLimit: 8
+    # Shape contract for the projected response, checked before extraction runs.
+    responseSchema: schemas/birth-parents-response.schema.yaml
     extractScript: adapters/birth-parents-extract.rhai
     factSchema: schemas/birth-parents-facts.schema.yaml
 authorityProfiles:

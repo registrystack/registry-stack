@@ -231,6 +231,7 @@ sources:
       kind: static-bearer
       tokenRef: secret:file/source-token
     request: {}
+    responseSchema: schemas/source-a-response.schema.yaml
     extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/source-a-facts.schema.yaml
 ```
@@ -243,8 +244,27 @@ sources:
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. |
 | `request` | yes | One fixed evidence-data request plan. |
+| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before `extract/2` runs. |
 | `extractScript` | yes | Bundle-relative Rhai script implementing `extract/2`. |
 | `factSchema` | yes | Bundle-relative closed JSON Schema for match facts. |
+
+`responseSchema` states the shape the adapter was reviewed against, so the
+script never has to prove it by hand. A response outside that shape is a
+source-protocol failure and no script runs. Two rules differ from the fact and
+adapter-parameter roles, because the projected tree is not the wire response:
+
+- A response schema may require fewer members than it declares properties.
+  Projection drops a selected leaf the record did not carry, and a page decided
+  ambiguous is never read record by record, so a record on that page need not
+  be complete.
+- A response schema node may write its type as the pair `[T, "null"]`. A source
+  that reports an explicit null where it holds no value has that null carried
+  through projection verbatim; the script reads it with `is_missing`, exactly as
+  it reads an absent leaf. This is the only union the subset admits.
+
+What stays with the script is what a shape cannot state: how a reported total
+agrees with the records returned, page-count arithmetic, uniqueness across
+fields, and which values must agree with the closed adapter parameters.
 
 ### Source authentication
 

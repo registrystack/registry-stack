@@ -30,6 +30,7 @@ validated_source_definition:
     timeoutMilliseconds: 3000
     maximumResponseBytes: 65536
     concurrencyLimit: 4
+  responseSchema: schemas/response.schema.yaml
   extractScript: adapters/flat-rest.rhai
   factSchema: schemas/facts.schema.yaml
 request:

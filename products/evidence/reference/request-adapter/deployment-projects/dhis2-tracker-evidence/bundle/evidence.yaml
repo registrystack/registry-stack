@@ -97,6 +97,8 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    # Shape contract for the projected response, checked before extraction runs.
+    responseSchema: schemas/adult-status-response.schema.yaml
     extractScript: adapters/adult-status-extract.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
   professional-licence-register:
@@ -156,6 +158,8 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    # Shape contract for the projected response, checked before extraction runs.
+    responseSchema: schemas/professional-licence-response.schema.yaml
     extractScript: adapters/professional-licence-extract.rhai
     factSchema: schemas/professional-licence-facts.schema.yaml
 authorityProfiles:

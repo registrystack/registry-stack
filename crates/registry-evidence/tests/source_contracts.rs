@@ -89,6 +89,7 @@ fn source_config(
             "maximumResponseBytes": 65536,
             "concurrencyLimit": 4
         },
+        "responseSchema": "schemas/response.schema.yaml",
         "extractScript": "adapters/extract.rhai",
         "factSchema": "schemas/facts.schema.yaml"
     }))
@@ -810,6 +811,15 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         .expect("fact schema parses");
         let fact_schema =
             jsonschema::JSONSchema::compile(&fact_schema_value).expect("fact schema compiles");
+        let response_schema_value: Value = serde_norway::from_str(
+            &fs::read_to_string(directory.join(source.response_schema.as_str()))
+                .expect("response schema is readable"),
+        )
+        .expect("response schema parses");
+        let response_schema = jsonschema::JSONSchema::options()
+            .should_validate_formats(true)
+            .compile(&response_schema_value)
+            .expect("response schema compiles");
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .expect("adapter parameters serialize");
         let (script_selectors, transport_selectors) = shape_selectors(id);
@@ -943,6 +953,26 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             .execute(&transport_selectors, &prepared)
             .await
             .expect("frozen shape executes through the production transport");
+        // Every committed cardinality response of the shape has to sit inside the
+        // declared response schema, because the runtime refuses the response
+        // before extraction otherwise.
+        for case in ["match", "no-match", "ambiguous", "missing-fact"] {
+            let recorded: Value = serde_json::from_slice(
+                &fs::read(directory.join(format!("responses/{case}.json")))
+                    .expect("cardinality response fixture is readable"),
+            )
+            .expect("cardinality response fixture is JSON");
+            let recorded = project_fixture_response(&source, &recorded)
+                .expect("cardinality response fixture projects");
+            assert!(
+                response_schema.is_valid(&recorded),
+                "{id}: committed {case} response is outside the declared response schema"
+            );
+        }
+        assert!(
+            response_schema.is_valid(&projected),
+            "{id}: transport-backed response is outside the declared response schema"
+        );
         let facts = match runtime
             .extract(&extraction, &projected, &parameters, &fact_schema)
             .expect("projected transport response extracts")

@@ -1,23 +1,20 @@
 // The licence register nests the governing state one level deeper than the
 // population register: the tracked entity carries the licence validity dates,
 // its enrollment in the licence programme carries the licence state, and that
-// enrollment's events carry any recorded practice restriction. Extraction reads
-// exactly that nesting and nothing else.
+// enrollment's events carry any recorded practice restriction. The response
+// schema states that nesting, so this script reads it without re-checking it,
+// and keeps only the readings a shape cannot express.
 
 fn licence_enrollments(record, parameters) {
     let selected = [];
-    if !record.contains("enrollments") {
+    // A tracked entity with no enrollment at all is a record carrying no
+    // licence state, not a malformed response, so absence is read as an empty
+    // selection.
+    let enrollments = get_path(record, "/enrollments");
+    if is_missing(enrollments) {
         return selected;
     }
-    if type_of(record["enrollments"]) != "array" {
-        throw("source_protocol_error");
-    }
-    for enrollment in record["enrollments"] {
-        if type_of(enrollment) != "map" ||
-           !enrollment.contains("program") ||
-           type_of(enrollment["program"]) != "string" {
-            throw("source_protocol_error");
-        }
+    for enrollment in enrollments {
         if enrollment["program"] == parameters["program"] {
             selected.push(enrollment);
         }
@@ -38,21 +35,12 @@ fn unrecorded_restriction(parameters) {
 }
 
 fn restriction_recorded(enrollment, parameters) {
-    if !enrollment.contains("events") {
+    let events = get_path(enrollment, "/events");
+    if is_missing(events) {
         return unrecorded_restriction(parameters);
     }
-    if type_of(enrollment["events"]) != "array" {
-        throw("source_protocol_error");
-    }
     let stage_present = false;
-    for event in enrollment["events"] {
-        if type_of(event) != "map" ||
-           !event.contains("programStage") ||
-           !event.contains("status") ||
-           type_of(event["programStage"]) != "string" ||
-           type_of(event["status"]) != "string" {
-            throw("source_protocol_error");
-        }
+    for event in events {
         if event["programStage"] == parameters["restrictionStage"] {
             if event["status"] == parameters["completedEventStatus"] {
                 return true;
@@ -67,31 +55,8 @@ fn restriction_recorded(enrollment, parameters) {
 }
 
 fn extract(source_response, parameters) {
-    if !source_response.contains("pager") ||
-       !source_response.contains("trackedEntities") ||
-       type_of(source_response["pager"]) != "map" ||
-       type_of(source_response["trackedEntities"]) != "array" {
-        throw("source_protocol_error");
-    }
-
     let pager = source_response["pager"];
     let records = source_response["trackedEntities"];
-    if pager.len() != 4 ||
-       !pager.contains("page") ||
-       !pager.contains("pageSize") ||
-       !pager.contains("total") ||
-       !pager.contains("pageCount") ||
-       type_of(pager["page"]) != "i64" ||
-       type_of(pager["pageSize"]) != "i64" ||
-       type_of(pager["total"]) != "i64" ||
-       type_of(pager["pageCount"]) != "i64" ||
-       pager["page"] != 1 ||
-       pager["pageSize"] != 2 ||
-       pager["total"] < 0 ||
-       records.len > 2 {
-        throw("source_protocol_error");
-    }
-
     let total = pager["total"];
     if pager["pageCount"] != (total + pager["pageSize"] - 1) / pager["pageSize"] {
         throw("source_protocol_error");
@@ -108,34 +73,19 @@ fn extract(source_response, parameters) {
     if records.len != 1 { throw("source_protocol_error"); }
 
     let record = records[0];
-    if !record.contains("trackedEntity") ||
-       type_of(record["trackedEntity"]) != "string" ||
-       !record.contains("attributes") ||
-       type_of(record["attributes"]) != "array" {
-        throw("source_protocol_error");
-    }
-
+    // The validity attributes are named by adapter parameters, and a register
+    // that reports one of them twice has no single value to read, so this loop
+    // stays.
     let valid_from = ();
     let valid_until = ();
     let from_matches = 0;
     let until_matches = 0;
     for attribute in record["attributes"] {
-        if type_of(attribute) != "map" ||
-           !attribute.contains("attribute") ||
-           !attribute.contains("value") {
-            throw("source_protocol_error");
-        }
         if attribute["attribute"] == parameters["validFromAttribute"] {
-            if type_of(attribute["value"]) != "string" {
-                throw("source_protocol_error");
-            }
             valid_from = attribute["value"];
             from_matches += 1;
         }
         if attribute["attribute"] == parameters["validUntilAttribute"] {
-            if type_of(attribute["value"]) != "string" {
-                throw("source_protocol_error");
-            }
             valid_until = attribute["value"];
             until_matches += 1;
         }
@@ -156,10 +106,6 @@ fn extract(source_response, parameters) {
     }
     if enrollments.len == 1 {
         let enrollment = enrollments[0];
-        if !enrollment.contains("status") ||
-           type_of(enrollment["status"]) != "string" {
-            throw("source_protocol_error");
-        }
         facts["licence_state"] = enrollment["status"];
         let restricted = restriction_recorded(enrollment, parameters);
         if type_of(restricted) == "bool" {

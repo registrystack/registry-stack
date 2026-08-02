@@ -187,6 +187,7 @@ pub struct OfflineKernel {
     extractions: BTreeMap<String, CompiledExtraction>,
     request_parts_limits: BTreeMap<String, RequestPartsLimits>,
     derivations: BTreeMap<String, CompiledDerivation>,
+    response_schemas: BTreeMap<String, JSONSchema>,
     fact_schemas: BTreeMap<String, JSONSchema>,
     reviewed_schemas: BTreeMap<String, JSONSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
@@ -209,6 +210,7 @@ impl OfflineKernel {
         let mut preparations = BTreeMap::new();
         let mut extractions = BTreeMap::new();
         let mut request_parts_limits = BTreeMap::new();
+        let mut response_schemas = BTreeMap::new();
         let mut fact_schemas = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
             let preparation = bundle
@@ -230,6 +232,11 @@ impl OfflineKernel {
                 source_id.to_owned(),
                 compile_request_parts_limits(&source.request.preparation_limits)?,
             );
+
+            let response_schema = bundle
+                .fact_schema(&source.response_schema)
+                .ok_or(KernelError::Bundle)?;
+            response_schemas.insert(source_id.to_owned(), compile_schema(response_schema)?);
 
             let schema = bundle
                 .fact_schema(&source.fact_schema)
@@ -277,6 +284,7 @@ impl OfflineKernel {
             extractions,
             request_parts_limits,
             derivations,
+            response_schemas,
             fact_schemas,
             reviewed_schemas,
             codelist_handles,
@@ -348,6 +356,17 @@ impl OfflineKernel {
             .sources
             .get(&requirement.source)
             .ok_or(KernelError::Bundle)?;
+        // The declared response shape is checked in Rust before any script sees
+        // the response, so extraction maps a response it can rely on and a
+        // provider that breaks its protocol fails closed the same way whether
+        // or not the script happens to test for it.
+        let response_schema = self
+            .response_schemas
+            .get(&requirement.source)
+            .ok_or(KernelError::Bundle)?;
+        if !response_schema.is_valid(source_response) {
+            return Err(KernelError::SourceProtocol);
+        }
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .map_err(|_| KernelError::Bundle)?;
         self.runtime
@@ -1192,6 +1211,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_projected_response_outside_its_declared_shape_fails_before_extraction() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+
+        // The declared response shape is the extraction contract. Rust refuses
+        // a response the script would otherwise have to re-check by hand, and
+        // the refusal is the same closed source-protocol class the script
+        // would have raised.
+        for response in [
+            json!({}),
+            json!({"total": "1"}),
+            json!({"total": -1}),
+            json!({"total": 1, "unexpected": true}),
+            json!({"total": 1, "date_of_birth": 19700101}),
+            json!({"total": 1, "date_of_birth": "1970-13-01"}),
+        ] {
+            assert_eq!(
+                kernel.extract(&requirement.id, &response),
+                Err(KernelError::SourceProtocol),
+                "{response}"
+            );
+        }
+
+        // An absent optional leaf is legitimate after projection, so it stays a
+        // script decision rather than a shape violation.
+        assert_eq!(
+            kernel.extract(&requirement.id, &json!({"total": 1})),
+            Err(KernelError::Extraction)
+        );
+        assert_eq!(
+            kernel.extract(
+                &requirement.id,
+                &json!({"total": 1, "date_of_birth": "1970-01-01"})
+            ),
+            Ok(LookupResult::Match(BTreeMap::from([(
+                "date_of_birth".to_owned(),
+                json!("1970-01-01")
+            )])))
+        );
     }
 
     #[test]

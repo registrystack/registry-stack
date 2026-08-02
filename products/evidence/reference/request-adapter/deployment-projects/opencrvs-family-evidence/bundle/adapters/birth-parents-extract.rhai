@@ -1,16 +1,12 @@
+// The response schema has already refused anything outside the declared shape,
+// so what remains here is what a shape cannot state: how total relates to the
+// records returned, which values must agree with the adapter parameters, and
+// how many distinct parent references a registered record must carry.
 fn extract(source_response, parameters) {
-    if len(source_response) != 2 ||
-       !source_response.contains("total") ||
-       !source_response.contains("results") ||
-       type_of(source_response["total"]) != "i64" ||
-       source_response["total"] < 0 ||
-       type_of(source_response["results"]) != "array" ||
-       source_response["results"].len > parameters["resultLimit"] {
-        throw("source_protocol_error");
-    }
-
     let total = source_response["total"];
     let results = source_response["results"];
+    if results.len > parameters["resultLimit"] { throw("source_protocol_error"); }
+
     if total == 0 {
         if results.len != 0 { throw("source_protocol_error"); }
         return #{outcome: "no_match"};
@@ -22,23 +18,18 @@ fn extract(source_response, parameters) {
     if results.len != 1 { throw("source_protocol_error"); }
 
     let result = results[0];
-    if !result.contains("type") ||
-       !result.contains("status") ||
-       result["type"] != parameters["eventType"] ||
-       result["status"] != parameters["registeredStatus"] ||
-       !result.contains("trackingId") ||
-       type_of(result["trackingId"]) != "string" ||
-       !result.contains("declaration") ||
-       type_of(result["declaration"]) != "map" {
+    if result["type"] != parameters["eventType"] ||
+       result["status"] != parameters["registeredStatus"] {
         throw("source_protocol_error");
     }
 
+    // The reference fields are named by an adapter parameter, and two named
+    // fields must not resolve to the same person, so this loop stays.
     let parent_references = [];
     for field in parameters["parentReferenceFields"] {
         if result["declaration"].contains(field) {
             let reference = result["declaration"][field];
-            if type_of(reference) != "string" || reference == "" ||
-               list_contains(parent_references, reference) {
+            if list_contains(parent_references, reference) {
                 throw("source_protocol_error");
             }
             parent_references.push(reference);

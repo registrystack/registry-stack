@@ -102,6 +102,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 8
+    responseSchema: schemas/source-a-response.schema.yaml
     extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/source-a-facts.schema.yaml
 requirements:
@@ -227,6 +228,34 @@ or mistyped intermediate container is a source-protocol failure before Rhai.
 An empty projection, duplicate path, invalid escape, overlapping ancestor and
 descendant paths, or path that cannot be reconciled with another selected path
 fails bundle validation.
+
+### Declared response shape
+
+Every source declares a required `responseSchema`: a bundle-relative closed
+JSON Schema, in the same subset as `adapterParametersSchema` and `factSchema`,
+describing the projected tree. Rust validates the projected response against it
+after projection and before conversion to Rhai, so a response outside the shape
+the adapter was reviewed against never reaches a script; that is a
+source-protocol failure like any other.
+
+Two rules differ from the fact and adapter-parameter roles, because the
+projected tree is not the wire response:
+
+- It may require fewer members than it declares properties. Projection drops a
+  selected leaf the record did not carry, and a page decided ambiguous is never
+  read record by record, so a record on that page need not be complete.
+- A node may write its type as the pair `[T, "null"]`. A source that reports an
+  explicit null where it holds no value has that null carried through
+  projection verbatim, and it reaches the script as the same unit marker
+  `is_missing` already reads. This is the only union the subset admits, and
+  only in this role: a fact and an adapter parameter are never null.
+
+State in the schema what a shape can state: member presence where it is
+guaranteed, member types, array bounds and uniqueness, string bounds and
+formats, and enumerated or constant values. What remains for the script is what
+a shape cannot state, such as how a reported total agrees with the records
+returned, page-count arithmetic, and which values must agree with the closed
+adapter parameters.
 
 Response byte limits and JSON parsing bounds apply before projection, so the
 configured `maximumResponseBytes` describes the wire body Evidence is willing
@@ -518,6 +547,7 @@ Rust can supply through derivation context.
 | `required` | `(value, safe_error_code) -> value`; unit becomes the closed unavailable outcome; the code must match `[a-z][a-z0-9_]*` and be at most 64 ASCII bytes |
 | `required` code handling | The bundle-owned code is validated for shape and then discarded. It documents the reviewed script; it never reaches the public problem, audit, logs, or the raised signal, which is a host-private, unforgeable, uncatchable value |
 | `is_missing` | `value -> bool`; true only for unit |
+| `get_path` | `(value, json_pointer) -> value`; resolves one RFC 6901 pointer and returns unit when any segment resolves to nothing. Only `~0` and `~1` escapes; an array segment is a non-negative decimal integer with no leading zero. A pointer that is not resolvable syntax, exceeds 256 bytes, or exceeds 16 segments is a script fault and fails the invocation rather than answering missing |
 
 `NumericBucket` has exactly `minimumInclusive: Decimal`,
 `maximumExclusive: Decimal`, and `code: string`. `LegalLocalTime` is another
@@ -597,6 +627,8 @@ These engine ceilings apply independently of script logic:
 | Entries per codelist | 4,096 |
 | Numeric buckets | 64 |
 | Entity-reference seeds in one derived value | 64 |
+| `get_path` pointer | 256 bytes |
+| `get_path` pointer segments | 16 |
 | Entity-reference seed input | 512 bytes |
 | `required` error code | 64 ASCII bytes |
 | Exact decimal precision | 28 significant digits |

@@ -13,7 +13,7 @@ real system yet, and every identifier is in the `urn:example:scaffold` namespace
     evidence.yaml         the deployment contract
     adapters/             request preparation and fact extraction (Rhai)
     derivations/          requirement derivation (Rhai)
-    schemas/              closed adapter-parameter and fact schemas
+    schemas/              closed adapter-parameter, response, and fact schemas
     fixtures/             synthetic acceptance cases
   runtime.yaml            process-local paths and listener, not governed
   secrets/                key material, created empty with mode 0700

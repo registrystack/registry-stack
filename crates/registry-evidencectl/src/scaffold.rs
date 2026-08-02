@@ -85,7 +85,7 @@ struct ProjectFile {
     template: &'static str,
 }
 
-const PROJECT_FILES: [ProjectFile; 10] = [
+const PROJECT_FILES: [ProjectFile; 11] = [
     ProjectFile {
         relative: "README.md",
         template: include_str!("../templates/README.md"),
@@ -117,6 +117,10 @@ const PROJECT_FILES: [ProjectFile; 10] = [
     ProjectFile {
         relative: "bundle/schemas/adapter-parameters.schema.yaml",
         template: include_str!("../templates/bundle/schemas/adapter-parameters.schema.yaml"),
+    },
+    ProjectFile {
+        relative: "bundle/schemas/response.schema.yaml",
+        template: include_str!("../templates/bundle/schemas/response.schema.yaml"),
     },
     ProjectFile {
         relative: "bundle/schemas/facts.schema.yaml",

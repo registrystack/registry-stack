@@ -395,6 +395,14 @@ impl EvidenceConfig {
         let mut evidence_types = BTreeSet::new();
         let mut concept_ids = BTreeSet::new();
         let mut disclosure_families = BTreeSet::new();
+        // One artifact carries one schema role for the whole bundle: reviewing
+        // it as a response contract must not silently also accept it as a fact
+        // or adapter-parameter contract somewhere else.
+        let response_schemas = self
+            .sources
+            .iter()
+            .map(|(_, source)| source.response_schema.as_str())
+            .collect::<BTreeSet<_>>();
         let fact_schemas = self
             .sources
             .iter()
@@ -405,8 +413,11 @@ impl EvidenceConfig {
             .iter()
             .map(|(_, source)| source.request.adapter_parameters_schema.as_str())
             .collect::<BTreeSet<_>>();
-        if !fact_schemas.is_disjoint(&parameter_schemas) {
-            return invalid("fact and adapter-parameter schema roles must not overlap");
+        if !fact_schemas.is_disjoint(&parameter_schemas)
+            || !response_schemas.is_disjoint(&fact_schemas)
+            || !response_schemas.is_disjoint(&parameter_schemas)
+        {
+            return invalid("source schema roles must not overlap across sources");
         }
         for requirement in &self.requirements {
             requirement.validate()?;
@@ -1366,6 +1377,9 @@ pub struct SourceConfig {
     pub tls_trust_profile: Option<String>,
     pub authentication: SourceAuthentication,
     pub request: FixedRequest,
+    /// Shape contract for the projected response, validated by Rust before
+    /// extraction runs, so the script maps a response it can rely on.
+    pub response_schema: ArtifactPath,
     pub extract_script: ArtifactPath,
     pub fact_schema: ArtifactPath,
 }
@@ -1394,9 +1408,16 @@ impl SourceConfig {
                 "source adapter name must be a local identifier",
             ))?;
         debug_assert!(!adapter_id.is_empty());
+        require_artifact_prefix(&self.response_schema, "schemas/")?;
         require_artifact_prefix(&self.fact_schema, "schemas/")?;
-        if self.fact_schema == self.request.adapter_parameters_schema {
-            return invalid("fact and adapter-parameter schemas must be distinct artifacts");
+        let roles = [
+            self.response_schema.as_str(),
+            self.fact_schema.as_str(),
+            self.request.adapter_parameters_schema.as_str(),
+        ];
+        let distinct = roles.iter().collect::<BTreeSet<_>>();
+        if distinct.len() != roles.len() {
+            return invalid("source schema roles must be distinct artifacts");
         }
         Ok(())
     }
@@ -3480,6 +3501,66 @@ mod tests {
         let misspelled = valid.replacen("codelistVersion", "codelist_version", 1);
         assert_ne!(misspelled, valid, "fixture mutation must remain effective");
         assert!(EvidenceConfig::parse_yaml(misspelled.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn source_schema_roles_are_mandatory_distinct_and_directory_scoped() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+        assert!(EvidenceConfig::parse_yaml(valid.as_bytes()).is_ok());
+
+        for (from, to) in [
+            // The response contract is mandatory, so extraction never runs
+            // behind an undeclared response shape.
+            ("    responseSchema: schemas/response.schema.yaml\n", ""),
+            // Every schema artifact is directory-scoped like the other roles.
+            (
+                "responseSchema: schemas/response.schema.yaml",
+                "responseSchema: adapters/response.schema.yaml",
+            ),
+            // One artifact cannot carry two schema roles inside one source.
+            (
+                "responseSchema: schemas/response.schema.yaml",
+                "responseSchema: schemas/facts.schema.yaml",
+            ),
+            (
+                "responseSchema: schemas/response.schema.yaml",
+                "responseSchema: schemas/adapter-parameters.schema.yaml",
+            ),
+        ] {
+            let mutated = valid.replace(from, to);
+            assert_ne!(mutated, valid, "fixture mutation must remain effective");
+            assert!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
+                "{to}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_roles_do_not_overlap_across_sources() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+        assert!(EvidenceConfig::parse_yaml(valid.as_bytes()).is_ok());
+
+        // One artifact validating a response for one source and facts for
+        // another would make a single review cover two different contracts.
+        let crossed = valid.replacen(
+            "responseSchema: schemas/adult-status-response.schema.yaml",
+            "responseSchema: schemas/residence-region-facts.schema.yaml",
+            1,
+        );
+        assert_ne!(crossed, valid, "fixture mutation must remain effective");
+        assert!(matches!(
+            EvidenceConfig::parse_yaml(crossed.as_bytes()),
+            Err(ConfigError::Invalid(
+                "source schema roles must not overlap across sources"
+            ))
+        ));
     }
 
     #[test]

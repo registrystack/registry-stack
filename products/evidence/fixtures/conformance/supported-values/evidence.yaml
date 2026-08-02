@@ -72,6 +72,7 @@ sources:
       timeoutMilliseconds: 3000
       maximumResponseBytes: 65536
       concurrencyLimit: 2
+    responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source.rhai
     factSchema: schemas/facts.schema.yaml
 authorityProfiles:

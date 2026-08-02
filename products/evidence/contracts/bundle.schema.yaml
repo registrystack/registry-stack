@@ -186,7 +186,7 @@ $defs:
   source:
     type: object
     additionalProperties: false
-    required: [transport, baseUrl, posture, authentication, request, extractScript, factSchema]
+    required: [transport, baseUrl, posture, authentication, request, responseSchema, extractScript, factSchema]
     properties:
       transport: {const: http-json}
       baseUrl:
@@ -197,6 +197,7 @@ $defs:
       tlsTrustProfile: {$ref: '#/$defs/local-id'}
       authentication: {$ref: '#/$defs/source-authentication'}
       request: {$ref: '#/$defs/fixed-request'}
+      responseSchema: {$ref: '#/$defs/relative-path'}
       extractScript: {$ref: '#/$defs/relative-path'}
       factSchema: {$ref: '#/$defs/relative-path'}
   source-authentication:
