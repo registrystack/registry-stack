@@ -1,0 +1,76 @@
+# Compose deployment for the adopter and development images built by
+# docker/Dockerfile (see docker/README.md for the build commands and the
+# container contract this file encodes). These images are not release
+# evidence, and neither is this file.
+#
+# Required environment:
+#   EVIDENCE_PROJECT_DIR  absolute path to an evidencectl deployment project
+#                         (the directory holding runtime.yaml, bundle/ and
+#                         secrets/)
+#
+# Optional environment:
+#   EVIDENCE_IMAGE        image tag for the evidence service
+#   MINT_IMAGE            image tag for the mint service
+#   MINT_PROJECT_DIR      mint configuration directory; defaults to the
+#                         mint/ directory a `--with-mint` scaffold creates
+#                         inside the project
+#
+# The mint service only starts under the `mint` profile:
+#   docker compose --profile mint up
+name: registry-evidence
+
+services:
+  evidence:
+    image: ${EVIDENCE_IMAGE:-registry-evidence}
+    read_only: true
+    restart: unless-stopped
+    volumes:
+      # The whole deployment project, read-only. The read-only mount is what
+      # satisfies the runtime's refusal of writable deployment inputs; no
+      # host-side freeze is required for the container path.
+      - ${EVIDENCE_PROJECT_DIR:?set EVIDENCE_PROJECT_DIR to your evidencectl deployment project directory}:/etc/registry-evidence:ro
+      # The container-shaped runtime file beside this compose file overlays
+      # the project's host-shaped runtime.yaml, so the project on disk needs
+      # no edits to run in a container.
+      - ./runtime.docker.yaml:/etc/registry-evidence/runtime.yaml:ro
+      # The append-only audit chain must outlive the container.
+      - evidence-audit:/var/lib/registry-evidence
+    networks:
+      evidence-net:
+        # The listener refuses wildcard and public bind addresses, so the
+        # service binds this static private address; runtime.docker.yaml's
+        # listener.bindHost must stay equal to it.
+        ipv4_address: 172.28.0.10
+    # To reach the listener from the host, publish it explicitly; TLS and
+    # public exposure stay upstream concerns for the operator's proxy:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+  mint:
+    profiles: [mint]
+    image: ${MINT_IMAGE:-registry-mint}
+    read_only: true
+    restart: unless-stopped
+    environment:
+      # The scaffold names the configuration mint.yaml; the image default
+      # expects config.yaml.
+      MINT_CONFIG: /etc/registry-mint/mint.yaml
+    volumes:
+      - ${MINT_PROJECT_DIR:-${EVIDENCE_PROJECT_DIR}/mint}:/etc/registry-mint:ro
+    networks:
+      evidence-net:
+        ipv4_address: 172.28.0.11
+    # Mint has no bind-address restriction, but the scaffolded mint.yaml
+    # listens on 127.0.0.1; set its listener.address to 0.0.0.0 (or
+    # 172.28.0.11) for container use.
+    # ports:
+    #   - "127.0.0.1:8081:8081"
+
+networks:
+  evidence-net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  evidence-audit:
