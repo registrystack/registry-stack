@@ -1,0 +1,51 @@
+# Focused executable DHIS2 adapter fragment. For a deployable governed bundle
+# and runtime binding, use deployment-projects/dhis2-adult-status/.
+transport: http-json
+baseUrl: https://tracker.example.invalid
+posture: record-transformed
+authentication:
+  kind: basic
+  usernameRef: secret:file/tracker-username
+  passwordRef: secret:file/tracker-password
+request:
+  method: GET
+  path: /api/tracker/trackedEntities
+  fixedHeaders:
+    - {name: Accept, value: application/json}
+  selectorInputs:
+    - role: subject
+      alternatives:
+        - {profile: tracked-entity-id-v1, fields: [record_reference]}
+        - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
+  prepareScript: prepare.rhai
+  adapterParameters:
+    program: Prg00000001
+    organisationUnit: Org00000001
+    projection: trackedEntity,attributes[attribute,value]
+    pageSize: "2"
+    page: "1"
+    totalPages: "true"
+    attributes:
+      given_name: Gvn00000001
+      family_name: Fam00000001
+      birth_date: Dob00000001
+    statusAttribute: Sta00000001
+  adapterParametersSchema: parameters.schema.yaml
+  preparationLimits:
+    query: allowed
+    jsonBody: forbidden
+    maximumQueryPairs: 16
+    maximumQueryNameBytes: 64
+    maximumQueryValueBytes: 1024
+    maximumNormalizedBytes: 8192
+  projection:
+    - /pager/total
+    - /trackedEntities/*/trackedEntity
+    - /trackedEntities/*/attributes/*/attribute
+    - /trackedEntities/*/attributes/*/value
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 4
+extractScript: extract.rhai
+factSchema: facts.schema.yaml

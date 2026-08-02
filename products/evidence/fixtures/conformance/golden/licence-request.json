@@ -1,0 +1,16 @@
+{
+  "requirement": "urn:example:fixture:requirement:professional-licence-status:v1",
+  "purpose": "fixture-registration",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "licence-register-v1",
+        "values": {
+          "licence_reference": "synthetic-licence-001",
+          "registry_region": "RR-A"
+        }
+      }
+    }
+  ]
+}

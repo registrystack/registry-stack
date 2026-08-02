@@ -1,0 +1,16 @@
+fixture: registry.evidence.source-shape-index/v1
+classification: test-only compatibility profiles
+profiles:
+  - id: flat-rest
+    path: flat-rest
+    reference: generic flat REST JSON
+  - id: nested-paged-rest
+    path: dhis2-tracker-style
+    reference: DHIS2 Tracker 2.43 compatibility shape
+  - id: opencrvs-event-search-json
+    path: opencrvs-record-search-style
+    reference: OpenCRVS version 2 Event Search JSON compatibility shape
+rules:
+  - Product names and shapes in this subtree are test-only and never production configuration identifiers.
+  - Each mock contains only the consumed boundary and is not an emulator, certified connector, or support claim.
+  - Deterministic local mocks pass before any ignored read-only public-demo smoke test.

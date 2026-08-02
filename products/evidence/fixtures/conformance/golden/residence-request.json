@@ -1,0 +1,15 @@
+{
+  "requirement": "urn:example:fixture:requirement:residence-region:v1",
+  "purpose": "fixture-routing",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "residence-record-v1",
+        "values": {
+          "record_reference": "synthetic-residence-record-001"
+        }
+      }
+    }
+  ]
+}

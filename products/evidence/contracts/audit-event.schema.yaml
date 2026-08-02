@@ -1,0 +1,90 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/audit-event-v1.json
+title: Evidence native audit event Version 1
+type: object
+additionalProperties: false
+required:
+  - schema
+  - eventId
+  - occurredAt
+  - operation
+  - phase
+  - requirement
+  - bundleRevision
+  - purpose
+  - requesterPseudonym
+  - authority
+  - subjects
+  - decision
+  - durationMilliseconds
+properties:
+  schema: {const: registry.evidence.audit/v1}
+  eventId: {type: string, format: uri, maxLength: 512}
+  occurredAt: {type: string, format: date-time}
+  operation: {type: string, minLength: 16, maxLength: 128}
+  phase: {enum: [access-attempt, disclosure-release, denial, transient-failure]}
+  requirement: {type: string, format: uri, maxLength: 512}
+  bundleRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+  requesterPseudonym: {$ref: '#/$defs/pseudonym'}
+  actorPseudonym: {$ref: '#/$defs/pseudonym'}
+  authority:
+    type: object
+    additionalProperties: false
+    required: [kind]
+    properties:
+      kind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+      grantPseudonym: {$ref: '#/$defs/pseudonym'}
+  subjects:
+    type: array
+    minItems: 1
+    maxItems: 8
+    items:
+      type: object
+      additionalProperties: false
+      required: [role, selectorProfile]
+      properties:
+        role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+        selectorBundlePseudonym: {$ref: '#/$defs/pseudonym'}
+  sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  decision:
+    enum: [authorized, released, no-match, ambiguous, fact-missing, dependency-failure, evaluation-failure, signing-failure]
+  disclosedConcepts:
+    type: array
+    maxItems: 16
+    uniqueItems: true
+    items: {type: string, format: uri, maxLength: 512}
+  evidenceId: {type: string, format: uri, maxLength: 512}
+  signingKeyId: {type: string, minLength: 1, maxLength: 256}
+  safeErrorCategory: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  durationMilliseconds: {type: integer, minimum: 0, maximum: 86400000}
+$defs:
+  pseudonym:
+    type: string
+    pattern: '^hmac-sha256:v[1-9][0-9]*:[a-f0-9]{64}$'
+allOf:
+  - if: {properties: {phase: {const: disclosure-release}}}
+    then: {required: [disclosedConcepts, evidenceId, signingKeyId]}
+    else:
+      not:
+        anyOf:
+          - {required: [disclosedConcepts]}
+          - {required: [evidenceId]}
+          - {required: [signingKeyId]}
+audit_rules:
+  access_gate: access-attempt is durably accepted after authorization and before credential acquisition or source access
+  release_gate: disclosure-release is durably accepted after signing and before response release
+  failure_policy: sink failure blocks the applicable step
+  chain_verification: The complete keyed chain is verified at startup and after restart; steady-state appends and readiness verify the pinned file identity, modification fingerprint, expected length, and verified tail without rescanning the growing file.
+  external_mutation: Any external replacement or modification fails readiness and future appends closed until a restart completes full keyed-chain verification.
+  pre_material_denial: Authentication, unmatched-authority, and invalid-selector failures occur before a privacy-safe authority and complete selector bundle exist, so no native event is fabricated from their untrusted or protected request material.
+  pseudonym_domains: [requester, actor, grant, subject]
+  subject_scope: key version plus operator trust domain, purpose, audience, role, profile, and complete canonical selector bundle
+  never_record:
+    - raw principal, actor, grant, selector, source, or supported values
+    - separate hashes of low-entropy selector fields
+    - credentials, tokens, request or response bodies
+    - candidate count, candidates, scores, hints, or comparisons
+    - script inputs, outputs, stacks, or signing material

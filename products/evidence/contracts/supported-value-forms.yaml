@@ -1,0 +1,63 @@
+contract: registry.evidence.supported-value-forms/v1
+status: frozen
+common:
+  maximum_concepts_per_requirement: 16
+  concept_identifiers: exact set, each present once unless a declared optional concept is absent
+  undeclared_metadata: prohibited
+  total_serialized_value_bytes: 65536
+forms:
+  boolean:
+    wire: JSON boolean
+  controlled-code:
+    wire: JSON string
+    declaration_requires: [codelist, codelistVersion, maximumBytes]
+    rule: Exact code membership; labels and source codes are not disclosed.
+  controlled-category:
+    wire: JSON string
+    declaration_requires: [categoryScheme, schemeVersion, codelist, maximumBytes]
+    rule: Exact reviewed category membership.
+  bounded-integer:
+    wire: JSON integer
+    declaration_requires: [minimum, maximum]
+  bounded-decimal:
+    wire: JSON string containing canonical decimal text
+    declaration_requires: [minimum, maximum, maximumScale]
+    rhai_abi: A core-owned Decimal returned by decimal("canonical-text") or parse_decimal("canonical-text"); Rhai floating-point values are rejected.
+    canonical_text: '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$ with zero represented only as 0; no exponent, plus sign, leading zero, trailing fractional zero, NaN, infinity, or negative zero'
+    global_bounds: {maximumPrecision: 28, maximumScale: 9}
+    rule: Rust validates and compares coefficient plus scale exactly, then emits the canonical text as a JSON string; JSON numeric conversion and f32/f64 are prohibited.
+  date-bucket:
+    wire: {form: date-bucket, scheme: URI, bucket: code}
+    declaration_requires: [bucketScheme, schemeVersion]
+    rule: The scheme URI and version resolve to exactly one reviewed codelist artifact in the immutable bundle; the underlying date is not disclosed.
+  time-bucket:
+    wire: {form: time-bucket, scheme: URI, bucket: code}
+    declaration_requires: [bucketScheme, schemeVersion]
+    rule: The scheme URI and version resolve to exactly one reviewed codelist artifact in the immutable bundle; the underlying instant or duration is not disclosed.
+  audience-scoped-entity-reference:
+    wire: {form: audience-scoped-entity-reference, reference: opaque-urn}
+    declaration_requires: [maximumBytes]
+    rhai_abi: Rhai returns entity_reference_seed("protected-seed"), never a public reference.
+    rule: Rust HMAC-projects the seed with the concept id, audience, binding-key version, and binding key; the seed never enters evidence or diagnostics.
+  controlled-code-list:
+    wire: array of controlled-code strings
+    declaration_requires: [codelist, codelistVersion, minimumItems, maximumItems, unique]
+  entity-reference-list:
+    wire: array of audience-scoped-entity-reference objects
+    declaration_requires: [minimumItems, maximumItems, unique]
+    rhai_abi: Rhai returns a bounded list of entity_reference_seed values; Rust projects each seed independently and preserves declared order.
+  reviewed-structured-value:
+    wire: {form: reviewed-structured-value, schema: URI, fields: closed-object}
+    declaration_requires: [schema, maximumSerializedBytes]
+    rule: The schema URI resolves to exactly one closed JSON Schema artifact in the immutable bundle; that schema closes every property and nested value and prohibits arbitrary JSON.
+validation_order:
+  - exact concept identifier set and duplicate rejection
+  - exact declared form
+  - scalar and lexical type
+  - numeric precision and range
+  - codelist or scheme version and membership
+  - collection cardinality and uniqueness
+  - structured schema and additional-property rejection
+  - per-value and total serialized size
+  - core-owned evidence projection
+fixtures: ../fixtures/conformance/supported-values.yaml

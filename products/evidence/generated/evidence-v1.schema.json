@@ -1,0 +1,247 @@
+{
+  "$comment": "The selected concept declaration further closes value form, schema, codelist, precision, cardinality, structured fields, and uniqueness. Selector profiles and selector values never appear in Evidence.",
+  "$defs": {
+    "bucket": {
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "form": {
+          "enum": [
+            "date-bucket",
+            "time-bucket"
+          ]
+        },
+        "scheme": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        }
+      },
+      "required": [
+        "form",
+        "scheme",
+        "bucket"
+      ],
+      "type": "object"
+    },
+    "entity-reference": {
+      "additionalProperties": false,
+      "properties": {
+        "form": {
+          "const": "audience-scoped-entity-reference"
+        },
+        "reference": {
+          "pattern": "^urn:evidence:entity:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "form",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "structured": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "maxProperties": 16,
+          "minProperties": 1,
+          "type": "object"
+        },
+        "form": {
+          "const": "reviewed-structured-value"
+        },
+        "schema": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        }
+      },
+      "required": [
+        "form",
+        "schema",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "subject-binding": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "pattern": "^urn:evidence:subject:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "supported-value": {
+      "additionalProperties": false,
+      "properties": {
+        "providesValueFor": {
+          "format": "uri",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "providesValueFor",
+        "value"
+      ],
+      "type": "object"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/bucket"
+        },
+        {
+          "$ref": "#/$defs/entity-reference"
+        },
+        {
+          "$ref": "#/$defs/structured"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/entity-reference"
+              }
+            ]
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "audience": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "configurationRevision": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "id": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "isConformantTo": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "issuedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "issuedBy": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "observedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "providedBy": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "purpose": {
+      "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "registry.assertion-evidence/v1"
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/subject-binding"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "type": "array"
+    },
+    "supportedValues": {
+      "items": {
+        "$ref": "#/$defs/supported-value"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "supportsRequirement": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "type": {
+      "const": "Evidence"
+    },
+    "validUntil": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "type",
+    "supportsRequirement",
+    "isConformantTo",
+    "issuedBy",
+    "providedBy",
+    "issuedAt",
+    "observedAt",
+    "validUntil",
+    "purpose",
+    "audience",
+    "configurationRevision",
+    "subjects",
+    "supportedValues"
+  ],
+  "title": "Evidence assertion payload Version 1",
+  "type": "object"
+}

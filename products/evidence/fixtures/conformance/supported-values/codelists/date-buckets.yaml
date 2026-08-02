@@ -1,0 +1,3 @@
+id: urn:example:fixture:scheme:date-bucket
+version: '1'
+codes: [current-period, boundary-period]

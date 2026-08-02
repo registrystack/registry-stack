@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/registry-config-report",
+    "crates/registry-evidence",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-cache",
@@ -52,6 +53,7 @@ unsafe_code = "forbid"
 
 [workspace.dependencies]
 registry-config-report = { path = "crates/registry-config-report", version = "0.16.2" }
+registry-evidence = { path = "crates/registry-evidence", version = "0.16.2" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.16.2" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.16.2" }
 registry-notary-client = { path = "crates/registry-notary-client", version = "0.16.2" }
@@ -90,6 +92,7 @@ bytes = { version = "1" }
 calamine = { version = "0.36" }
 cel = { version = "0.13" }
 chrono = { version = "0.4" }
+chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }
 crc32fast = { version = "1.4" }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }

@@ -1,0 +1,75 @@
+version: 1
+service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+issuer: {id: urn:example:fixture:issuer:authority}
+authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [EdDSA], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, grantIdClaim: evidence_grant_id, grantAuthorityClaim: evidence_authority}
+audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+signing: {format: flattened-jws-json, algorithm: EdDSA, activeKeyId: fixture-key-2026-01, activeKeyRef: secret:file/signing-key, retiredPublicJwkFiles: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
+selectorProfiles:
+  licence-register-v1:
+    maximumAggregateBytes: 128
+    fields:
+      licence_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
+      registry_region: {type: controlled-code, codelist: codelists/registry-regions.yaml, codelistVersion: '1', maximumBytes: 16}
+sources:
+  source-c:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: record-transformed
+    authentication: {kind: basic, usernameRef: secret:file/source-c-username, passwordRef: secret:file/source-c-password}
+    request:
+      method: GET
+      path: /v1/records
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives: [{profile: licence-register-v1, fields: [licence_reference, registry_region]}]
+      prepareScript: adapters/source-c-prepare.rhai
+      adapterParameters: {requestedFields: "licence_state,valid_from,valid_until", resultLimit: "2"}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: required, jsonBody: forbidden, maximumQueryPairs: 4, maximumQueryNameBytes: 64, maximumQueryValueBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/total, /records/*/licence_state, /records/*/valid_from, /records/*/valid_until]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 131072
+      concurrencyLimit: 8
+    extractScript: adapters/source-c.rhai
+    factSchema: schemas/facts.schema.yaml
+authorityProfiles:
+  statutory-caseworker-v1:
+    kind: statutory
+    requesterTags: [fixture-agency]
+    grants:
+      - requirement: urn:example:fixture:requirement:professional-licence-status:v1
+        purpose: fixture-registration
+        audienceFrom: authenticated-requester
+        subjects: [{role: subject, selectorProfile: licence-register-v1, valueOrigin: request}]
+requirements:
+  - id: urn:example:fixture:requirement:professional-licence-status:v1
+    kind: criterion
+    source: source-c
+    purposes: [fixture-registration]
+    subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}]
+    referenceFrameworks: [urn:example:fixture:framework:professional-licence:v1]
+    evidenceType: urn:example:fixture:evidence-type:professional-licence-status:v1
+    observationTimezone: Africa/Nairobi
+    validitySeconds: 43200
+    derivation:
+      script: derivations/professional-licence.rhai
+      parameters:
+        active_state: CURRENT
+        expiry_buckets:
+          - {minimumInclusive: {type: decimal, value: '-365000'}, maximumExclusive: {type: decimal, value: '0'}, code: expired}
+          - {minimumInclusive: {type: decimal, value: '0'}, maximumExclusive: {type: decimal, value: '31'}, code: within-30-days}
+          - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
+          - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
+    concepts:
+      - {id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
+      - id: urn:example:fixture:concept:licence-expiry-category
+        form: controlled-category
+        required: true
+        constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/expiry-categories.yaml}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:professional-licence]}
+    existenceDisclosure: collapse-unresolved

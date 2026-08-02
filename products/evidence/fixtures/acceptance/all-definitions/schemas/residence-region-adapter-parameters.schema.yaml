@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [requestedFields, resultLimit]
+properties:
+  requestedFields: {const: [official_residence_code]}
+  resultLimit: {const: 2}

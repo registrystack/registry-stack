@@ -1,0 +1,265 @@
+version: 1
+service:
+  providerId: urn:gov:example:evidence:opencrvs
+  trustDomain: urn:gov:example:trust-domain:civil-registration
+issuer:
+  id: urn:gov:example:issuer:civil-registration-authority
+authentication:
+  kind: oidc-access-token
+  issuer: https://identity.gov.example
+  audiences: [registry-evidence]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://identity.gov.example/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+  failClosed: true
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: EdDSA
+  activeKeyId: evidence-signing-2026-01
+  activeKeyRef: secret:file/signing-ed25519-private-jwk
+  retiredPublicJwkFiles: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 86400
+  verifierClockSkewSeconds: 30
+selectorProfiles:
+  opencrvs-tracking-id-v1:
+    maximumAggregateBytes: 64
+    fields:
+      tracking_id: {type: string, minimumBytes: 1, maximumBytes: 64}
+  civil-person-reference-v1:
+    maximumAggregateBytes: 128
+    fields:
+      person_reference: {type: string, minimumBytes: 1, maximumBytes: 128}
+sources:
+  registered-birth-date:
+    transport: http-json
+    baseUrl: https://events.opencrvs.gov.example
+    posture: record-transformed
+    authentication:
+      kind: oauth2-client-credentials
+      tokenEndpoint: https://auth.opencrvs.gov.example/token
+      clientIdRef: secret:file/opencrvs-client-id
+      clientSecretRef: secret:file/opencrvs-client-secret
+      scope: recordsearch
+      credentialPlacement: query-string
+      maximumCacheSeconds: 300
+    request:
+      method: POST
+      path: /events/search
+      fixedHeaders:
+        - {name: Accept, value: application/json}
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+      prepareScript: adapters/birth-event-prepare.rhai
+      adapterParameters:
+        selectorRole: subject
+        eventType: birth
+        registeredStatus: REGISTERED
+        resultLimit: 2
+        resultOffset: 0
+        dateField: dateOfEvent
+      adapterParametersSchema: schemas/birth-adult-parameters.schema.yaml
+      preparationLimits:
+        query: forbidden
+        jsonBody: required
+        maximumJsonDepth: 12
+        maximumCollectionItems: 32
+        maximumStringBytes: 512
+        maximumNormalizedBytes: 8192
+      projection:
+        - /total
+        - /results/*/type
+        - /results/*/status
+        - /results/*/trackingId
+        - /results/*/dateOfEvent
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 262144
+      concurrencyLimit: 8
+    extractScript: adapters/birth-adult-extract.rhai
+    factSchema: schemas/birth-adult-facts.schema.yaml
+  registered-birth-parents:
+    transport: http-json
+    baseUrl: https://events.opencrvs.gov.example
+    posture: record-transformed
+    authentication:
+      kind: oauth2-client-credentials
+      tokenEndpoint: https://auth.opencrvs.gov.example/token
+      clientIdRef: secret:file/opencrvs-client-id
+      clientSecretRef: secret:file/opencrvs-client-secret
+      scope: recordsearch
+      credentialPlacement: query-string
+      maximumCacheSeconds: 300
+    request:
+      method: POST
+      path: /events/search
+      fixedHeaders:
+        - {name: Accept, value: application/json}
+      selectorInputs:
+        - role: child
+          alternatives:
+            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+      prepareScript: adapters/birth-event-prepare.rhai
+      adapterParameters:
+        selectorRole: child
+        eventType: birth
+        registeredStatus: REGISTERED
+        resultLimit: 2
+        resultOffset: 0
+        parentReferenceFields: [mother.personReference, father.personReference]
+        minimumParentReferences: 1
+        maximumParentReferences: 2
+        parentReferenceNamespace: urn:gov:example:opencrvs:person
+        relationshipSetContract: urn:gov:example:opencrvs:registered-parent-set:v1
+        relationshipSetComplete: true
+        absentConfiguredFieldMeansNoRegisteredParent: true
+      adapterParametersSchema: schemas/birth-parents-parameters.schema.yaml
+      preparationLimits:
+        query: forbidden
+        jsonBody: required
+        maximumJsonDepth: 12
+        maximumCollectionItems: 32
+        maximumStringBytes: 512
+        maximumNormalizedBytes: 8192
+      projection:
+        - /total
+        - /results/*/type
+        - /results/*/status
+        - /results/*/trackingId
+        - /results/*/declaration/mother.personReference
+        - /results/*/declaration/father.personReference
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 262144
+      concurrencyLimit: 8
+    extractScript: adapters/birth-parents-extract.rhai
+    factSchema: schemas/birth-parents-facts.schema.yaml
+authorityProfiles:
+  civil-registration-caseworker-v1:
+    kind: statutory
+    requesterTags: [civil-registration-caseworker]
+    grants:
+      - requirement: urn:gov:example:requirement:adult-status-from-birth:v1
+        purpose: eligibility-assessment
+        audienceFrom: authenticated-requester
+        subjects:
+          - role: subject
+            selectorProfile: opencrvs-tracking-id-v1
+            valueOrigin: request
+      - requirement: urn:gov:example:requirement:registered-parent-relationship:v1
+        purpose: family-relationship-verification
+        audienceFrom: authenticated-requester
+        subjects:
+          - role: child
+            selectorProfile: opencrvs-tracking-id-v1
+            valueOrigin: request
+          - role: candidate-parent
+            selectorProfile: civil-person-reference-v1
+            valueOrigin: authenticated-grant
+            valueClaims:
+              person_reference: grant.candidate_parent.person_reference
+      - requirement: urn:gov:example:requirement:identify-registered-parents:v1
+        purpose: family-case-record
+        audienceFrom: authenticated-requester
+        subjects:
+          - role: child
+            selectorProfile: opencrvs-tracking-id-v1
+            valueOrigin: request
+requirements:
+  - id: urn:gov:example:requirement:adult-status-from-birth:v1
+    kind: criterion
+    source: registered-birth-date
+    purposes: [eligibility-assessment]
+    subjectRoles:
+      - {role: subject, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
+    referenceFrameworks: [urn:gov:example:framework:age-of-majority:v1]
+    evidenceType: urn:gov:example:evidence-type:adult-status:v1
+    observationTimezone: Asia/Bangkok
+    validitySeconds: 86400
+    derivation:
+      script: derivations/adult-status.rhai
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+      parameters: {minimum_age_years: 18}
+    concepts:
+      - {id: urn:gov:example:concept:adult-status, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/adult-status-cases.yaml
+    disclosureGuard:
+      families: [urn:gov:example:disclosure-family:adult-status]
+    existenceDisclosure: collapse-unresolved
+  - id: urn:gov:example:requirement:registered-parent-relationship:v1
+    kind: criterion
+    source: registered-birth-parents
+    purposes: [family-relationship-verification]
+    subjectRoles:
+      - {role: child, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
+      - {role: candidate-parent, cardinality: one, selectorProfiles: [civil-person-reference-v1]}
+    referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
+    evidenceType: urn:gov:example:evidence-type:registered-parent-relationship:v1
+    validitySeconds: 86400
+    derivation:
+      script: derivations/registered-parent-relationship.rhai
+      selectorInputs:
+        - role: child
+          alternatives:
+            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+        - role: candidate-parent
+          alternatives:
+            - {profile: civil-person-reference-v1, fields: [person_reference]}
+      parameters:
+        matching_policy: exact-opaque-reference-v1
+        candidate_reference_namespace: urn:gov:example:opencrvs:person
+        relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
+    concepts:
+      - {id: urn:gov:example:concept:registered-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/registered-parent-relationship-cases.yaml
+    disclosureGuard:
+      families: [urn:gov:example:disclosure-family:registered-parent-relationship]
+    existenceDisclosure: collapse-unresolved
+  - id: urn:gov:example:requirement:identify-registered-parents:v1
+    kind: information-requirement
+    source: registered-birth-parents
+    purposes: [family-case-record]
+    subjectRoles:
+      - {role: child, cardinality: one, selectorProfiles: [opencrvs-tracking-id-v1]}
+    referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
+    evidenceType: urn:gov:example:evidence-type:registered-parent-references:v1
+    validitySeconds: 86400
+    derivation:
+      script: derivations/registered-parent-references.rhai
+      selectorInputs:
+        - role: child
+          alternatives:
+            - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+      parameters:
+        reference_namespace: urn:gov:example:opencrvs:person
+        relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
+    concepts:
+      - id: urn:gov:example:concept:registered-parent-references
+        form: entity-reference-list
+        required: true
+        constraints: {minimumItems: 1, maximumItems: 2, unique: true}
+    fixtures: fixtures/registered-parent-references-cases.yaml
+    disclosureGuard:
+      families: [urn:gov:example:disclosure-family:registered-parent-references]
+    existenceDisclosure: collapse-unresolved

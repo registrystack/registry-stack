@@ -45,6 +45,7 @@ jobs:
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       notary_contracts: ${{ steps.filter.outputs.notary_contracts }}
       relay_contracts: ${{ steps.filter.outputs.relay_contracts }}
+      evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       project_authoring: ${{ steps.filter.outputs.project_authoring }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -437,6 +438,32 @@ jobs:
           df -h /
           du -sh target 2>/dev/null || true
 
+  evidence-contracts:
+    name: Evidence contracts and source neutrality
+    needs: changes
+    if: needs.changes.outputs.evidence_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Reproduce Evidence generated contracts
+        run: products/evidence/scripts/check-contracts.sh
+
+      - name: Enforce Evidence source-product neutrality
+        run: products/evidence/scripts/check-source-neutrality.sh
+
   notary-contracts:
     name: Notary API contracts
     needs: changes
@@ -552,6 +579,7 @@ jobs:
       - rust-policy
       - rust-quality
       - rust-tests
+      - evidence-contracts
       - notary-contracts
       - relay-contracts
     runs-on: ubuntu-24.04

@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [record_reference, date_of_birth]
+properties:
+  record_reference: {type: string, minLength: 11, maxLength: 64}
+  date_of_birth: {type: string, format: date}

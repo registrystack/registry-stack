@@ -85,6 +85,29 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertFalse(outputs["docs_archives"])
 
+    def test_evidence_code_and_product_contracts_select_one_shard_and_drift_gate(self) -> None:
+        for path in (
+            "crates/registry-evidence/src/source.rs",
+            "products/evidence/contracts/source-contract.yaml",
+            "products/evidence/reference/request-adapter/ADAPTER-API.md",
+            "products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/fixtures/cases.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["evidence_contracts"])
+                self.assertIn("registry-evidence", outputs["rust_packages"])
+                self.assertEqual(
+                    {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+                    {"evidence"},
+                )
+
+    def test_evidence_contract_gate_is_required_by_the_rust_aggregate(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
+            "\n  project-authoring-determinism:\n", 1
+        )[0]
+        self.assertIn("\n      - evidence-contracts\n", rust_result)
+
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
         current_content = classify(
             self.workspace,

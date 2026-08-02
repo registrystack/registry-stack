@@ -1,0 +1,8 @@
+type: object
+additionalProperties: false
+required: [status_code]
+properties:
+  status_code:
+    type: string
+    minLength: 1
+    maxLength: 64

@@ -1,0 +1,10 @@
+{
+  "outcome": "match",
+  "facts": {
+    "record_tracking_id": "EVT-SYNTHETIC-001",
+    "parent_references": ["PERSON-SYNTHETIC-A", "PERSON-SYNTHETIC-B"],
+    "reference_namespace": "urn:gov:example:opencrvs:person",
+    "relationship_set_contract": "urn:gov:example:opencrvs:registered-parent-set:v1",
+    "relationship_set_complete": true
+  }
+}

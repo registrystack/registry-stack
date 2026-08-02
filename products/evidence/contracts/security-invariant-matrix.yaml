@@ -1,0 +1,171 @@
+contract: registry.evidence.security-invariants/v1
+status: frozen
+review_rule: Every row requires its named negative test on the same implementation revision; tests may be split but may not be weakened or deleted.
+invariants:
+  - id: V1-I01
+    rule: Only predefined, versioned requirements can be evaluated.
+    threat: Caller turns Evidence into an arbitrary fact-query service.
+    enforcement: Request resolver accepts only exact enabled requirement revisions before authorization.
+    negative_test: sec-unknown-or-disabled-requirement
+  - id: V1-I02
+    rule: Callers cannot provide thresholds, expressions, scripts, paths, headers, source fields, relationship types, adapter parameters, or response projections.
+    threat: Caller reconstructs protected facts or expands acquisition and disclosure.
+    enforcement: Closed request schema plus fixed bundle-owned preparation, extraction, derivation, source transport, and concept projection.
+    negative_test: sec-caller-query-material-rejected
+  - id: V1-I03
+    rule: The complete enabled bundle is reviewed as one disclosure surface.
+    threat: Threshold ladders or overlapping categories reconstruct a protected value across otherwise safe definitions.
+    enforcement: Startup bundle-combination validation and explicit operator review of one atomic revision.
+    negative_test: sec-unsafe-definition-combination
+  - id: V1-I04
+    rule: Principals and attributes derive only from configured validated authentication sources; missing data denies.
+    threat: Authentication bypass through fallback claims or unsigned headers.
+    enforcement: Strict authentication profile and one configured principal claim with no fallback.
+    negative_test: sec-missing-principal-no-fallback
+  - id: V1-I05
+    rule: One authorization decision binds requester, optional actor, requirement revision, purpose, all role/profile/origin tuples, authority, and audience.
+    threat: Permission splicing or confused-deputy access across partially authorized dimensions.
+    enforcement: Exact complete-entitlement match before audit, credential resolution, or source access.
+    negative_test: sec-no-entitlement-union
+  - id: V1-I06
+    rule: Selector profiles and values are provider-lookup inputs, never proof of authority.
+    threat: Broken object-level authorization by possession of an identifier or demographic tuple.
+    enforcement: Selector validation occurs inside an already matched subject-authority path.
+    negative_test: sec-selector-possession-no-authority
+  - id: V1-I07
+    rule: Caller-provided consent, approval, or grant references never create authority.
+    threat: Fabricated reference escalates authority.
+    enforcement: Grant identifiers are accepted only from authenticated context and must be bound to the complete entitlement.
+    negative_test: sec-caller-grant-reference-rejected
+  - id: V1-I08
+    rule: Callers cannot choose selector fields, operators, weights, thresholds, normalization, or query plans.
+    threat: Matching scope creep, oracle behavior, or broad candidate retrieval.
+    enforcement: Named profiles close exact field sets; independent source and derivation selectorInputs expose only reviewed role/profile/field subsets, while trusted preparation owns provider placement without receiving surplus selectors.
+    negative_test: sec-selector-shape-not-callable
+  - id: V1-I09
+    rule: Source calls are fixed by trusted configuration and executed only by the core.
+    threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
+    enforcement: Generic fixed HTTPS executor owns origin, method, fixed or selector-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one-request ceiling. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    negative_test: sec-source-request-immutable
+  - id: V1-I10
+    rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
+    threat: Evidence becomes an identity-resolution engine or exposes registry candidates.
+    enforcement: Closed extraction union, maximum two minimized results, no pagination, no derivation on non-match outcomes, and false relationship evidence only after exact returned-record binding plus complete governed relationship facts.
+    negative_test: sec-candidate-material-rejected
+  - id: V1-I11
+    rule: Rhai returns one closed lookup result and declared typed concept values only.
+    threat: Script crosses into authorization, response construction, diagnostics, or arbitrary metadata.
+    enforcement: Closed prepare/2, extract/2, and selector-aware derive/3 entry points, fresh state and input copies, capability allowlist, minimized stage inputs, and closed output decoding.
+    negative_test: sec-rhai-output-shape-closed
+  - id: V1-I12
+    rule: Undeclared concepts, extra fields, and values violating types, codelists, cardinality, precision, or sizes are rejected.
+    threat: Data leakage or type confusion through trusted-script mistakes.
+    enforcement: Core validates exact concept set and the complete Supported Value declaration before evidence construction; decimals are exact coefficient-and-scale values and entity-reference seeds are protected projection inputs.
+    negative_test: sec-derived-value-output-gate
+  - id: V1-I13
+    rule: Missing facts, undefined decisions, script failures, audit failures, and evaluation failures fail closed.
+    threat: Partial, stale, fabricated, or unaudited evidence is released.
+    enforcement: Typed error boundaries; access audit before source; release audit after signing and before release.
+    negative_test: sec-evaluation-and-audit-fail-closed
+  - id: V1-I14
+    rule: Raw source responses are never persisted or logged.
+    threat: Source connector data leakage and unauthorized secondary retention.
+    enforcement: Bounded in-memory response ownership, no recording path, and centralized structured-log redaction.
+    negative_test: sec-source-canary-absent-everywhere
+  - id: V1-I15
+    rule: Selector, source, and disclosed values never appear in logs or native audit.
+    threat: Quasi-identifier disclosure or reconstruction from operational records.
+    enforcement: Field allowlists and at most one scoped keyed pseudonym over each complete canonical role/selector bundle.
+    negative_test: sec-protected-canaries-redacted
+  - id: V1-I16
+    rule: No-match and ambiguous behavior cannot accidentally disclose registry membership.
+    threat: Existence oracle through status, message, diagnostics, count, or avoidable timing.
+    enforcement: Default public collapse to one problem plus closed protected audit class without counts.
+    negative_test: sec-unresolved-public-collapse
+  - id: V1-I17
+    rule: Subject bindings are audience-scoped and not globally linkable.
+    threat: Cross-purpose or cross-relying-party tracking.
+    enforcement: Domain-separated keyed derivation includes audience, purpose, role, profile, binding-key version, and complete canonical selector bundle.
+    negative_test: sec-subject-binding-scope
+  - id: V1-I18
+    rule: Configuration is immutable for the serving process lifetime.
+    threat: Unreviewed hot mutation, partial revisions, rollback, or inconsistent audit provenance.
+    enforcement: One read-only atomic governed bundle and one separately digested closed runtime file at startup; runtime overrides, reload, merge, fallback, and mutation paths do not exist.
+    negative_test: sec-runtime-bundle-mutation-absent
+  - id: V1-I19
+    rule: One process serves one operator-controlled trust domain.
+    threat: Cross-tenant disclosure, authority confusion, or key and audit boundary mixing.
+    enforcement: One service trustDomain, issuer governance boundary, bundle lifecycle, signer, and audit boundary per process.
+    negative_test: sec-mutually-distrustful-configuration
+  - id: V1-I20
+    rule: Rate controls are defense in depth, not a substitute for concept design or authorization.
+    threat: Unsafe threshold reconstruction remains possible below or around rate limits.
+    enforcement: Bundle combination validation is mandatory independently of configured rate limits.
+    negative_test: sec-rate-limit-does-not-legalize-ladder
+  - id: V1-I21
+    rule: Every successful production response is a standard JWS over the exact evidence payload.
+    threat: Payload substitution, unsigned success, or unverifiable parallel representations.
+    enforcement: One flattened-JWS response type containing only protected, payload, and signature.
+    negative_test: sec-jws-mutation-and-duplicate-payload
+  - id: V1-I22
+    rule: Missing or failed signing never falls back to unsigned evidence.
+    threat: Availability fallback silently removes integrity and provider authentication.
+    enforcement: Signing readiness plus a mandatory signing step before release audit and response.
+    negative_test: sec-signing-failure-no-release
+  - id: V1-I23
+    rule: Private signing material is core-owned and absent from bundle values, Rhai, logs, audit, and errors.
+    threat: Key disclosure or script exfiltration.
+    enforcement: Secret-reference-only schema, SigningProvider boundary, redacted serialization/debugging, and no script capability.
+    negative_test: sec-private-key-canary-unreachable
+  - id: V1-I24
+    rule: A signature authenticates provider and payload integrity but does not assert legal-signature status or source truth.
+    threat: Relying party overclaims cryptographic or legal assurance.
+    enforcement: Distinct issuer/provider fields and verifier contract with no legal-signature or source-truth claim.
+    negative_test: sec-verifier-rejects-untrusted-provider
+  - id: V1-I25
+    rule: Public evidence is constructed only by the core after complete output validation.
+    threat: Script injects envelope fields, subject identifiers, selector values, or unsupported claims.
+    enforcement: Rhai returns ConceptValueSet only; core owns identifiers, subjects, metadata, decimal serialization, entity-reference HMAC projection, public projection, and JWS.
+    negative_test: sec-script-cannot-construct-evidence
+cross_cutting:
+  config_trust:
+    threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.
+    enforcement: Version 1 has no in-bundle trust override; the operator must supply exactly one reviewed read-only bundle, and absence or failed immutability checks fail readiness.
+    negative_test: sec-missing-or-writable-bundle-fails
+  audit_order:
+    threat: Source read or evidence release occurs without a durable accountability record.
+    enforcement: Access-attempt audit precedes credentials/source; disclosure-release audit follows signing and precedes release; both fail closed. The complete keyed chain is verified at startup, while steady-state readiness and append use pinned identity, modification fingerprint, expected length, and verified tail so audit cost does not grow quadratically.
+    negative_test: sec-audit-order-and-failure
+  secret_parsing:
+    threat: YAML substitution or bundle values inject credential or key material.
+    enforcement: Bundle accepts exact secret references only; resolution occurs after parsing into core-owned secret containers and values never re-enter configuration.
+    negative_test: sec-secret-values-rejected-from-bundle
+  transport_identity:
+    threat: Public binding or proxy-provided identity bypasses Evidence token validation.
+    enforcement: Loopback or private HTTP listener behind operator-controlled HTTPS termination; Evidence validates strict OIDC bearer tokens and never trusts proxy identity headers.
+    negative_test: sec-proxy-identity-header-rejected
+  exact_decimal:
+    threat: Binary floating-point conversion changes a disclosed value or bypasses precision and range bounds.
+    enforcement: Rhai creates a Rust-owned coefficient-and-scale Decimal from canonical text with precision 28 and scale 9; public wire value is that canonical JSON string.
+    negative_test: sec-decimal-no-float-coercion
+  entity_reference_projection:
+    threat: A source-derived entity seed becomes a global identifier or leaks before audience scoping.
+    enforcement: Rhai returns a protected EntityReferenceSeed; Rust HMAC-projects version, concept, audience, and seed with the subject-binding key.
+    negative_test: sec-entity-reference-seed-protected
+  request_preparation:
+    threat: A trusted mapping mistake gains transport authority, smuggles an unbounded request, or acquires credentials before its output is validated.
+    enforcement: prepare/2 receives only minimized authorized selectors and closed parameters; Rust validates exact RequestParts, channel policy, sizes, path, headers, and encoding before bounded source-concurrency admission or credential resolution. GET plans close the JSON-body channel at startup and reject a defensive body before credential access.
+    negative_test: sec-request-preparation-closed
+  runtime_ownership_split:
+    threat: An environment-specific runtime file silently changes governed authorization, disclosure, source authority, signing, or audit policy.
+    enforcement: Closed runtime.yaml accepts only process-local listener, path, secret-root, audit-storage, and logical private-CA bindings and has an independent immutable digest.
+    negative_test: sec-runtime-cannot-override-governed-bundle
+  outbound_tls_and_proxy:
+    threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.
+    enforcement: Runtime captures validated private-CA bytes at startup, fixed-origin hostname verification stays enabled, and both evidence-data and OAuth clients ignore ambient proxy variables.
+    negative_test: sec-tls-and-proxy-authority-fixed
+  subject_role_order:
+    threat: Caller-controlled array position substitutes one subject role for another or changes the signed binding order.
+    enforcement: Rust resolves a unique subject by declared role, rejects duplicate, missing, unknown, and wrong-profile entries, then emits requirement declaration order.
+    negative_test: sec-subject-array-order-nonsemantic
+fixture_index: ../fixtures/conformance/coverage-matrix.yaml

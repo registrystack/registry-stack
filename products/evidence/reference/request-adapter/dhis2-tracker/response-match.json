@@ -1,0 +1,16 @@
+{
+  "pager": {
+    "page": 1,
+    "pageSize": 2,
+    "total": 1,
+    "pageCount": 1
+  },
+  "trackedEntities": [
+    {
+      "trackedEntity": "Tes00000001",
+      "attributes": [
+        {"attribute": "Sta00000001", "value": "SYNTHETIC-ACTIVE"}
+      ]
+    }
+  ]
+}

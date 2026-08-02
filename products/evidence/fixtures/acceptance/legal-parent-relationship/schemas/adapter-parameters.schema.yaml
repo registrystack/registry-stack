@@ -1,0 +1,15 @@
+type: object
+additionalProperties: false
+required:
+  - requestedFields
+  - resultLimit
+  - referenceNamespace
+  - relationshipSetContract
+  - relationshipSetComplete
+properties:
+  requestedFields:
+    const: [returned_child_reference, parent_references, reference_namespace, relationship_set_contract, relationship_set_complete]
+  resultLimit: {const: 2}
+  referenceNamespace: {const: urn:example:fixture:person-reference}
+  relationshipSetContract: {const: urn:example:fixture:legal-parent-set:v1}
+  relationshipSetComplete: {const: true}

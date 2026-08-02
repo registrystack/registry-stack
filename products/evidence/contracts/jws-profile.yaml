@@ -1,0 +1,59 @@
+contract: registry.evidence.jws-profile/v1
+status: frozen
+response:
+  media_type: application/jose+json
+  serialization: flattened-jws-json
+  members:
+    required: [protected, payload, signature]
+    prohibited: [header]
+  payload: base64url without padding of the exact UTF-8 Evidence JSON bytes
+protected_header:
+  exact_members: [alg, kid, typ, cty]
+  alg:
+    allowed: [EdDSA]
+    rule: Must equal the algorithm bound to the trusted key.
+  kid:
+    required: true
+    maximum_bytes: 256
+    rule: Resolved only within the verifier-pinned provider JWKS.
+  typ: {const: evidence+jws}
+  cty: {const: application/evidence+json}
+  prohibited: [jku, x5u, jwk, x5c, crit, b64]
+signing:
+  active_keys: 1
+  private_key_location: signing.activeKeyRef through a supported runtime secret provider only
+  retired_public_keys: signing.retiredPublicJwkFiles are bundle-owned public JWKs and never contain private members
+  bundle_private_key_material: prohibited
+  order:
+    - core validates the complete derivation result
+    - core constructs the exact evidence payload
+    - signing provider signs protected header plus payload
+    - disclosure-release audit is durably accepted
+    - JWS is released
+  failure: safe 503 with no unsigned fallback
+key_discovery:
+  path: /.well-known/evidence/jwks.json
+  media_type: application/jwk-set+json
+  content: public keys only
+  trust_rule: Discovery is not a trust anchor; provider identity and JWKS location are pinned through governed verifier configuration.
+rotation:
+  new_assertions_use: the single configured active key
+  retired_public_key_minimum_availability: maximum assertion validity plus allowed verifier clock skew
+  kid_reuse: prohibited for different key material
+verifier_rules:
+  - Parse flattened JWS with strict duplicate-member rejection.
+  - Reject unprotected headers and any protected member outside the exact allowlist.
+  - Resolve kid only in the pinned provider key set and require the allowlisted algorithm.
+  - Verify the signature before parsing or acting on payload claims.
+  - Validate the strict payload against the complete committed Evidence JSON Schema before deserializing or applying relying-procedure policy.
+  - Require schema, issuer, provider, requirement, Evidence Type, purpose, audience, observation, validity, and configuration revision expected by the relying procedure.
+  - Treat validUntil as an exclusive upper bound and apply only the configured clock skew.
+  - Do not infer source truth, legal-signature status, holder binding, or single-use semantics from a valid signature.
+negative_tests:
+  - jws-payload-modification
+  - jws-protected-header-modification
+  - jws-message-key-url-rejected
+  - jws-unknown-kid-rejected
+  - jws-schema-invalid-signed-payload-rejected
+  - jws-retired-key-window
+  - signing-failure-no-unsigned-success

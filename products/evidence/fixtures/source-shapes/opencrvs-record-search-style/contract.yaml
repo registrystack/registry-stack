@@ -1,0 +1,116 @@
+fixture: registry.evidence.source-shape.opencrvs-event-search-style/v1
+classification: compatibility-shaped-local-mock
+synthetic_only: true
+server: {base_url: 'http://[::1]:18083', bind: '[::1]:18083'}
+validated_source_definition:
+  transport: http-json
+  baseUrl: http://[::1]:18083
+  posture: record-transformed
+  authentication:
+    kind: oauth2-client-credentials
+    tokenEndpoint: http://[::1]:18083/oauth/token
+    clientIdRef: secret:file/fixture-event-search-client-id
+    clientSecretRef: secret:file/fixture-event-search-client-secret
+    scope: fixture.read
+    credentialPlacement: query-string
+    maximumCacheSeconds: 300
+  request:
+    method: POST
+    path: /events/search
+    selectorInputs:
+      - role: subject
+        alternatives:
+          - {profile: civil-record-reference-v1, fields: [record_reference]}
+    prepareScript: adapters/event-search-json-prepare.rhai
+    adapterParameters:
+      eventType: birth
+      registeredStatus: REGISTERED
+      resultLimit: 2
+      resultOffset: 0
+    adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+    preparationLimits:
+      query: forbidden
+      jsonBody: required
+      maximumJsonDepth: 12
+      maximumCollectionItems: 32
+      maximumStringBytes: 512
+      maximumNormalizedBytes: 8192
+    projection:
+      - /total
+      - /results/*/dateOfEvent
+    redirects: deny
+    timeoutMilliseconds: 3000
+    maximumResponseBytes: 65536
+    concurrencyLimit: 4
+  extractScript: adapters/event-search-json.rhai
+  factSchema: schemas/facts.schema.yaml
+reference_shape: OpenCRVS v2 Event Search JSON
+scope: Only OAuth client bootstrap and the consumed fixed event-search boundary
+credential_bootstrap:
+  method: POST
+  token_endpoint: 'http://[::1]:18083/oauth/token'
+  grant_type: client_credentials
+  credential_placement: query-string
+  client_id: injected from secret reference
+  client_secret: injected from secret reference
+  maximum_response_bytes: 8192
+  maximum_cache_seconds: 300
+  failures: [http-400, http-401, http-429, http-500, timeout, invalid-json, missing-token, wrong-token-type, oversized-response]
+request:
+  method: POST
+  path: /events/search
+  query: {}
+  headers:
+    content-type: application/json
+    authorization: Bearer token from credential bootstrap; exact value never snapshotted
+  body:
+    query:
+      type: and
+      clauses:
+        - eventType: birth
+          status: {type: exact, term: REGISTERED}
+          trackingId: {type: exact, term: TRACKING-CANARY-0001}
+    limit: 2
+    offset: 0
+  response_shape: [results, total]
+  result_shape: EventIndex including a country-configured declaration map
+  unexpected_request: fail test
+selector_contracts:
+  identifier_only: {profile: civil-record-reference-v1, prepared_field: body.query.clauses.0.trackingId.term}
+  array_placement: The reviewed prepare/2 script constructs the fixed clauses array and places only the authorized record reference in the trackingId exact predicate.
+cardinality:
+  zero: responses/no-match.json
+  one: responses/match.json
+  multiple: responses/ambiguous.json
+  maximum_results: 2
+  page_traversal: prohibited
+  evidence_data_requests_after_response: 0
+extraction:
+  match_facts: [date_of_event]
+  missing_fact: responses/missing-fact.json
+  error_envelope: responses/error-envelope.json
+  inconsistent_cardinality: responses/inconsistent-cardinality.json
+  rule: total is provider-owned cardinality; total zero maps to no_match, one result with total one maps to match, and total above one maps to ambiguous without a second request or local comparison.
+  declaration_rule: The broader declaration is transient source data. The adapter does not compare child or parent fields and exposes only the declared date_of_event fact.
+  projection_rule: Rust removes ids, tracking ids, declarations, and every unrelated field before extract/2.
+failures:
+  - http-401
+  - http-403
+  - http-429
+  - http-500
+  - timeout
+  - redirect
+  - invalid-json
+  - wrong-media-type
+  - oversized-response
+  - error-envelope
+redaction_canaries:
+  committed_source_and_selector: [TRACKING-CANARY-0001, SOURCE-DATE-CANARY-DO-NOT-LOG, SOURCE-PARENT-CANARY-DO-NOT-LOG]
+  runtime_generated_secret_classes: [oauth-client-id, oauth-client-secret, oauth-access-token]
+minimization:
+  acquisition: disclosure-minimized only; one bounded lookup returns a broader EventIndex and country-configured declaration
+  response_posture: record-transformed
+  persistence: prohibited
+  diagnostics: no declaration field, selector, source fact, credential, token, or response body
+claim: Compatibility-shaped fixture only; not an emulator, connector certification, maintained vendor integration, or legal-parent matching implementation.
+relationship_boundary: A zero-result Event Search response is no_match and can never be interpreted as a conclusive negative relationship fact.

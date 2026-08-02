@@ -1,0 +1,671 @@
+//! Native Evidence Version 1 HTTP boundary.
+//!
+//! Request admission, body collection, and concurrency queueing observe the
+//! configured request timeout. Once [`EvidenceRuntime::evaluate`] starts, this
+//! boundary deliberately does not wrap it in a cancelling timeout: evaluation
+//! contains the durable access-audit, signing, and durable release-audit
+//! critical section.
+
+use std::{
+    future::{Future, IntoFuture},
+    io,
+    net::{IpAddr, SocketAddr},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
+use axum::{
+    body::{to_bytes, Body},
+    extract::State,
+    http::{
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER},
+        HeaderMap, HeaderValue, Request, StatusCode,
+    },
+    middleware::{from_fn, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
+use registry_platform_crypto::parse_json_strict;
+use registry_platform_httpsec::CspBuilder;
+use serde::Serialize;
+use tokio::{net::TcpListener, sync::Semaphore};
+use ulid::Ulid;
+
+use crate::{
+    config::ListenerConfig,
+    contracts::request_contract_accepts,
+    model::EvidenceRequest,
+    problem::ProblemCode,
+    runtime::{EvidenceRuntime, RuntimeFailure},
+    EVIDENCE_JWS_MEDIA_TYPE,
+};
+
+const JSON_MEDIA_TYPE: &str = "application/json";
+const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
+const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
+const RETRY_AFTER_SECONDS: &str = "1";
+
+#[derive(Clone)]
+struct ServerState {
+    runtime: Arc<EvidenceRuntime>,
+    maximum_request_bytes: usize,
+    request_timeout: Duration,
+    request_slots: Arc<Semaphore>,
+    evaluations: EvaluationTracker,
+    #[cfg(test)]
+    evaluation_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Build the four-route Version 1 application from one immutable runtime.
+#[cfg(test)]
+pub(crate) fn build_app(runtime: Arc<EvidenceRuntime>) -> Router {
+    build_app_with_tracker(runtime).0
+}
+
+#[cfg(test)]
+pub(crate) fn build_app_at_for_test(
+    runtime: Arc<EvidenceRuntime>,
+    evaluation_time: chrono::DateTime<chrono::Utc>,
+) -> Router {
+    build_app_with_tracker_at(runtime, Some(evaluation_time)).0
+}
+
+fn build_app_with_tracker(runtime: Arc<EvidenceRuntime>) -> (Router, EvaluationTracker) {
+    build_app_with_tracker_at(runtime, None)
+}
+
+fn build_app_with_tracker_at(
+    runtime: Arc<EvidenceRuntime>,
+    evaluation_time: Option<chrono::DateTime<chrono::Utc>>,
+) -> (Router, EvaluationTracker) {
+    #[cfg(not(test))]
+    let _ = evaluation_time;
+    let listener = &runtime.runtime_config().listener;
+    let maximum_request_bytes = listener.maximum_request_bytes as usize;
+    let request_timeout = Duration::from_millis(listener.request_timeout_milliseconds);
+    let maximum_concurrent_requests = listener.maximum_concurrent_requests as usize;
+    let evaluations = EvaluationTracker::default();
+    let state = Arc::new(ServerState {
+        runtime,
+        maximum_request_bytes,
+        request_timeout,
+        request_slots: Arc::new(Semaphore::new(maximum_concurrent_requests)),
+        evaluations: evaluations.clone(),
+        #[cfg(test)]
+        evaluation_time,
+    });
+
+    let routes = Router::new()
+        .route("/v1/evidence", post(create_evidence))
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/.well-known/evidence/jwks.json", get(jwks))
+        .fallback(unknown_route)
+        .method_not_allowed_fallback(unknown_route)
+        .with_state(state);
+    (response_layers(routes), evaluations)
+}
+
+#[derive(Clone, Default)]
+struct EvaluationTracker {
+    inner: Arc<EvaluationTrackerInner>,
+}
+
+#[derive(Default)]
+struct EvaluationTrackerInner {
+    active: AtomicUsize,
+    idle: tokio::sync::Notify,
+}
+
+impl EvaluationTracker {
+    fn spawn<F, T>(&self, future: F) -> tokio::task::JoinHandle<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.inner.active.fetch_add(1, Ordering::AcqRel);
+        let guard = ActiveEvaluation {
+            tracker: self.clone(),
+        };
+        tokio::spawn(async move {
+            let _guard = guard;
+            future.await
+        })
+    }
+
+    async fn wait_idle(&self) {
+        loop {
+            let idle = self.inner.idle.notified();
+            if self.inner.active.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            idle.await;
+        }
+    }
+}
+
+struct ActiveEvaluation {
+    tracker: EvaluationTracker,
+}
+
+impl Drop for ActiveEvaluation {
+    fn drop(&mut self) {
+        if self.tracker.inner.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.tracker.inner.idle.notify_one();
+        }
+    }
+}
+
+fn response_layers(routes: Router) -> Router {
+    routes
+        .layer(from_fn(add_no_store))
+        .layer(registry_platform_httpsec::corp_conditional())
+        .layer(
+            registry_platform_httpsec::security_headers(CspBuilder::restrictive()).without_hsts(),
+        )
+}
+
+/// Bind the configured private listener and serve until graceful shutdown.
+pub async fn serve<F>(runtime: Arc<EvidenceRuntime>, shutdown: F) -> io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listener_config = runtime.runtime_config().listener.clone();
+    let bind_ip = listener_config
+        .bind_host
+        .parse::<IpAddr>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let address = SocketAddr::new(bind_ip, listener_config.port);
+    let listener = TcpListener::bind(address).await?;
+    let (app, evaluations) = build_app_with_tracker(runtime);
+    let result = serve_listener(listener, app, &listener_config, shutdown).await;
+
+    // A disconnected client can cause axum to drop its handler future. The
+    // admitted evaluation itself is owned by a detached task, so the server
+    // must explicitly drain those tasks before production shutdown returns.
+    evaluations.wait_idle().await;
+    result
+}
+
+/// Serve a pre-bound listener and drain client-bound handlers on shutdown.
+///
+/// The grace duration is an operational target, not a cancellation boundary.
+/// A request already inside runtime evaluation is allowed to complete even if
+/// it exceeds that target, preserving the audit and signing invariants. The
+/// production [`serve`] entry point additionally drains detached evaluations.
+async fn serve_listener<F>(
+    listener: TcpListener,
+    app: Router,
+    config: &ListenerConfig,
+    shutdown: F,
+) -> io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let grace = Duration::from_millis(config.shutdown_grace_milliseconds);
+    let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel();
+    let graceful = async move {
+        shutdown.await;
+        let _ = shutdown_started_tx.send(());
+    };
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(graceful)
+        .into_future();
+    tokio::pin!(server);
+
+    let grace_watch = async move {
+        if shutdown_started_rx.await.is_ok() {
+            tokio::time::sleep(grace).await;
+            tracing::warn!(
+                target: "registry_evidence::server",
+                "graceful shutdown target elapsed; waiting for protected operations to finish"
+            );
+        }
+        std::future::pending::<()>().await;
+    };
+    tokio::pin!(grace_watch);
+
+    tokio::select! {
+        result = &mut server => result,
+        () = &mut grace_watch => unreachable!("shutdown grace watcher never completes"),
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn serve_listener_for_test<F>(
+    runtime: Arc<EvidenceRuntime>,
+    listener: TcpListener,
+    shutdown: F,
+) -> io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listener_config = runtime.runtime_config().listener.clone();
+    let (app, evaluations) = build_app_with_tracker(runtime);
+    let result = serve_listener(listener, app, &listener_config, shutdown).await;
+    evaluations.wait_idle().await;
+    result
+}
+
+async fn create_evidence(
+    State(state): State<Arc<ServerState>>,
+    request: Request<Body>,
+) -> Response {
+    let operation = operation_id();
+    let started = Instant::now();
+
+    let access_token = match bearer_token(request.headers()) {
+        Ok(token) => token.to_owned(),
+        Err(code) => return problem_response(code, &operation),
+    };
+    if !has_exact_content_type(request.headers(), JSON_MEDIA_TYPE)
+        || content_length_exceeds(request.headers(), state.maximum_request_bytes)
+    {
+        return problem_response(ProblemCode::MalformedRequest, &operation);
+    }
+
+    let admission_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    let request_slot = match tokio::time::timeout(
+        admission_budget,
+        Arc::clone(&state.request_slots).acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) | Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, &operation)
+        }
+    };
+
+    let body_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    let body = match tokio::time::timeout(
+        body_budget,
+        to_bytes(request.into_body(), state.maximum_request_bytes),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(_)) => return problem_response(ProblemCode::MalformedRequest, &operation),
+        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+    let evidence_request = match parse_evidence_request(&body) {
+        Ok(request) => request,
+        Err(code) => return problem_response(code, &operation),
+    };
+
+    // The tracker-owned task, rather than this client-bound handler, owns the
+    // admitted concurrency permit and complete fail-closed evaluation. If the
+    // client disconnects while the handler awaits the join handle, dropping
+    // that handle detaches the task instead of cancelling its audit writes.
+    let evaluation_operation = operation.clone();
+    let runtime = Arc::clone(&state.runtime);
+    let evaluations = state.evaluations.clone();
+    #[cfg(test)]
+    let evaluation_time = state.evaluation_time;
+    let evaluation = evaluations.spawn(async move {
+        let _request_slot = request_slot;
+        #[cfg(test)]
+        if let Some(evaluation_time) = evaluation_time {
+            return runtime
+                .evaluate_at_for_test(
+                    &evaluation_operation,
+                    &access_token,
+                    &evidence_request,
+                    evaluation_time,
+                )
+                .await;
+        }
+        runtime
+            .evaluate(&evaluation_operation, &access_token, &evidence_request)
+            .await
+    });
+    let result = match evaluation.await {
+        Ok(result) => result,
+        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+    };
+
+    match result {
+        Ok(jws) => match serialize_response(StatusCode::OK, EVIDENCE_JWS_MEDIA_TYPE, &jws) {
+            Some(response) => response,
+            None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+        },
+        Err(failure) => runtime_failure_response(failure, &operation),
+    }
+}
+
+async fn health() -> Response {
+    static_json_response(StatusCode::OK, r#"{"status":"ok"}"#)
+}
+
+async fn ready(State(state): State<Arc<ServerState>>) -> Response {
+    let operation = operation_id();
+    match tokio::time::timeout(state.request_timeout, state.runtime.ready()).await {
+        Ok(true) => static_json_response(StatusCode::OK, r#"{"status":"ready"}"#),
+        Ok(false) | Err(_) => problem_response(ProblemCode::ServiceUnavailable, &operation),
+    }
+}
+
+async fn jwks(State(state): State<Arc<ServerState>>) -> Response {
+    let operation = operation_id();
+    match serialize_response(StatusCode::OK, JWKS_MEDIA_TYPE, state.runtime.jwks()) {
+        Some(response) => response,
+        None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+    }
+}
+
+async fn unknown_route() -> Response {
+    problem_response(ProblemCode::MalformedRequest, &operation_id())
+}
+
+async fn add_no_store(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn parse_evidence_request(bytes: &[u8]) -> Result<EvidenceRequest, ProblemCode> {
+    let value = parse_json_strict(bytes).map_err(|_| ProblemCode::MalformedRequest)?;
+    match request_contract_accepts(&value) {
+        Ok(true) => {}
+        Ok(false) => return Err(ProblemCode::MalformedRequest),
+        Err(_) => return Err(ProblemCode::ServiceUnavailable),
+    }
+    serde_json::from_value(value).map_err(|_| ProblemCode::MalformedRequest)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, ProblemCode> {
+    let mut values = headers.get_all(AUTHORIZATION).iter();
+    let value = values.next().ok_or(ProblemCode::AuthenticationFailed)?;
+    if values.next().is_some() {
+        return Err(ProblemCode::AuthenticationFailed);
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| ProblemCode::AuthenticationFailed)?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .ok_or(ProblemCode::AuthenticationFailed)?;
+    if token.is_empty()
+        || token
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte == b',')
+    {
+        return Err(ProblemCode::AuthenticationFailed);
+    }
+    Ok(token)
+}
+
+fn has_exact_content_type(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    values.next().is_none() && value.as_bytes() == expected.as_bytes()
+}
+
+fn content_length_exceeds(headers: &HeaderMap, maximum: usize) -> bool {
+    let mut values = headers.get_all(CONTENT_LENGTH).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return true;
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_none_or(|length| length > maximum as u64)
+}
+
+fn remaining(limit: Duration, started: Instant) -> Option<Duration> {
+    limit.checked_sub(started.elapsed())
+}
+
+fn runtime_failure_response(failure: RuntimeFailure, operation: &str) -> Response {
+    problem_response(failure.problem(), operation)
+}
+
+fn problem_response(code: ProblemCode, operation: &str) -> Response {
+    let body = code.body(operation);
+    let mut response = serialize_response(code.status(), PROBLEM_MEDIA_TYPE, &body)
+        .unwrap_or_else(|| empty_response(StatusCode::INTERNAL_SERVER_ERROR));
+    if code == ProblemCode::AuthenticationFailed {
+        response.headers_mut().insert(
+            axum::http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer"),
+        );
+    }
+    if code == ProblemCode::RateLimited {
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static(RETRY_AFTER_SECONDS));
+    }
+    response
+}
+
+fn serialize_response<T: Serialize>(
+    status: StatusCode,
+    media_type: &'static str,
+    value: &T,
+) -> Option<Response> {
+    let bytes = serde_json::to_vec(value).ok()?;
+    Some(bytes_response(status, media_type, bytes))
+}
+
+fn static_json_response(status: StatusCode, body: &'static str) -> Response {
+    bytes_response(status, JSON_MEDIA_TYPE, body.as_bytes().to_vec())
+}
+
+fn bytes_response(status: StatusCode, media_type: &'static str, bytes: Vec<u8>) -> Response {
+    let mut response = (status, Body::from(bytes)).into_response();
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static(media_type));
+    response
+}
+
+fn empty_response(status: StatusCode) -> Response {
+    (status, Body::empty()).into_response()
+}
+
+fn operation_id() -> String {
+    Ulid::new().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[test]
+    fn authorization_requires_one_unambiguous_bearer_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer three.parts.value"),
+        );
+        assert_eq!(
+            bearer_token(&headers).expect("single bearer accepted"),
+            "three.parts.value"
+        );
+
+        for invalid in [
+            "bearer three.parts.value",
+            "Bearer",
+            "Bearer  three.parts.value",
+            "Bearer three.parts.value ",
+            "Bearer three.parts.value,other",
+        ] {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(invalid).expect("test header is valid"),
+            );
+            assert_eq!(
+                bearer_token(&headers),
+                Err(ProblemCode::AuthenticationFailed)
+            );
+        }
+
+        headers.clear();
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer first"));
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer second"));
+        assert_eq!(
+            bearer_token(&headers),
+            Err(ProblemCode::AuthenticationFailed)
+        );
+    }
+
+    #[test]
+    fn request_json_is_strict_and_closed() {
+        let valid = br#"{
+            "requirement":"urn:example:requirement:v1",
+            "purpose":"review",
+            "subjects":[{
+                "role":"subject",
+                "selector":{"profile":"opaque-v1","values":{"opaque":"value"}}
+            }]
+        }"#;
+        assert!(parse_evidence_request(valid).is_ok());
+        for number in ["1.0", "1e0"] {
+            let request = r#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":NUMBER}}}]}"#
+                .replace("NUMBER", number);
+            let parsed = parse_evidence_request(request.as_bytes())
+                .expect("schema-valid integral JSON number is accepted");
+            assert_eq!(
+                parsed.subjects[0]
+                    .selector
+                    .values
+                    .as_ref()
+                    .and_then(|values| values.get("opaque")),
+                Some(&crate::model::SelectorValue::Integer(1))
+            );
+        }
+        assert_eq!(
+            parse_evidence_request(
+                br#"{"requirement":"a","requirement":"b","purpose":"p","subjects":[]}"#
+            ),
+            Err(ProblemCode::MalformedRequest)
+        );
+        assert_eq!(
+            parse_evidence_request(
+                br#"{"requirement":"a","purpose":"p","subjects":[],"query":"hidden"}"#
+            ),
+            Err(ProblemCode::MalformedRequest)
+        );
+
+        for invalid in [
+            br#"{"requirement":"not a URI","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requirement":"urn:example:requirement:v1","purpose":"Uppercase","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[]}"#.as_slice(),
+            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"Uppercase","selector":{"profile":"opaque-v1","values":{"opaque":"value"}}}]}"#.as_slice(),
+            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{}}}]}"#.as_slice(),
+            br#"{"requirement":"urn:example:requirement:v1","purpose":"p","subjects":[{"role":"subject","selector":{"profile":"opaque-v1","values":{"opaque":9007199254740992}}}]}"#.as_slice(),
+        ] {
+            assert_eq!(
+                parse_evidence_request(invalid),
+                Err(ProblemCode::MalformedRequest)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn problem_responses_have_closed_media_and_challenge_headers() {
+        let authentication = problem_response(
+            ProblemCode::AuthenticationFailed,
+            "01K1EVIDENCEOPERATION0000000",
+        );
+        assert_eq!(authentication.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            authentication.headers().get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(PROBLEM_MEDIA_TYPE))
+        );
+        assert_eq!(
+            authentication
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE),
+            Some(&HeaderValue::from_static("Bearer"))
+        );
+
+        let rate = problem_response(ProblemCode::RateLimited, "01K1EVIDENCEOPERATION0000000");
+        assert_eq!(rate.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            rate.headers().get(RETRY_AFTER),
+            Some(&HeaderValue::from_static(RETRY_AFTER_SECONDS))
+        );
+    }
+
+    #[test]
+    fn operation_ids_meet_the_audit_contract() {
+        let operation = operation_id();
+        assert!((16..=128).contains(&operation.len()));
+        assert!(!operation.bytes().any(|byte| byte.is_ascii_whitespace()));
+    }
+
+    #[tokio::test]
+    async fn response_layers_apply_no_store_and_security_headers_without_hsts() {
+        let app = response_layers(
+            Router::new().route("/probe", get(|| async { StatusCode::NO_CONTENT })),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/probe")
+                    .body(Body::empty())
+                    .expect("test request builds"),
+            )
+            .await
+            .expect("infallible router responds");
+
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        assert_eq!(
+            response.headers().get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        assert_eq!(
+            response.headers().get("x-frame-options"),
+            Some(&HeaderValue::from_static("DENY"))
+        );
+        assert!(response
+            .headers()
+            .get("strict-transport-security")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn evaluation_tracker_drains_a_detached_task_without_a_missed_wakeup() {
+        let tracker = EvaluationTracker::default();
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let detached = tracker.spawn(async move {
+            let _ = blocked.await;
+        });
+        drop(detached);
+
+        let waiter = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { tracker.wait_idle().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        release.send(()).expect("detached task is still running");
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("detached task drains")
+            .expect("drain waiter does not panic");
+    }
+}

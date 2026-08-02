@@ -1,0 +1,676 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/bundle-v1.json
+title: Evidence immutable deployment bundle Version 1
+type: object
+additionalProperties: false
+required: [version, service, issuer, authentication, audit, subjectBinding, rateLimits, signing, selectorProfiles, sources, authorityProfiles, requirements]
+properties:
+  version: {const: 1}
+  service:
+    type: object
+    additionalProperties: false
+    required: [providerId, trustDomain]
+    properties:
+      providerId: {type: string, format: uri, maxLength: 512}
+      trustDomain: {type: string, format: uri, maxLength: 512}
+  issuer:
+    type: object
+    additionalProperties: false
+    required: [id]
+    properties: {id: {type: string, format: uri, maxLength: 512}}
+  authentication: {$ref: '#/$defs/authentication'}
+  audit: {$ref: '#/$defs/audit'}
+  subjectBinding: {$ref: '#/$defs/subject-binding'}
+  rateLimits: {$ref: '#/$defs/rate-limits'}
+  signing:
+    type: object
+    additionalProperties: false
+    required: [format, algorithm, activeKeyId, activeKeyRef, retiredPublicJwkFiles, jwksPath, maximumAssertionValiditySeconds, verifierClockSkewSeconds]
+    properties:
+      format: {const: flattened-jws-json}
+      algorithm: {const: EdDSA}
+      activeKeyId: {type: string, minLength: 1, maxLength: 256, pattern: '^[^\u0000-\u001F\u007F-\u009F]+$'}
+      activeKeyRef: {$ref: '#/$defs/secret-ref'}
+      retiredPublicJwkFiles:
+        type: array
+        maxItems: 32
+        uniqueItems: true
+        items: {$ref: '#/$defs/public-jwk-path'}
+      jwksPath: {const: /.well-known/evidence/jwks.json}
+      maximumAssertionValiditySeconds: {type: integer, minimum: 1, maximum: 31536000}
+      verifierClockSkewSeconds: {type: integer, minimum: 0, maximum: 600}
+  selectorProfiles:
+    type: object
+    minProperties: 1
+    maxProperties: 128
+    propertyNames: {$ref: '#/$defs/local-id'}
+    additionalProperties: {$ref: '#/$defs/selector-profile'}
+  sources:
+    type: object
+    minProperties: 1
+    maxProperties: 128
+    propertyNames: {$ref: '#/$defs/local-id'}
+    additionalProperties: {$ref: '#/$defs/source'}
+  authorityProfiles:
+    type: object
+    minProperties: 1
+    maxProperties: 128
+    propertyNames: {$ref: '#/$defs/local-id'}
+    additionalProperties: {$ref: '#/$defs/authority-profile'}
+  requirements:
+    type: array
+    minItems: 1
+    maxItems: 128
+    items: {$ref: '#/$defs/requirement'}
+$defs:
+  local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  uri: {type: string, format: uri, maxLength: 512}
+  secret-ref:
+    {type: string, pattern: '^secret:file/[a-z][a-z0-9._-]{0,127}$'}
+  relative-path: {type: string, pattern: '^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$'}
+  public-jwk-path: {type: string, pattern: '^public-keys/[A-Za-z0-9._-]+\.jwk\.json$'}
+  authentication:
+    type: object
+    additionalProperties: false
+    required: [kind, issuer, audiences, tokenTypes, algorithms, jwksUri, principalClaim, requesterTagsClaim, evidenceAudienceClaim, grantIdClaim, grantAuthorityClaim]
+    properties:
+      kind: {const: oidc-access-token}
+      issuer: {type: string, pattern: '^https://', maxLength: 512}
+      audiences:
+        type: array
+        minItems: 1
+        maxItems: 16
+        uniqueItems: true
+        items: {type: string, minLength: 1, maxLength: 512}
+      tokenTypes:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items: {enum: [at+jwt, application/at+jwt]}
+      algorithms:
+        type: array
+        minItems: 1
+        maxItems: 3
+        uniqueItems: true
+        items: {enum: [EdDSA, ES256, RS256]}
+      jwksUri: {type: string, pattern: '^https://', maxLength: 512}
+      principalClaim: {$ref: '#/$defs/claim-name'}
+      requesterTagsClaim: {$ref: '#/$defs/claim-name'}
+      evidenceAudienceClaim: {$ref: '#/$defs/claim-name'}
+      grantIdClaim: {$ref: '#/$defs/claim-name'}
+      grantAuthorityClaim: {$ref: '#/$defs/claim-name'}
+      actorClaim: {$ref: '#/$defs/claim-name'}
+  audit:
+    type: object
+    additionalProperties: false
+    required: [format, hashSecretRef, hashKeyVersion, failClosed]
+    properties:
+      format: {const: keyed-jsonl}
+      hashSecretRef: {$ref: '#/$defs/secret-ref'}
+      hashKeyVersion: {type: integer, minimum: 1, maximum: 2147483647}
+      failClosed: {const: true}
+  subject-binding:
+    type: object
+    additionalProperties: false
+    required: [secretRef, keyVersion]
+    properties:
+      secretRef: {$ref: '#/$defs/secret-ref'}
+      keyVersion: {type: integer, minimum: 1, maximum: 2147483647}
+  rate-limits:
+    type: object
+    additionalProperties: false
+    required: [requestsPerPrincipalPerMinute, burstPerPrincipal, failedSelectorAttemptsPerPrincipalAuthorityPerMinute]
+    properties:
+      requestsPerPrincipalPerMinute: {type: integer, minimum: 1, maximum: 1000000}
+      burstPerPrincipal: {type: integer, minimum: 1, maximum: 100000}
+      failedSelectorAttemptsPerPrincipalAuthorityPerMinute: {type: integer, minimum: 1, maximum: 100000}
+  claim-name: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_.-]{0,127}$'}
+  claim-path: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'}
+  selector-profile:
+    type: object
+    additionalProperties: false
+    required: [maximumAggregateBytes, fields]
+    properties:
+      maximumAggregateBytes: {type: integer, minimum: 1, maximum: 8192}
+      fields:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        additionalProperties: {$ref: '#/$defs/selector-field'}
+  selector-field:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type, minimumBytes, maximumBytes]
+        properties:
+          type: {const: string}
+          minimumBytes: {type: integer, minimum: 1, maximum: 8192}
+          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties: {type: {const: date}}
+      - type: object
+        additionalProperties: false
+        required: [type, minimum, maximum]
+        properties:
+          type: {const: integer}
+          minimum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+          maximum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties: {type: {const: boolean}}
+      - type: object
+        additionalProperties: false
+        required: [type, codelist, codelistVersion, maximumBytes]
+        properties:
+          type: {const: controlled-code}
+          codelist: {$ref: '#/$defs/relative-path'}
+          codelistVersion: {type: string, minLength: 1, maxLength: 128}
+          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+  source:
+    type: object
+    additionalProperties: false
+    required: [transport, baseUrl, posture, authentication, request, extractScript, factSchema]
+    properties:
+      transport: {const: http-json}
+      baseUrl:
+        oneOf:
+          - {type: string, pattern: '^https://[^/?#]+$'}
+          - {type: string, pattern: '^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?$'}
+      posture: {enum: [source-derived, field-projected, record-transformed]}
+      tlsTrustProfile: {$ref: '#/$defs/local-id'}
+      authentication: {$ref: '#/$defs/source-authentication'}
+      request: {$ref: '#/$defs/fixed-request'}
+      extractScript: {$ref: '#/$defs/relative-path'}
+      factSchema: {$ref: '#/$defs/relative-path'}
+  source-authentication:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind, usernameRef, passwordRef]
+        properties:
+          kind: {const: basic}
+          usernameRef: {$ref: '#/$defs/secret-ref'}
+          passwordRef: {$ref: '#/$defs/secret-ref'}
+      - type: object
+        additionalProperties: false
+        required: [kind, tokenRef]
+        properties:
+          kind: {const: static-bearer}
+          tokenRef: {$ref: '#/$defs/secret-ref'}
+      - type: object
+        additionalProperties: false
+        required: [kind, headerName, valueRef]
+        properties:
+          kind: {const: static-api-key}
+          headerName: {$ref: '#/$defs/configurable-header-name'}
+          valueRef: {$ref: '#/$defs/secret-ref'}
+      - type: object
+        additionalProperties: false
+        required: [kind, tokenEndpoint, clientIdRef, clientSecretRef, credentialPlacement, maximumCacheSeconds]
+        properties:
+          kind: {const: oauth2-client-credentials}
+          tokenEndpoint:
+            oneOf:
+              - {type: string, pattern: '^https://[^?#]+$'}
+              - {type: string, pattern: '^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?/[^?#]*$'}
+          clientIdRef: {$ref: '#/$defs/secret-ref'}
+          clientSecretRef: {$ref: '#/$defs/secret-ref'}
+          scope: {type: string, minLength: 1, maxLength: 512}
+          credentialPlacement: {enum: [basic-header, form-body, query-string]}
+          maximumCacheSeconds: {type: integer, minimum: 0, maximum: 86400}
+  fixed-request:
+    type: object
+    additionalProperties: false
+    required: [method, selectorInputs, prepareScript, adapterParameters, adapterParametersSchema, preparationLimits, projection, redirects, timeoutMilliseconds, maximumResponseBytes, concurrencyLimit]
+    properties:
+      method: {enum: [GET, POST]}
+      path: {type: string, pattern: '^/(?!/)[A-Za-z0-9._~!$&''()*+,;=:@%/-]*$'}
+      pathTemplate: {type: string, minLength: 2, maxLength: 2048, pattern: '^/(?!/)[A-Za-z0-9._~!$&''()*+,;=:@%/{\}-]*$'}
+      pathBindings:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        additionalProperties: {$ref: '#/$defs/path-binding'}
+      fixedHeaders:
+        type: array
+        maxItems: 32
+        items:
+          type: object
+          additionalProperties: false
+          required: [name, value]
+          properties:
+            name: {$ref: '#/$defs/configurable-header-name'}
+            value: {type: string, maxLength: 4096, pattern: '^[^\u0000-\u001F\u007F-\u009F]*$'}
+      selectorInputs:
+        type: array
+        minItems: 1
+        maxItems: 8
+        items: {$ref: '#/$defs/selector-input'}
+      prepareScript: {$ref: '#/$defs/relative-path'}
+      adapterParameters:
+        type: object
+        maxProperties: 64
+        propertyNames: {$ref: '#/$defs/parameter-key'}
+        additionalProperties: {$ref: '#/$defs/adapter-parameter-value'}
+      adapterParametersSchema: {$ref: '#/$defs/relative-path'}
+      preparationLimits: {$ref: '#/$defs/preparation-limits'}
+      projection:
+        type: array
+        minItems: 1
+        maxItems: 64
+        uniqueItems: true
+        items: {type: string, minLength: 2, maxLength: 256, pattern: '^/(?!/)([^/~]|~[01]|/|\*)+$'}
+      redirects: {const: deny}
+      timeoutMilliseconds: {type: integer, minimum: 1, maximum: 30000}
+      maximumResponseBytes: {type: integer, minimum: 1, maximum: 1048576}
+      concurrencyLimit: {type: integer, minimum: 1, maximum: 256}
+    oneOf:
+      - required: [path]
+        not: {anyOf: [{required: [pathTemplate]}, {required: [pathBindings]}]}
+      - required: [pathTemplate, pathBindings]
+        not: {required: [path]}
+    allOf:
+      - if:
+          required: [method]
+          properties: {method: {const: GET}}
+        then:
+          properties:
+            preparationLimits:
+              properties: {jsonBody: {const: forbidden}}
+  selector-input:
+    type: object
+    additionalProperties: false
+    required: [role, alternatives]
+    properties:
+      role: {$ref: '#/$defs/local-id'}
+      alternatives:
+        type: array
+        minItems: 1
+        maxItems: 16
+        items:
+          type: object
+          additionalProperties: false
+          required: [profile, fields]
+          properties:
+            profile: {$ref: '#/$defs/local-id'}
+            fields:
+              type: array
+              minItems: 1
+              maxItems: 16
+              uniqueItems: true
+              items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+  path-binding:
+    type: object
+    additionalProperties: false
+    required: [role, profile, field]
+    properties:
+      role: {$ref: '#/$defs/local-id'}
+      profile: {$ref: '#/$defs/local-id'}
+      field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+  configurable-header-name:
+    type: string
+    minLength: 1
+    maxLength: 64
+    pattern: '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$'
+  parameter-key: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9._-]{0,127}$'}
+  adapter-parameter-value:
+    oneOf:
+      - {type: boolean}
+      - {type: integer, minimum: -9223372036854775808, maximum: 9223372036854775807}
+      - {type: string, maxLength: 16384}
+      - type: array
+        maxItems: 256
+        items: {$ref: '#/$defs/adapter-parameter-value'}
+      - type: object
+        maxProperties: 256
+        propertyNames: {$ref: '#/$defs/parameter-key'}
+        additionalProperties: {$ref: '#/$defs/adapter-parameter-value'}
+  preparation-limits:
+    type: object
+    additionalProperties: false
+    required: [query, jsonBody]
+    properties:
+      query: {enum: [required, allowed, forbidden]}
+      jsonBody: {enum: [required, allowed, forbidden]}
+      maximumQueryPairs: {type: integer, minimum: 1, maximum: 64}
+      maximumQueryNameBytes: {type: integer, minimum: 1, maximum: 64}
+      maximumQueryValueBytes: {type: integer, minimum: 1, maximum: 4096}
+      maximumJsonDepth: {type: integer, minimum: 1, maximum: 32}
+      maximumCollectionItems: {type: integer, minimum: 1, maximum: 256}
+      maximumStringBytes: {type: integer, minimum: 1, maximum: 16384}
+      maximumNormalizedBytes: {type: integer, minimum: 1, maximum: 65536}
+    not:
+      properties:
+        query: {const: forbidden}
+        jsonBody: {const: forbidden}
+      required: [query, jsonBody]
+  authority-profile:
+    type: object
+    additionalProperties: false
+    required: [kind, requesterTags, grants]
+    properties:
+      kind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+      requesterTags:
+        type: array
+        minItems: 1
+        maxItems: 32
+        uniqueItems: true
+        items: {$ref: '#/$defs/local-id'}
+      grants:
+        type: array
+        minItems: 1
+        maxItems: 128
+        items:
+          type: object
+          additionalProperties: false
+          required: [requirement, purpose, audienceFrom, subjects]
+          properties:
+            requirement: {$ref: '#/$defs/uri'}
+            purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+            audienceFrom: {const: authenticated-requester}
+            subjects:
+              type: array
+              minItems: 1
+              maxItems: 8
+              items:
+                type: object
+                additionalProperties: false
+                required: [role, selectorProfile, valueOrigin]
+                properties:
+                  role: {$ref: '#/$defs/local-id'}
+                  selectorProfile: {$ref: '#/$defs/local-id'}
+                  valueOrigin: {enum: [authenticated-context, authenticated-grant, request]}
+                  valueClaims:
+                    type: object
+                    minProperties: 1
+                    maxProperties: 16
+                    propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+                    additionalProperties: {$ref: '#/$defs/claim-path'}
+                allOf:
+                  - if:
+                      required: [valueOrigin]
+                      properties:
+                        valueOrigin: {enum: [authenticated-context, authenticated-grant]}
+                    then: {required: [valueClaims]}
+                  - if:
+                      required: [valueOrigin]
+                      properties:
+                        valueOrigin: {const: request}
+                    then:
+                      not: {required: [valueClaims]}
+  requirement:
+    type: object
+    additionalProperties: false
+    required: [id, kind, source, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, fixtures, disclosureGuard, existenceDisclosure]
+    properties:
+      id: {$ref: '#/$defs/uri'}
+      kind: {enum: [criterion, information-requirement, constraint]}
+      source: {$ref: '#/$defs/local-id'}
+      purposes:
+        type: array
+        minItems: 1
+        maxItems: 32
+        uniqueItems: true
+        items: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+      subjectRoles:
+        type: array
+        minItems: 1
+        maxItems: 8
+        items:
+          type: object
+          additionalProperties: false
+          required: [role, cardinality, selectorProfiles]
+          properties:
+            role: {$ref: '#/$defs/local-id'}
+            cardinality: {const: one}
+            selectorProfiles:
+              type: array
+              minItems: 1
+              maxItems: 16
+              uniqueItems: true
+              items: {$ref: '#/$defs/local-id'}
+      referenceFrameworks:
+        type: array
+        minItems: 1
+        maxItems: 16
+        uniqueItems: true
+        items: {$ref: '#/$defs/uri'}
+      evidenceType: {$ref: '#/$defs/uri'}
+      observationTimezone: {type: string, minLength: 1, maxLength: 128}
+      validitySeconds: {type: integer, minimum: 1, maximum: 31536000}
+      derivation:
+        type: object
+        additionalProperties: false
+        required: [script, parameters]
+        properties:
+          script: {$ref: '#/$defs/relative-path'}
+          selectorInputs:
+            type: array
+            maxItems: 8
+            items: {$ref: '#/$defs/selector-input'}
+          parameters:
+            type: object
+            maxProperties: 32
+            additionalProperties: {$ref: '#/$defs/parameter-value'}
+      concepts:
+        type: array
+        minItems: 1
+        maxItems: 16
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, form, required]
+          properties:
+            id: {$ref: '#/$defs/uri'}
+            form: {enum: [boolean, controlled-code, controlled-category, bounded-integer, bounded-decimal, date-bucket, time-bucket, audience-scoped-entity-reference, controlled-code-list, entity-reference-list, reviewed-structured-value]}
+            required: {type: boolean}
+            constraints: {type: object}
+          allOf:
+            - oneOf:
+                - properties:
+                    form: {const: boolean}
+                    constraints: {$ref: '#/$defs/boolean-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: controlled-code}
+                    constraints: {$ref: '#/$defs/controlled-code-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: controlled-category}
+                    constraints: {$ref: '#/$defs/controlled-category-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: bounded-integer}
+                    constraints: {$ref: '#/$defs/bounded-integer-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: bounded-decimal}
+                    constraints: {$ref: '#/$defs/bounded-decimal-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: date-bucket}
+                    constraints: {$ref: '#/$defs/bucket-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: time-bucket}
+                    constraints: {$ref: '#/$defs/bucket-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: audience-scoped-entity-reference}
+                    constraints: {$ref: '#/$defs/entity-reference-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: controlled-code-list}
+                    constraints: {$ref: '#/$defs/controlled-code-list-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: entity-reference-list}
+                    constraints: {$ref: '#/$defs/entity-reference-list-constraints'}
+                - required: [constraints]
+                  properties:
+                    form: {const: reviewed-structured-value}
+                    constraints: {$ref: '#/$defs/reviewed-structured-value-constraints'}
+      fixtures: {$ref: '#/$defs/relative-path'}
+      disclosureGuard:
+        type: object
+        additionalProperties: false
+        required: [families]
+        properties:
+          families:
+            type: array
+            minItems: 1
+            maxItems: 16
+            uniqueItems: true
+            items: {$ref: '#/$defs/uri'}
+      existenceDisclosure: {enum: [collapse-unresolved]}
+  boolean-constraints:
+    type: object
+    additionalProperties: false
+    maxProperties: 0
+  controlled-code-constraints:
+    type: object
+    additionalProperties: false
+    required: [codelist, codelistVersion, maximumBytes]
+    properties:
+      codelist: {$ref: '#/$defs/relative-path'}
+      codelistVersion: {type: string, minLength: 1, maxLength: 128}
+      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+  controlled-category-constraints:
+    type: object
+    additionalProperties: false
+    required: [categoryScheme, schemeVersion, codelist, maximumBytes]
+    properties:
+      categoryScheme: {$ref: '#/$defs/uri'}
+      schemeVersion: {type: string, minLength: 1, maxLength: 128}
+      codelist: {$ref: '#/$defs/relative-path'}
+      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+  bounded-integer-constraints:
+    type: object
+    additionalProperties: false
+    required: [minimum, maximum]
+    properties:
+      minimum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      maximum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+  bounded-decimal-constraints:
+    type: object
+    additionalProperties: false
+    required: [minimum, maximum, maximumScale]
+    properties:
+      minimum: {$ref: '#/$defs/canonical-decimal-text'}
+      maximum: {$ref: '#/$defs/canonical-decimal-text'}
+      maximumScale: {type: integer, minimum: 0, maximum: 9}
+  canonical-decimal-text:
+    type: string
+    pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'
+  bucket-constraints:
+    type: object
+    additionalProperties: false
+    required: [bucketScheme, schemeVersion]
+    properties:
+      bucketScheme: {$ref: '#/$defs/uri'}
+      schemeVersion: {type: string, minLength: 1, maxLength: 128}
+  entity-reference-constraints:
+    type: object
+    additionalProperties: false
+    required: [maximumBytes]
+    properties:
+      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+  controlled-code-list-constraints:
+    type: object
+    additionalProperties: false
+    required: [codelist, codelistVersion, minimumItems, maximumItems, unique]
+    properties:
+      codelist: {$ref: '#/$defs/relative-path'}
+      codelistVersion: {type: string, minLength: 1, maxLength: 128}
+      minimumItems: {type: integer, minimum: 1, maximum: 64}
+      maximumItems: {type: integer, minimum: 1, maximum: 64}
+      unique: {const: true}
+  entity-reference-list-constraints:
+    type: object
+    additionalProperties: false
+    required: [minimumItems, maximumItems, unique]
+    properties:
+      minimumItems: {type: integer, minimum: 1, maximum: 64}
+      maximumItems: {type: integer, minimum: 1, maximum: 64}
+      unique: {const: true}
+  reviewed-structured-value-constraints:
+    type: object
+    additionalProperties: false
+    required: [schema, maximumSerializedBytes]
+    properties:
+      schema: {$ref: '#/$defs/uri'}
+      maximumSerializedBytes: {type: integer, minimum: 1, maximum: 65536}
+  parameter-value:
+    oneOf:
+      - {type: string, maxLength: 1024}
+      - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - {type: boolean}
+      - {$ref: '#/$defs/decimal-value'}
+      - type: array
+        minItems: 1
+        maxItems: 64
+        items: {$ref: '#/$defs/bucket-boundary'}
+  decimal-value:
+    type: object
+    additionalProperties: false
+    required: [type, value]
+    properties:
+      type: {const: decimal}
+      value: {type: string, pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'}
+  bucket-boundary:
+    type: object
+    additionalProperties: false
+    required: [minimumInclusive, maximumExclusive, code]
+    properties:
+      minimumInclusive: {$ref: '#/$defs/decimal-value'}
+      maximumExclusive: {$ref: '#/$defs/decimal-value'}
+      code: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+bundle_layout:
+  root: evidence.yaml
+  allowed_directories: [adapters, derivations, schemas, codelists, fixtures, public-keys]
+  symlinks: prohibited
+  path_escape: prohibited
+  unknown_files: prohibited
+atomic_revision:
+  digest: sha256 over a canonical sorted path manifest plus exact file bytes
+  trust: Established by operator deployment controls, not by the digest itself.
+  lifetime: Mounted read-only and loaded once; reload, merge, mutation, fallback, and partial serving are prohibited.
+startup_checks:
+  - Unique stable identifiers and no dangling references.
+  - Complete role/profile/origin/authority/source bindings.
+  - Secret references resolve without expanding values into YAML or diagnostics.
+  - Scripts compile and use only the Version 1 ABI and primitive allowlist.
+  - Schemas and codelists are closed, versioned, bounded, and referenced.
+  - Each reviewed structured-value schema URI resolves to exactly one schema artifact by its `$id`; missing, duplicate, unreferenced, or open schemas fail startup.
+  - Each date- or time-bucket scheme URI and version resolves to exactly one reviewed codelist artifact; missing, duplicate, or unreferenced schemes fail startup.
+  - Fixtures cover positive, negative, boundary, missing, no-match, ambiguous, source failure, and anti-reconstruction cases.
+  - The complete simultaneously enabled requirement set passes disclosure-combination review.
+  - No two enabled requirements share a disclosureGuard family; a shared family rejects the bundle regardless of purposes, audiences, requester entitlements, or rate limits.
+  - Each context-derived or grant-derived subject has valueClaims whose keys exactly equal the named selector profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
+  - Request-derived subjects have no valueClaims.
+  - Request preparation receives only the closed selectorInputs alternatives and cannot choose transport authority, paths, headers, credentials, or request count.
+  - For authenticated-grant origin, verified token values at authentication.grantIdClaim and grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must bind requirement, purpose, audience, role, selector profile, and valueClaims result before selector resolution.
+  - Required signing, audit, credential, and source dependencies are ready.
+  - Every retired public JWK file is public-only, has a unique kid, uses the configured allowlisted algorithm, and remains available for the maximum assertion validity plus clock skew.
+  - Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml secretProviders.file.root.
+  - Fixed path and selector-bound path-template forms are mutually exclusive and every template placeholder has one authorized selector binding.
+  - Fixed headers and static API-key header names reject authentication, routing, framing, cookie, forwarding, proxy, tracing, and hop-by-hop collisions after ASCII case folding.
+  - Extended JSON Pointer projections are non-empty, uniquely decoded, and reject duplicate or overlapping ancestor, descendant, and wildcard paths.
+  - Every source preparation, extraction, and derivation selector-input contract is closed and cross-referenced to the exact authorized role/profile/field set.
+secret_policy:
+  permitted: File-provider logical names matching the exact secret-reference grammar only.
+  prohibited: private key, password, bearer token, client secret, or expanded environment value in any bundle file
+  query_string_oauth_rule: Query-string client credentials require the explicit query-string placement and complete token URL, query, body, response, and debug-output redaction.
+  file_provider_rule: Resolve secret:file logical names beneath the configured owner-controlled fileRoot, reject symlinks and path traversal, require regular owner-only files, and parse values as data.
+deployment_rules:
+  authentication: Evidence independently validates the bearer token against exact configured issuer, audience, token type, algorithm, and JWKS; upstream identity headers are ignored and rejected if mapped
+  audit: failClosed and keyed pseudonymization remain governed; storage path and rotation bound come only from runtime.yaml
+  rate_limit_labels: principal and authority use scoped pseudonyms; raw selector values are never labels or keys
+  source_urls: HTTPS is required except explicit HTTP numeric loopback on 127.0.0.0/8 or ::1 for deterministic local mocks; Rust parses IP and port strictly and rejects userinfo, DNS localhost aliases, non-loopback HTTP, invalid octets, fragments, and URL ambiguity
+  runtime_split: runtime.yaml cannot override any field in this schema; the two closed documents have independent digests and immutable startup lifetimes

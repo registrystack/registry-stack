@@ -1,0 +1,31 @@
+{
+  "schema": "registry.assertion-evidence/v1",
+  "id": "urn:example:fixture:evidence:licence-001",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:fixture:requirement:professional-licence-status:v1",
+  "isConformantTo": "urn:example:fixture:evidence-type:professional-licence-status:v1",
+  "issuedBy": "urn:example:fixture:issuer:authority",
+  "providedBy": "urn:example:fixture:provider:evidence",
+  "issuedAt": "2026-08-02T00:00:00Z",
+  "observedAt": "2026-08-02T00:00:00Z",
+  "validUntil": "2026-08-02T12:00:00Z",
+  "purpose": "fixture-registration",
+  "audience": "urn:example:fixture:audience:requester-a",
+  "configurationRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:fixture:concept:licence-active",
+      "value": true
+    },
+    {
+      "providesValueFor": "urn:example:fixture:concept:licence-expiry-category",
+      "value": "within-30-days"
+    }
+  ]
+}

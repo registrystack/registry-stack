@@ -1,0 +1,21 @@
+{
+  "requirement": "urn:example:fixture:requirement:legal-parent-relationship:v1",
+  "purpose": "fixture-enrolment",
+  "subjects": [
+    {
+      "role": "child",
+      "selector": {
+        "profile": "civil-record-reference-v1",
+        "values": {
+          "record_reference": "synthetic-child-record-001"
+        }
+      }
+    },
+    {
+      "role": "candidate-parent",
+      "selector": {
+        "profile": "person-demographics-v1"
+      }
+    }
+  ]
+}

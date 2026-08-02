@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [date_of_birth]
+properties:
+  date_of_birth: {type: string, format: date}

@@ -1,0 +1,31 @@
+{
+  "schema": "registry.assertion-evidence/v1",
+  "id": "urn:example:fixture:evidence:relationship-001",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:fixture:requirement:legal-parent-relationship:v1",
+  "isConformantTo": "urn:example:fixture:evidence-type:legal-parent-relationship:v1",
+  "issuedBy": "urn:example:fixture:issuer:authority",
+  "providedBy": "urn:example:fixture:provider:evidence",
+  "issuedAt": "2026-08-02T00:00:00Z",
+  "observedAt": "2026-08-02T00:00:00Z",
+  "validUntil": "2026-08-03T00:00:00Z",
+  "purpose": "fixture-enrolment",
+  "audience": "urn:example:fixture:audience:requester-a",
+  "configurationRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "subjects": [
+    {
+      "role": "child",
+      "binding": "urn:evidence:subject:v1_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    },
+    {
+      "role": "candidate-parent",
+      "binding": "urn:evidence:subject:v1_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:fixture:concept:legal-parent-relationship-confirmed",
+      "value": true
+    }
+  ]
+}

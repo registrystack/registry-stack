@@ -1,0 +1,27 @@
+type: object
+additionalProperties: false
+required:
+  - program
+  - organisationUnit
+  - projection
+  - pageSize
+  - page
+  - totalPages
+  - attributes
+  - statusAttribute
+properties:
+  program: {type: string, minLength: 1, maxLength: 64}
+  organisationUnit: {type: string, minLength: 1, maxLength: 64}
+  projection: {type: string, minLength: 1, maxLength: 1024}
+  pageSize: {const: "2"}
+  page: {const: "1"}
+  totalPages: {const: "true"}
+  attributes:
+    type: object
+    additionalProperties: false
+    required: [given_name, family_name, birth_date]
+    properties:
+      given_name: {type: string, minLength: 1, maxLength: 64}
+      family_name: {type: string, minLength: 1, maxLength: 64}
+      birth_date: {type: string, minLength: 1, maxLength: 64}
+  statusAttribute: {type: string, minLength: 1, maxLength: 64}

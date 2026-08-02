@@ -1,0 +1,85 @@
+contract: registry.evidence.selector-profile/v1
+status: frozen
+profile:
+  identifier:
+    pattern: '^[a-z][a-z0-9._-]{0,127}$'
+    meaning: Deployment-defined stable name; no field name has core semantics.
+  fields:
+    minimum: 1
+    maximum: 16
+    exact_set: true
+    name_pattern: '^[a-z][a-z0-9._-]{0,63}$'
+    allowed_types:
+      string: {requires: [minimum_bytes, maximum_bytes]}
+      date: {lexical_form: YYYY-MM-DD}
+      integer: {requires: [minimum, maximum]}
+      boolean: {}
+      controlled-code: {requires: [codelist, codelist_version, maximum_bytes]}
+  maximum_aggregate_bytes:
+    required: true
+    maximum: 8192
+  value_origins:
+    allowed: [authenticated-context, authenticated-grant, request]
+    rule: Each authority path permits exactly the reviewed origin for each role and profile.
+  value_claims:
+    authenticated-context: Required exact field-name to verified-token claim-path map.
+    authenticated-grant: Required exact field-name to verified-token claim-path map plus configured grantIdClaim and grantAuthorityClaim; grantAuthority must equal the matched authority-profile identifier.
+    request: Prohibited; selector values come only from the closed public request values object.
+    completeness: Map keys must exactly equal the named profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
+    claim_path_pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'
+    token_rule: Claim paths are resolved only from the strictly verified access token, never proxy identity headers, unsigned headers, request fields, or fallback claims.
+  source_inputs:
+    rule: Each source declares a closed selectorInputs set of allowed role, profile, and exact field alternatives. Rust passes only the active already validated and authorized subset to prepare/2. Provider query and JSON-body mapping is reviewed script logic, not public request data or a core placement DSL.
+    path_templates: Complete-segment pathBindings are separately Rust-owned and bind directly to one declared role, profile, and field. They are never script or caller output.
+    caller_supplied_paths_or_placements: prohibited
+  derivation_inputs:
+    rule: Each requirement may declare a separate closed derivation.selectorInputs set. Rust passes only those already authorized roles, profiles, and fields to derive/3; omission supplies an empty map.
+    relationship_use: A reviewed derivation may compare an independently authorized stable candidate reference with complete facts from one uniquely resolved authoritative record. It may not inspect any undeclared subject material.
+validation:
+  active_set: Runtime materializes only the complete role/profile tuple set matched by the authority grant, resolves request subjects by unique role rather than array position, and never unions every alternative declared on a shared source.
+  subject_array_order: Non-semantic. Duplicate, missing, unknown, or wrong-profile roles fail before credentials or source access; accepted roles are canonicalized to requirement declaration order for internal processing and evidence output.
+  before_credentials_or_source:
+    - role exists and cardinality is exact
+    - profile is permitted for that role and authority path
+    - value origin is permitted
+    - values are absent for context-derived or grant-derived input
+    - values are present for request-derived input
+    - configured valueClaims are exact and complete for context or grant origin and absent for request origin
+    - authenticated-grant id and authority claim values bind the matched profile and entitlement
+    - exact field set, scalar type, lexical form, individual bound, and aggregate bound pass
+  prohibited_core_behavior:
+    - semantic normalization
+    - case folding
+    - transliteration or phonetics
+    - tokenization or name-order parsing
+    - partial-date matching
+    - fuzzy or probabilistic matching
+    - confidence, weights, thresholds, scoring, or candidate choice
+  alternative_sets: A different sufficient field set or added disambiguator is a distinct named profile; it is never inferred from supplied fields.
+  exact_relationship_rule: A signed false relationship result requires exact returned-record binding, one unique provider match, a schema-required complete relationship set, governed contract and reference namespaces, and the exact declared comparison. Missing, partial, mismatched, or ambiguous data is unavailable rather than false.
+canonical_encoding:
+  format: deterministic length-prefixed UTF-8 binary
+  sequence:
+    - version byte 0x01
+    - audience URI
+    - purpose code
+    - role id
+    - selector profile id
+    - field count
+    - each field in profile declaration order as name, scalar type tag, and canonical scalar bytes
+  scalar_rules:
+    string: exact validated UTF-8 bytes without normalization
+    date: validated ASCII YYYY-MM-DD
+    integer: minimal signed decimal ASCII, no leading plus or leading zero except zero
+    boolean: single byte 0x00 or 0x01
+    controlled-code: exact validated UTF-8 codelist code
+  purpose: Input to audience-scoped subject binding and audit pseudonymization; never exposed or logged.
+subject_binding_projection:
+  hmac_input: deterministic length-prefixed bytes over profile version, audience, purpose, role, selector profile, binding-key version, and complete canonical selector fields
+  key: subjectBinding.secretRef from the governed bundle
+  output: 'urn:evidence:subject:v<key-version>_<base64url-no-pad HMAC-SHA256>'
+  rule: Binding-key rotation changes the public binding version; a binding is never global or accepted as authority.
+audit:
+  permitted: selector profile id and at most one scoped keyed pseudonym over the complete canonical role/profile/field bundle
+  prohibited: raw values, per-field hashes, plain hashes, globally stable subject handles, candidate material
+fixtures: ../fixtures/conformance/selector-matrix.yaml

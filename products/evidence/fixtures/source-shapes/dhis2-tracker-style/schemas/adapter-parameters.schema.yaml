@@ -1,0 +1,11 @@
+type: object
+additionalProperties: false
+required: [program, organisationUnits, fields, pageSize, page, totalPages, statusAttribute]
+properties:
+  program: {const: PROGRAM-FIXTURE}
+  organisationUnits: {const: OU-FIXTURE}
+  fields: {const: 'trackedEntity,attributes[attribute,value]'}
+  pageSize: {const: "2"}
+  page: {const: "1"}
+  totalPages: {const: "true"}
+  statusAttribute: {const: ATTR-STATUS}

@@ -1,0 +1,78 @@
+fixture: registry.evidence.reference.opencrvs-registered-parent-references/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    child:
+      profile: opencrvs-tracking-id-v1
+      values: {tracking_id: TRACKING-SYNTHETIC-001}
+  derivationSelectorInputs:
+    child:
+      profile: opencrvs-tracking-id-v1
+      values: {tracking_id: TRACKING-SYNTHETIC-001}
+  expectedRequestParts:
+    query: []
+    body:
+      query:
+        type: and
+        clauses:
+          - eventType: birth
+            status: {type: exact, term: REGISTERED}
+            trackingId: {type: exact, term: TRACKING-SYNTHETIC-001}
+      limit: 2
+      offset: 0
+  expectedTransport:
+    path: /events/search
+    fixedHeaders:
+      - {name: Accept, value: application/json}
+cases:
+  - id: positive
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
+    expected: {lookup: match, entityReferenceCount: 1, rawReferencesDisclosed: false, derivationRuns: true, signed: true}
+  - id: boundary-two-parents
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration:
+            mother.personReference: PERSON-SYNTHETIC-A
+            father.personReference: PERSON-SYNTHETIC-B
+            unrelated.field: SOURCE-UNRELATED-CANARY
+    expected: {lookup: match, entityReferenceCount: 2, rawReferencesDisclosed: false, derivationRuns: true, signed: true}
+  - id: missing-parent-set
+    response:
+      total: 1
+      results: [{type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-001, declaration: {}}]
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - {id: no-match, response: {total: 0, results: []}, expected: {lookup: no_match, publicProblem: evidence_not_available, derivationRuns: false, signed: false}}
+  - id: ambiguous-child
+    response:
+      total: 2
+      results:
+        - {type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-001, declaration: {mother.personReference: PERSON-SYNTHETIC-A}}
+        - {type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-002, declaration: {father.personReference: PERSON-SYNTHETIC-B}}
+    expected: {lookup: ambiguous, publicProblem: evidence_not_available, derivationRuns: false, signed: false}
+  - id: negative-duplicate-parent-reference
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          declaration: {mother.personReference: PERSON-SYNTHETIC-A, father.personReference: PERSON-SYNTHETIC-A}
+    expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+  - {id: source-failure, sourceFailure: timeout, expected: {publicProblem: dependency_unavailable, signed: false}}
+  - {id: returned-child-mismatch, response: {total: 1, results: [{type: birth, status: REGISTERED, trackingId: TRACKING-SYNTHETIC-OTHER, declaration: {mother.personReference: PERSON-SYNTHETIC-A}}]}, expected: {lookup: match, error: derivation_input_error, derivationRuns: true, signed: false}}
+  - {id: anti-reconstruction, derivationMutation: return-raw-reference, expected: {outputGate: rejected, signed: false}}
+privacyExpectation:
+  evidenceContains: [urn:gov:example:concept:registered-parent-references]
+  evidenceExcludes: [parent_references, tracking_id, person_reference, relationship_set_contract]
+  diagnosticsExclude: [TRACKING-SYNTHETIC-001, PERSON-SYNTHETIC-A, PERSON-SYNTHETIC-B, SOURCE-UNRELATED-CANARY]

@@ -1,0 +1,175 @@
+fixture: registry.evidence.phase-zero-coverage/v1
+status: frozen
+completion_rule: Every required row is implemented and green on one revision; no acceptance definition is a seed, phase, optional example, or later generality check.
+categories: [positive, negative, boundary, missing, no-match, ambiguous, source-failure, anti-reconstruction]
+acceptance_definitions:
+  - definition: adult-status
+    bundle: ../acceptance/adult-status/evidence.yaml
+    cases: ../acceptance/adult-status/fixtures/cases.yaml
+    selector: compound no identifier
+    posture: field-projected
+    supported_values: [boolean]
+    coverage:
+      positive: positive
+      negative: [negative-false-is-success, negative-wrong-derived-type]
+      boundary: [boundary-before, boundary-on, boundary-after, boundary-leap-day]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: threshold-ladder
+  - definition: residence-region
+    bundle: ../acceptance/residence-region/evidence.yaml
+    cases: ../acceptance/residence-region/fixtures/cases.yaml
+    selector: identifier only
+    posture: field-projected
+    supported_values: [controlled-code]
+    coverage:
+      positive: positive
+      negative: [negative-unknown-code, negative-overly-precise-output]
+      boundary: [boundary-second-source-code-same-coarse-region, boundary-other-coarse-region]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: geographic-overlap
+  - definition: professional-licence-status
+    bundle: ../acceptance/professional-licence/evidence.yaml
+    cases: ../acceptance/professional-licence/fixtures/cases.yaml
+    selector: compound sector selector
+    posture: record-transformed
+    supported_values: [boolean, controlled-category]
+    coverage:
+      positive: positive
+      negative: [negative-inactive-is-success, negative-exact-date-leak]
+      boundary: [boundary-valid-from, boundary-valid-until, boundary-after-valid-until]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: coexisting-revisions
+  - definition: legal-parent-relationship
+    bundle: ../acceptance/legal-parent-relationship/evidence.yaml
+    cases: ../acceptance/legal-parent-relationship/fixtures/cases.yaml
+    selector: two independently role-bound profiles
+    posture: source-derived
+    supported_values: [boolean]
+    coverage:
+      positive: positive
+      negative: [negative-false-is-success, negative-swapped-roles, negative-caller-candidate-substitution, negative-child-unresolved, negative-candidate-unresolved-or-typo, negative-raw-record-search-zero-not-false, negative-role-resolution-ambiguous, negative-extra-family-fact, negative-status-on-none, negative-status-on-ambiguous, negative-unknown-pair-resolution, negative-unknown-relationship-status, negative-relationship-status-type, negative-extra-source-field]
+      boundary: boundary-correct-role-order
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: relationship-graph
+selector_matrix:
+  fixture: selector-matrix.yaml
+  required:
+    - identifier-only
+    - compound-no-identifier
+    - added-disambiguator
+    - multi-role
+    - opaque-non-domain-field-names
+  origins:
+    request: identifier-only
+    authenticated-context: compound-no-identifier
+    authenticated-grant: added-disambiguator
+  pre_source_rejections:
+    - missing, unknown, extra, mistyped, empty, oversized, and aggregate-oversized fields
+    - unauthorized profile, role, purpose, audience, or value origin
+    - caller values on context-derived or grant-derived profiles
+    - absent caller values on an authorized request-derived profile
+    - caller-added disambiguator and inferred alternative sufficient field set
+  opaque_behavior: Unicode and multipart name-like strings are exact bounded UTF-8 with no normalization, transliteration, tokenization, phonetics, or partial-date matching.
+supported_values:
+  fixture: supported-values.yaml
+  forms:
+    - boolean
+    - controlled-code
+    - controlled-category
+    - bounded-integer
+    - bounded-decimal
+    - date-bucket
+    - time-bucket
+    - audience-scoped-entity-reference
+    - controlled-code-list
+    - entity-reference-list
+    - reviewed-structured-value
+  each_requires: [positive, boundary, wrong-type, range-or-code, size, cardinality-where-applicable, evidence-construction, jws-round-trip]
+  special:
+    decimal: custom exact Decimal from canonical string, precision 28 and scale 9, public canonical JSON string, no f32/f64
+    entity_reference: protected seed or seed list is HMAC-projected by Rust and never disclosed
+acquisition_postures:
+  fixture: acquisition-postures.yaml
+  required: [source-derived, field-projected, record-transformed]
+  honesty_test: record-transformed may claim disclosure minimization only
+source_shapes:
+  index: ../source-shapes/index.yaml
+  profiles:
+  - profile: flat-rest
+    request: fixed JSON POST
+    authentication: static-bearer
+    outcomes: [no-match, match, ambiguous, missing-fact]
+  - profile: nested-paged-rest
+    request: fixed GET query, fields, pageSize two
+    authentication: basic
+    outcomes: [no-match, match, ambiguous, missing-fact, pager-refusal]
+  - profile: opencrvs-event-search-json
+    request: fixed OpenCRVS version 2 JSON POST to /events/search after credential bootstrap
+    authentication: oauth2-client-credentials
+    posture: record-transformed
+    outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality]
+  common_failures: [401, 403, 429, 5xx, timeout, redirect, invalid-json, wrong-media-type, oversized-response]
+  common_invariants:
+    - one evidence-data request and no page traversal
+    - maximum two bounded results solely for cardinality; profiles that cannot field-project declare record-transformed
+    - no candidates, count beyond closed outcome, score, hint, or comparison in derivation or public surfaces
+    - raw selectors, credentials, token flows, source values, and bodies absent from diagnostics and audit
+  query_oauth_redaction: oauth-query-credential-redaction.yaml
+public_contracts:
+  requests_and_payloads: golden/
+  jws: jws-cases.yaml
+  audit: audit-events.yaml
+  problems: ../../contracts/problem-contract.yaml
+security_negative_tests:
+  - sec-unknown-or-disabled-requirement
+  - sec-caller-query-material-rejected
+  - sec-unsafe-definition-combination
+  - sec-missing-principal-no-fallback
+  - sec-no-entitlement-union
+  - sec-selector-possession-no-authority
+  - sec-caller-grant-reference-rejected
+  - sec-selector-shape-not-callable
+  - sec-source-request-immutable
+  - sec-candidate-material-rejected
+  - sec-rhai-output-shape-closed
+  - sec-derived-value-output-gate
+  - sec-evaluation-and-audit-fail-closed
+  - sec-source-canary-absent-everywhere
+  - sec-protected-canaries-redacted
+  - sec-unresolved-public-collapse
+  - sec-subject-binding-scope
+  - sec-runtime-bundle-mutation-absent
+  - sec-mutually-distrustful-configuration
+  - sec-rate-limit-does-not-legalize-ladder
+  - sec-jws-mutation-and-duplicate-payload
+  - sec-signing-failure-no-release
+  - sec-private-key-canary-unreachable
+  - sec-verifier-rejects-untrusted-provider
+  - sec-script-cannot-construct-evidence
+  - sec-missing-or-writable-bundle-fails
+  - sec-audit-order-and-failure
+  - sec-secret-values-rejected-from-bundle
+  - sec-proxy-identity-header-rejected
+  - sec-decimal-no-float-coercion
+  - sec-entity-reference-seed-protected
+  - sec-request-preparation-closed
+  - sec-runtime-cannot-override-governed-bundle
+  - sec-tls-and-proxy-authority-fixed
+  - sec-subject-array-order-nonsemantic
+canary_scan_surfaces: [evidence, jws, public-problem, log, metric, trace, audit, snapshot, panic, temporary-file, test-failure-output]
+canary_classes: [principal, actor, grant, selector, source-fact, supported-value, source-credential, oauth-client, oauth-token, signing-key, entity-reference-seed]
+coequal_full_path:
+  for_each: [offline-evaluation, authentication, authorization, access-audit, source-execution, extraction, derivation, output-gate, evidence-construction, signing, release-audit, jws-verification]
+  together: all four definitions enabled in one immutable bundle and one operator trust domain, including concurrency isolation

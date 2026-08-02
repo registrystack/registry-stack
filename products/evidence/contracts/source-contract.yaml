@@ -1,0 +1,131 @@
+contract: registry.evidence.fixed-http-json-source/v1
+status: frozen
+ownership:
+  governed_bundle:
+    - fixed source origin, acquisition posture, authentication kind, and logical secret references
+    - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
+    - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters and schemas
+    - preparation channel policy and bounds, response projection, redirect denial, timeout, response byte limit, and concurrency limit
+    - optional logical TLS trust-profile name
+  runtime_yaml:
+    - bundle directory, listener and process bounds
+    - file-secret root and audit-storage path
+    - exact private-CA file binding for each governed logical TLS trust profile
+  runtime_override: prohibited
+  scripts:
+    prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors and closed parameters.
+    extract: Maps only the bounded projected response and closed parameters to the closed lookup union.
+    prohibited: source, origin, method, path, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
+evidence_data_request:
+  count: Exactly one per evaluation after successful authorization, durable access audit, and complete RequestParts validation.
+  owner: Core runtime.
+  method_allowlist: [GET, POST]
+  request_media_types: [application/json]
+  response_media_types: [application/json, application/graphql-response+json]
+  redirects: deny
+  maximum_response_bytes: {required: true, upper_bound: 1048576, applied: before parsing and projection}
+  timeout_milliseconds: {required: true, range: [1, 30000], applies_to: [source-concurrency-admission, OAuth-single-flight-admission, HTTP-exchange]}
+  concurrency_limit: {required: true, range: [1, 256]}
+  request_parts:
+    query: Ordered logical string pairs. Rust preserves duplicates, percent-encodes UTF-8 components exactly once with uppercase percent escapes, and never performs implicit value-to-string conversion.
+    body: At most one bounded JSON value. JSON null means no body; GET sources must configure the JSON-body channel as forbidden and any defensive GET-with-body execution is rejected before concurrency admission or credential resolution.
+    channels: Each source marks query and JSON body required, allowed, or forbidden and may configure tighter bounds beneath the ABI ceilings.
+    validation_order: Rust validates the exact keys, types, channel policy, sizes, query controls, and normalized output before resolving credentials or contacting the source.
+  path:
+    fixed: One normalized absolute path.
+    template: A placeholder occupies one complete segment and binds directly to one already authorized selector role, profile, and field through pathBindings.
+    encoding: Rust rejects missing, extra, duplicated, empty, slash, backslash, percent, control, and dot-segment values and percent-encodes each accepted segment exactly once.
+    script_authority: prohibited
+  fixed_headers:
+    form: Ordered non-secret name and value constants, unique after ASCII case folding.
+    forbidden_collisions:
+      - authentication, host and routing, cookies, body framing, content length and type
+      - connection and hop-by-hop, forwarding, proxy, tracing, and configured API-key headers
+    core_headers: Rust owns authentication and framing and adds Content-Type application/json for a JSON body.
+    script_authority: prohibited
+  url_security:
+    production: HTTPS only.
+    deterministic_local_mock: HTTP only when the parsed host is a numeric address in 127.0.0.0/8 or exactly ::1.
+    prohibited: [arbitrary-insecure-http, DNS-localhost-alias, userinfo, fragment, ambiguous-host-encoding, product-specific-insecure-transport-flag]
+projection:
+  owner: Core runtime.
+  stage: After bounded strict JSON parsing and before conversion to Rhai.
+  grammar:
+    root: Non-empty list of extended JSON Pointers.
+    object_segments: RFC 6901 literal segments with only ~0 and ~1 escapes.
+    array_segment: A literal wildcard '*' visits every current array element.
+    prohibited: [numeric-array-index, recursive-descent, filters, predicates, unions, script-computed-paths]
+  semantics:
+    - A new tree retains only selected leaves and the objects or arrays needed to reach them.
+    - Object keys not selected are removed; array order and length are preserved.
+    - A missing selected leaf remains absent, while a missing or mistyped intermediate container is a source-protocol failure before Rhai.
+    - Empty, invalid, duplicate, decoded-duplicate, ancestor/descendant-overlap, wildcard-overlap, or structurally incompatible paths fail startup.
+    - Wire byte and parsing bounds apply before projection; Rhai bounds apply again to the projected tree.
+  posture_rule: The declared acquisition posture describes the pre-projection wire response. Local projection never upgrades a record-transformed source claim.
+cardinality:
+  preferred: Provider count plus at most one bounded result, field-projected where supported.
+  fallback: At most two minimally projected results solely to distinguish a unique result from ambiguity.
+  outcomes: [match, no_match, ambiguous]
+  facts_only_on: match
+  prohibited:
+    - broad candidate retrieval, candidate exposure, score comparison, candidate choice, page traversal, retry, response-led request, or second evidence-data request
+    - converting provider inconsistency, returned-subject mismatch, or incomplete relationship data into no_match or an authoritative false concept
+authentication:
+  basic:
+    inputs: [username_secret_ref, password_secret_ref]
+    placement: Authorization header.
+  static-bearer:
+    inputs: [token_secret_ref]
+    placement: Authorization header.
+  static-api-key:
+    inputs: [bundle_fixed_header_name, value_secret_ref]
+    placement: The exact allowlisted provider header.
+    rule: Header name is validated against the same collision denylist as fixed headers and cannot be Authorization.
+  oauth2-client-credentials:
+    inputs: [token_endpoint, client_id_secret_ref, client_secret_secret_ref, optional_fixed_scope, credential_placement, maximum_cache_lifetime]
+    rules:
+      - Token acquisition is credential bootstrap, not an evidence-data request or fact source.
+      - Endpoint, grant, scope, placement, response bounds, redirect denial, and cache maximum are fixed.
+      - Waiting for the per-source token-cache and single-flight boundary is limited by the configured source timeout.
+      - Cache lifetime is clamped to provider expiry and the configured maximum.
+      - Token request and response are unavailable to Rhai and fully redacted.
+    credential_placements: [basic-header, form-body, query-string]
+    query_string_rule: Query-string placement is explicit and requires complete token URL, query, body, response, client identifier, and debug-output redaction.
+    token_endpoint_transport: The same HTTPS-or-explicit-numeric-loopback rule as the evidence-data origin.
+  secret_rules:
+    - The governed bundle contains only secret:file logical references. Environment-variable interpolation and literal secret values are not supported.
+    - Runtime binds one owner-controlled file-secret root and cannot change a source authentication kind or logical reference.
+    - Evidence-request processing resolves credentials only after authorization, access audit, preparation, and RequestParts validation.
+    - Missing or invalid credentials fail closed without an evidence-data request.
+tls_and_proxy:
+  system_roots: Supported when runtime outboundTls.systemRoots is true.
+  private_ca: A governed logical tlsTrustProfile must have exactly one regular, read-only, captured, bounded, valid runtime CA file binding before readiness; missing, extra, symlinked, mutable, and malformed bindings fail startup.
+  verification: Fixed-origin and hostname verification remain mandatory; insecure, skip-verification, and trust-all modes do not exist.
+  proxy: Evidence-data and OAuth token clients ignore HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY; Version 1 has no application-level proxy field.
+acquisition_postures:
+  source-derived:
+    meaning: Source returns the final declared concept fact.
+    claim: Acquisition and disclosure minimization.
+  field-projected:
+    meaning: Source returns only the facts required for in-process derivation.
+    claim: Strong acquisition and disclosure minimization.
+  record-transformed:
+    meaning: A broader legacy record is transiently transformed in memory.
+    claim: Disclosure minimization only.
+failure_classes:
+  transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
+  projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
+  semantic: [no-match, ambiguous, required-fact-missing, wrong-fact-type, unknown-controlled-code]
+  graphql_envelope_rule: Any top-level errors member, including partial data with errors, fails closed.
+persistence:
+  source_request_or_response: prohibited
+  raw_fact: prohibited
+  in_memory_lifetime: One bounded evaluation only.
+neutrality:
+  production_contract: Generic HTTP, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only.
+  named_compatibility_profiles: Test fixtures and reference documentation only.
+fixtures:
+  postures: ../fixtures/conformance/acquisition-postures.yaml
+  oauth_query_redaction: ../fixtures/conformance/oauth-query-credential-redaction.yaml
+  shapes: ../fixtures/source-shapes/
+  required_shape_outcomes: [zero, one, multiple, missing-fact, error-envelope]

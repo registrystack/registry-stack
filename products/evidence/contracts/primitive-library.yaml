@@ -1,0 +1,99 @@
+contract: registry.evidence.rhai-primitives/v1
+status: frozen
+resource_limits:
+  maximum_operations: 100000
+  maximum_call_depth: 32
+  maximum_expression_depth: 64
+  maximum_modules: 0
+  maximum_string_bytes: 16384
+  maximum_array_items: 256
+  maximum_map_entries: 256
+  maximum_fact_entries: 64
+  maximum_concept_values: 16
+  maximum_codelist_entries_per_handle: 4096
+  maximum_source_input_bytes: 1048576
+  maximum_preparation_input_bytes: 1048576
+  maximum_result_bytes: 65536
+  maximum_request_parts_bytes: 65536
+  maximum_query_pairs: 64
+  maximum_query_name_bytes: 64
+  maximum_query_value_bytes: 4096
+  maximum_json_body_depth: 32
+  timeout_behavior: operation limit is normative; any outer wall-time limit only aborts and never changes results
+primitives:
+  parse_date:
+    signature: string -> Date
+    behavior: Strict proleptic Gregorian YYYY-MM-DD; invalid or non-canonical input fails.
+  parse_instant:
+    signature: string -> Instant
+    behavior: Strict RFC 3339 with explicit offset; normalized internally to UTC without consulting a clock.
+  parse_integer:
+    signature: string -> integer
+    behavior: Parses an optional ASCII minus followed by one or more ASCII decimal digits into signed i64. Leading zeroes are permitted. Empty, plus-prefixed, whitespace, non-ASCII, fractional, exponential, and overflowing inputs fail.
+  decimal:
+    signature: string -> Decimal
+    behavior: Alias of parse_decimal for exact canonical text; never accepts a Rhai float.
+  parse_decimal:
+    signature: string -> Decimal
+    behavior: Rust validates canonical finite decimal text, maximum precision 28 and scale 9, with zero represented only as 0; no exponent, plus sign, leading zero, trailing fractional zero, NaN, infinity, or negative zero.
+  integer_to_decimal:
+    signature: integer -> Decimal
+    behavior: Exact conversion of a bounded Rhai integer to scale-zero Decimal.
+  add_calendar_years:
+    signature: '[Date, integer] -> Date'
+    behavior: Calendar addition; a leap-day input clamps to the last valid day of the target month.
+    bounds: {years: [-1000, 1000]}
+  add_calendar_months:
+    signature: '[Date, integer] -> Date'
+    behavior: Calendar addition with last-valid-day clamping.
+    bounds: {months: [-12000, 12000]}
+  compare_dates:
+    signature: '[Date, Date] -> integer'
+    behavior: Returns only -1, 0, or 1.
+  compare_instants:
+    signature: '[Instant, Instant] -> integer'
+    behavior: Returns only -1, 0, or 1.
+  days_between:
+    signature: '[Date, Date] -> integer'
+    behavior: Returns second minus first in whole Gregorian calendar days, bounded to -365000 through 365000.
+  compare_decimals:
+    signature: '[Decimal, Decimal] -> integer'
+    behavior: Exact arbitrary-precision decimal comparison; returns -1, 0, or 1 without binary floating-point conversion.
+  bucket_number:
+    signature: '[Decimal, array<Boundary>] -> string'
+    behavior: Returns the code for the one configured half-open minimum_inclusive/maximum_exclusive interval; intervals must be ordered, non-overlapping, exhaustive over the declared numeric range, and at most 64.
+    boundary_shape: {minimumInclusive: Decimal, maximumExclusive: Decimal, code: string}
+  entity_reference_seed:
+    signature: string -> EntityReferenceSeed
+    behavior: Wraps 1 through 512 exact UTF-8 bytes in a protected opaque core value; the seed cannot be converted back to a Rhai string, compared, printed, logged, or serialized.
+  codelist_lookup:
+    signature: '[CodelistHandle, string] -> Option<string>'
+    behavior: Exact code lookup with no normalization; returns only the configured output code.
+  list_contains:
+    signature: '[array<scalar>, scalar] -> boolean'
+    behavior: Exact typed equality over at most 256 items.
+  set_contains:
+    signature: '[array<scalar>, scalar] -> boolean'
+    behavior: Exact typed equality over at most 256 items; a duplicate input item fails because the array represents a set.
+  array_push:
+    signature: 'array.push(value) -> unit'
+    behavior: Appends one local value when the resulting array remains within the 256-item bound; otherwise fails without a partial output.
+  string_replace:
+    signature: 'string.replace(from, to) -> unit'
+    behavior: Mutates the local receiver by replacing every exact non-overlapping literal occurrence, with no regex or Unicode normalization, when the result remains within the 16384-byte string bound.
+  required:
+    signature: '[Option<T>, string] -> T'
+    behavior: Returns the value or fails with the supplied safe bundle-owned error code; protected data may not be used as the code.
+  is_missing:
+    signature: Option<T> -> boolean
+    behavior: Explicit missing-value test with no implicit coercion.
+global_rules:
+  - Primitives are pure, deterministic, typed, bounded, and domain-neutral.
+  - Strings are compared as exact UTF-8 values; no Unicode normalization, case folding, transliteration, or phonetics occurs.
+  - Decimal operations use the Rust-owned exact Decimal type; Rhai floating-point arithmetic is not accepted at the output gate.
+  - EntityReferenceSeed is a protected projection input, not public data; only the core can HMAC-project it to an audience-scoped reference.
+  - Query names and values remain strings. parse_integer exists only for provider text and does not introduce implicit integer-to-string or value-to-string conversion.
+  - Array and string mutation affects only the fresh invocation-local copy and cannot modify the governed bundle, another script stage, or another request.
+  - No primitive performs I/O, authorization, logging, audit, signing, response construction, or ambient time access.
+  - A new primitive requires a generic need demonstrated by more than one definition shape and focused boundary tests.
+prohibited_namespaces: [domain, identity, source-product, credential, policy, response, audit]

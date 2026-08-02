@@ -15,3 +15,7 @@ __pycache__/
 /.playwright-mcp/
 /worktrees/
 /*.png
+
+# Evidence local operator material. Never commit credentials or curl artifacts.
+/products/evidence/.env
+/products/evidence/.first-curl/

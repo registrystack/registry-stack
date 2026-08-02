@@ -1,0 +1,94 @@
+{
+  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access.",
+  "$defs": {
+    "scalar-selector-value": {
+      "oneOf": [
+        {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "selector": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/scalar-selector-value"
+          },
+          "maxProperties": 16,
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "subject": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "required": [
+        "role",
+        "selector"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/request-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "purpose": {
+      "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+      "type": "string"
+    },
+    "requirement": {
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/subject"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "requirement",
+    "purpose",
+    "subjects"
+  ],
+  "title": "Evidence request Version 1",
+  "type": "object"
+}

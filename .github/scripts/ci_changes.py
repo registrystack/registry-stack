@@ -42,6 +42,7 @@ SHARDS = {
         "xtask",
     ),
     "relay": ("registry-relay",),
+    "evidence": ("registry-evidence",),
     "developer-tools": (
         "registry-config-report",
         "registry-language-server",
@@ -50,6 +51,7 @@ SHARDS = {
 }
 
 NOTARY_PACKAGES = frozenset(SHARDS["notary"])
+EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 TUTORIAL_PACKAGES = frozenset(
@@ -309,6 +311,8 @@ def classify(
                 continue
             if path.startswith("products/notary/"):
                 seeds.update(NOTARY_PACKAGES)
+            elif path.startswith("products/evidence/"):
+                seeds.update(EVIDENCE_PACKAGES)
             elif path.startswith("products/manifest/"):
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
@@ -523,6 +527,7 @@ def classify(
         "platform_hygiene": platform_hygiene,
         "notary_contracts": bool(affected & NOTARY_PACKAGES),
         "relay_contracts": "registry-relay" in affected,
+        "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "project_authoring": "registryctl" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

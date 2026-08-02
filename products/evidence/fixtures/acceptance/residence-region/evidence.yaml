@@ -1,0 +1,63 @@
+version: 1
+service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+issuer: {id: urn:example:fixture:issuer:authority}
+authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [EdDSA], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, grantIdClaim: evidence_grant_id, grantAuthorityClaim: evidence_authority}
+audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+signing: {format: flattened-jws-json, algorithm: EdDSA, activeKeyId: fixture-key-2026-01, activeKeyRef: secret:file/signing-key, retiredPublicJwkFiles: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
+selectorProfiles:
+  residence-record-v1:
+    maximumAggregateBytes: 96
+    fields: {record_reference: {type: string, minimumBytes: 1, maximumBytes: 96}}
+sources:
+  source-b:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-b-token}
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives: [{profile: residence-record-v1, fields: [record_reference]}]
+      prepareScript: adapters/source-b-prepare.rhai
+      adapterParameters: {requestedFields: [official_residence_code], resultLimit: 2}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/total, /official_residence_code]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    extractScript: adapters/source-b.rhai
+    factSchema: schemas/facts.schema.yaml
+authorityProfiles:
+  statutory-caseworker-v1:
+    kind: statutory
+    requesterTags: [fixture-agency]
+    grants:
+      - requirement: urn:example:fixture:requirement:residence-region:v1
+        purpose: fixture-routing
+        audienceFrom: authenticated-requester
+        subjects: [{role: subject, selectorProfile: residence-record-v1, valueOrigin: request}]
+requirements:
+  - id: urn:example:fixture:requirement:residence-region:v1
+    kind: information-requirement
+    source: source-b
+    purposes: [fixture-routing]
+    subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [residence-record-v1]}]
+    referenceFrameworks: [urn:example:fixture:framework:residence-region:v1]
+    evidenceType: urn:example:fixture:evidence-type:residence-region:v1
+    validitySeconds: 86400
+    derivation: {script: derivations/residence-region.rhai, parameters: {}}
+    concepts:
+      - id: urn:example:fixture:concept:residence-region
+        form: controlled-code
+        required: true
+        constraints: {codelist: codelists/region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:residence-region]}
+    existenceDisclosure: collapse-unresolved

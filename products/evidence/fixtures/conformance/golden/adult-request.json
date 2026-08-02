@@ -1,0 +1,17 @@
+{
+  "requirement": "urn:example:fixture:requirement:adult-status:v1",
+  "purpose": "fixture-eligibility",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "person-demographics-v1",
+        "values": {
+          "given_name": "Amina",
+          "family_name": "Diallo",
+          "birth_date": "2000-01-01"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+[package]
+name = "registry-evidence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Minimum-disclosure signed assertion evidence service."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "evidence"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+chrono-tz.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+fs2.workspace = true
+http.workspace = true
+jsonschema.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+reqwest.workspace = true
+rand_core.workspace = true
+rhai.workspace = true
+rustix.workspace = true
+schemars = { workspace = true, features = ["chrono04"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+url.workspace = true
+utoipa.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+assert-json-diff.workspace = true
+axum-test.workspace = true
+rcgen.workspace = true
+tempfile.workspace = true
+tokio-rustls.workspace = true
+wiremock.workspace = true

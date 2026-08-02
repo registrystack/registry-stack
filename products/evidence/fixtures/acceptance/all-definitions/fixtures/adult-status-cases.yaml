@@ -1,0 +1,29 @@
+fixture: registry.evidence.acceptance.adult-status/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  legal_local_date: '2026-08-02'
+  selector: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}
+  selectors:
+    subject: {profile: person-demographics-v1, values: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}}
+  expectedRequestParts: {query: [], body: {lookup: {given_name: Amina, family_name: Diallo, birth_date: '2000-01-01'}, fields: [date_of_birth], limit: 2}}
+  expectedTransport: {path: /v1/facts, fixedHeaders: [{name: Accept, value: application/json}]}
+cases:
+  - {id: positive, source: {total: 1, date_of_birth: '2000-01-01'}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: negative-false-is-success, source: {total: 1, date_of_birth: '2010-01-01'}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: boundary-before, legal_local_date: '2026-08-01', source: {total: 1, date_of_birth: '2008-08-02'}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: boundary-on, legal_local_date: '2026-08-02', source: {total: 1, date_of_birth: '2008-08-02'}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: boundary-after, legal_local_date: '2026-08-03', source: {total: 1, date_of_birth: '2008-08-02'}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: boundary-leap-day, legal_local_date: '2026-02-28', source: {total: 1, date_of_birth: '2008-02-29'}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: missing-fact, source: {total: 1}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: missing-record, source: {total: 0}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: no-match, source: {total: 0}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: ambiguous, source: {total: 2}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}
+  - {id: negative-wrong-derived-type, injected_derivation: [{concept_id: urn:example:fixture:concept:adult-status, value: 'true'}], expected: output-gate-rejection}
+  - {id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}
+privacy_expectation:
+  evidence_contains: [urn:example:fixture:concept:adult-status]
+  evidence_excludes: [date_of_birth, given_name, family_name, selector-profile]
+  diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]

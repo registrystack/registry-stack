@@ -1,0 +1,3312 @@
+//! Typed Evidence Version 1 deployment configuration.
+//!
+//! Configuration is trusted deployment data, but it is still parsed as a
+//! closed contract. Secret-bearing fields contain only [`SecretRef`] values;
+//! this module never resolves them.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::net::{IpAddr, Ipv6Addr};
+use std::path::{Component, Path};
+use std::str::FromStr;
+
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_norway::Value as YamlValue;
+use thiserror::Error;
+use url::{Host, Url};
+
+pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+pub enum ConfigError {
+    #[error("configuration YAML does not match the Evidence Version 1 schema")]
+    InvalidYaml,
+    #[error("configuration exceeds the Evidence Version 1 size limit")]
+    TooLarge,
+    #[error("configuration violates the Evidence Version 1 contract: {0}")]
+    Invalid(&'static str),
+}
+
+/// A mapping that rejects duplicate keys and preserves declaration order.
+///
+/// Selector declaration order is part of canonical selector encoding, so a
+/// sorted map is not sufficient for this contract.
+#[derive(Clone, Eq, PartialEq)]
+pub struct OrderedMap<T>(Vec<(String, T)>);
+
+impl<T> Default for OrderedMap<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T> OrderedMap<T> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, key: &str) -> Option<&T> {
+        self.0
+            .iter()
+            .find_map(|(candidate, value)| (candidate == key).then_some(value))
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(key, _)| key.as_str())
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for OrderedMap<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_map()
+            .entries(self.0.iter().map(|(key, value)| (key, value)))
+            .finish()
+    }
+}
+
+impl<'de, T> Deserialize<'de> for OrderedMap<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OrderedMapVisitor<T>(std::marker::PhantomData<T>);
+
+        impl<'de, T> Visitor<'de> for OrderedMapVisitor<T>
+        where
+            T: Deserialize<'de>,
+        {
+            type Value = OrderedMap<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a mapping with unique string keys")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                let mut seen = BTreeSet::new();
+                while let Some((key, value)) = map.next_entry::<String, T>()? {
+                    if !seen.insert(key.clone()) {
+                        return Err(de::Error::custom("duplicate mapping key"));
+                    }
+                    entries.push((key, value));
+                }
+                Ok(OrderedMap(entries))
+            }
+        }
+
+        deserializer.deserialize_map(OrderedMapVisitor(std::marker::PhantomData))
+    }
+}
+
+impl<T: Serialize> Serialize for OrderedMap<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceConfig {
+    pub version: u8,
+    pub service: ServiceConfig,
+    pub issuer: IssuerConfig,
+    pub authentication: AuthenticationConfig,
+    pub audit: AuditConfig,
+    pub subject_binding: SubjectBindingConfig,
+    pub rate_limits: RateLimitConfig,
+    pub signing: SigningConfig,
+    pub selector_profiles: OrderedMap<SelectorProfile>,
+    pub sources: OrderedMap<SourceConfig>,
+    pub authority_profiles: OrderedMap<AuthorityProfile>,
+    pub requirements: Vec<RequirementConfig>,
+}
+
+pub type SourceSelectorSet = Vec<(String, String)>;
+
+impl EvidenceConfig {
+    pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError::TooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| ConfigError::InvalidYaml)?;
+        let config: Self = serde_norway::from_str(text).map_err(|_| ConfigError::InvalidYaml)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.version != 1 {
+            return invalid("version must equal 1");
+        }
+        validate_uri(&self.service.provider_id)?;
+        validate_uri(&self.service.trust_domain)?;
+        validate_uri(&self.issuer.id)?;
+        self.authentication.validate()?;
+        self.audit.validate()?;
+        self.subject_binding.validate()?;
+        self.rate_limits.validate()?;
+        self.signing.validate()?;
+        validate_named_map(&self.selector_profiles, 1, 128, |profile| {
+            profile.validate()
+        })?;
+        validate_named_map(&self.sources, 1, 128, SourceConfig::validate)?;
+        validate_named_map(&self.authority_profiles, 1, 128, |profile| {
+            profile.validate()
+        })?;
+        validate_len(self.requirements.len(), 1, 128, "requirements")?;
+
+        let mut requirement_ids = BTreeSet::new();
+        let mut evidence_types = BTreeSet::new();
+        let mut concept_ids = BTreeSet::new();
+        let mut disclosure_families = BTreeSet::new();
+        let fact_schemas = self
+            .sources
+            .iter()
+            .map(|(_, source)| source.fact_schema.as_str())
+            .collect::<BTreeSet<_>>();
+        let parameter_schemas = self
+            .sources
+            .iter()
+            .map(|(_, source)| source.request.adapter_parameters_schema.as_str())
+            .collect::<BTreeSet<_>>();
+        if !fact_schemas.is_disjoint(&parameter_schemas) {
+            return invalid("fact and adapter-parameter schema roles must not overlap");
+        }
+        for requirement in &self.requirements {
+            requirement.validate()?;
+            if !requirement_ids.insert(requirement.id.as_str()) {
+                return invalid("requirement identifiers must be unique");
+            }
+            if !evidence_types.insert(requirement.evidence_type.as_str()) {
+                return invalid("Evidence Type identifiers must be unique");
+            }
+            for concept in &requirement.concepts {
+                if !concept_ids.insert(concept.id.as_str()) {
+                    return invalid("concept identifiers must be unique");
+                }
+            }
+            for family in &requirement.disclosure_guard.families {
+                if !disclosure_families.insert(family.as_str()) {
+                    return invalid("enabled requirements share a disclosure family");
+                }
+            }
+        }
+
+        self.validate_cross_references()
+    }
+
+    /// Return the complete selector tuple sets that an authorized request may
+    /// activate for one source. The configuration has already proven that
+    /// every grant is complete and references the named requirement source.
+    pub fn source_selector_sets(&self, source_id: &str) -> Vec<SourceSelectorSet> {
+        let Some(source) = self.sources.get(source_id) else {
+            return Vec::new();
+        };
+        let requirement_sources = self
+            .requirements
+            .iter()
+            .map(|requirement| (requirement.id.as_str(), requirement.source.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let mut sets = BTreeSet::new();
+        for (_, authority) in self.authority_profiles.iter() {
+            for grant in &authority.grants {
+                if requirement_sources.get(grant.requirement.as_str()) != Some(&source_id) {
+                    continue;
+                }
+                let mut set = grant
+                    .subjects
+                    .iter()
+                    .filter(|subject| {
+                        source.request.selector_inputs.iter().any(|input| {
+                            input.role == subject.role
+                                && input.alternatives.iter().any(|alternative| {
+                                    alternative.profile == subject.selector_profile
+                                })
+                        })
+                    })
+                    .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
+                    .collect::<SourceSelectorSet>();
+                if set.is_empty() {
+                    continue;
+                }
+                set.sort();
+                sets.insert(set);
+            }
+        }
+        sets.into_iter().collect()
+    }
+
+    fn validate_cross_references(&self) -> Result<(), ConfigError> {
+        for (_, source) in self.sources.iter() {
+            for input in &source.request.selector_inputs {
+                for alternative in &input.alternatives {
+                    let profile = self.selector_profiles.get(&alternative.profile).ok_or(
+                        ConfigError::Invalid(
+                            "source selector input references an unknown selector profile",
+                        ),
+                    )?;
+                    if alternative
+                        .fields
+                        .iter()
+                        .any(|field| !profile.fields.contains_key(field))
+                    {
+                        return invalid(
+                            "source selector input references an unknown selector field",
+                        );
+                    }
+                }
+            }
+            for (_, binding) in source.request.path_bindings.iter() {
+                let profile =
+                    self.selector_profiles
+                        .get(&binding.profile)
+                        .ok_or(ConfigError::Invalid(
+                            "source path binding references an unknown selector profile",
+                        ))?;
+                if !profile.fields.contains_key(&binding.field) {
+                    return invalid("source path binding references an unknown selector field");
+                }
+                if !source.request.selector_inputs.iter().any(|input| {
+                    input.role == binding.role
+                        && input.alternatives.iter().any(|alternative| {
+                            alternative.profile == binding.profile
+                                && alternative.fields.contains(&binding.field)
+                        })
+                }) {
+                    return invalid("source path binding is not declared as a selector input");
+                }
+            }
+        }
+
+        for requirement in &self.requirements {
+            if !self.sources.contains_key(&requirement.source) {
+                return invalid("requirement references an unknown source");
+            }
+            if requirement.validity_seconds > self.signing.maximum_assertion_validity_seconds {
+                return invalid("requirement validity exceeds signing maximum validity");
+            }
+            for role in &requirement.subject_roles {
+                for profile_id in &role.selector_profiles {
+                    self.selector_profiles
+                        .get(profile_id)
+                        .ok_or(ConfigError::Invalid(
+                            "requirement references an unknown selector profile",
+                        ))?;
+                }
+            }
+            validate_derivation_selector_inputs(requirement, &self.selector_profiles)?;
+        }
+
+        let requirements = self
+            .requirements
+            .iter()
+            .map(|requirement| (requirement.id.as_str(), requirement))
+            .collect::<BTreeMap<_, _>>();
+        let mut authorized_combinations = BTreeSet::new();
+        let mut source_selector_sets: BTreeMap<String, BTreeSet<SourceSelectorSet>> =
+            BTreeMap::new();
+        for (_, authority) in self.authority_profiles.iter() {
+            for grant in &authority.grants {
+                let requirement =
+                    requirements
+                        .get(grant.requirement.as_str())
+                        .ok_or(ConfigError::Invalid(
+                            "authority grant references an unknown requirement",
+                        ))?;
+                if !requirement
+                    .purposes
+                    .iter()
+                    .any(|purpose| purpose == &grant.purpose)
+                {
+                    return invalid("authority grant references an unauthorized purpose");
+                }
+                if grant.subjects.len() != requirement.subject_roles.len() {
+                    return invalid("authority grant must bind the complete subject-role set");
+                }
+                let source = self
+                    .sources
+                    .get(&requirement.source)
+                    .ok_or(ConfigError::Invalid(
+                        "requirement references an unknown source",
+                    ))?;
+                let mut seen_roles = BTreeSet::new();
+                let mut source_selector_set = Vec::with_capacity(grant.subjects.len());
+                for subject in &grant.subjects {
+                    if !seen_roles.insert(subject.role.as_str()) {
+                        return invalid("authority grant subject roles must be unique");
+                    }
+                    let role = requirement
+                        .subject_roles
+                        .iter()
+                        .find(|role| role.role == subject.role)
+                        .ok_or(ConfigError::Invalid(
+                            "authority grant references an unknown subject role",
+                        ))?;
+                    if !role
+                        .selector_profiles
+                        .iter()
+                        .any(|profile| profile == &subject.selector_profile)
+                    {
+                        return invalid("authority grant selector profile is not allowed for role");
+                    }
+                    let profile = self
+                        .selector_profiles
+                        .get(&subject.selector_profile)
+                        .ok_or(ConfigError::Invalid(
+                            "authority grant references an unknown selector profile",
+                        ))?;
+                    subject.validate_value_claims(profile)?;
+                    authorized_combinations.insert((
+                        grant.requirement.as_str(),
+                        grant.purpose.as_str(),
+                        subject.role.as_str(),
+                        subject.selector_profile.as_str(),
+                    ));
+                    if source.request.selector_inputs.iter().any(|input| {
+                        input.role == subject.role
+                            && input
+                                .alternatives
+                                .iter()
+                                .any(|alternative| alternative.profile == subject.selector_profile)
+                    }) {
+                        source_selector_set
+                            .push((subject.role.clone(), subject.selector_profile.clone()));
+                    }
+                }
+                if requirement
+                    .subject_roles
+                    .iter()
+                    .any(|role| !seen_roles.contains(role.role.as_str()))
+                {
+                    return invalid("authority grant omits a required subject role");
+                }
+                if source_selector_set.is_empty() {
+                    return invalid(
+                        "authority path does not activate any declared source selector input",
+                    );
+                }
+                source_selector_set.sort();
+                source_selector_sets
+                    .entry(requirement.source.clone())
+                    .or_default()
+                    .insert(source_selector_set);
+            }
+        }
+
+        for requirement in &self.requirements {
+            for purpose in &requirement.purposes {
+                for role in &requirement.subject_roles {
+                    for profile in &role.selector_profiles {
+                        if !authorized_combinations.contains(&(
+                            requirement.id.as_str(),
+                            purpose.as_str(),
+                            role.role.as_str(),
+                            profile.as_str(),
+                        )) {
+                            return invalid(
+                                "requirement role and selector profile lack an authority path",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        self.validate_source_selector_sets(&source_selector_sets)?;
+        Ok(())
+    }
+
+    fn validate_source_selector_sets(
+        &self,
+        allowed: &BTreeMap<String, BTreeSet<SourceSelectorSet>>,
+    ) -> Result<(), ConfigError> {
+        for (source_id, source) in self.sources.iter() {
+            let sets = allowed.get(source_id).ok_or(ConfigError::Invalid(
+                "configured source is unreachable from every authority grant",
+            ))?;
+            let reachable = sets
+                .iter()
+                .flatten()
+                .map(|(role, profile)| (role.as_str(), profile.as_str()))
+                .collect::<BTreeSet<_>>();
+            if source.request.selector_inputs.iter().any(|input| {
+                input.alternatives.iter().any(|alternative| {
+                    !reachable.contains(&(input.role.as_str(), alternative.profile.as_str()))
+                })
+            }) {
+                return invalid(
+                    "source selector input is unreachable from every complete authority path",
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceConfig {
+    pub provider_id: String,
+    pub trust_domain: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssuerConfig {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeConfig {
+    pub version: u8,
+    pub bundle_directory: String,
+    pub listener: ListenerConfig,
+    pub secret_providers: RuntimeSecretProviders,
+    pub audit_storage: AuditStorageConfig,
+    pub outbound_tls: OutboundTlsConfig,
+}
+
+impl RuntimeConfig {
+    pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err(ConfigError::TooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| ConfigError::InvalidYaml)?;
+        let config: Self = serde_norway::from_str(text).map_err(|_| ConfigError::InvalidYaml)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.version != 1 {
+            return invalid("runtime version must equal 1");
+        }
+        validate_absolute_path(&self.bundle_directory)?;
+        self.listener.validate()?;
+        self.secret_providers.validate()?;
+        self.audit_storage.validate()?;
+        self.outbound_tls.validate()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSecretProviders {
+    pub file: FileSecretProvider,
+}
+
+impl RuntimeSecretProviders {
+    fn validate(&self) -> Result<(), ConfigError> {
+        self.file.validate()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSecretProvider {
+    pub root: String,
+}
+
+impl FileSecretProvider {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_absolute_path(&self.root)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditStorageConfig {
+    pub path: String,
+    pub maximum_file_bytes: u64,
+}
+
+impl AuditStorageConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_absolute_path(&self.path)?;
+        validate_range(
+            self.maximum_file_bytes,
+            1_048_576,
+            1_099_511_627_776,
+            "audit maximumFileBytes",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutboundTlsConfig {
+    pub system_roots: bool,
+    pub trust_profiles: OrderedMap<TrustProfileBinding>,
+}
+
+impl OutboundTlsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !self.system_roots {
+            return invalid("outbound TLS system roots must remain enabled");
+        }
+        validate_named_map(&self.trust_profiles, 0, 64, TrustProfileBinding::validate)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrustProfileBinding {
+    pub ca_bundle_file: String,
+}
+
+impl TrustProfileBinding {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_absolute_path(&self.ca_bundle_file)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListenerConfig {
+    pub bind_host: String,
+    pub port: u16,
+    pub tls_termination: TlsTermination,
+    pub trust_proxy_identity_headers: bool,
+    pub maximum_request_bytes: u64,
+    pub maximum_concurrent_requests: u32,
+    pub request_timeout_milliseconds: u64,
+    pub shutdown_grace_milliseconds: u64,
+}
+
+impl ListenerConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.bind_host.len() < 2 || self.bind_host.len() > 64 {
+            return invalid("listener bindHost length is invalid");
+        }
+        let ip: IpAddr = self
+            .bind_host
+            .parse()
+            .map_err(|_| ConfigError::Invalid("listener bindHost must be a private numeric IP"))?;
+        let private = match ip {
+            IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+            IpAddr::V6(ip) => ip.is_loopback() || is_unique_local(ip),
+        };
+        if !private || ip.is_unspecified() || ip.is_multicast() {
+            return invalid("listener bindHost must be loopback or private");
+        }
+        if self.trust_proxy_identity_headers {
+            return invalid("proxy identity headers must not be trusted");
+        }
+        validate_range(
+            self.maximum_request_bytes,
+            1_024,
+            1_048_576,
+            "maximumRequestBytes",
+        )?;
+        validate_range(
+            u64::from(self.maximum_concurrent_requests),
+            1,
+            4_096,
+            "maximumConcurrentRequests",
+        )?;
+        validate_range(
+            self.request_timeout_milliseconds,
+            1,
+            30_000,
+            "requestTimeoutMilliseconds",
+        )?;
+        validate_range(
+            self.shutdown_grace_milliseconds,
+            1,
+            120_000,
+            "shutdownGraceMilliseconds",
+        )
+    }
+}
+
+fn is_unique_local(ip: Ipv6Addr) -> bool {
+    ip.octets()[0] & 0xfe == 0xfc
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TlsTermination {
+    OperatorControlledUpstream,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationConfig {
+    pub kind: AuthenticationKind,
+    pub issuer: String,
+    pub audiences: Vec<String>,
+    pub token_types: Vec<AccessTokenType>,
+    pub algorithms: Vec<AccessTokenAlgorithm>,
+    pub jwks_uri: String,
+    pub principal_claim: String,
+    pub requester_tags_claim: String,
+    pub evidence_audience_claim: String,
+    pub grant_id_claim: String,
+    pub grant_authority_claim: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_claim: Option<String>,
+}
+
+impl AuthenticationConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_https_issuer(&self.issuer)?;
+        validate_https_url(&self.jwks_uri, false)?;
+        validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
+        validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
+        validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
+        for claim in [
+            Some(&self.principal_claim),
+            Some(&self.requester_tags_claim),
+            Some(&self.evidence_audience_claim),
+            Some(&self.grant_id_claim),
+            Some(&self.grant_authority_claim),
+            self.actor_claim.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_claim_name(claim)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthenticationKind {
+    OidcAccessToken,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum AccessTokenType {
+    #[serde(rename = "at+jwt")]
+    AtJwt,
+    #[serde(rename = "application/at+jwt")]
+    ApplicationAtJwt,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum AccessTokenAlgorithm {
+    EdDSA,
+    ES256,
+    RS256,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretProvider {
+    Environment,
+    File,
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct SecretRef(String);
+
+impl SecretRef {
+    pub fn parse(value: &str) -> Result<Self, ConfigError> {
+        if let Some(name) = value.strip_prefix("secret:file/") {
+            if valid_file_secret_name(name) {
+                return Ok(Self(value.to_owned()));
+            }
+        }
+        invalid("secret reference does not use an exact permitted grammar")
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn provider(&self) -> SecretProvider {
+        SecretProvider::File
+    }
+}
+
+impl fmt::Debug for SecretRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_tuple("SecretRef").field(&self.0).finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+impl Serialize for SecretRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+fn valid_file_secret_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes.len() <= 128
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditConfig {
+    pub format: AuditFormat,
+    pub hash_secret_ref: SecretRef,
+    pub hash_key_version: u32,
+    pub fail_closed: bool,
+}
+
+impl AuditConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.hash_key_version == 0 || !self.fail_closed {
+            return invalid("audit must be versioned and fail closed");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditFormat {
+    KeyedJsonl,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubjectBindingConfig {
+    pub secret_ref: SecretRef,
+    pub key_version: u32,
+}
+
+impl SubjectBindingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.key_version == 0 {
+            return invalid("subject binding keyVersion must be positive");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RateLimitConfig {
+    pub requests_per_principal_per_minute: u64,
+    pub burst_per_principal: u64,
+    pub failed_selector_attempts_per_principal_authority_per_minute: u64,
+}
+
+impl RateLimitConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_range(
+            self.requests_per_principal_per_minute,
+            1,
+            1_000_000,
+            "request rate limit",
+        )?;
+        validate_range(self.burst_per_principal, 1, 100_000, "burst rate limit")?;
+        validate_range(
+            self.failed_selector_attempts_per_principal_authority_per_minute,
+            1,
+            100_000,
+            "failed-selector rate limit",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SigningConfig {
+    pub format: SigningFormat,
+    pub algorithm: SigningAlgorithm,
+    pub active_key_id: String,
+    pub active_key_ref: SecretRef,
+    pub retired_public_jwk_files: Vec<PublicJwkPath>,
+    pub jwks_path: String,
+    pub maximum_assertion_validity_seconds: u64,
+    pub verifier_clock_skew_seconds: u64,
+}
+
+impl SigningConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_string(&self.active_key_id, 1, 256, "active signing key id")?;
+        if self.active_key_id.chars().any(char::is_control) {
+            return invalid("active signing key id contains a control character");
+        }
+        validate_unique(
+            &self.retired_public_jwk_files,
+            0,
+            32,
+            "retired public JWK paths",
+        )?;
+        if self.jwks_path != "/.well-known/evidence/jwks.json" {
+            return invalid("JWKS path is not the Version 1 discovery path");
+        }
+        validate_range(
+            self.maximum_assertion_validity_seconds,
+            1,
+            31_536_000,
+            "maximum assertion validity",
+        )?;
+        validate_range(
+            self.verifier_clock_skew_seconds,
+            0,
+            600,
+            "verifier clock skew",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SigningFormat {
+    FlattenedJwsJson,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+pub enum SigningAlgorithm {
+    EdDSA,
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct PublicJwkPath(String);
+
+impl PublicJwkPath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PublicJwkPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("PublicJwkPath")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicJwkPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if is_public_jwk_path(&value) {
+            Ok(Self(value))
+        } else {
+            Err(de::Error::custom("invalid public JWK path"))
+        }
+    }
+}
+
+impl Serialize for PublicJwkPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+fn is_public_jwk_path(value: &str) -> bool {
+    let Some(name) = value.strip_prefix("public-keys/") else {
+        return false;
+    };
+    let Some(stem) = name.strip_suffix(".jwk.json") else {
+        return false;
+    };
+    !stem.is_empty()
+        && stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectorProfile {
+    pub maximum_aggregate_bytes: u64,
+    pub fields: OrderedMap<SelectorField>,
+}
+
+impl SelectorProfile {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_range(
+            self.maximum_aggregate_bytes,
+            1,
+            8_192,
+            "selector maximumAggregateBytes",
+        )?;
+        validate_len(self.fields.len(), 1, 16, "selector fields")?;
+        for (name, field) in self.fields.iter() {
+            if !valid_field_name(name) {
+                return invalid("selector field name is invalid");
+            }
+            field.validate(self.maximum_aggregate_bytes)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SelectorField {
+    String {
+        #[serde(rename = "minimumBytes")]
+        minimum_bytes: u64,
+        #[serde(rename = "maximumBytes")]
+        maximum_bytes: u64,
+    },
+    Date,
+    Integer {
+        minimum: i64,
+        maximum: i64,
+    },
+    Boolean,
+    ControlledCode {
+        codelist: ArtifactPath,
+        #[serde(rename = "codelistVersion")]
+        codelist_version: String,
+        #[serde(rename = "maximumBytes")]
+        maximum_bytes: u64,
+    },
+}
+
+impl SelectorField {
+    fn validate(&self, aggregate_maximum: u64) -> Result<(), ConfigError> {
+        match self {
+            Self::String {
+                minimum_bytes,
+                maximum_bytes,
+            } => {
+                validate_range(*minimum_bytes, 1, 8_192, "selector string minimumBytes")?;
+                validate_range(*maximum_bytes, 1, 8_192, "selector string maximumBytes")?;
+                if minimum_bytes > maximum_bytes || maximum_bytes > &aggregate_maximum {
+                    return invalid("selector string byte bounds are inconsistent");
+                }
+            }
+            Self::Integer { minimum, maximum } => {
+                if minimum > maximum || *minimum < -MAX_SAFE_INTEGER || *maximum > MAX_SAFE_INTEGER
+                {
+                    return invalid("selector integer bounds are inconsistent");
+                }
+            }
+            Self::ControlledCode {
+                codelist,
+                codelist_version,
+                maximum_bytes,
+            } => {
+                require_artifact_prefix(codelist, "codelists/")?;
+                validate_string(codelist_version, 1, 128, "selector codelist version")?;
+                validate_range(*maximum_bytes, 1, 8_192, "selector code maximumBytes")?;
+                if maximum_bytes > &aggregate_maximum {
+                    return invalid("selector code exceeds aggregate byte bound");
+                }
+            }
+            Self::Date | Self::Boolean => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct ArtifactPath(String);
+
+impl ArtifactPath {
+    pub fn parse(value: &str) -> Result<Self, ConfigError> {
+        if !valid_artifact_path(value) {
+            return invalid("artifact path is invalid");
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ArtifactPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ArtifactPath")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+impl Serialize for ArtifactPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+fn valid_artifact_path(value: &str) -> bool {
+    const ROOTS: [&str; 5] = [
+        "adapters/",
+        "derivations/",
+        "schemas/",
+        "codelists/",
+        "fixtures/",
+    ];
+    ROOTS.iter().any(|root| value.starts_with(root))
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceConfig {
+    pub transport: SourceTransport,
+    pub base_url: String,
+    pub posture: AcquisitionPosture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_trust_profile: Option<String>,
+    pub authentication: SourceAuthentication,
+    pub request: FixedRequest,
+    pub extract_script: ArtifactPath,
+    pub fact_schema: ArtifactPath,
+}
+
+impl SourceConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_source_origin(&self.base_url)?;
+        if self
+            .tls_trust_profile
+            .as_deref()
+            .is_some_and(|profile| !valid_local_id(profile))
+        {
+            return invalid("source TLS trust profile identifier is invalid");
+        }
+        self.authentication.validate()?;
+        self.request.validate()?;
+        require_artifact_prefix(&self.extract_script, "adapters/")?;
+        if !self.extract_script.as_str().ends_with(".rhai") {
+            return invalid("source extraction script must be a Rhai file");
+        }
+        let adapter_id = Path::new(self.extract_script.as_str())
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| valid_local_id(value))
+            .ok_or(ConfigError::Invalid(
+                "source adapter name must be a local identifier",
+            ))?;
+        debug_assert!(!adapter_id.is_empty());
+        require_artifact_prefix(&self.fact_schema, "schemas/")?;
+        if self.fact_schema == self.request.adapter_parameters_schema {
+            return invalid("fact and adapter-parameter schemas must be distinct artifacts");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceTransport {
+    HttpJson,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AcquisitionPosture {
+    SourceDerived,
+    FieldProjected,
+    RecordTransformed,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SourceAuthentication {
+    Basic {
+        #[serde(rename = "usernameRef")]
+        username_ref: SecretRef,
+        #[serde(rename = "passwordRef")]
+        password_ref: SecretRef,
+    },
+    StaticBearer {
+        #[serde(rename = "tokenRef")]
+        token_ref: SecretRef,
+    },
+    StaticApiKey {
+        #[serde(rename = "headerName")]
+        header_name: String,
+        #[serde(rename = "valueRef")]
+        value_ref: SecretRef,
+    },
+    Oauth2ClientCredentials {
+        #[serde(rename = "tokenEndpoint")]
+        token_endpoint: String,
+        #[serde(rename = "clientIdRef")]
+        client_id_ref: SecretRef,
+        #[serde(rename = "clientSecretRef")]
+        client_secret_ref: SecretRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        #[serde(rename = "credentialPlacement")]
+        credential_placement: CredentialPlacement,
+        #[serde(rename = "maximumCacheSeconds")]
+        maximum_cache_seconds: u64,
+    },
+}
+
+impl SourceAuthentication {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::Basic {
+                username_ref: _,
+                password_ref: _,
+            }
+            | Self::StaticBearer { token_ref: _ } => Ok(()),
+            Self::StaticApiKey {
+                header_name,
+                value_ref: _,
+            } => validate_configurable_header_name(header_name),
+            Self::Oauth2ClientCredentials {
+                token_endpoint,
+                scope,
+                maximum_cache_seconds,
+                ..
+            } => {
+                let token_endpoint = validate_source_url(token_endpoint, false)?;
+                if token_endpoint.query().is_some() {
+                    return invalid("OAuth token endpoint must not contain a query");
+                }
+                if let Some(scope) = scope {
+                    validate_string(scope, 1, 512, "OAuth scope")?;
+                }
+                validate_range(
+                    *maximum_cache_seconds,
+                    0,
+                    86_400,
+                    "OAuth maximum cache lifetime",
+                )
+            }
+        }
+    }
+
+    pub fn secret_refs(&self) -> Vec<&SecretRef> {
+        match self {
+            Self::Basic {
+                username_ref,
+                password_ref,
+            } => vec![username_ref, password_ref],
+            Self::StaticBearer { token_ref } => vec![token_ref],
+            Self::StaticApiKey { value_ref, .. } => vec![value_ref],
+            Self::Oauth2ClientCredentials {
+                client_id_ref,
+                client_secret_ref,
+                ..
+            } => vec![client_id_ref, client_secret_ref],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialPlacement {
+    BasicHeader,
+    FormBody,
+    QueryString,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FixedRequest {
+    pub method: HttpMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_template: Option<String>,
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub path_bindings: OrderedMap<PathBindingConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed_headers: Vec<FixedHeader>,
+    pub selector_inputs: Vec<SelectorInput>,
+    pub prepare_script: ArtifactPath,
+    pub adapter_parameters: OrderedMap<AdapterParameterValue>,
+    pub adapter_parameters_schema: ArtifactPath,
+    pub preparation_limits: PreparationLimits,
+    pub projection: Vec<String>,
+    pub redirects: RedirectPolicy,
+    pub timeout_milliseconds: u64,
+    pub maximum_response_bytes: u64,
+    pub concurrency_limit: u16,
+}
+
+impl FixedRequest {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match (&self.path, &self.path_template) {
+            (Some(path), None) => {
+                validate_normalized_request_path(path)?;
+                if !self.path_bindings.is_empty() {
+                    return invalid("fixed source path must not define pathBindings");
+                }
+            }
+            (None, Some(template)) => validate_path_template(template, &self.path_bindings)?,
+            _ => return invalid("source request must define exactly one of path or pathTemplate"),
+        }
+        validate_fixed_headers(&self.fixed_headers)?;
+        validate_selector_inputs(&self.selector_inputs)?;
+        require_artifact_prefix(&self.prepare_script, "adapters/")?;
+        if !self.prepare_script.as_str().ends_with(".rhai") {
+            return invalid("source preparation script must be a Rhai file");
+        }
+        validate_len(self.adapter_parameters.len(), 0, 64, "adapter parameters")?;
+        for (name, value) in self.adapter_parameters.iter() {
+            if !valid_parameter_key(name) {
+                return invalid("adapter parameter name is invalid");
+            }
+            value.validate(0)?;
+        }
+        require_artifact_prefix(&self.adapter_parameters_schema, "schemas/")?;
+        self.preparation_limits.validate()?;
+        if self.method == HttpMethod::GET
+            && self.preparation_limits.json_body != PreparationChannelPolicy::Forbidden
+        {
+            return invalid("GET source requests must forbid the JSON body channel");
+        }
+        validate_projection(&self.projection)?;
+        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
+        validate_range(
+            self.maximum_response_bytes,
+            1,
+            1_048_576,
+            "source response size",
+        )?;
+        validate_range(
+            u64::from(self.concurrency_limit),
+            1,
+            256,
+            "source concurrency",
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+pub enum HttpMethod {
+    GET,
+    POST,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedirectPolicy {
+    Deny,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectorInput {
+    pub role: String,
+    pub alternatives: Vec<SelectorInputAlternative>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectorInputAlternative {
+    pub profile: String,
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathBindingConfig {
+    pub role: String,
+    pub profile: String,
+    pub field: String,
+}
+
+impl PathBindingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_local_id(&self.role)
+            || !valid_local_id(&self.profile)
+            || !valid_field_name(&self.field)
+        {
+            return invalid("source selector binding identifier is invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum AdapterParameterValue {
+    Boolean(bool),
+    Integer(i64),
+    String(String),
+    Array(Vec<AdapterParameterValue>),
+    Object(OrderedMap<AdapterParameterValue>),
+}
+
+impl AdapterParameterValue {
+    fn validate(&self, depth: usize) -> Result<(), ConfigError> {
+        if depth > 32 {
+            return invalid("adapter parameter nesting exceeds Version 1 bounds");
+        }
+        match self {
+            Self::Boolean(_) | Self::Integer(_) => Ok(()),
+            Self::String(value) => validate_string(value, 0, 16_384, "adapter parameter string"),
+            Self::Array(values) => {
+                validate_len(values.len(), 0, 256, "adapter parameter array")?;
+                for value in values {
+                    value.validate(depth + 1)?;
+                }
+                Ok(())
+            }
+            Self::Object(values) => {
+                validate_len(values.len(), 0, 256, "adapter parameter object")?;
+                for (name, value) in values.iter() {
+                    if !valid_parameter_key(name) {
+                        return invalid("adapter parameter object key is invalid");
+                    }
+                    value.validate(depth + 1)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparationLimits {
+    pub query: PreparationChannelPolicy,
+    pub json_body: PreparationChannelPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_query_pairs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_query_name_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_query_value_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_json_depth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_collection_items: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_string_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_normalized_bytes: Option<u64>,
+}
+
+impl PreparationLimits {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.query == PreparationChannelPolicy::Forbidden
+            && self.json_body == PreparationChannelPolicy::Forbidden
+        {
+            return invalid("at least one preparation output channel must be usable");
+        }
+        validate_optional_range(self.maximum_query_pairs, 1, 64)?;
+        validate_optional_range(self.maximum_query_name_bytes, 1, 64)?;
+        validate_optional_range(self.maximum_query_value_bytes, 1, 4_096)?;
+        validate_optional_range(self.maximum_json_depth, 1, 32)?;
+        validate_optional_range(self.maximum_collection_items, 1, 256)?;
+        validate_optional_range(self.maximum_string_bytes, 1, 16_384)?;
+        validate_optional_range(self.maximum_normalized_bytes, 1, 65_536)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreparationChannelPolicy {
+    Required,
+    Allowed,
+    Forbidden,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityProfile {
+    pub kind: AuthorityKind,
+    pub requester_tags: Vec<String>,
+    pub grants: Vec<AuthorityGrant>,
+}
+
+impl AuthorityProfile {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_unique_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
+        if self.requester_tags.iter().any(|tag| !valid_local_id(tag)) {
+            return invalid("requester tag is invalid");
+        }
+        validate_len(self.grants.len(), 1, 128, "authority grants")?;
+        for grant in &self.grants {
+            grant.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorityKind {
+    Statutory,
+    Organizational,
+    Consent,
+    Delegated,
+    ExplicitRequest,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityGrant {
+    pub requirement: String,
+    pub purpose: String,
+    pub audience_from: AudienceFrom,
+    pub subjects: Vec<GrantedSubject>,
+}
+
+impl AuthorityGrant {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_uri(&self.requirement)?;
+        validate_purpose(&self.purpose)?;
+        validate_len(self.subjects.len(), 1, 8, "authority grant subjects")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudienceFrom {
+    AuthenticatedRequester,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantedSubject {
+    pub role: String,
+    pub selector_profile: String,
+    pub value_origin: ValueOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_claims: Option<OrderedMap<String>>,
+}
+
+impl GrantedSubject {
+    fn validate_value_claims(&self, profile: &SelectorProfile) -> Result<(), ConfigError> {
+        if !valid_local_id(&self.role) || !valid_local_id(&self.selector_profile) {
+            return invalid("authority subject identifier is invalid");
+        }
+        match self.value_origin {
+            ValueOrigin::Request => {
+                if self.value_claims.is_some() {
+                    return invalid("request-derived subject must not define valueClaims");
+                }
+            }
+            ValueOrigin::AuthenticatedContext | ValueOrigin::AuthenticatedGrant => {
+                let claims = self.value_claims.as_ref().ok_or(ConfigError::Invalid(
+                    "context-derived subject requires valueClaims",
+                ))?;
+                if claims.len() != profile.fields.len()
+                    || profile
+                        .fields
+                        .keys()
+                        .any(|field| !claims.contains_key(field))
+                    || claims
+                        .keys()
+                        .any(|field| !profile.fields.contains_key(field))
+                {
+                    return invalid("valueClaims must exactly equal selector profile fields");
+                }
+                let mut targets = BTreeSet::new();
+                for (_, claim) in claims.iter() {
+                    validate_claim_path(claim)?;
+                    if !targets.insert(claim.as_str()) {
+                        return invalid("valueClaims targets must be unique");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ValueOrigin {
+    AuthenticatedContext,
+    AuthenticatedGrant,
+    Request,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementConfig {
+    pub id: String,
+    pub kind: RequirementKind,
+    pub source: String,
+    pub purposes: Vec<String>,
+    pub subject_roles: Vec<SubjectRole>,
+    pub reference_frameworks: Vec<String>,
+    pub evidence_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_timezone: Option<String>,
+    pub validity_seconds: u64,
+    pub derivation: DerivationConfig,
+    pub concepts: Vec<ConceptConfig>,
+    pub fixtures: ArtifactPath,
+    pub disclosure_guard: DisclosureGuard,
+    pub existence_disclosure: ExistenceDisclosure,
+}
+
+impl RequirementConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_uri(&self.id)?;
+        if !valid_local_id(&self.source) {
+            return invalid("requirement source identifier is invalid");
+        }
+        validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
+        for purpose in &self.purposes {
+            validate_purpose(purpose)?;
+        }
+        validate_len(self.subject_roles.len(), 1, 8, "requirement subject roles")?;
+        let mut roles = BTreeSet::new();
+        for role in &self.subject_roles {
+            role.validate()?;
+            if !roles.insert(role.role.as_str()) {
+                return invalid("requirement subject roles must be unique");
+            }
+        }
+        validate_unique_strings(
+            &self.reference_frameworks,
+            1,
+            16,
+            1,
+            512,
+            "reference frameworks",
+        )?;
+        for reference in &self.reference_frameworks {
+            validate_uri(reference)?;
+        }
+        validate_uri(&self.evidence_type)?;
+        if let Some(timezone) = &self.observation_timezone {
+            validate_string(timezone, 1, 128, "observation timezone")?;
+            chrono_tz::Tz::from_str(timezone).map_err(|_| {
+                ConfigError::Invalid("observation timezone is not an IANA timezone")
+            })?;
+        }
+        validate_range(self.validity_seconds, 1, 31_536_000, "requirement validity")?;
+        self.derivation.validate()?;
+        validate_len(self.concepts.len(), 1, 16, "requirement concepts")?;
+        let mut concepts = BTreeSet::new();
+        for concept in &self.concepts {
+            concept.validate()?;
+            if !concepts.insert(concept.id.as_str()) {
+                return invalid("requirement concepts must be unique");
+            }
+        }
+        require_artifact_prefix(&self.fixtures, "fixtures/")?;
+        self.disclosure_guard.validate()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequirementKind {
+    Criterion,
+    InformationRequirement,
+    Constraint,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubjectRole {
+    pub role: String,
+    pub cardinality: SubjectCardinality,
+    pub selector_profiles: Vec<String>,
+}
+
+impl SubjectRole {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_local_id(&self.role) {
+            return invalid("subject role identifier is invalid");
+        }
+        validate_unique_strings(
+            &self.selector_profiles,
+            1,
+            16,
+            1,
+            128,
+            "role selector profiles",
+        )?;
+        if self
+            .selector_profiles
+            .iter()
+            .any(|profile| !valid_local_id(profile))
+        {
+            return invalid("role selector profile identifier is invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubjectCardinality {
+    One,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DerivationConfig {
+    pub script: ArtifactPath,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_inputs: Vec<SelectorInput>,
+    pub parameters: OrderedMap<ParameterValue>,
+}
+
+impl DerivationConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        require_artifact_prefix(&self.script, "derivations/")?;
+        if !self.script.as_str().ends_with(".rhai") {
+            return invalid("derivation script must be a Rhai file");
+        }
+        validate_derivation_input_shape(&self.selector_inputs)?;
+        validate_len(self.parameters.len(), 0, 32, "derivation parameters")?;
+        for (name, value) in self.parameters.iter() {
+            if !valid_field_name(name) {
+                return invalid("derivation parameter name is invalid");
+            }
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ParameterValue {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+    Decimal(DecimalValue),
+    BucketBoundaries(Vec<BucketBoundary>),
+}
+
+impl ParameterValue {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::String(value) => validate_string(value, 0, 1_024, "derivation string parameter"),
+            Self::Integer(value) => {
+                if value.unsigned_abs() > MAX_SAFE_INTEGER as u64 {
+                    invalid("derivation integer parameter exceeds safe bounds")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Boolean(_) => Ok(()),
+            Self::Decimal(value) => value.validate(),
+            Self::BucketBoundaries(boundaries) => validate_bucket_boundaries(boundaries),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecimalValue {
+    #[serde(rename = "type")]
+    pub value_type: DecimalMarker,
+    pub value: String,
+}
+
+impl DecimalValue {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_decimal(&self.value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecimalMarker {
+    Decimal,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BucketBoundary {
+    pub minimum_inclusive: DecimalValue,
+    pub maximum_exclusive: DecimalValue,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConceptConfig {
+    pub id: String,
+    pub form: ConceptForm,
+    pub required: bool,
+    #[serde(default)]
+    pub constraints: OrderedMap<YamlValue>,
+}
+
+impl ConceptConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_uri(&self.id)?;
+        validate_len(self.constraints.len(), 0, 32, "concept constraints")?;
+        validate_concept_constraints(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConceptForm {
+    Boolean,
+    ControlledCode,
+    ControlledCategory,
+    BoundedInteger,
+    BoundedDecimal,
+    DateBucket,
+    TimeBucket,
+    AudienceScopedEntityReference,
+    ControlledCodeList,
+    EntityReferenceList,
+    ReviewedStructuredValue,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisclosureGuard {
+    pub families: Vec<String>,
+}
+
+impl DisclosureGuard {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_unique_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
+        for family in &self.families {
+            validate_uri(family)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExistenceDisclosure {
+    CollapseUnresolved,
+}
+
+fn validate_named_map<T>(
+    map: &OrderedMap<T>,
+    minimum: usize,
+    maximum: usize,
+    validate: impl Fn(&T) -> Result<(), ConfigError>,
+) -> Result<(), ConfigError> {
+    validate_len(map.len(), minimum, maximum, "named configuration map")?;
+    for (name, value) in map.iter() {
+        if !valid_local_id(name) {
+            return invalid("local identifier is invalid");
+        }
+        validate(value)?;
+    }
+    Ok(())
+}
+
+fn require_artifact_prefix(path: &ArtifactPath, prefix: &'static str) -> Result<(), ConfigError> {
+    if path.as_str().starts_with(prefix) {
+        Ok(())
+    } else {
+        invalid("artifact path has the wrong bundle directory")
+    }
+}
+
+fn validate_selector_inputs(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
+    validate_len(inputs.len(), 1, 8, "source selector inputs")?;
+    validate_derivation_input_shape(inputs)
+}
+
+fn validate_derivation_input_shape(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
+    validate_len(inputs.len(), 0, 8, "selector inputs")?;
+    let mut roles = BTreeSet::new();
+    for input in inputs {
+        if !valid_local_id(&input.role) || !roles.insert(input.role.as_str()) {
+            return invalid("selector-input roles must be valid and unique");
+        }
+        validate_len(
+            input.alternatives.len(),
+            1,
+            16,
+            "selector-input alternatives",
+        )?;
+        let mut profiles = BTreeSet::new();
+        for alternative in &input.alternatives {
+            if !valid_local_id(&alternative.profile)
+                || !profiles.insert(alternative.profile.as_str())
+            {
+                return invalid("selector-input profiles must be valid and unique per role");
+            }
+            validate_unique_strings(&alternative.fields, 1, 16, 1, 64, "selector-input fields")?;
+            if alternative
+                .fields
+                .iter()
+                .any(|field| !valid_field_name(field))
+            {
+                return invalid("selector-input field name is invalid");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_derivation_selector_inputs(
+    requirement: &RequirementConfig,
+    profiles: &OrderedMap<SelectorProfile>,
+) -> Result<(), ConfigError> {
+    for input in &requirement.derivation.selector_inputs {
+        let role = requirement
+            .subject_roles
+            .iter()
+            .find(|role| role.role == input.role)
+            .ok_or(ConfigError::Invalid(
+                "derivation selector input references an unknown requirement role",
+            ))?;
+        for alternative in &input.alternatives {
+            if !role.selector_profiles.contains(&alternative.profile) {
+                return invalid(
+                    "derivation selector input profile is not allowed for the requirement role",
+                );
+            }
+            let profile = profiles
+                .get(&alternative.profile)
+                .ok_or(ConfigError::Invalid(
+                    "derivation selector input references an unknown selector profile",
+                ))?;
+            if alternative
+                .fields
+                .iter()
+                .any(|field| !profile.fields.contains_key(field))
+            {
+                return invalid("derivation selector input references an unknown selector field");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_fixed_headers(headers: &[FixedHeader]) -> Result<(), ConfigError> {
+    validate_len(headers.len(), 0, 32, "fixed headers")?;
+    let mut names = BTreeSet::new();
+    for header in headers {
+        validate_configurable_header_name(&header.name)?;
+        if !names.insert(header.name.to_ascii_lowercase()) {
+            return invalid("fixed header names must be unique ignoring ASCII case");
+        }
+        validate_string(&header.value, 0, 4_096, "fixed header value")?;
+        if header.value.chars().any(char::is_control) {
+            return invalid("fixed header value contains a control character");
+        }
+    }
+    Ok(())
+}
+
+fn validate_configurable_header_name(name: &str) -> Result<(), ConfigError> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name.bytes().all(is_http_token_byte)
+        || is_reserved_header_name(&name.to_ascii_lowercase())
+    {
+        return invalid("configured header name is prohibited");
+    }
+    Ok(())
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn is_reserved_header_name(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "proxy-authorization"
+            | "host"
+            | "cookie"
+            | "set-cookie"
+            | "content-length"
+            | "content-type"
+            | "transfer-encoding"
+            | "expect"
+            | "connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "proxy-connection"
+            | "forwarded"
+            | "via"
+            | "x-real-ip"
+            | "traceparent"
+            | "tracestate"
+            | "baggage"
+            | "x-request-id"
+            | "x-correlation-id"
+            | "x-amzn-trace-id"
+            | "x-original-url"
+            | "x-rewrite-url"
+            | "x-http-method-override"
+            | "x-original-method"
+    ) || name.starts_with("x-forwarded-")
+        || name.starts_with("proxy-")
+        || name.starts_with("x-b3-")
+}
+
+fn validate_path_template(
+    template: &str,
+    bindings: &OrderedMap<PathBindingConfig>,
+) -> Result<(), ConfigError> {
+    validate_string(template, 2, 2_048, "source path template")?;
+    if !template.starts_with('/')
+        || template.starts_with("//")
+        || template.contains(['?', '#', '\\'])
+        || !template.is_ascii()
+    {
+        return invalid("source path template is invalid");
+    }
+    let mut placeholders = BTreeSet::new();
+    let mut normalized = String::new();
+    for segment in template.split('/').skip(1) {
+        if segment.is_empty() || matches!(segment, "." | "..") {
+            return invalid("source path template contains an empty or dot segment");
+        }
+        normalized.push('/');
+        if let Some(name) = segment
+            .strip_prefix('{')
+            .and_then(|segment| segment.strip_suffix('}'))
+        {
+            if !valid_field_name(name) || !placeholders.insert(name) {
+                return invalid("source path-template placeholders must be valid and unique");
+            }
+            normalized.push('x');
+        } else {
+            if segment.contains(['{', '}']) {
+                return invalid("source path-template placeholder must occupy a complete segment");
+            }
+            normalized.push_str(segment);
+        }
+    }
+    validate_normalized_request_path(&normalized)?;
+    if placeholders.is_empty() || placeholders != bindings.keys().collect::<BTreeSet<_>>() {
+        return invalid("pathBindings must exactly match path-template placeholders");
+    }
+    for (_, binding) in bindings.iter() {
+        binding.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_projection(projection: &[String]) -> Result<(), ConfigError> {
+    validate_unique_strings(projection, 1, 64, 2, 256, "source projection")?;
+    let paths = projection
+        .iter()
+        .map(|path| parse_projection_pointer(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, left) in paths.iter().enumerate() {
+        for right in paths.iter().skip(index + 1) {
+            if projection_paths_overlap(left, right) {
+                return invalid("source projection paths must not duplicate or overlap");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum ProjectionSegment {
+    Wildcard,
+    Key(String),
+}
+
+fn parse_projection_pointer(pointer: &str) -> Result<Vec<ProjectionSegment>, ConfigError> {
+    if !pointer.starts_with('/')
+        || pointer.starts_with("//")
+        || pointer.chars().any(char::is_control)
+    {
+        return invalid("source projection is not an extended JSON Pointer");
+    }
+    pointer[1..]
+        .split('/')
+        .map(|raw| {
+            if raw.is_empty() {
+                return invalid("source projection contains an empty segment");
+            }
+            if raw == "*" {
+                return Ok(ProjectionSegment::Wildcard);
+            }
+            let mut decoded = String::with_capacity(raw.len());
+            let mut chars = raw.chars();
+            while let Some(character) = chars.next() {
+                if character == '~' {
+                    match chars.next() {
+                        Some('0') => decoded.push('~'),
+                        Some('1') => decoded.push('/'),
+                        _ => return invalid("source projection contains an invalid escape"),
+                    }
+                } else {
+                    decoded.push(character);
+                }
+            }
+            Ok(ProjectionSegment::Key(decoded))
+        })
+        .collect()
+}
+
+fn projection_paths_overlap(left: &[ProjectionSegment], right: &[ProjectionSegment]) -> bool {
+    let common = left.len().min(right.len());
+    left.iter().zip(right).take(common).all(|(left, right)| {
+        left == right
+            || matches!(left, ProjectionSegment::Wildcard)
+            || matches!(right, ProjectionSegment::Wildcard)
+    })
+}
+
+fn validate_optional_range(
+    value: Option<u64>,
+    minimum: u64,
+    maximum: u64,
+) -> Result<(), ConfigError> {
+    value.map_or(Ok(()), |value| {
+        validate_range(value, minimum, maximum, "optional bound")
+    })
+}
+
+fn validate_source_origin(value: &str) -> Result<(), ConfigError> {
+    let url = validate_source_url(value, true)?;
+    if url.path() != "/" || url.query().is_some() {
+        return invalid("source baseUrl must contain only scheme, host, and optional port");
+    }
+    Ok(())
+}
+
+fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
+    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("source URL is invalid"))?;
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return invalid("source URL contains prohibited authority or fragment data");
+    }
+    if origin_only && url.query().is_some() {
+        return invalid("source origin must not contain a query");
+    }
+    match url.scheme() {
+        "https" => {}
+        "http" => {
+            match url.host() {
+                Some(Host::Ipv4(ip)) if ip.is_loopback() => {}
+                Some(Host::Ipv6(ip)) if ip.is_loopback() => {}
+                _ => return invalid("insecure source URL must use a numeric loopback host"),
+            }
+            if !has_canonical_loopback_authority(value) {
+                return invalid("insecure source URL host syntax is ambiguous");
+            }
+        }
+        _ => return invalid("source URL scheme is not permitted"),
+    }
+    Ok(url)
+}
+
+fn has_canonical_loopback_authority(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if let Some(suffix) = authority.strip_prefix("[::1]") {
+        return suffix.is_empty() || valid_port_suffix(suffix);
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    if port.is_some_and(|port| !valid_port(port)) {
+        return false;
+    }
+    let octets = host.split('.').collect::<Vec<_>>();
+    octets.len() == 4
+        && octets[0] == "127"
+        && octets.iter().all(|octet| {
+            !octet.is_empty()
+                && (octet == &"0" || !octet.starts_with('0'))
+                && octet.bytes().all(|byte| byte.is_ascii_digit())
+                && octet.parse::<u8>().is_ok()
+        })
+}
+
+fn valid_port_suffix(value: &str) -> bool {
+    value.strip_prefix(':').is_some_and(valid_port)
+}
+
+fn valid_port(value: &str) -> bool {
+    !value.starts_with('0') && value.parse::<u16>().is_ok_and(|port| port != 0)
+}
+
+fn validate_https_url(value: &str, origin_only: bool) -> Result<(), ConfigError> {
+    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("HTTPS URL is invalid"))?;
+    if url.scheme() != "https"
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || (origin_only && (url.path() != "/" || url.query().is_some()))
+    {
+        return invalid("HTTPS URL violates the strict origin contract");
+    }
+    Ok(())
+}
+
+fn validate_https_issuer(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("HTTPS issuer is invalid"))?;
+    if url.scheme() != "https"
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return invalid("HTTPS issuer violates the exact issuer contract");
+    }
+    Ok(())
+}
+
+fn validate_normalized_request_path(value: &str) -> Result<(), ConfigError> {
+    if value.len() < 2
+        || !value.starts_with('/')
+        || value.starts_with("//")
+        || value.contains(['?', '#', '\\'])
+        || !value.is_ascii()
+    {
+        return invalid("source request path is invalid");
+    }
+    let mut index = 0;
+    let bytes = value.as_bytes();
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+                || bytes[index + 1].is_ascii_lowercase()
+                || bytes[index + 2].is_ascii_lowercase()
+            {
+                return invalid("source request path contains a non-canonical escape");
+            }
+            let decoded = u8::from_str_radix(&value[index + 1..index + 3], 16)
+                .map_err(|_| ConfigError::Invalid("source request path escape is invalid"))?;
+            if decoded.is_ascii_alphanumeric()
+                || matches!(decoded, b'-' | b'.' | b'_' | b'~' | b'/' | b'\\')
+            {
+                return invalid("source request path contains an ambiguous escape");
+            }
+            index += 3;
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'/' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'-'
+            ))
+        {
+            return invalid("source request path contains a prohibited character");
+        }
+        index += 1;
+    }
+    if value
+        .split('/')
+        .skip(1)
+        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return invalid("source request path contains a dot segment");
+    }
+    Ok(())
+}
+
+fn validate_bucket_boundaries(boundaries: &[BucketBoundary]) -> Result<(), ConfigError> {
+    validate_len(boundaries.len(), 1, 64, "bucket boundaries")?;
+    let mut codes = BTreeSet::new();
+    let mut previous_maximum: Option<&str> = None;
+    for boundary in boundaries {
+        boundary.minimum_inclusive.validate()?;
+        boundary.maximum_exclusive.validate()?;
+        if compare_decimal_text(
+            &boundary.minimum_inclusive.value,
+            &boundary.maximum_exclusive.value,
+        ) != std::cmp::Ordering::Less
+        {
+            return invalid("bucket interval must be non-empty");
+        }
+        if previous_maximum.is_some_and(|previous| {
+            compare_decimal_text(previous, &boundary.minimum_inclusive.value)
+                != std::cmp::Ordering::Equal
+        }) {
+            return invalid("bucket intervals must be ordered and contiguous");
+        }
+        if !valid_code(&boundary.code) || !codes.insert(boundary.code.as_str()) {
+            return invalid("bucket code is invalid or duplicated");
+        }
+        previous_maximum = Some(&boundary.maximum_exclusive.value);
+    }
+    Ok(())
+}
+
+fn validate_concept_constraints(concept: &ConceptConfig) -> Result<(), ConfigError> {
+    let required: &[&str] = match concept.form {
+        ConceptForm::Boolean => &[],
+        ConceptForm::ControlledCode => &["codelist", "codelistVersion", "maximumBytes"],
+        ConceptForm::ControlledCategory => &[
+            "categoryScheme",
+            "schemeVersion",
+            "maximumBytes",
+            "codelist",
+        ],
+        ConceptForm::BoundedInteger => &["minimum", "maximum"],
+        ConceptForm::BoundedDecimal => &["minimum", "maximum", "maximumScale"],
+        ConceptForm::DateBucket | ConceptForm::TimeBucket => &["bucketScheme", "schemeVersion"],
+        ConceptForm::AudienceScopedEntityReference => &["maximumBytes"],
+        ConceptForm::ControlledCodeList => &[
+            "codelist",
+            "codelistVersion",
+            "minimumItems",
+            "maximumItems",
+            "unique",
+        ],
+        ConceptForm::EntityReferenceList => &["minimumItems", "maximumItems", "unique"],
+        ConceptForm::ReviewedStructuredValue => &["schema", "maximumSerializedBytes"],
+    };
+    if concept.constraints.len() != required.len()
+        || required
+            .iter()
+            .any(|name| !concept.constraints.contains_key(name))
+    {
+        return invalid("concept constraints do not exactly match the declared value form");
+    }
+
+    match concept.form {
+        ConceptForm::Boolean => {}
+        ConceptForm::ControlledCode => {
+            validate_codelist_constraints(&concept.constraints, "codelistVersion")?;
+        }
+        ConceptForm::ControlledCategory => {
+            validate_uri(yaml_string(&concept.constraints, "categoryScheme")?)?;
+            validate_string(
+                yaml_string(&concept.constraints, "schemeVersion")?,
+                1,
+                128,
+                "scheme version",
+            )?;
+            validate_codelist_path(yaml_string(&concept.constraints, "codelist")?)?;
+            validate_constraint_u64(&concept.constraints, "maximumBytes", 1, 8_192)?;
+        }
+        ConceptForm::BoundedInteger => {
+            let minimum = yaml_i64(&concept.constraints, "minimum")?;
+            let maximum = yaml_i64(&concept.constraints, "maximum")?;
+            if minimum > maximum || minimum < -MAX_SAFE_INTEGER || maximum > MAX_SAFE_INTEGER {
+                return invalid("bounded integer constraints are invalid");
+            }
+        }
+        ConceptForm::BoundedDecimal => {
+            let minimum = yaml_string(&concept.constraints, "minimum")?;
+            let maximum = yaml_string(&concept.constraints, "maximum")?;
+            validate_decimal(minimum)?;
+            validate_decimal(maximum)?;
+            if compare_decimal_text(minimum, maximum) == std::cmp::Ordering::Greater {
+                return invalid("bounded decimal constraints are invalid");
+            }
+            validate_constraint_u64(&concept.constraints, "maximumScale", 0, 9)?;
+        }
+        ConceptForm::DateBucket | ConceptForm::TimeBucket => {
+            validate_uri(yaml_string(&concept.constraints, "bucketScheme")?)?;
+            validate_string(
+                yaml_string(&concept.constraints, "schemeVersion")?,
+                1,
+                128,
+                "scheme version",
+            )?;
+        }
+        ConceptForm::AudienceScopedEntityReference => {
+            validate_constraint_u64(&concept.constraints, "maximumBytes", 1, 8_192)?;
+        }
+        ConceptForm::ControlledCodeList => {
+            validate_codelist_path(yaml_string(&concept.constraints, "codelist")?)?;
+            validate_string(
+                yaml_string(&concept.constraints, "codelistVersion")?,
+                1,
+                128,
+                "codelist version",
+            )?;
+            validate_collection_constraints(&concept.constraints)?;
+        }
+        ConceptForm::EntityReferenceList => validate_collection_constraints(&concept.constraints)?,
+        ConceptForm::ReviewedStructuredValue => {
+            validate_uri(yaml_string(&concept.constraints, "schema")?)?;
+            validate_constraint_u64(&concept.constraints, "maximumSerializedBytes", 1, 65_536)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_codelist_constraints(
+    constraints: &OrderedMap<YamlValue>,
+    version_key: &str,
+) -> Result<(), ConfigError> {
+    validate_codelist_path(yaml_string(constraints, "codelist")?)?;
+    validate_string(
+        yaml_string(constraints, version_key)?,
+        1,
+        128,
+        "codelist version",
+    )?;
+    validate_constraint_u64(constraints, "maximumBytes", 1, 8_192).map(|_| ())
+}
+
+fn validate_collection_constraints(constraints: &OrderedMap<YamlValue>) -> Result<(), ConfigError> {
+    let minimum = validate_constraint_u64(constraints, "minimumItems", 1, 64)?;
+    let maximum = validate_constraint_u64(constraints, "maximumItems", 1, 64)?;
+    if minimum > maximum || !yaml_bool(constraints, "unique")? {
+        return invalid("collection constraints are invalid");
+    }
+    Ok(())
+}
+
+fn validate_codelist_path(value: &str) -> Result<(), ConfigError> {
+    let path = ArtifactPath::parse(value)?;
+    require_artifact_prefix(&path, "codelists/")
+}
+
+fn yaml_string<'a>(map: &'a OrderedMap<YamlValue>, key: &str) -> Result<&'a str, ConfigError> {
+    map.get(key)
+        .and_then(YamlValue::as_str)
+        .ok_or(ConfigError::Invalid(
+            "concept constraint has the wrong scalar type",
+        ))
+}
+
+fn yaml_i64(map: &OrderedMap<YamlValue>, key: &str) -> Result<i64, ConfigError> {
+    map.get(key)
+        .and_then(YamlValue::as_i64)
+        .ok_or(ConfigError::Invalid(
+            "concept constraint has the wrong integer type",
+        ))
+}
+
+fn yaml_bool(map: &OrderedMap<YamlValue>, key: &str) -> Result<bool, ConfigError> {
+    map.get(key)
+        .and_then(YamlValue::as_bool)
+        .ok_or(ConfigError::Invalid(
+            "concept constraint has the wrong boolean type",
+        ))
+}
+
+fn validate_constraint_u64(
+    map: &OrderedMap<YamlValue>,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<u64, ConfigError> {
+    let value = map
+        .get(key)
+        .and_then(YamlValue::as_u64)
+        .ok_or(ConfigError::Invalid(
+            "concept constraint has the wrong integer type",
+        ))?;
+    validate_range(value, minimum, maximum, "concept constraint")?;
+    Ok(value)
+}
+
+fn validate_decimal(value: &str) -> Result<(), ConfigError> {
+    if value.is_empty()
+        || value.starts_with('+')
+        || value == "-0"
+        || value.starts_with("-0.")
+        || value.contains(['e', 'E'])
+    {
+        return invalid("decimal text is not canonical");
+    }
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let mut parts = unsigned.split('.');
+    let integer = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || integer.is_empty()
+        || !integer.bytes().all(|byte| byte.is_ascii_digit())
+        || (integer.len() > 1 && integer.starts_with('0'))
+        || fraction.is_some_and(|fraction| {
+            fraction.is_empty()
+                || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+                || fraction.ends_with('0')
+        })
+    {
+        return invalid("decimal text is not canonical");
+    }
+    let scale = fraction.map_or(0, str::len);
+    let precision = integer.len() + scale;
+    if precision > 28 || scale > 9 {
+        return invalid("decimal precision or scale exceeds Version 1 bounds");
+    }
+    Ok(())
+}
+
+fn compare_decimal_text(left: &str, right: &str) -> std::cmp::Ordering {
+    fn parts(value: &str) -> (bool, &str, &str) {
+        let negative = value.starts_with('-');
+        let unsigned = value.strip_prefix('-').unwrap_or(value);
+        let (integer, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        (negative, integer, fraction)
+    }
+    let (left_negative, left_integer, left_fraction) = parts(left);
+    let (right_negative, right_integer, right_fraction) = parts(right);
+    if left_negative != right_negative {
+        return if left_negative {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        };
+    }
+    let magnitude = left_integer
+        .len()
+        .cmp(&right_integer.len())
+        .then_with(|| left_integer.cmp(right_integer))
+        .then_with(|| {
+            let width = left_fraction.len().max(right_fraction.len());
+            left_fraction
+                .bytes()
+                .chain(std::iter::repeat(b'0'))
+                .take(width)
+                .cmp(
+                    right_fraction
+                        .bytes()
+                        .chain(std::iter::repeat(b'0'))
+                        .take(width),
+                )
+        });
+    if left_negative {
+        magnitude.reverse()
+    } else {
+        magnitude
+    }
+}
+
+fn validate_uri(value: &str) -> Result<(), ConfigError> {
+    validate_string(value, 1, 512, "URI")?;
+    let url = Url::parse(value).map_err(|_| ConfigError::Invalid("URI is invalid"))?;
+    if url.scheme().is_empty() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return invalid("URI is invalid");
+    }
+    Ok(())
+}
+
+fn validate_absolute_path(value: &str) -> Result<(), ConfigError> {
+    let path = Path::new(value);
+    if value.len() > 512
+        || !value.starts_with('/')
+        || value.starts_with("//")
+        || value.contains('\\')
+        || !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return invalid("absolute operator path is invalid");
+    }
+    Ok(())
+}
+
+fn validate_claim_name(value: &str) -> Result<(), ConfigError> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 128
+        || !matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+        || !bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    {
+        return invalid("claim name is invalid");
+    }
+    Ok(())
+}
+
+fn validate_claim_path(value: &str) -> Result<(), ConfigError> {
+    if value.len() > 512 {
+        return invalid("claim path is too long");
+    }
+    for segment in value.split('.') {
+        let bytes = segment.as_bytes();
+        if bytes.is_empty()
+            || !matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+            || !bytes[1..]
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return invalid("claim path is invalid");
+        }
+    }
+    Ok(())
+}
+
+fn validate_purpose(value: &str) -> Result<(), ConfigError> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 128
+        || !matches!(bytes.first(), Some(b'a'..=b'z'))
+        || !bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+    {
+        return invalid("purpose code is invalid");
+    }
+    Ok(())
+}
+
+fn valid_local_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn valid_field_name(value: &str) -> bool {
+    value.len() <= 64 && valid_local_id(value)
+}
+
+fn valid_parameter_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn valid_code(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn validate_len(
+    length: usize,
+    minimum: usize,
+    maximum: usize,
+    _field: &'static str,
+) -> Result<(), ConfigError> {
+    if (minimum..=maximum).contains(&length) {
+        Ok(())
+    } else {
+        invalid("collection cardinality is outside Version 1 bounds")
+    }
+}
+
+fn validate_range(
+    value: u64,
+    minimum: u64,
+    maximum: u64,
+    _field: &'static str,
+) -> Result<(), ConfigError> {
+    if (minimum..=maximum).contains(&value) {
+        Ok(())
+    } else {
+        invalid("numeric value is outside Version 1 bounds")
+    }
+}
+
+fn validate_string(
+    value: &str,
+    minimum: usize,
+    maximum: usize,
+    _field: &'static str,
+) -> Result<(), ConfigError> {
+    if (minimum..=maximum).contains(&value.len()) && !value.contains('\0') {
+        Ok(())
+    } else {
+        invalid("string length is outside Version 1 bounds")
+    }
+}
+
+fn validate_unique<T: Ord>(
+    values: &[T],
+    minimum: usize,
+    maximum: usize,
+    field: &'static str,
+) -> Result<(), ConfigError> {
+    validate_len(values.len(), minimum, maximum, field)?;
+    if values.iter().collect::<BTreeSet<_>>().len() != values.len() {
+        return invalid("collection values must be unique");
+    }
+    Ok(())
+}
+
+fn validate_unique_strings(
+    values: &[String],
+    minimum_items: usize,
+    maximum_items: usize,
+    minimum_bytes: usize,
+    maximum_bytes: usize,
+    field: &'static str,
+) -> Result<(), ConfigError> {
+    validate_len(values.len(), minimum_items, maximum_items, field)?;
+    let mut seen = BTreeSet::new();
+    for value in values {
+        validate_string(value, minimum_bytes, maximum_bytes, field)?;
+        if !seen.insert(value.as_str()) {
+            return invalid("collection values must be unique");
+        }
+    }
+    Ok(())
+}
+
+fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
+    Err(ConfigError::Invalid(reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle_contract_validator() -> jsonschema::JSONSchema {
+        let schema: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/bundle.schema.yaml"
+        ))
+        .expect("bundle contract is YAML");
+        let schema = serde_json::to_value(schema).expect("bundle contract converts to JSON");
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema)
+            .expect("bundle contract compiles")
+    }
+
+    fn runtime_contract_validator() -> jsonschema::JSONSchema {
+        let schema: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/runtime.schema.yaml"
+        ))
+        .expect("runtime contract is YAML");
+        let schema = serde_json::to_value(schema).expect("runtime contract converts to JSON");
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema)
+            .expect("runtime contract compiles")
+    }
+
+    fn bundle_contract_instance(yaml: &[u8]) -> serde_json::Value {
+        let value: serde_norway::Value =
+            serde_norway::from_slice(yaml).expect("bundle instance is YAML");
+        serde_json::to_value(value).expect("bundle instance converts to JSON")
+    }
+
+    #[test]
+    fn exact_secret_reference_grammars_are_closed() {
+        for valid in ["secret:file/a", "secret:file/source-token_v2.json"] {
+            assert!(SecretRef::parse(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "secret:env/",
+            "secret:env/SOURCE_2_PASSWORD",
+            "secret:env/lower",
+            "secret:env/A-B",
+            "secret:file/Upper",
+            "secret:file/../token",
+            "secret:file/.token",
+            "plain-value",
+        ] {
+            assert!(SecretRef::parse(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn decimal_comparison_is_exact() {
+        assert_eq!(
+            compare_decimal_text("-10.5", "-2"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_decimal_text("1.2", "1.20"),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(compare_decimal_text("10", "2"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn all_coequal_acceptance_definitions_use_the_same_typed_config() {
+        for yaml in [
+            include_bytes!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/professional-licence/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml").as_slice(),
+        ] {
+            EvidenceConfig::parse_yaml(yaml).expect("acceptance definition must validate");
+        }
+    }
+
+    #[test]
+    fn bundle_contract_accepts_every_complete_version_one_bundle() {
+        let validator = bundle_contract_validator();
+        for yaml in [
+            include_bytes!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/professional-licence/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/conformance/selectors/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml").as_slice(),
+        ] {
+            assert!(validator.is_valid(&bundle_contract_instance(yaml)));
+        }
+    }
+
+    #[test]
+    fn bundle_contract_closes_concept_constraints_by_form() {
+        let validator = bundle_contract_validator();
+        let valid = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        ));
+        assert!(validator.is_valid(&valid));
+
+        let mut misspelled = valid.clone();
+        let constraints = misspelled["requirements"][0]["concepts"][1]["constraints"]
+            .as_object_mut()
+            .expect("controlled-code constraints are an object");
+        let version = constraints
+            .remove("codelistVersion")
+            .expect("canonical constraint exists");
+        constraints.insert("codelist_version".to_owned(), version);
+        assert!(!validator.is_valid(&misspelled));
+
+        let mut unsupported = valid;
+        unsupported["requirements"][0]["concepts"][0]["constraints"]["maximumBytes"] =
+            serde_json::json!(32);
+        assert!(!validator.is_valid(&unsupported));
+    }
+
+    #[test]
+    fn typed_config_rejects_noncanonical_constraint_names() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+        let misspelled = valid.replacen("codelistVersion", "codelist_version", 1);
+        assert_ne!(misspelled, valid, "fixture mutation must remain effective");
+        assert!(EvidenceConfig::parse_yaml(misspelled.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn yaml_names_and_secret_references_are_strict() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+        assert!(
+            EvidenceConfig::parse_yaml(valid.replace("providerId", "provider_id").as_bytes())
+                .is_err()
+        );
+        let unexpected = valid.replacen(
+            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}",
+            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance, unexpected: true}",
+            1,
+        );
+        assert_ne!(unexpected, valid, "fixture mutation must remain effective");
+        assert!(EvidenceConfig::parse_yaml(unexpected.as_bytes()).is_err());
+        let literal_secret = valid.replacen(
+            "activeKeyRef: secret:file/signing-key",
+            "activeKeyRef: literal-private-key",
+            1,
+        );
+        assert_ne!(
+            literal_secret, valid,
+            "fixture mutation must remain effective"
+        );
+        assert!(EvidenceConfig::parse_yaml(literal_secret.as_bytes(),).is_err());
+        assert!(EvidenceConfig::parse_yaml(
+            valid
+                .replace(
+                    "activeKeyId: fixture-key-2026-01",
+                    "activeKeyId: \"fixture-key\\u000A2026-01\"",
+                )
+                .as_bytes(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn context_and_grant_claim_maps_are_exact_and_non_aliasing() {
+        let profile: SelectorProfile = serde_norway::from_str(
+            "maximumAggregateBytes: 32\nfields:\n  alpha: {type: string, minimumBytes: 1, maximumBytes: 16}\n  beta: {type: boolean}\n",
+        )
+        .expect("selector profile parses");
+        let exact: GrantedSubject = serde_norway::from_str(
+            "role: subject\nselectorProfile: opaque-v1\nvalueOrigin: authenticated-context\nvalueClaims: {alpha: claims.alpha, beta: claims.beta}\n",
+        )
+        .expect("subject parses");
+        assert!(exact.validate_value_claims(&profile).is_ok());
+
+        for invalid_subject in [
+            "role: subject\nselectorProfile: opaque-v1\nvalueOrigin: authenticated-context\nvalueClaims: {alpha: claims.alpha}\n",
+            "role: subject\nselectorProfile: opaque-v1\nvalueOrigin: authenticated-grant\nvalueClaims: {alpha: claims.same, beta: claims.same}\n",
+            "role: subject\nselectorProfile: opaque-v1\nvalueOrigin: request\nvalueClaims: {alpha: claims.alpha, beta: claims.beta}\n",
+        ] {
+            let subject: GrantedSubject =
+                serde_norway::from_str(invalid_subject).expect("subject shape parses");
+            assert!(subject.validate_value_claims(&profile).is_err());
+        }
+    }
+
+    #[test]
+    fn complete_authority_paths_cannot_be_unioned_across_partial_grants() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        config.authority_profiles.0[0].1.grants[0].subjects.pop();
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "authority grant must bind the complete subject-role set"
+            ))
+        );
+    }
+
+    #[test]
+    fn active_source_role_sets_reject_unreachable_inputs_at_startup() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        config.sources.0[0].1.request.selector_inputs[0]
+            .alternatives
+            .push(SelectorInputAlternative {
+                profile: "person-reference-v1".to_owned(),
+                fields: vec!["person_reference".to_owned()],
+            });
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "source selector input is unreachable from every complete authority path"
+            ))
+        );
+    }
+
+    #[test]
+    fn one_source_may_serve_mutually_exclusive_complete_role_sets() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("adult fixture validates");
+
+        let mut alternative = config.requirements[0].clone();
+        alternative.id = "urn:example:fixture:requirement:adult-status-alternative:v1".to_owned();
+        alternative.subject_roles[0].role = "alternate-subject".to_owned();
+        alternative.evidence_type =
+            "urn:example:fixture:evidence-type:adult-status-alternative:v1".to_owned();
+        alternative.derivation.script =
+            ArtifactPath::parse("derivations/adult-status-alternative.rhai")
+                .expect("alternative derivation path");
+        alternative.concepts[0].id =
+            "urn:example:fixture:concept:adult-status-alternative".to_owned();
+        alternative.disclosure_guard.families[0] =
+            "urn:example:fixture:disclosure-family:adult-status-alternative".to_owned();
+
+        let mut grant = config.authority_profiles.0[0].1.grants[0].clone();
+        grant.requirement = alternative.id.clone();
+        grant.subjects[0].role = "alternate-subject".to_owned();
+        config.authority_profiles.0[0].1.grants.push(grant);
+
+        let alternative_inputs = config.sources.0[0]
+            .1
+            .request
+            .selector_inputs
+            .iter()
+            .cloned()
+            .map(|mut input| {
+                input.role = "alternate-subject".to_owned();
+                input
+            })
+            .collect::<Vec<_>>();
+        config.sources.0[0]
+            .1
+            .request
+            .selector_inputs
+            .extend(alternative_inputs);
+        config.requirements.push(alternative);
+
+        config
+            .validate()
+            .expect("mutually exclusive role sets may reuse fixed placements");
+        assert_eq!(
+            config.source_selector_sets("source-a"),
+            vec![
+                vec![(
+                    "alternate-subject".to_owned(),
+                    "person-demographics-v1".to_owned()
+                )],
+                vec![("subject".to_owned(), "person-demographics-v1".to_owned())]
+            ]
+        );
+    }
+
+    #[test]
+    fn one_trust_domain_and_native_token_identity_are_closed_configuration() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+        let invalid = valid.replacen(
+            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}",
+            "service: {providerId: urn:example:fixture:provider:evidence, trustDomains: [urn:example:fixture:trust-domain:a, urn:example:fixture:trust-domain:b]}",
+            1,
+        );
+        assert_ne!(invalid, valid, "fixture mutation must remain effective");
+        assert!(EvidenceConfig::parse_yaml(invalid.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn source_urls_reject_insecure_aliases_and_ambiguous_numeric_hosts() {
+        for valid in [
+            "https://source.invalid",
+            "http://127.0.0.1:18081",
+            "http://127.42.5.9",
+            "http://[::1]:18083",
+        ] {
+            assert!(validate_source_origin(valid).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "http://localhost:18081",
+            "http://127.1:18081",
+            "http://127.00.0.1:18081",
+            "http://192.168.1.2",
+            "https://user@source.invalid",
+            "https://source.invalid/path",
+            "https://source.invalid#fragment",
+        ] {
+            assert!(validate_source_origin(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query() {
+        let valid = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+
+        let uppercase_adapter = valid.replace(
+            "extractScript: adapters/source-a.rhai",
+            "extractScript: adapters/Source-a.rhai",
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(uppercase_adapter.as_bytes()),
+            Err(ConfigError::Invalid(
+                "source adapter name must be a local identifier"
+            ))
+        );
+
+        for query in [
+            "?client_secret=plaintext",
+            "?client_id=duplicate",
+            "?fixed=true",
+        ] {
+            let mut oauth =
+                EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+            oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
+                token_endpoint: format!("https://source.invalid/token{query}"),
+                client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
+                client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
+                    .expect("secret ref"),
+                scope: None,
+                credential_placement: CredentialPlacement::FormBody,
+                maximum_cache_seconds: 60,
+            };
+            assert_eq!(
+                oauth.validate(),
+                Err(ConfigError::Invalid(
+                    "OAuth token endpoint must not contain a query"
+                )),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_sources_must_forbid_the_json_body_channel() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        config.sources.0[0].1.request.method = HttpMethod::GET;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "GET source requests must forbid the JSON body channel"
+            ))
+        );
+
+        let validator = bundle_contract_validator();
+        let mut instance = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ));
+        instance["sources"]["source-a"]["request"]["method"] = serde_json::json!("GET");
+        assert!(!validator.is_valid(&instance));
+    }
+
+    #[test]
+    fn a_shared_disclosure_family_rejects_the_complete_bundle() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        let mut duplicate = config.requirements[0].clone();
+        duplicate.id = "urn:example:fixture:requirement:other:v1".to_owned();
+        duplicate.evidence_type = "urn:example:fixture:evidence-type:other:v1".to_owned();
+        duplicate.derivation.script =
+            ArtifactPath::parse("derivations/other.rhai").expect("artifact path");
+        duplicate.concepts[0].id = "urn:example:fixture:concept:other".to_owned();
+        config.requirements.push(duplicate);
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "enabled requirements share a disclosure family"
+            ))
+        );
+    }
+
+    #[test]
+    fn runtime_document_is_closed_and_contains_no_governed_override_surface() {
+        let valid = br#"
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles:
+    internal-pki: {caBundleFile: /etc/registry-evidence/ca/internal.pem}
+"#;
+        RuntimeConfig::parse_yaml(valid).expect("closed runtime parses");
+        let validator = runtime_contract_validator();
+        assert!(validator.is_valid(&bundle_contract_instance(valid)));
+        for reference in [
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/runtime.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml").as_slice(),
+        ] {
+            assert!(validator.is_valid(&bundle_contract_instance(reference)));
+            RuntimeConfig::parse_yaml(reference).expect("reference runtime matches Rust contract");
+        }
+        for rejected_host in ["evidence.internal", "0.0.0.0", "8.8.8.8", "ff02::1"] {
+            let candidate = String::from_utf8(valid.to_vec())
+                .expect("runtime fixture is UTF-8")
+                .replace("bindHost: 127.0.0.1", &format!("bindHost: {rejected_host}"));
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "runtime accepted prohibited bindHost {rejected_host}"
+            );
+        }
+        for governed_key in [
+            "service",
+            "issuer",
+            "authentication",
+            "audit",
+            "subjectBinding",
+            "rateLimits",
+            "signing",
+            "selectorProfiles",
+            "sources",
+            "authorityProfiles",
+            "requirements",
+        ] {
+            let mut candidate = valid.to_vec();
+            candidate.extend_from_slice(format!("{governed_key}: {{}}\n").as_bytes());
+            assert_eq!(
+                RuntimeConfig::parse_yaml(&candidate),
+                Err(ConfigError::InvalidYaml),
+                "runtime accepted governed bundle key {governed_key}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(&candidate)),
+                "runtime schema accepted governed bundle key {governed_key}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_templates_headers_and_projection_fail_closed() {
+        let bindings: OrderedMap<PathBindingConfig> = serde_norway::from_str(
+            "record_reference: {role: subject, profile: record-reference-v1, field: record_reference}\n",
+        )
+        .expect("path binding parses");
+        assert!(validate_path_template("/records/{record_reference}", &bindings).is_ok());
+        for invalid_template in [
+            "/records/{record_reference}/",
+            "/records/prefix-{record_reference}",
+            "/records/{missing}",
+            "/records/../{record_reference}",
+        ] {
+            assert!(validate_path_template(invalid_template, &bindings).is_err());
+        }
+
+        assert!(validate_configurable_header_name("X-API-Version").is_ok());
+        for forbidden in [
+            "Authorization",
+            "Host",
+            "Content-Length",
+            "Expect",
+            "Cookie",
+            "Proxy-Authorization",
+            "X-Forwarded-For",
+            "X-Original-URL",
+            "X-Rewrite-URL",
+            "X-HTTP-Method-Override",
+            "X-Original-Method",
+            "TraceParent",
+        ] {
+            assert!(
+                validate_configurable_header_name(forbidden).is_err(),
+                "{forbidden}"
+            );
+        }
+
+        assert!(validate_projection(&[
+            "/total".to_owned(),
+            "/results/*/status".to_owned(),
+            "/declaration/mother.personReference".to_owned(),
+        ])
+        .is_ok());
+        for paths in [
+            vec!["/results".to_owned(), "/results/*/status".to_owned()],
+            vec![
+                "/results/*/status".to_owned(),
+                "/results/0/status".to_owned(),
+            ],
+            vec!["/bad/~2escape".to_owned()],
+        ] {
+            assert!(validate_projection(&paths).is_err());
+        }
+    }
+
+    #[test]
+    fn path_based_https_oidc_issuer_is_preserved_exactly() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        config.authentication.issuer = "https://identity.example.test/realms/registry".to_owned();
+        assert!(config.validate().is_ok());
+        config.authentication.issuer.push_str("?tenant=wrong");
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn file_secret_references_are_the_only_governed_secret_form() {
+        assert!(SecretRef::parse("secret:file/source-token").is_ok());
+        assert!(SecretRef::parse("secret:env/SOURCE_TOKEN").is_err());
+        assert!(SecretRef::parse("literal-token").is_err());
+    }
+}

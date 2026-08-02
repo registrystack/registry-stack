@@ -1,0 +1,136 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/authority-context-v1.json
+title: Normalized Evidence authority context Version 1
+description: Internal core-owned value; never accepted as an Evidence request body and never logged verbatim.
+type: object
+additionalProperties: false
+required: [authenticationProfile, principal, audience, entitlements, selectorSources]
+properties:
+  authenticationProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  principal: {type: string, minLength: 1, maxLength: 512}
+  actor: {type: string, minLength: 1, maxLength: 512}
+  requesterAttributes:
+    type: object
+    maxProperties: 32
+    propertyNames: {pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+    additionalProperties:
+      oneOf:
+        - {type: string, maxLength: 512}
+        - {type: boolean}
+        - type: array
+          maxItems: 32
+          items: {type: string, maxLength: 512}
+  audience: {type: string, format: uri, maxLength: 512}
+  entitlements:
+    type: array
+    minItems: 1
+    maxItems: 128
+    items: {$ref: '#/$defs/entitlement'}
+  selectorSources:
+    type: array
+    maxItems: 16
+    items: {$ref: '#/$defs/selector-source'}
+$defs:
+  entitlement:
+    type: object
+    additionalProperties: false
+    required: [authorityProfile, authorityKind, requirement, purpose, audience, subjects]
+    properties:
+      authorityProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      authorityKind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+      grantId: {type: string, minLength: 1, maxLength: 512}
+      requirement: {type: string, format: uri, maxLength: 512}
+      purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+      audience: {type: string, format: uri, maxLength: 512}
+      subjects:
+        type: array
+        minItems: 1
+        maxItems: 8
+        items: {$ref: '#/$defs/subject-authorization'}
+  subject-authorization:
+    type: object
+    additionalProperties: false
+    required: [role, selectorProfile, valueOrigin]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      valueOrigin: {enum: [authenticated-context, authenticated-grant, request]}
+      valueClaims:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        additionalProperties: {$ref: '#/$defs/claim-path'}
+    allOf:
+      - if:
+          required: [valueOrigin]
+          properties:
+            valueOrigin: {enum: [authenticated-context, authenticated-grant]}
+        then: {required: [valueClaims]}
+      - if:
+          required: [valueOrigin]
+          properties:
+            valueOrigin: {const: request}
+        then:
+          not: {required: [valueClaims]}
+  selector-source:
+    type: object
+    additionalProperties: false
+    required: [role, selectorProfile, valueOrigin, values]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      valueOrigin: {enum: [authenticated-context, authenticated-grant]}
+      grantId: {type: string, minLength: 1, maxLength: 512}
+      grantAuthority: {type: string, minLength: 1, maxLength: 512}
+      values:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        additionalProperties:
+          oneOf:
+            - {type: string, minLength: 1, maxLength: 512}
+            - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+            - {type: boolean}
+    allOf:
+      - if:
+          required: [valueOrigin]
+          properties:
+            valueOrigin: {const: authenticated-grant}
+        then: {required: [grantId, grantAuthority]}
+        else:
+          not:
+            anyOf:
+              - {required: [grantId]}
+              - {required: [grantAuthority]}
+  claim-path:
+    type: string
+    pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'
+allOf:
+  - if: {required: [actor]}
+    then:
+      properties:
+        entitlements:
+          contains:
+            type: object
+            required: [authorityKind]
+            properties: {authorityKind: {const: delegated}}
+authorization_decision:
+  exact_inputs:
+    - principal
+    - optional actor
+    - exact requirement revision
+    - purpose
+    - audience
+    - authority profile and kind
+    - optional authenticated grant identifier
+    - complete set of role, selector profile, and value origin tuples
+  matching_rule: One entitlement must cover the complete request; permissions are never unioned across entitlements.
+  principal_rule: Principal derives only from the one configured validated claim; a missing claim denies with no client_id, azp, header, or request fallback.
+  grant_rule: A grant identifier is context, never authority by possession; it must already be authenticated and bound to the matched entitlement.
+  selector_claim_rule: Context-derived and grant-derived selector values resolve only through the complete configured valueClaims map over the already verified token; request-derived subjects prohibit valueClaims.
+  authenticated_grant_rule: Values from the configured grantIdClaim and grantAuthorityClaim must both exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must cover the complete request; neither value may come from the caller request.
+  denial_order: Deny before source credential resolution or source access.
+privacy:
+  raw_context_in_logs_audit_errors: prohibited
+  audit_transformation: domain-separated keyed pseudonyms only

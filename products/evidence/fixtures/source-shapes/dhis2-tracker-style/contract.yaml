@@ -1,0 +1,107 @@
+fixture: registry.evidence.source-shape.dhis2-tracker-style/v1
+classification: compatibility-shaped-local-mock
+synthetic_only: true
+server: {base_url: 'http://127.0.0.2:18082', bind: '127.0.0.2:18082'}
+validated_source_definition:
+  transport: http-json
+  baseUrl: http://127.0.0.2:18082
+  posture: field-projected
+  authentication:
+    kind: basic
+    usernameRef: secret:file/fixture-nested-rest-username
+    passwordRef: secret:file/fixture-nested-rest-password
+  request:
+    method: GET
+    path: /api/tracker/trackedEntities
+    fixedHeaders:
+      - {name: Accept, value: application/json}
+    selectorInputs:
+      - role: subject
+        alternatives:
+          - {profile: civil-record-reference-v1, fields: [record_reference]}
+    prepareScript: adapters/nested-paged-rest-prepare.rhai
+    adapterParameters:
+      program: PROGRAM-FIXTURE
+      organisationUnits: OU-FIXTURE
+      fields: trackedEntity,attributes[attribute,value]
+      pageSize: "2"
+      page: "1"
+      totalPages: "true"
+      statusAttribute: ATTR-STATUS
+    adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+    preparationLimits:
+      query: required
+      jsonBody: forbidden
+      maximumQueryPairs: 7
+      maximumQueryNameBytes: 64
+      maximumQueryValueBytes: 1024
+      maximumNormalizedBytes: 4096
+    projection:
+      - /pager/page
+      - /pager/pageSize
+      - /pager/total
+      - /pager/pageCount
+      - /trackedEntities/*/attributes/*/attribute
+      - /trackedEntities/*/attributes/*/value
+    redirects: deny
+    timeoutMilliseconds: 3000
+    maximumResponseBytes: 65536
+    concurrencyLimit: 4
+  extractScript: adapters/nested-paged-rest.rhai
+  factSchema: schemas/facts.schema.yaml
+reference_shape: DHIS2 Tracker 2.43
+scope: Only the consumed request, pager, collection, and nested attribute boundary
+request:
+  method: GET
+  path: /api/tracker/trackedEntities
+  query:
+    program: PROGRAM-FIXTURE
+    orgUnits: OU-FIXTURE
+    trackedEntities: B0000000001
+    fields: trackedEntity,attributes[attribute,value]
+    pageSize: "2"
+    page: "1"
+    totalPages: "true"
+  query_order: [program, orgUnits, trackedEntities, fields, pageSize, page, totalPages]
+  headers:
+    accept: application/json
+    authorization: HTTP Basic injected from two secret references; exact value never snapshotted
+  body: absent
+  unexpected_request: fail test
+selector_contracts:
+  identifier_only:
+    profile: civil-record-reference-v1
+    prepared_field: query.trackedEntities
+    outer_boundary: exactly one reviewed tracked-entity UID
+cardinality:
+  zero: responses/no-match.json
+  one: responses/match.json
+  multiple: responses/ambiguous.json
+  inconsistent: responses/inconsistent-cardinality.json
+  page_size: 2
+  second_page_request: prohibited
+  requests_after_response: 0
+extraction:
+  configured_attribute: ATTR-STATUS
+  provider_fields: [ATTR-STATUS]
+  match_facts: [official_residence_code]
+  missing_fact: responses/missing-fact.json
+  error_envelope: responses/error-envelope.json
+  cardinality_consistency: pager total must equal the returned collection length
+  product_identifiers_disclosed: false
+failures:
+  - http-401
+  - http-403
+  - http-429
+  - http-500
+  - timeout
+  - redirect
+  - invalid-json
+  - wrong-media-type
+  - oversized-response
+  - error-envelope
+  - pager-count-mismatch
+redaction_canaries:
+  committed_source_and_selector: [Synthetic, Subject, '2000-02-29', B0000000001, SOURCE-STATUS-CANARY-DO-NOT-LOG]
+  runtime_generated_secret_classes: [basic-username, basic-password]
+claim: Compatibility-shaped fixture only; not an emulator, connector certification, or maintained vendor integration.

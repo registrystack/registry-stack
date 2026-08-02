@@ -1,0 +1,36 @@
+contract: registry.evidence.public-problem/v1
+status: frozen
+media_type: application/problem+json
+body:
+  exact_members: [type, title, status, code, operation]
+  operation: opaque per-request identifier safe for support correlation
+  prohibited:
+    - request body or selector profile and values
+    - principal, actor, grant, token, credential, or authorization inputs
+    - source URL, query, request, response, status text, or fact
+    - script input, output, line, stack, or diagnostic
+    - supported value or subject binding
+    - candidate count, score, hint, or comparison detail
+codes:
+  malformed_request: {status: 400, title: Request is not valid}
+  invalid_selector: {status: 400, title: Request is not valid}
+  authentication_failed: {status: 401, title: Authentication failed}
+  not_authorized: {status: 403, title: Request is not authorized}
+  evidence_not_available: {status: 422, title: Evidence could not be produced}
+  rate_limited: {status: 429, title: Request rate exceeded}
+  dependency_unavailable: {status: 503, title: Service temporarily unavailable}
+  service_unavailable: {status: 503, title: Service temporarily unavailable}
+existence_disclosure:
+  default_public_collapse:
+    internal_classes: [no_match, ambiguous, required_fact_missing]
+    public_code: evidence_not_available
+    same_status: 422
+    same_title: Evidence could not be produced
+    same_body_shape: true
+    timing_rule: Avoid intentional class-dependent delay; apply uniform bounded processing and response handling.
+  explicit_existence_concept_rule: Existence may be disclosed only as a separately authorized fixed concept, never as error detail.
+transient_failures:
+  internal_classes: [source_unavailable, source_protocol_error, script_failure, signing_failure, access_audit_failure, release_audit_failure]
+  public_codes: [dependency_unavailable, service_unavailable]
+  retry_after: permitted only for bounded transient failures and never derived from protected source content
+unknown_definition_rule: Unknown and unauthorized requirement identifiers must be indistinguishable to a caller lacking authorization.

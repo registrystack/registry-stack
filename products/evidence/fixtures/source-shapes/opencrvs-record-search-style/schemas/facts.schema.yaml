@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [date_of_event]
+properties:
+  date_of_event: {type: string, format: date}

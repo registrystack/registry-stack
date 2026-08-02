@@ -34,7 +34,7 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack is organized around two runtime patterns:
+Registry Stack contains three independent runtime patterns:
 
 - **Protected Registry APIs:** scoped, read-only HTTP APIs over existing files,
   extracts, databases, or legacy registry systems. Registry Relay implements
@@ -43,6 +43,11 @@ Registry Stack is organized around two runtime patterns:
   credential issuance, disclosure policy, and audit provenance. Registry Notary
   implements claim evaluation and credential issuance; governed Registry Relay
   routes use the same Policy Decision Point pattern for protected reads.
+- **Evidence:** a small service that returns signed,
+  minimum-disclosure assertion evidence from fixed authoritative-source
+  requests. Evidence is not a Registry Notary mode or rewrite. Its first
+  version excludes credentials, documents, federation, and a general policy
+  engine.
 
 The stack also includes Registry Manifest for portable metadata, Registry
 Platform shared primitives, `registryctl` adopter tooling, and release tooling
@@ -54,6 +59,7 @@ flowchart LR
     manifest["Registry Manifest<br/>describe"]
     relay["Registry Relay<br/>expose protected reads"]
     notary["Registry Notary<br/>certify evidence"]
+    evidence["Evidence<br/>minimum-disclosure assertions"]
     caller["Approved service, verifier, or wallet"]
 
     source --> relay
@@ -61,12 +67,15 @@ flowchart LR
     relay --> caller
     relay --> notary
     notary --> caller
+    source -. fixed request .-> evidence
+    evidence -. signed assertion .-> caller
 ```
 
 ## Repository Layout
 
 - `crates/`: Rust crates and runnable binaries for Platform, Manifest, Notary,
-  Relay, `registryctl`, and shared release tooling.
+  Relay, Evidence, `registryctl`, and shared release tooling. Evidence lives in
+  one `crates/registry-evidence` crate with one `evidence` binary.
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
