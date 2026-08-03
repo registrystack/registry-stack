@@ -154,6 +154,27 @@ residue the workstream did not reach, not new scope.
       the manifest schema and renaming the identifiers. Either way it is a
       published schema change and needs a manifest version decision, which
       is why it is not folded into the mechanical deletions.
+- [ ] C11. The remaining registryctl schema versions are reconciled with the
+      shapes the retirement changed. Decision 10 fixed the approved baseline
+      set. The same mismatch is still present in
+      `crates/registryctl/src/deployment.rs` and
+      `crates/registryctl/src/release_lock.rs`: `DeploymentBindingV1` lost
+      `ports.notary` and three `secret_files` ids, `LockedManagedImagesV1`,
+      `LockedRuntimeRecipesV1` and `SupportedContractsV1` lost their Notary
+      members, and every one of those documents still declares and requires
+      schema version `1.0` through `require_schema`. Two documents with
+      different required shapes therefore claim the same version, so a
+      newer registryctl refuses an adopter's existing `binding.yaml`,
+      generated binding projection, deployment manifest, and release lock
+      while the version claims nothing changed. Severity is lower than the
+      approved set: every removed member is literally named `notary`, so
+      serde's `unknown field` error is at least readable, and
+      `verify_release_lock_for_package` already documents that a
+      Notary-bearing payload must be rebuilt. What is owed is the version
+      bump and a refusal that names the retirement, matching decision 10.
+      This touches release provenance and deployment defaults, so it needs a
+      review note and Jeremi's call on whether the release lock bumps with
+      the rest or stays pinned to the published release train.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
 
@@ -784,3 +805,13 @@ is parallel; B has no upstream dependencies and is the standing priority
   longer has, so its whole flow needs E2's pass rather than one inserted
   paragraph. Docs gates: `npm test` 294 passed, `npm run check` clean
   including 31741 built links.
+
+- 2026-08-03: Audited the rest of registryctl's schema versions for the same
+  defect decision 10 fixed, and opened C11. `DeploymentBindingV1` lost
+  `ports.notary` and three `secret_files` ids, and the release lock's image,
+  recipe, and supported-contract structs lost their Notary members, while
+  `require_schema` still pins every one of those documents to version `1.0`.
+  The version is the compatibility gate and it did not move when the required
+  shape did. The other constants in `deployment.rs`, `trust.rs`, and
+  `project_authoring` are unaffected: their documents are generated fresh or
+  their shapes did not change in the retirement.
