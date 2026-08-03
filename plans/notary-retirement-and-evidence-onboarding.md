@@ -85,7 +85,7 @@ gates for its area (see Verification), and committed.
 - [x] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
 - [x] B7. Mint has real docs presence: a Configure page and a reference page.
-- [ ] B8. Onboarding spine: glossary disambiguates Evidence (product) from
+- [x] B8. Onboarding spine: glossary disambiguates Evidence (product) from
       the retired Notary evidence credentials; `start/when-to-use` presents
       the two doors; the quickstart ends in an Evidence assertion over the
       Relay-protected API (this last flip needs A and D).
@@ -525,3 +525,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   second run against kept volumes dies in `registry-postgresql-bootstrap`
   with a message naming neither cause; the page now has that row and the gate
   refuses to start against a checkout still holding volumes.
+
+- 2026-08-03: B8 done. Its third part was the one still open: the quickstart
+  now ends where Evidence answers over a Relay-protected API rather than a
+  local fixture. `first-run-with-solmara-lab` stops being a draft, loses its
+  redirect back to the chooser, and takes a sidebar entry under Answer with
+  Evidence as "See it over a Relay API". `start/quickstart` closes with a
+  section that says plainly what the composed run shows: one institution can
+  publish through Relay and answer through Evidence over those same records,
+  because Evidence treats a Relay API as an ordinary fixed HTTP source.
+  `start/when-to-use` and the Evidence track overview both link there, so
+  either door reaches the place they meet. The glossary's Notary sense of
+  evidence credential now says outright that it describes deployments already
+  running Notary rather than a path to start on. A new
+  `information-architecture` test holds the shape: quickstart lane order,
+  no redirect, page published rather than draft, sidebar entry present. It
+  failed on the missing quickstart link before the edits. Gates: `npm test`
+  281 pass 0 fail, `npm run check` exit 0.

@@ -76,3 +76,20 @@ Pre-1.0 commands and generated runtime files do not have compatibility aliases
 or an automated migration path.
 Use the [pre-1.0 cutover guide](../pre-1.0-cutover/) to preserve reviewed
 authored intent and recreate generated material.
+
+## See both doors working together
+
+The two doors are not alternatives an institution has to choose between once
+and for all. One institution can publish records through Registry Relay and
+answer bounded questions through Evidence over those same records, because
+Evidence treats a Relay API as an ordinary fixed HTTP source.
+
+[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) is
+where that arrangement is visible end to end. It brings up a whole fictional
+country's registry services on a laptop, then asks Evidence one question about
+one person: is this subject an adult? The answer comes back signed, carrying
+`true` and neither the identifier nor the date of birth that settled it, while
+the record stays with the authority that holds it.
+
+Run it after either first tutorial above. It needs Docker and about 30
+minutes.
