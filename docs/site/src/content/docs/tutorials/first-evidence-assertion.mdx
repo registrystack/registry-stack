@@ -118,6 +118,12 @@ If you skip this step, the next command fails with `deployment input is not immu
 by the input it refused, such as `the bundle directory has a writable entry`. That refusal is the
 runtime working as designed, not a broken install.
 
+Each refusal names one artifact, so a project-wide mistake surfaces one restart at a time.
+`evidencectl doctor --project .` reports every mode and owner the runtime would refuse in a single
+read-only pass instead. It also reports `secrets/source-bearer-token` as missing, which is correct
+and expected here: fixtures replay offline, and the source credential is only needed once you make
+a live request.
+
 ## Run the fixtures
 
 Drive the `evidence` binary across the whole project:

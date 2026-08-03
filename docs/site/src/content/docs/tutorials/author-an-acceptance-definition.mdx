@@ -755,7 +755,10 @@ pipeline, offline, with no source and no network.
 ## When it does not pass
 
 To edit the bundle again after freezing it, run `chmod -R u+w bundle` first. Without that, the run
-fails with `deployment input is not immutable` before it looks at anything you changed.
+fails with `deployment input is not immutable` before it looks at anything you changed. If you have
+lost track of which artifacts are writable, `evidencectl doctor --project .` reports all of them in
+one read-only pass, along with the two source bearer tokens this offline project deliberately does
+not hold.
 
 Four refusals account for most of what goes wrong here, and each of them is the runtime working as
 designed:
