@@ -121,12 +121,12 @@ One file per client, parsed by `crates/registry-mint/src/clients.rs`.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `clientId` | string | required | |
-| `principal` | string (<=512 bytes) | required | |
+| `principal` | string (at most 512 bytes) | required | |
 | `evidenceAudience` | string | required | |
-| `requesterTags` | list of strings (<=32 entries) | required | |
+| `requesterTags` | list of strings (at most 32 entries) | required | |
 | `grant` | object: `id`, `authority` | none, optional | Required together or not at all. |
 | `delegation` | object: `actors`, `subjectClaims` | none, optional | Enables delegated tokens bound to one subject; see `crates/registry-mint/README.md`. |
-| `keys` | list of public JWKs (<=8 entries) | required | A document carrying a private key member is rejected. |
+| `keys` | list of public JWKs (at most 8 entries) | required | A document carrying a private key member is rejected. |
 
 ## Token endpoint contract
 

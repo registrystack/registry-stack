@@ -1,5 +1,6 @@
 ---
 import { mdHrefForPath } from '../lib/md-href';
+import { isGeneratedApiPath } from '../lib/generated-api-bases.mjs';
 
 const { starlightRoute } = Astro.locals;
 const PAGE_TITLE_ID = '_top';
@@ -33,8 +34,7 @@ const isHome = path === '/';
 const is404 = parts.length === 1 && parts[0] === '404';
 // starlight-openapi reference routes are virtual pages with no per-page .md
 // twin, so the Copy/View as Markdown affordances would dangle. Skip them.
-const isGeneratedApi =
-  path.startsWith('/reference/apis/relay/') || path.startsWith('/reference/apis/notary/');
+const isGeneratedApi = isGeneratedApiPath(path);
 const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
 const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
 const isWide = starlightRoute.entry.data.wide === true;
