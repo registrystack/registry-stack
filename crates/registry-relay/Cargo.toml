@@ -146,8 +146,6 @@ aws-lc-rs = { version = "1" }
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
 chrono = { version = "0.4" }
-registry-notary-core.workspace = true
-registry-notary-server.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 proptest = { version = "1" }
 rcgen.workspace = true

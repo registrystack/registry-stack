@@ -21,15 +21,9 @@ members = [
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-mint",
-    "crates/registry-notary-core",
-    "crates/registry-notary-client",
-    "crates/registry-notary-server",
-    "crates/registry-notary",
-    "crates/registry-notary-worker-harness",
     "crates/registry-relay",
     "crates/registry-language-server",
     "crates/registryctl",
-    "products/notary/xtask",
 ]
 exclude = [
     # Parked until Assisted Access or the delegation profile work supplies a
@@ -37,7 +31,6 @@ exclude = [
     # workspace CI.
     "crates/registry-platform-sts",
     "products/platform/fuzz",
-    "products/notary/fuzz",
     "products/manifest/fuzz",
 ]
 resolver = "2"
@@ -59,11 +52,7 @@ registry-evidence = { path = "crates/registry-evidence", version = "0.16.3" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.16.3" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.16.3" }
 registry-mint = { path = "crates/registry-mint", version = "0.16.3" }
-registry-notary-client = { path = "crates/registry-notary-client", version = "0.16.3" }
-registry-notary-core = { path = "crates/registry-notary-core", version = "0.16.3" }
 registry-relay = { path = "crates/registry-relay", version = "0.16.3" }
-registry-notary-server = { path = "crates/registry-notary-server", version = "0.16.3", default-features = false }
-registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness", version = "0.16.3" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.16.3" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.16.3" }
 registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.16.3" }
@@ -99,10 +88,8 @@ chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }
 crc32fast = { version = "1.4" }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
-cryptoki = { version = "0.12" }
 csv = { version = "1" }
 datafusion = { version = "53.1" }
-deadpool = { version = "0.12.3", default-features = false, features = ["managed", "rt_tokio_1"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
@@ -136,7 +123,6 @@ rhai = { version = "=1.25.1", features = ["sync", "serde"] }
 rustix = { version = "1", features = ["fs", "process"] }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }
-secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "=1.2.1" }

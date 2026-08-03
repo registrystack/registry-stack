@@ -1474,28 +1474,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cryptoki"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff765b99fc49f3116c9a908484486a2b92fd73c48da45c3a69716471c6cc56c6"
-dependencies = [
- "bitflags 2.13.0",
- "cryptoki-sys",
- "libloading",
- "log",
- "secrecy",
-]
-
-[[package]]
-name = "cryptoki-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1fd850498411e4057f1cba79e6e2bc7cbe960544c1046ab46d4685c403a1121"
-dependencies = [
- "libloading",
-]
-
-[[package]]
 name = "csv"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2287,9 +2265,6 @@ name = "deadpool-runtime"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
-dependencies = [
- "tokio",
-]
 
 [[package]]
 name = "debug_unsafe"
@@ -4053,16 +4028,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
 name = "liblzma"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5586,169 +5551,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary"
-version = "0.16.3"
-dependencies = [
- "axum",
- "axum-test",
- "base64",
- "chrono",
- "clap",
- "ed25519-dalek",
- "getrandom 0.4.3",
- "hyper",
- "hyper-util",
- "jsonschema 0.18.3",
- "registry-config-report",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-ops",
- "reqwest 0.12.28",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "wiremock",
-]
-
-[[package]]
-name = "registry-notary-client"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "axum",
- "axum-test",
- "base64",
- "flate2",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-sdjwt",
- "reqwest 0.12.28",
- "secrecy",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "registry-notary-core"
-version = "0.16.3"
-dependencies = [
- "base64",
- "humantime-serde",
- "ipnet",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-ops",
- "registry-platform-sdjwt",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "ulid",
- "url",
- "utoipa",
-]
-
-[[package]]
-name = "registry-notary-server"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "aws-lc-rs",
- "axum",
- "axum-test",
- "base64",
- "chrono",
- "criterion",
- "crosswalk-core",
- "cryptoki",
- "deadpool",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "jsonschema 0.18.3",
- "jsonwebtoken",
- "native-tls",
- "postgres-native-tls",
- "registry-notary-client",
- "registry-notary-core",
- "registry-notary-worker-harness",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-cache",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-oidc",
- "registry-platform-ops",
- "registry-platform-pdp",
- "registry-platform-replay",
- "registry-platform-sdjwt",
- "registry-platform-testing",
- "reqwest 0.12.28",
- "rustix",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-postgres",
- "tower-http 0.7.0",
- "tracing",
- "ulid",
- "utoipa",
- "wiremock",
- "zeroize",
-]
-
-[[package]]
-name = "registry-notary-worker-harness"
-version = "0.16.3"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "registry-platform-audit"
 version = "0.16.3"
 dependencies = [
@@ -6036,8 +5838,6 @@ dependencies = [
  "rcgen",
  "registry-config-report",
  "registry-manifest-core",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
@@ -6524,15 +6324,6 @@ dependencies = [
  "generic-array 0.14.9",
  "pkcs8",
  "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "secrecy"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
-dependencies = [
  "zeroize",
 ]
 
@@ -8566,17 +8357,6 @@ dependencies = [
  "cmpv2",
  "cms",
  "der",
-]
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-sdjwt",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

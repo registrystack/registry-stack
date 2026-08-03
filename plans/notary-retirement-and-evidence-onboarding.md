@@ -98,7 +98,7 @@ gates for its area (see Verification), and committed.
 - [x] C2. registryctl surgery complete: Notary compiler target, dev
       credentials, deployment wiring, and release-lock entries removed;
       registryctl builds and tests green as Relay-only tooling.
-- [ ] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
+- [x] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
       Notary dev-dependency contract tests dropped; workspace members,
       `deny.toml`, and `Cargo.lock` updated; workspace green.
 - [ ] C4. Platform crates with no remaining consumers deleted (candidates:
@@ -544,3 +544,14 @@ is parallel; B has no upstream dependencies and is the standing priority
   deployment-documentation tests, offline link check, stale-surface scan,
   beta-27 validation, and diff check passed. Next in C: the mandatory C3
   approval, then C3/C4 and prepared C5.
+- 2026-08-03: C3 done after Jeremi approved the exact deletion list. All five
+  `registry-notary*` crates, `products/notary`, Relay's two Notary contract-test
+  artifacts, and the two Notary profile handoff examples are deleted. The
+  workspace manifest and lock no longer contain a Notary package; Relay keeps
+  `registry-platform-testing`, and no Relay production source changed.
+  `deny.toml` required no edit because it held no Notary-specific allowance.
+  Formatting, check, Clippy, the complete workspace test suite, cargo-deny,
+  Evidence contract reproduction, and Evidence source neutrality passed. The
+  workspace test was run with the shell's inherited `RUST_LOG=warn` removed,
+  matching CI; the one test it had suppressed then passed without an
+  Evidencectl change. Next in C: C4 orphan platform cleanup.
