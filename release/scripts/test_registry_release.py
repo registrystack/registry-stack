@@ -498,6 +498,66 @@ class RegistryReleaseTest(TestCase):
                 any("not pinned by immutable digest" in failure for failure in failures)
             )
 
+    def test_debian13_contract_covers_the_adopter_image(self) -> None:
+        # The adopter image builds two binaries from one file, so it has no
+        # single `AS runtime` stage and no HEALTHCHECK (distroless has no shell
+        # and neither binary has a healthcheck subcommand). It is still bound to
+        # the same Debian 13 boundary and the same digest pins, so it is checked
+        # here rather than left uncovered for not fitting the release shape.
+        module = load_debian13_image_check()
+        adopter = Path("docker/Dockerfile")
+        self.assertIn(adopter, module.ADOPTER_DOCKERFILES)
+        self.assertIn(adopter, module.MAINTAINED_TEXT_PATHS)
+        self.assertEqual(
+            [],
+            [
+                failure
+                for failure in module.check_repository(ROOT)
+                if str(adopter) in failure
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in module.MAINTAINED_TEXT_PATHS:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+            adopter_path = root / adopter
+            text = adopter_path.read_text(encoding="utf-8")
+            # Unpin the final runtime base and give one runtime stage a shell
+            # command: both are exactly what the boundary exists to catch.
+            text = text.replace(
+                module.DISTROLESS_RUNTIME,
+                "gcr.io/distroless/cc-debian13:nonroot",
+            )
+            text = text.replace(
+                'ENTRYPOINT ["/usr/local/bin/mint"]',
+                'RUN ["/bin/sh", "-c", "true"]\nENTRYPOINT ["/usr/local/bin/mint"]',
+                1,
+            )
+            adopter_path.write_text(text, encoding="utf-8")
+
+            failures = module.check_repository(root)
+            self.assertTrue(
+                any(
+                    str(adopter) in failure and "not pinned by immutable digest" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    str(adopter) in failure and "/bin/sh" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_debian13_contract_binds_builder_to_candidate_workflow(self) -> None:
         module = load_debian13_image_check()
         with tempfile.TemporaryDirectory() as directory:
