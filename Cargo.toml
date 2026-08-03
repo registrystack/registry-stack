@@ -118,6 +118,7 @@ http = { version = "1" }
 humantime-serde = { version = "1" }
 hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+inquire = { version = "0.9.4" }
 insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
 jsonschema = { version = "0.18", features = ["draft202012"] }
