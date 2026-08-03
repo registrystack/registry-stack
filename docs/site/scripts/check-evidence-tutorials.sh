@@ -49,6 +49,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	author-an-acceptance-definition
+	connect-an-institution-source
 )
 
 load_spec() {
@@ -105,6 +106,31 @@ load_spec() {
 			'PASS: fixtures/cases.yaml (12 cases)'
 			'PASS: fixtures/residence-region-cases.yaml (11 cases)'
 			'3 passed, 0 failed (23 cases evaluated)'
+		)
+		;;
+	connect-an-institution-source)
+		SPEC_FENCES=11
+		# The drafting tool writes three files into the project, so two of the
+		# edits repair its output in place and one repoints the requirement.
+		SPEC_STEPS=(
+			'run:1-4'
+			'edit:Narrow the drafted response schema|yaml|1|Narrow the drafted response schema|yaml|2|bundle/schemas/event-records-response.schema.yaml'
+			'run:5-6'
+			'edit:Replace the placeholder source|yaml|1|Replace the placeholder source|yaml|2|bundle/evidence.yaml'
+			'edit:Repoint the requirement|yaml|1|Repoint the requirement|yaml|2|bundle/evidence.yaml'
+			'run:7-11'
+		)
+		SPEC_LITERALS=(
+			'evidencectl new connect-a-source'
+			'evidencectl source suggest'
+			'chmod -R a-w bundle && chmod 444 runtime.yaml'
+			'evidencectl fixtures run --project .'
+			'2 passed, 0 failed (12 cases evaluated)'
+		)
+		SPEC_OUTPUTS=(
+			'PASS: check'
+			'PASS: fixtures/cases.yaml (12 cases)'
+			'2 passed, 0 failed (12 cases evaluated)'
 		)
 		;;
 	*)
