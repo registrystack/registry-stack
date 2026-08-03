@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use super::types::{
     BoundKind, BoundNeed, BoundValues, DraftArtifacts, DraftFile, NarrowOutcome, OperationKey,
-    Provenance, SuggestedBound,
+    Provenance, SpecSource, SuggestedBound,
 };
 
 /// Everything the emit stage needs to draft artifacts for one source. Built
@@ -52,8 +52,9 @@ pub struct EmitInputs {
     /// comment; a need still unresolved is already covered by
     /// `narrowed.unresolved` and gets a TODO comment instead.
     pub needs: Vec<BoundNeed>,
-    /// The OpenAPI document path, echoed back in `equivalent_command`.
-    pub openapi_path: PathBuf,
+    /// Where the OpenAPI document was read from, echoed back in
+    /// `equivalent_command`.
+    pub openapi: SpecSource,
     /// The sample file path, if one was used, echoed back in
     /// `equivalent_command`.
     pub sample_path: Option<PathBuf>,
@@ -1369,7 +1370,7 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
     ];
 
     parts.push("--openapi".to_owned());
-    parts.push(shell_quote(&path_display(&inputs.openapi_path)));
+    parts.push(shell_quote(&inputs.openapi.display()));
     parts.push("--operation".to_owned());
     parts.push(shell_quote(&format!(
         "{} {}",

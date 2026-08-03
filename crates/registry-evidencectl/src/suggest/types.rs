@@ -7,7 +7,31 @@
 //! through the types here so the interactive front-end and the flag-driven
 //! front-end share one deterministic core.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
+
+/// Where the OpenAPI document is read from.
+///
+/// The two cases stay distinguishable all the way to the reproduce line, so
+/// the command printed at the end of a run names the same document the run
+/// actually read. Deciding which case a `--openapi` argument is happens once,
+/// before anything is read, so an unusable URL fails before the operator is
+/// asked a single question.
+#[derive(Debug, Clone)]
+pub enum SpecSource {
+    File(PathBuf),
+    Url(url::Url),
+}
+
+impl SpecSource {
+    /// The document as it should be named in a message or echoed back in the
+    /// reproduce command.
+    pub fn display(&self) -> String {
+        match self {
+            SpecSource::File(path) => path.to_string_lossy().into_owned(),
+            SpecSource::Url(url) => url.to_string(),
+        }
+    }
+}
 
 /// One operation in the OpenAPI document: an uppercase HTTP method and the
 /// literal path template, e.g. `GET` and `/records/{id}`.

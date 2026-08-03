@@ -1,9 +1,11 @@
-//! Loads a local OpenAPI 3.0.x or 3.1.x document and resolves the pieces the
-//! `source suggest` pipeline needs: operation listings and one operation's
-//! response schema with every local `$ref` inlined.
+//! Loads an OpenAPI 3.0.x or 3.1.x document, from a file or from a URL (see
+//! [`super::fetch`]), and resolves the pieces the `source suggest` pipeline
+//! needs: operation listings and one operation's response schema with every
+//! local `$ref` inlined.
 //!
-//! Only local files are read and only local `#/components/...` refs are
-//! followed. An external or remote `$ref` (anything not starting with `#/`)
+//! Only local `#/components/...` refs are followed, whichever way the
+//! document arrived: one document is fetched, never a graph of them. An
+//! external or remote `$ref` (anything not starting with `#/`)
 //! is rejected with a clear error rather than silently truncated or ignored,
 //! because a partially-resolved schema would let the closed-subset narrowing
 //! stage draft against data the runtime cannot actually see. A `$ref` cycle
@@ -23,8 +25,9 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
+use super::fetch;
 use super::types::{
-    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
+    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, SpecSource, RECURSIVE_REF_KEY,
 };
 
 /// Path Item Object keys this pipeline can draft a source from.
@@ -85,45 +88,31 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// Reads and parses the OpenAPI document at `path`. Accepts YAML or
-    /// JSON (YAML is a superset for this purpose, so both are parsed the
-    /// same way) and requires a top-level `openapi: 3.0.x` or `3.1.x`
-    /// version string. No network access is performed; `path` must name a
-    /// local file.
-    pub fn load(path: &Path) -> Result<Spec> {
-        if let Some(url) = looks_like_url(path) {
-            bail!(
-                "`{url}` is a URL; this reads a local file only. Fetch the document first, \
-                 for example `curl -sSL -o openapi.yaml {url}`, then pass the file"
-            );
-        }
-        let metadata = std::fs::metadata(path)
-            .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
-        if metadata.len() > MAX_DOCUMENT_BYTES {
-            bail!(
-                "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
-                path.display(),
-                metadata.len(),
-                MAX_DOCUMENT_BYTES
-            );
-        }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading OpenAPI document at {}", path.display()))?;
-        let document: Value = serde_norway::from_str(&text)
-            .with_context(|| format!("parsing {} as YAML or JSON", path.display()))?;
+    /// Reads and parses the OpenAPI document `source` names, from disk or
+    /// from the network. Accepts YAML or JSON (YAML is a superset for this
+    /// purpose, so both are parsed the same way) and requires a top-level
+    /// `openapi: 3.0.x` or `3.1.x` version string.
+    pub fn open(source: &SpecSource) -> Result<Spec> {
+        let text = match source {
+            SpecSource::File(path) => read_local(path)?,
+            SpecSource::Url(url) => fetch::get(url, MAX_DOCUMENT_BYTES)?,
+        };
+        Spec::parse(&text, &source.display())
+    }
+
+    /// Parses one already-read document, naming it `origin` in any error so
+    /// the message points at the file path or URL the operator passed rather
+    /// than at a buffer.
+    fn parse(text: &str, origin: &str) -> Result<Spec> {
+        let document: Value = serde_norway::from_str(text)
+            .with_context(|| format!("parsing {origin} as YAML or JSON"))?;
         let version = document
             .get("openapi")
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow!(
-                    "{} has no top-level `openapi` version string",
-                    path.display()
-                )
-            })?;
+            .ok_or_else(|| anyhow!("{origin} has no top-level `openapi` version string"))?;
         if !(version.starts_with("3.0.") || version.starts_with("3.1.")) {
             bail!(
-                "{} declares `openapi: {version}`; only OpenAPI 3.0.x and 3.1.x are supported",
-                path.display()
+                "{origin} declares `openapi: {version}`; only OpenAPI 3.0.x and 3.1.x are supported"
             );
         }
         Ok(Spec { document })
@@ -629,15 +618,21 @@ fn infer_structural_type(
     ));
 }
 
-/// Whether `path` was written as a URL rather than a file to read, returned as
-/// the text to quote back. Checked against the scheme rather than the whole
-/// string so a local path merely containing `://` is not mistaken for one.
-fn looks_like_url(path: &Path) -> Option<&str> {
-    let text = path.to_str()?;
-    ["http://", "https://"]
-        .into_iter()
-        .any(|scheme| text.starts_with(scheme))
-        .then_some(text)
+/// Reads a local document, refusing one past the size ceiling before any of
+/// it is read into memory.
+fn read_local(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
+    if metadata.len() > MAX_DOCUMENT_BYTES {
+        bail!(
+            "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
+            path.display(),
+            metadata.len(),
+            MAX_DOCUMENT_BYTES
+        );
+    }
+    std::fs::read_to_string(path)
+        .with_context(|| format!("reading OpenAPI document at {}", path.display()))
 }
 
 /// Escapes an object member name into one RFC 6901 pointer segment, matching

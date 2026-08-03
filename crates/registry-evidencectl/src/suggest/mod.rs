@@ -9,6 +9,7 @@
 //! and ends by printing the equivalent fully-flagged command.
 
 pub mod emit;
+pub mod fetch;
 pub mod flatten;
 pub mod interactive;
 pub mod narrow;
@@ -36,9 +37,10 @@ pub enum SourceCommand {
 
 #[derive(Debug, Args)]
 pub struct SuggestArgs {
-    /// OpenAPI 3.0 or 3.1 document (YAML or JSON, local file only).
+    /// OpenAPI 3.0 or 3.1 document (YAML or JSON): a local file path, or an
+    /// https URL to fetch it from.
     #[arg(long)]
-    pub openapi: std::path::PathBuf,
+    pub openapi: String,
 
     /// Operation as "METHOD /path/template"; interactive selection if absent.
     #[arg(long)]
@@ -104,12 +106,13 @@ const FALLBACK_SOURCE_ID: &str = "source-a";
 /// command reproduces either run exactly, because every suggestion is
 /// derived deterministically from the same inputs.
 fn suggest(args: SuggestArgs) -> Result<ExitCode> {
-    let spec = Spec::load(&args.openapi)?;
+    let source = fetch::spec_source(&args.openapi)?;
+    let spec = Spec::open(&source)?;
     let operations = spec.operations();
     if operations.is_empty() {
         bail!(
             "{} declares no operation with a JSON response schema; there is nothing to draft from",
-            args.openapi.display()
+            source.display()
         );
     }
 
@@ -245,7 +248,7 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
         selection: decisions.selection.clone(),
         narrowed,
         needs,
-        openapi_path: args.openapi.clone(),
+        openapi: source.clone(),
         sample_path: args.sample.clone(),
         project: args.project.clone(),
     };
