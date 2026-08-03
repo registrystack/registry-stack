@@ -3,19 +3,26 @@ set -euo pipefail
 
 repo="registrystack/registry-stack"
 binaries=(evidence evidencectl mint)
+# Release packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
 script_name="${script_name##*/}"
 filename_version=""
 if [[ "$script_name" =~ ^evidencectl-(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-install\.sh$ ]]; then
-	default_version="${BASH_REMATCH[1]}"
-	filename_version="$default_version"
+	filename_version="${BASH_REMATCH[1]}"
 fi
+if [ -n "$default_version" ] &&
+	[ -n "$filename_version" ] &&
+	[ "$default_version" != "$filename_version" ]; then
+	echo "Refusing an installer whose embedded release does not match its filename." >&2
+	exit 1
+fi
+default_version="${default_version:-$filename_version}"
 version="${EVIDENCECTL_VERSION:-$default_version}"
-if [ -n "$filename_version" ] &&
+if [ -n "$default_version" ] &&
 	[ -n "${EVIDENCECTL_VERSION:-}" ] &&
-	[ "$EVIDENCECTL_VERSION" != "$filename_version" ]; then
-	echo "Refusing a release override that does not match the versioned installer asset." >&2
+	[ "$EVIDENCECTL_VERSION" != "$default_version" ]; then
+	echo "Refusing a release override that does not match the released installer asset." >&2
 	exit 1
 fi
 install_dir="${EVIDENCECTL_INSTALL_DIR:-$HOME/.local/bin}"
@@ -35,8 +42,8 @@ set to the verified directory:
   https://github.com/${repo}/blob/<version>/release/VERIFY.md
 
 Environment:
-  EVIDENCECTL_VERSION      Release tag to install. A versioned installer
-                           asset requires the matching filename release.
+  EVIDENCECTL_VERSION      Release tag to install. A released installer
+                           embeds its tag and refuses a different override.
   EVIDENCECTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
   EVIDENCECTL_ASSET_DIR    Read already-downloaded release assets from this
                            directory instead of downloading them.

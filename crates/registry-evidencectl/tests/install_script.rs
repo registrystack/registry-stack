@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -81,6 +81,60 @@ fn versioned_installer_asset_selects_its_own_release_without_an_override() {
         String::from_utf8_lossy(&output.stderr)
     );
     fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn released_installer_selects_its_embedded_release_when_read_from_stdin() {
+    let fixture = InstallerFixture::new();
+    let rendered = fixture.rendered_installer();
+    let output = fixture.command_from_stdin(&rendered).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn released_installer_rejects_a_mismatched_release_override_from_stdin() {
+    let fixture = InstallerFixture::new();
+    let rendered = fixture.rendered_installer();
+    let mut command = fixture.command_from_stdin(&rendered);
+    command.env("EVIDENCECTL_VERSION", "v1.2.3");
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refusing a release override"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !fixture.fake_curl_log().exists(),
+        "must fail before download"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn released_installer_rejects_a_filename_that_names_another_release() {
+    let fixture = InstallerFixture::new();
+    let rendered = fixture.rendered_installer();
+    let mismatched = fixture.temp_path().join("evidencectl-v1.2.3-install.sh");
+    fs::rename(rendered, &mismatched).unwrap();
+    let output = fixture.command_for(&mismatched, false).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("embedded release does not match its filename"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !fixture.fake_curl_log().exists(),
+        "must fail before download"
+    );
 }
 
 #[cfg(unix)]
@@ -442,6 +496,16 @@ exec "$REAL_MV" "$@"
         self._temp.path()
     }
 
+    fn rendered_installer(&self) -> PathBuf {
+        let source = fs::read_to_string(installer_path()).unwrap();
+        let marker = "default_version=\"\"";
+        assert_eq!(source.matches(marker).count(), 1);
+        let rendered = source.replacen(marker, &format!("default_version=\"{}\"", self.version), 1);
+        let path = self._temp.path().join("evidencectl-install.sh");
+        fs::write(&path, rendered).unwrap();
+        path
+    }
+
     fn release_dir(&self) -> &Path {
         &self.release_dir
     }
@@ -474,6 +538,12 @@ exec "$REAL_MV" "$@"
         if set_version {
             command.env("EVIDENCECTL_VERSION", &self.version);
         }
+        command
+    }
+
+    fn command_from_stdin(&self, installer: &Path) -> Command {
+        let mut command = self.command_for(Path::new("/dev/stdin"), false);
+        command.stdin(Stdio::from(fs::File::open(installer).unwrap()));
         command
     }
 }

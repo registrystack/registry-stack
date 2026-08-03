@@ -126,6 +126,25 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
 
+    def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn('version="${{ needs.validate.outputs.tag }}"', assemble)
+        self.assertIn(
+            'cp "candidate/bundle-root/${evidencectl_installer}" \\\n'
+            "  candidate/bundle-root/evidencectl-install.sh",
+            assemble,
+        )
+        self.assertIn(
+            "chmod 0755 candidate/bundle-root/evidencectl-install.sh",
+            assemble,
+        )
+
     def test_reuses_cache_with_seven_day_validity_and_storage_margin(self) -> None:
         text, document = workflow("release-candidate.yml")
         cache = next(
@@ -334,9 +353,24 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("verify-candidate", expiry_run)
 
     def test_signs_one_checksum_closure_without_beta_only_ceremony(self) -> None:
-        text, _ = workflow("release.yml")
+        text, document = workflow("release.yml")
+        checksum = step_run(
+            document,
+            "finalize-assets",
+            "Sign and upload the checksum closure",
+        )
+        public_recheck = step_run(
+            document,
+            "publish",
+            "Recheck complete signed release and exact public images",
+        )
         self.assertIn("SHA256SUMS.sigstore.json", text)
         self.assertIn("cosign sign-blob --yes", text)
+        self.assertIn(
+            "find . -maxdepth 1 -type f ! -name SHA256SUMS -print0",
+            checksum,
+        )
+        self.assertIn("sha256sum --check --strict SHA256SUMS", public_recheck)
         self.assertIn(
             ".github/workflows/release.yml@refs/heads/main",
             text,
