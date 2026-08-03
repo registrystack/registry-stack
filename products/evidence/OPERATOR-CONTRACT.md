@@ -682,7 +682,7 @@ Before production exposure, the operator runs:
 
 ```sh
 evidence check
-evidence evaluate --fixture <path>
+evidence evaluate --fixture "<path>"
 ```
 
 All commands accept `--runtime <absolute-path>`. The same path may be supplied
