@@ -112,8 +112,9 @@ mutable deployment input, so make them read-only before anything runs:
 chmod -R a-w bundle && chmod 444 runtime.yaml
 ```
 
-If you skip this step, the next command fails with `deployment input is not immutable`. That
-refusal is the runtime working as designed, not a broken install.
+If you skip this step, the next command fails with `deployment input is not immutable:` followed
+by the input it refused, such as `the bundle directory has a writable entry`. That refusal is the
+runtime working as designed, not a broken install.
 
 ## Run the fixtures
 

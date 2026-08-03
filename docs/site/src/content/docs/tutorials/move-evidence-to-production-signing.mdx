@@ -138,7 +138,7 @@ provider's authority to act for the named legal issuer.
 |---|---|
 | `evidence check` rejects the signing key | The private JWK's `kid` does not equal `signing.activeKeyId`. Align the bundle field with the generated identifier. |
 | Check refuses secret material | A secret file is group- or world-accessible, a symlink, or shorter than 32 raw bytes. Regenerate with `evidencectl keygen` and keep mode `0600`. |
-| `deployment input is not immutable` | The bundle or runtime file is writable to the service process. Remove the write bits or mount read-only. |
+| `deployment input is not immutable: ...` | The named input is writable to the service process, or the secret provider root is readable beyond its owner. Remove the write bits, mount read-only, or `chmod 700` the secret root. |
 | `/ready` stays unready while `/health` is 200 | A source credential failed its readiness check. Readiness owns source credentials; check dropped none of them. |
 
 ## Next
