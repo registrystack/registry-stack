@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     path::Path,
     str,
     sync::Arc,
@@ -9,7 +10,7 @@ use std::{
 };
 
 use chrono::Utc;
-use registry_platform_audit::AuditHashSecret;
+use registry_platform_audit::{AuditError, AuditHashSecret};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
@@ -17,8 +18,8 @@ use thiserror::Error;
 use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
-        AuthorityKind as AuditAuthorityKind, EvidenceAuditEvent, EvidenceAuditLog,
-        ResponseProtection,
+        AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
+        EvidenceAuditLog, ResponseProtection,
     },
     auth::{AuthenticatedContext, Authenticator},
     bundle::{Bundle, DeploymentInputs},
@@ -58,14 +59,83 @@ pub enum RuntimeInitializationError {
     Bundle,
     #[error("the Evidence secret resolver could not initialize")]
     Secrets,
-    #[error("the Evidence audit boundary could not initialize")]
-    Audit,
+    #[error("the Evidence audit boundary could not initialize: {0}")]
+    Audit(AuditInitializationFault),
     #[error("the Evidence signing boundary could not initialize")]
     Signing,
     #[error("an Evidence source plan could not initialize")]
     Source,
     #[error("the Evidence rate limiter could not initialize")]
     RateLimit,
+}
+
+/// Why the audit boundary refused to initialize.
+///
+/// A mode an operator fixes with `chmod`, a chain that no longer verifies, and
+/// a second writer already holding the sink lock are three unrelated faults
+/// with three unrelated remedies. They are reported separately because from
+/// outside the process they are indistinguishable, and the wrong guess sends an
+/// operator hunting for tampering in what is a permission bit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditInitializationFault {
+    /// `auditStorage` bounds or the audit key version are out of range.
+    Configuration,
+    /// The audit hash secret is missing, unreadable, or too weak.
+    Secret,
+    /// The audit file, its lock, or its directory cannot be opened as an
+    /// owner-only, singly linked regular file.
+    Storage,
+    /// Another writer already holds the sink's single-writer lock.
+    Locked,
+    /// A chain is present but its records do not verify against the head.
+    Chain,
+}
+
+impl AuditInitializationFault {
+    /// The value-free cause, for the operator message this fault appears in.
+    /// It names the fault and never the audit path, which the operator already
+    /// has in the runtime file.
+    pub fn cause(self) -> &'static str {
+        match self {
+            Self::Configuration => "the audit storage configuration is out of range",
+            Self::Secret => "the audit hash secret is unusable",
+            Self::Storage => {
+                "the audit file, its lock, or its directory is unavailable or is not owner-only"
+            }
+            Self::Locked => "another writer already holds the audit sink lock",
+            Self::Chain => "the existing audit chain did not verify",
+        }
+    }
+}
+
+impl fmt::Display for AuditInitializationFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.cause())
+    }
+}
+
+impl From<&EvidenceAuditError> for AuditInitializationFault {
+    fn from(error: &EvidenceAuditError) -> Self {
+        match error {
+            EvidenceAuditError::Configuration => Self::Configuration,
+            EvidenceAuditError::InvalidEvent | EvidenceAuditError::SegmentMissing { .. } => {
+                Self::Chain
+            }
+            EvidenceAuditError::Audit(audit) => match audit {
+                AuditError::Io(_) => Self::Storage,
+                AuditError::SinkLocked { .. } => Self::Locked,
+                AuditError::EmptyEnvVarName
+                | AuditError::EnvVarUnavailable { .. }
+                | AuditError::EnvVarNotUnicode { .. }
+                | AuditError::EmptySecret { .. }
+                | AuditError::WeakSecret { .. } => Self::Secret,
+                // Everything else the sink can report at startup is a statement
+                // about chain state: a record that does not parse, a hash that
+                // does not match, or a head that cannot be read.
+                _ => Self::Chain,
+            },
+        }
+    }
 }
 
 /// Deployment secret material, resolved and validated exactly as service
@@ -90,9 +160,9 @@ pub async fn validate_secret_material(
 ) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
     let audit_secret = secrets
         .resolve(bundle.config.audit.hash_secret_ref.as_str())
-        .map_err(|_| RuntimeInitializationError::Audit)?;
+        .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
     AuditHashSecret::new(audit_secret.expose_secret().to_vec())
-        .map_err(|_| RuntimeInitializationError::Audit)?;
+        .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
 
     let subject_binding_secret = secrets
         .resolve(bundle.config.subject_binding.secret_ref.as_str())
@@ -280,7 +350,7 @@ impl EvidenceRuntime {
             bundle.config.audit.hash_key_version,
         )
         .await
-        .map_err(|_| RuntimeInitializationError::Audit)?;
+        .map_err(|error| RuntimeInitializationError::Audit((&error).into()))?;
 
         let mut sources = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
