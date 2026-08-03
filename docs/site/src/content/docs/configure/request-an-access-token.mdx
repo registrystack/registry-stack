@@ -1,0 +1,251 @@
+---
+title: Request an access token from your own code
+description: Build and sign the client assertion Registry Mint expects, then exchange it for an access token, with worked Python and TypeScript examples.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Build the signed request Registry Mint expects when the caller is your own application rather
+than the `mint token` command.
+
+## When to use this
+
+Use this page when you are integrating a registered client into an application and need an access
+token to present to a resource server such as Evidence. If you only need a token at a terminal,
+`mint token` already does all of this; see
+[Obtain a token](../mint/#obtain-a-token).
+
+## Before you start
+
+You need four things, all of which come from whoever registered your client:
+
+- The `clientId` your client is registered under.
+- Your client's **private** JWK. Registry Mint holds only the public half; if you do not have the
+  private half, nobody can issue you a token.
+- The exact `clientAssertion.audience` value the deployment is configured with. This is not the
+  same as the audience of the token you get back, and confusing the two is the most common
+  first-attempt failure.
+- The token endpoint URL. The path is always `/token` and is not configurable.
+
+Registry Mint serves plain HTTP and expects TLS termination it does not manage, so the URL you
+call is the terminator's, not the process's own listener.
+
+## What you are signing
+
+One JWT, signed with your own private key, sent once. This is `private_key_jwt` client
+authentication (RFC 7523) inside the `client_credentials` grant: there is no shared secret
+anywhere in the exchange.
+
+| Claim | Value | Why it is checked |
+| --- | --- | --- |
+| `iss` | your `clientId` | Names which registration's keys to verify against. |
+| `sub` | your `clientId`, identical to `iss` | Without it a legitimate client key could sign an assertion naming a different subject. |
+| `aud` | the configured `clientAssertion.audience` | Stops a request built for one endpoint being replayed at another. |
+| `jti` | a fresh unique value **per request** | Accepted exactly once. Reusing one is refused. |
+| `iat` | now | Freshness, tolerating a small clock skew. |
+| `exp` | within `clientAssertion.maximumLifetimeSeconds` of `iat` (default 300) | A long-lived assertion is a long-lived bearer credential, so the bound is enforced whatever you choose. |
+
+The header carries `alg` (one of the algorithms the deployment lists under
+`clientAssertion.algorithms`), `typ: JWT`, and `kid` naming which of your registered keys signed
+it.
+
+The examples below build the JWT from primitives rather than pulling in a JWT library, so that
+every field above is visible in the code. A JWT library is a perfectly good substitute as long as
+it lets you set `kid` and does not cache or reuse `jti`.
+
+## Python
+
+Needs `cryptography` and `requests`.
+
+```python
+import base64
+import json
+import time
+import uuid
+
+import requests
+from cryptography.hazmat.primitives.asymmetric import ed25519
+
+
+def b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def unb64url(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def sign_client_assertion(
+    private_jwk: dict,
+    client_id: str,
+    audience: str,
+    lifetime_seconds: int = 120,
+) -> str:
+    """Build one single-use assertion proving this client holds its own key."""
+    now = int(time.time())
+    header = {"alg": "EdDSA", "typ": "JWT", "kid": private_jwk["kid"]}
+    claims = {
+        "iss": client_id,
+        "sub": client_id,
+        "aud": audience,
+        "iat": now,
+        "exp": now + lifetime_seconds,
+        "jti": str(uuid.uuid4()),
+    }
+    signing_input = ".".join(
+        b64url(json.dumps(part, separators=(",", ":")).encode())
+        for part in (header, claims)
+    )
+    key = ed25519.Ed25519PrivateKey.from_private_bytes(unb64url(private_jwk["d"]))
+    return f"{signing_input}.{b64url(key.sign(signing_input.encode()))}"
+
+
+def request_access_token(token_url: str, assertion: str) -> str:
+    response = requests.post(
+        token_url,
+        data={
+            "grant_type": "client_credentials",
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": assertion,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
+```
+
+Call it with the client's own private JWK:
+
+```python
+with open("client-signing-private-jwk", encoding="utf-8") as handle:
+    private_jwk = json.load(handle)
+
+assertion = sign_client_assertion(
+    private_jwk,
+    client_id="health-desk",
+    audience="https://mint.example.org/token",
+)
+token = request_access_token("https://mint.example.org/token", assertion)
+```
+
+## TypeScript
+
+Needs no dependencies. `node:crypto` reads an Ed25519 JWK directly, and `fetch` is built in.
+
+```typescript
+import { createPrivateKey, randomUUID, sign } from "node:crypto";
+
+interface PrivateJwk {
+  kty: "OKP";
+  crv: "Ed25519";
+  kid: string;
+  d: string;
+  x: string;
+}
+
+const b64url = (raw: Buffer | string): string =>
+  Buffer.from(raw).toString("base64url");
+
+/** Build one single-use assertion proving this client holds its own key. */
+export function signClientAssertion(
+  privateJwk: PrivateJwk,
+  clientId: string,
+  audience: string,
+  lifetimeSeconds = 120,
+): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "EdDSA", typ: "JWT", kid: privateJwk.kid };
+  const claims = {
+    iss: clientId,
+    sub: clientId,
+    aud: audience,
+    iat: now,
+    exp: now + lifetimeSeconds,
+    jti: randomUUID(),
+  };
+  const signingInput = [header, claims]
+    .map((part) => b64url(JSON.stringify(part)))
+    .join(".");
+  const key = createPrivateKey({ key: privateJwk, format: "jwk" });
+  // Ed25519 signs the message itself, so the digest argument is null.
+  const signature = sign(null, Buffer.from(signingInput), key);
+  return `${signingInput}.${b64url(signature)}`;
+}
+
+export async function requestAccessToken(
+  tokenUrl: string,
+  assertion: string,
+): Promise<string> {
+  const response = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_assertion_type:
+        "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: assertion,
+    }),
+  });
+  if (!response.ok) {
+    const { error } = (await response.json()) as { error?: string };
+    throw new Error(`token request failed: ${response.status} ${error ?? ""}`);
+  }
+  const body = (await response.json()) as { access_token: string };
+  return body.access_token;
+}
+```
+
+## Use the token
+
+Present it as a bearer token to the resource server, not back to Registry Mint:
+
+```sh
+curl -sS https://evidence.example.org/v1/evidence \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'content-type: application/json' \
+  --data @request.json
+```
+
+## Rules that bite
+
+**Sign a new assertion per request.** The `jti` is spent on first use and remembered past `exp`,
+so a cached assertion fails the second time it is sent. What you may cache is the access token,
+for the `expires_in` seconds the response reports.
+
+**The two audiences are different.** The assertion's `aud` is `clientAssertion.audience`, the
+value that identifies the token endpoint. The resulting token's own `aud` comes from
+`accessTokens.audiences` and identifies the resource server. Signing the assertion with the
+resource server's audience is a refusal, not a warning.
+
+**You cannot ask for more authority than you are registered with.** Principal, requester tags,
+evidence audience, and grant pair are all written from the client registry. Nothing you put in
+the assertion changes them, so there is no scope parameter to send.
+
+**Every authentication failure looks identical.** An unknown client id, a bad signature, a
+replayed `jti`, a wrong audience, and an expired assertion all return the same
+`401 {"error": "invalid_client"}`. This is deliberate: the endpoint must not be usable to
+discover which client ids are registered. It also means the response cannot tell you which of
+those five things went wrong, so check them in order locally.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+| --- | --- |
+| `401 invalid_client` on the first attempt | The `aud` is the resource server rather than `clientAssertion.audience`, or `kid` names a key the registration does not carry. |
+| `401 invalid_client` only on repeat requests | The assertion, rather than the token, is being cached and replayed. Generate a fresh `jti` each time. |
+| `401 invalid_client` after a working period | The assertion's `exp` exceeds `clientAssertion.maximumLifetimeSeconds`, or the client clock has drifted beyond the tolerated skew. |
+| `400 invalid_request` | A required form field is missing or duplicated, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` lands here too. |
+| `400 unsupported_grant_type` | `grant_type` is present but is not exactly `client_credentials`. |
+| The resource server rejects a token Registry Mint issued | The two deployments name different claims for the same authority field. See [How Evidence verifies these tokens](../../reference/mint/#how-evidence-verifies-these-tokens). |
+
+## Next
+
+- [How a client, Registry Mint, and Evidence interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-interact)
+- [Configure Registry Mint](../mint/)
+- [Registry Mint reference](../../reference/mint/)

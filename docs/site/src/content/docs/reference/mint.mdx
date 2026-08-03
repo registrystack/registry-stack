@@ -172,8 +172,8 @@ Every response body is `{"error": "<code>"}`, from
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | `400` | A required form field is missing, duplicated, or the assertion type is unsupported. |
-| `unsupported_grant_type` | `400` | `grant_type` is missing or not `client_credentials`. |
+| `invalid_request` | `400` | A required form field is missing or duplicated, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` is a missing field and lands here, not below. |
+| `unsupported_grant_type` | `400` | `grant_type` is present but is not `client_credentials`. |
 | `invalid_client` | `401` | Every client authentication failure: unknown client id, bad signature, replayed `jti`, expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. Carries a `WWW-Authenticate: Bearer error="invalid_client"` header. |
 | `server_error` | `500` | An internal failure, such as a misconfigured delegation the startup check is meant to catch. |
 

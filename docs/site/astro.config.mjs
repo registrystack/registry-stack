@@ -334,6 +334,7 @@ export default defineConfig({
             { label: 'Verify an assertion as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
+            { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },
             { label: 'Move to production signing', slug: 'tutorials/move-evidence-to-production-signing' },
           ],
         },
