@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1829);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1829);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1829);
-  assert.equal(coverage.distinct_reviewed_intent_count, 629);
-  assert.equal(coverage.distinct_reviewed_intents_reused_count, 86);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1286);
+  assert.equal(reference.fields.length, 1155);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1155);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1155);
+  assert.equal(coverage.distinct_reviewed_intent_count, 490);
+  assert.equal(coverage.distinct_reviewed_intents_reused_count, 62);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 727);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -50,34 +50,33 @@ test('committed internal and public reference artifacts are exact and complete',
     'unverified release history must remain explicit and cannot contain a fabricated version',
   );
   assert.deepEqual(reference.coverage.by_schema, {
-    project: 220,
-    environment: 213,
+    project: 191,
+    environment: 126,
     integration: 171,
-    fixture: 63,
+    fixture: 39,
     entity: 35,
     relay: 593,
-    notary: 534,
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
-    root: 7,
-    property: 1458,
-    map_key: 26,
-    map_value: 48,
-    array_item: 178,
-    branch: 112,
+    root: 6,
+    property: 903,
+    map_key: 22,
+    map_value: 34,
+    array_item: 102,
+    branch: 88,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
       (total, count) => total + count,
       0,
     ),
-    1127,
+    593,
   );
-  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 528);
-  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 315);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 260);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 259);
   assert.equal(
     reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
-    986,
+    636,
   );
 });
 
@@ -149,7 +148,7 @@ test('published reference page identifies generated sources and the no-country-v
     /Coverage gate: `registryctl tooling reference configuration --coverage`/,
   );
   assert.match(page, /Country workspace or runtime configuration reads: none/);
-  assert.match(page, /Relay and Notary runtime schemas/);
+  assert.match(page, /Relay runtime schema/);
   assert.match(page, /does not inspect a project, live runtime configuration, environment variables/);
   assert.match(page, /five project-authoring sections describe configuration people commit/);
   assert.match(page, /intent sidecars are documentation knowledge\s+only/);

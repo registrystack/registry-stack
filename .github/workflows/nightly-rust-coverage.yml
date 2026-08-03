@@ -57,7 +57,6 @@ jobs:
           flags = {
               "platform": "platform",
               "manifest": "manifest-unit",
-              "notary": "notary-unit",
               "relay": "relay-unit",
               "developer-tools": "developer-tools",
               "registryctl": "registryctl-unit",
@@ -72,19 +71,6 @@ jobs:
               }
               for name, packages in SHARDS.items()
           ]
-          matrix.append(
-              {
-                  "name": "notary-cel",
-                  "packages": "registry-notary registry-notary-server",
-                  "all_features": "false",
-                  "features": (
-                      "registry-notary/registry-notary-cel,"
-                      "registry-notary-server/cel-worker-fixture"
-                  ),
-                  "flag": "notary-cel",
-              }
-          )
-
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"matrix={json.dumps({'include': matrix})}\n")
           PY
@@ -292,12 +278,3 @@ jobs:
         run: |
           df -h /
           du -sh "${CARGO_TARGET_DIR}" 2>/dev/null || true
-
-  notary-postgres:
-    name: Notary PostgreSQL coverage
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/notary-postgres-conformance.yml
-    with:
-      strict_coverage: true

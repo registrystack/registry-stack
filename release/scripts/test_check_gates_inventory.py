@@ -626,46 +626,16 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_advisory_checker_identity_gate_is_reported(self) -> None:
+    def test_missing_relay_advisory_checker_tests_are_reported(self) -> None:
+        path = "crates/registry-relay/tests/advisory_baseline_check_test.py"
         text = self.workflow.replace(
-            "run: python3 release/scripts/check_advisory_checker_copies.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Advisory checker byte identity",
-            self.module.missing_gates(text),
-        )
-
-    def test_missing_advisory_checker_identity_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 -m unittest release/scripts/test_check_advisory_checker_copies.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Advisory checker identity guard tests",
-            self.module.missing_gates(text),
-        )
-
-    def test_missing_advisory_checker_tests_are_reported(self) -> None:
-        for path, gate in (
-            (
-                "products/notary/tests/advisory_baseline_check_test.py",
-                "Notary advisory checker tests",
+            path,
+            path.replace(
+                "advisory_baseline_check_test.py",
+                "disabled_advisory_test.py",
             ),
-            (
-                "crates/registry-relay/tests/advisory_baseline_check_test.py",
-                "Relay advisory checker tests",
-            ),
-        ):
-            with self.subTest(path=path):
-                text = self.workflow.replace(
-                    path,
-                    path.replace(
-                        "advisory_baseline_check_test.py",
-                        "disabled_advisory_test.py",
-                    ),
-                )
-                self.assertIn(gate, self.module.missing_gates(text))
+        )
+        self.assertIn("Relay advisory checker tests", self.module.missing_gates(text))
 
     def test_missing_relay_all_features_shard_is_reported(self) -> None:
         classifier = self.classifier.replace(

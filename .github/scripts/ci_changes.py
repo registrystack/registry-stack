@@ -33,14 +33,6 @@ SHARDS = {
         "registry-manifest-cli",
         "registry-manifest-core",
     ),
-    "notary": (
-        "registry-notary",
-        "registry-notary-client",
-        "registry-notary-core",
-        "registry-notary-server",
-        "registry-notary-worker-harness",
-        "xtask",
-    ),
     "relay": ("registry-relay",),
     "evidence": ("registry-evidence", "registry-evidencectl"),
     "mint": ("registry-mint",),
@@ -51,13 +43,12 @@ SHARDS = {
     "registryctl": ("registryctl",),
 }
 
-NOTARY_PACKAGES = frozenset(SHARDS["notary"])
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 TUTORIAL_PACKAGES = frozenset(
     package
-    for shard in ("platform", "manifest", "notary", "relay", "registryctl")
+    for shard in ("platform", "manifest", "relay", "registryctl")
     for package in SHARDS[shard]
 ) | {"registry-config-report"}
 
@@ -335,9 +326,7 @@ def classify(
             if package is not None:
                 seeds.add(package)
                 continue
-            if path.startswith("products/notary/"):
-                seeds.update(NOTARY_PACKAGES)
-            elif path.startswith("products/evidence/"):
+            if path.startswith("products/evidence/"):
                 seeds.update(EVIDENCE_PACKAGES)
             elif path.startswith("products/manifest/"):
                 seeds.update(MANIFEST_PACKAGES)
@@ -417,7 +406,6 @@ def classify(
             "crates/registry-relay/openapi/*",
             "crates/registry-relay/src/api/openapi.rs",
             "crates/registryctl/assets/project-starters/*",
-            "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/*",
             "crates/registryctl/schemas/project-reports/*",
@@ -426,8 +414,6 @@ def classify(
             "crates/registryctl/tests/fixtures/project-reports/*",
             "docs/site/*",
             "products/manifest/docs/*",
-            "products/notary/docs/*",
-            "products/notary/openapi/*",
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
@@ -502,18 +488,13 @@ def classify(
             "docs/site/src/content/docs/tutorials/use-your-spreadsheet.mdx",
             "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
             "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
-            "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
         }
-        or path.startswith("products/notary/")
         for path in paths
     )
     tutorial_source_under_test = any(
         matches(
             path,
-            "crates/registry-notary/src/*",
-            "crates/registry-notary-core/src/*",
-            "crates/registry-notary-server/src/*",
             "crates/registryctl/src/templates/*",
         )
         or path
@@ -557,7 +538,6 @@ def classify(
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_hygiene": platform_hygiene,
-        "notary_contracts": bool(affected & NOTARY_PACKAGES),
         "relay_contracts": "registry-relay" in affected,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "project_authoring": "registryctl" in affected,

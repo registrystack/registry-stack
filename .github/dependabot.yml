@@ -50,7 +50,6 @@ updates:
     directories:
       - "/release/docker"
       - "/crates/registry-relay"
-      - "/products/notary"
     schedule:
       interval: weekly
       day: wednesday

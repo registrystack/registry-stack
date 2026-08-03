@@ -104,7 +104,7 @@ gates for its area (see Verification), and committed.
 - [ ] C4. Platform crates with no remaining consumers deleted (candidates:
       `oid4vci`, `pdp`, `replay`); verified with `cargo tree`, including
       `registry-platform-testing` usage.
-- [ ] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
+- [x] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
       Evidence gates confirmed present.
 - [x] C6. Release tooling: a new manifest without Notary components
       validates; the source-model proof passes; the OpenID conformance
@@ -555,3 +555,17 @@ is parallel; B has no upstream dependencies and is the standing priority
   workspace test was run with the shell's inherited `RUST_LOG=warn` removed,
   matching CI; the one test it had suppressed then passed without an
   Evidencectl change. Next in C: C4 orphan platform cleanup.
+- 2026-08-03: C5 done. Current CI no longer routes, tests, fuzzes, covers, or
+  publishes a PostgreSQL conformance lane for Notary. Relay's OpenAPI,
+  exposure, advisory, assurance, and coverage gates remain, and Evidence
+  contract reproduction plus source-neutrality stay in the Rust aggregate.
+  The obsolete Notary-versus-Relay advisory-checker byte-identity guard was
+  removed while Relay's checker tests remain. The CI classifier's generated
+  authoring-reference inputs and artifacts now follow the Relay-only
+  registryctl source contract instead of reading deleted Notary schemas.
+  Actionlint, the 30 classifier tests, the 71 gate-inventory tests and live
+  146-gate inventory, Relay's 41 security/advisory tests, the 71 release
+  aggregate tests, the focused generated-reference suite, Relay OpenAPI, and
+  both Evidence gates passed. The full docs suite now reaches seven stale
+  post-C2/C3 consumers and generated closures reserved for C7; its C5-owned
+  reference tests pass byte-exactly. Next in C: C4 orphan platform cleanup.

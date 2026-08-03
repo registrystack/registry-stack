@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
@@ -23,6 +22,24 @@ from ci_changes import (
     validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
+
+
+class CiRetirementTest(unittest.TestCase):
+    def test_current_ci_surfaces_do_not_reference_retired_notary(self) -> None:
+        current_ci_surfaces = (
+            Path(".github/dependabot.yml"),
+            Path(".github/scripts/ci_changes.py"),
+            Path(".github/workflows/ci.yml"),
+            Path(".github/workflows/nightly-rust-coverage.yml"),
+            Path(".github/workflows/nightly-security.yml"),
+        )
+        for path in current_ci_surfaces:
+            with self.subTest(path=path):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?i)notary")
+
+        self.assertFalse(
+            Path(".github/workflows/notary-postgres-conformance.yml").exists()
+        )
 
 
 class CiChangesTest(unittest.TestCase):
@@ -124,7 +141,6 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
-        self.assertIn("registry-notary", outputs["rust_packages"])
         self.assertTrue(outputs["registryctl_tutorial"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
@@ -163,12 +179,24 @@ class CiChangesTest(unittest.TestCase):
                     {"evidence", "mint"},
                 )
 
-    def test_evidence_contract_gate_is_required_by_the_rust_aggregate(self) -> None:
+    def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("\n  evidence-contracts:\n", workflow)
+        self.assertIn("products/evidence/scripts/check-contracts.sh", workflow)
+        self.assertIn(
+            "products/evidence/scripts/check-source-neutrality.sh", workflow
+        )
+        self.assertIn("\n  relay-contracts:\n", workflow)
+        self.assertIn("name: Relay OpenAPI contract", workflow)
+        self.assertNotIn("\n  notary-contracts:\n", workflow)
+        self.assertNotIn("notary_contracts", workflow)
+
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
             "\n  project-authoring-determinism:\n", 1
         )[0]
         self.assertIn("\n      - evidence-contracts\n", rust_result)
+        self.assertIn("\n      - relay-contracts\n", rust_result)
+        self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
         current_content = classify(
@@ -262,11 +290,9 @@ class CiChangesTest(unittest.TestCase):
                 "crates/registryctl/schemas/project-authoring/fixture.schema.json",
                 "crates/registryctl/schemas/project-authoring/entity.schema.json",
                 "schemas/registry-relay.config.schema.json",
-                "schemas/registry-notary.config.schema.json",
                 "crates/registryctl/schemas/project-authoring/parity-coverage.json",
                 "crates/registryctl/schemas/project-authoring/documentation-intent.json",
                 "crates/registry-relay/config/documentation-intent.json",
-                "crates/registry-notary-core/config/documentation-intent.json",
             ),
         )
         validate_authoring_reference_routing(
@@ -333,7 +359,6 @@ on:
 
     def test_diagnostic_reference_inputs_run_docs(self) -> None:
         inputs = (
-            "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/**",
             "crates/registry-relay/src/process_startup.rs",
@@ -369,14 +394,6 @@ on:
             ),
             (
                 "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
                 {
                     "docs": True,
                     "project_authoring": True,
@@ -452,38 +469,6 @@ on:
                 {
                     "docs": True,
                     "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-server/src/standalone/activation.rs",
-                {
-                    "docs": True,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary/src/config_loader.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-core/src/config/root.rs",
-                {
-                    "docs": True,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-server/src/runtime/evaluation.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
                     "registryctl_tutorial": True,
                 },
             ),
@@ -576,14 +561,6 @@ on:
                 "README.md",
                 {"docs": False, "rust": False, "registryctl_tutorial": False},
             ),
-            (
-                "crates/registry-notary-client/src/lib.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
         )
 
         for path, expected in cases:
@@ -662,30 +639,6 @@ on:
         )
         self.assertFalse(outputs["release_tool"])
         self.assertFalse(outputs["release_source_proof"])
-
-    def test_nightly_notary_fuzz_inventory_matches_declared_targets(self) -> None:
-        workflow = Path(".github/workflows/nightly-security.yml").read_text(
-            encoding="utf-8"
-        )
-        target_block = re.search(
-            r"name: Run notary fuzz smoke.*?for target in \\\n"
-            r"(?P<targets>.*?)\n\s*do",
-            workflow,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(target_block)
-        configured = re.findall(
-            r"^\s+([a-z][a-z0-9_]*)",
-            target_block["targets"],
-            re.MULTILINE,
-        )
-
-        manifest = tomllib.loads(
-            Path("products/notary/fuzz/Cargo.toml").read_text(encoding="utf-8")
-        )
-        declared = [target["name"] for target in manifest["bin"]]
-        self.assertCountEqual(configured, declared)
-
 
 class RunCargoPackagesTest(unittest.TestCase):
     def test_builds_a_direct_cargo_argument_vector(self) -> None:

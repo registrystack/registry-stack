@@ -5,8 +5,10 @@
     "integration",
     "fixture",
     "entity",
-    "relay",
-    "notary"
+    "relay"
+  ],
+  "runtime_schemas": [
+    "relay"
   ],
   "schema_sources": [
     "project.schema.json",
@@ -14,14 +16,12 @@
     "integration.schema.json",
     "fixture.schema.json",
     "entity.schema.json",
-    "registry-relay.config.schema.json",
-    "registry-notary.config.schema.json"
+    "registry-relay.config.schema.json"
   ],
   "field_knowledge": "schemas/project-authoring/parity-coverage.json#field_knowledge",
   "human_intent": "schemas/project-authoring/documentation-intent.json",
   "runtime_intent": [
-    "crates/registry-relay/config/documentation-intent.json",
-    "crates/registry-notary-core/config/documentation-intent.json"
+    "crates/registry-relay/config/documentation-intent.json"
   ],
   "ci_inputs": [
     {
@@ -49,28 +49,8 @@
       "sample": "crates/registry-relay/src/config/mod.rs"
     },
     {
-      "pattern": "crates/registry-notary-core/config/documentation-intent.json",
-      "sample": "crates/registry-notary-core/config/documentation-intent.json"
-    },
-    {
-      "pattern": "crates/registry-notary-core/src/config.rs",
-      "sample": "crates/registry-notary-core/src/config.rs"
-    },
-    {
-      "pattern": "crates/registry-notary-core/src/config/**",
-      "sample": "crates/registry-notary-core/src/config/root.rs"
-    },
-    {
-      "pattern": "crates/registry-notary-core/src/deployment.rs",
-      "sample": "crates/registry-notary-core/src/deployment.rs"
-    },
-    {
       "pattern": "schemas/registry-relay.config.schema.json",
       "sample": "schemas/registry-relay.config.schema.json"
-    },
-    {
-      "pattern": "schemas/registry-notary.config.schema.json",
-      "sample": "schemas/registry-notary.config.schema.json"
     }
   ]
 }
