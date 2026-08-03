@@ -1,51 +1,55 @@
 ---
 title: First run with Solmara Lab
-description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suite, and call a Notary evaluation route directly.
+description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suites, and ask Registry Evidence one question over a Relay-protected API.
 status: current
 draft: true
 owner: registry-docs
 source_repos:
   - solmara-lab
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-07"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-03"
 doc_type: tutorial
 persona:
   - operator
+  - consumer or verifier
 locale: en
 standards_referenced:
   - openapi
-  - sd-jwt-vc
+  - cccev
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 import { Steps } from '@astrojs/starlight/components';
 
-Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara: six
-[Registry Relay](../../products/registry-relay/) instances and four
-[Registry Notary](../../products/registry-notary/) instances wired over generated synthetic data
-into one topology, alongside a citizen portal and a public Visitor's Center. This tutorial brings
-the topology up with the lab's `just` recipes, verifies it with the smoke suite, and calls a Notary
-evaluation route directly so you touch the protected API surface, not only the portal.
+Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara: a
+whole country's worth of registry services over generated synthetic data, with a citizen portal and
+a public Visitor's Center in front of them. This tutorial brings that topology up with the lab's
+`just` recipes, verifies it with the smoke suites, and then asks
+[Registry Evidence](../../products/registry-evidence/) one question by hand: is this person an
+adult? The answer comes back signed, and the date of birth behind it never leaves the Civil
+Registration Authority.
 
 <QuickstartMeta
-  outcome="The full Solmara Lab topology running on your laptop, verified by the smoke suite, with a Notary evaluation call made directly against the running stack."
-  time="About 20 minutes, most of it the first startup (image pulls plus three local image builds)"
+  outcome="The full Solmara Lab topology running on your laptop, verified by both smoke suites, and one signed Evidence assertion you requested by hand over a Relay-protected API."
+  time="About 30 minutes, most of it the first startup (image pulls plus local image builds)"
   level="Local multi-service demo"
-  prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git', 'curl']}
+  prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git', 'curl', 'A clean Registry Stack checkout']}
 />
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
 For a standalone local project, use
-[Build and run an HTTP registry project](../author-registry-project/).
+[Build and run an HTTP registry project](../author-registry-project/). For Evidence on its own,
+without a country around it, start at [Get a first Evidence assertion](../first-evidence-assertion/).
 Clone Solmara Lab when you want the full multi-service country demo.
 
 ## Prerequisites
 
-- Docker with Compose v2. `just up` and `just down` run `docker compose ... up -d --build` and
-  `docker compose ... down`.
+- Docker with Compose v2. `just up-evidence` and `just down-evidence` run
+  `docker compose ... up -d --build` and `docker compose ... down`.
 - The [`just`](https://github.com/casey/just) command runner. Every step in this tutorial is a
   `just` recipe.
 - `uv`. `just generate` runs the fixture generator with `uv run python -m solmara_lab.generate`.
@@ -54,7 +58,12 @@ Clone Solmara Lab when you want the full multi-service country demo.
 - `pnpm` `11.3.0`, matching the `packageManager` field the portal and Visitor's Center pin. Run
   `corepack enable` first if `pnpm` is not already on your PATH.
 - `git`.
-- `curl`, for the direct Notary evaluation call and the verify commands.
+- `curl`, for the direct Evidence call and the verify commands.
+- A clean checkout of the Registry Stack repository, named by the `REGISTRY_STACK_SOURCE_DIR`
+  environment variable. No Registry Stack release ships the Evidence or Mint binaries yet, so the
+  lab builds those two images from source; every other image it runs is a pinned digest. The
+  checkout must have no uncommitted changes, because the build labels each image with the commit
+  that produced it. This prerequisite goes away once a release publishes both images.
 
 ## Get the repository
 
@@ -72,11 +81,11 @@ just setup
 
 ## Steps
 
-Run these from your Solmara Lab checkout, in order.
+Run these from your Solmara Lab checkout, in order, with `REGISTRY_STACK_SOURCE_DIR` exported.
 
 <Steps>
 
-1. Generate the deterministic fixtures, local demo secrets, and Postgres TLS material:
+1. Generate the deterministic fixtures, local demo secrets, and TLS material:
 
     ```sh
     just generate
@@ -85,132 +94,183 @@ Run these from your Solmara Lab checkout, in order.
 2. Build the local images and start the topology in the background:
 
     ```sh
-    just up
+    just up-evidence
     ```
 
-3. Run the smoke suite, the primary verification:
+3. Run the country smoke suite:
 
     ```sh
     just smoke
     ```
 
+4. Run the Evidence smoke, which drives Mint, Relay, and Evidence end to end:
+
+    ```sh
+    just smoke-evidence
+    ```
+
 </Steps>
 
-`just generate` also writes `.env`, a Compose-required file of local demo credentials. Skipping it
-is the most common first failure; see the troubleshooting table. `just up` builds the `portal`,
-`home`, and `scenario-runner` images locally and pulls the digest-pinned Relay and Notary images;
-expect the first run to take most of this tutorial's time. `just smoke` runs story-preview checks
-plus, by default, live checks against the running Relay, Notary, and portal services.
+`just generate` also writes `.env`, a Compose-required file of local demo credentials, and the
+lab's own certificate authority under `config/evidence/tls/`. Skipping it is the most common first
+failure; see the troubleshooting table. `just up-evidence` builds the Evidence and Mint images from
+your Registry Stack checkout, builds the `portal`, `home`, and `scenario-runner` images, and pulls
+the digest-pinned Relay and Notary images; expect the first run to take most of this tutorial's
+time. `just smoke` runs story-preview checks plus live checks against the running Relay, Notary,
+and portal services. `just smoke-evidence` runs four cases against the Evidence path: an adult, a
+minor, a reference no record resolves, and an unusable access token.
 
 ## What is running
 
-`just up` starts 16 long-running services: six purpose-scoped Relay instances, one per Solmara
-ministry authority, four purpose-scoped Notary instances, the citizen portal, the public Visitor's
-Center, a static metadata publisher, a scenario-runner service that backs the portal's guided
-demos, Postgres, and Redis.
+`just up-evidence` starts 41 long-running services. Most of them exist so that the country's own
+journeys work; this tutorial calls six of them.
 
 {/* SVG diagram. Every service name and host port in the diagram is restated in the
-    table and paragraphs that follow. */}
+    tables and paragraphs that follow. */}
 <figure>
   <img src="../../images/solmara-lab-topology.svg"
-       alt="Solmara Lab compose topology, 16 services. Six authority Relay instances
-            (cra-civil-relay :4311, nia-population-relay :4312, sro-social-relay :4313,
-            programme-mis-relay :4314, sipf-pensions-relay :4315, nagdi-agriculture-relay :4316)
-            provide evidence reads to four Notary instances (child-benefit-notary :4321, which
-            you call directly in this tutorial; pension-notary :4322; nagdi-notary :4323;
-            citizen-notary :4324). The citizen portal :4300 is wired to the citizen Notary;
-            the Visitor's Center runs on :4301. A support strip holds static-metadata :4331,
-            scenario-runner, Postgres :54329, and Redis :63799." />
+       alt="The five hops this tutorial makes. Your shell signs a request with the demo
+            caller's own key and sends it to Registry Mint on host port 4341; Mint returns a
+            short-lived access token; your shell presents that token to Registry Evidence on
+            host port 4343 and asks whether the subject is an adult; Evidence reads two fields
+            of one row from the Civil Registration Authority's records Relay on host port 4342
+            under the recorded purpose adult-status-verification; Evidence returns a signed
+            answer carrying true or false and no record. A strip below lists the rest of the
+            lab: six authority Relay instances on host ports 4311 to 4316, the citizen portal
+            on 4300, the Visitor's Center on 4301, static metadata on 4331, Postgres on 54329,
+            and the consultation Relay instances, workload identity agents, and journey services
+            behind them." />
 </figure>
 
-The services this tutorial calls directly:
+The endpoints this tutorial uses:
 
-| Service | Host port | Role |
+| Endpoint | Reaches | Role |
 | --- | --- | --- |
-| `portal` | `4300` | Citizen portal: a SvelteKit application wired to the citizen Notary. |
-| `home` | `4301` | Visitor's Center: the lab's public tour, including an Engineer door. |
-| `child-benefit-notary` | `4321` | Notary for the birth-to-child-benefit journey; you call its evaluation route directly. |
-| `static-metadata` | `4331` | Unauthenticated multi-authority metadata bundle. |
+| `https://127.0.0.1:4341` | `mint` | Registry Mint: issues the short-lived access token Evidence verifies. |
+| `https://127.0.0.1:4342` | `cra-records-relay` | Registry Relay over the civil register: the source Evidence reads. |
+| `https://127.0.0.1:4343` | `evidence` | Registry Evidence: answers adult status and signs the answer. |
+| `http://127.0.0.1:4300` | `portal` | Citizen portal: a SvelteKit application over the authority services. |
+| `http://127.0.0.1:4301` | `home` | Visitor's Center: the lab's public tour, including an Engineer door. |
+| `http://127.0.0.1:4331` | `static-metadata` | Unauthenticated multi-authority metadata bundle. |
 
-The other six Relay instances, three Notary instances, Postgres, and Redis back the pension and
-farmer-voucher journeys and the portal's own evidence calls; this tutorial does not call them
-directly. The topology figure shows the full port map.
+The three HTTPS endpoints terminate at `evidence-gateway`, a TLS proxy in front of Mint, the
+records Relay, and Evidence. Those three containers publish no host port of their own. The gateway
+presents certificates from the lab's own certificate authority, which `just generate` writes to
+`config/evidence/tls/lab-ca.crt`; every command below passes it with `--cacert`.
 
-Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
-its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
+The rest of the topology, which this tutorial does not call:
+
+| Group | Count | What it is |
+| --- | --- | --- |
+| Public authority Relay instances | 6 | One per ministry authority, on host ports `4311` through `4316`. |
+| Consultation Relay instances | 6 | Private per-authority reads, on `4322`, `4323`, and `4325` through `4328`. |
+| Workload identity agents | 12 | One per Relay, issuing that Relay's short-lived caller credential. |
+| Evidence gateway service | 1 | The TLS proxy described above. |
+| Records workload agent | 1 | The caller credential for `cra-records-relay`. |
+| Notary instances and the child benefit federator | 7 | The country's own evidence gateway services, on `4321` for the federator. |
+| Portal, Visitor's Center, static metadata | 3 | The experience layer. |
+| Postgres and the scenario runner | 2 | Shared state on `54329`, and the service backing the portal's guided demos. |
+
+Each Relay instance publishes its rendered API reference at `/docs`, a route that is always public,
+and its raw `/openapi.json`, public here because every Relay configuration in this lab sets
 `openapi_requires_auth: false`.
 
 ## See it: the citizen portal and the Visitor's Center
 
 Open the citizen portal at [http://127.0.0.1:4300](http://127.0.0.1:4300). It is a SvelteKit
-application backed by the citizen Notary and the civil, social, and agriculture Relay instances.
-Sign in with one of the portal's fixed demo personas to see a resident's own view of the evidence
-flows this tutorial calls directly.
+application backed by the country's own registry services. Sign in with one of the portal's fixed
+demo personas to see a resident's own view of the journeys the lab tells.
 
 Open the Visitor's Center at [http://127.0.0.1:4301](http://127.0.0.1:4301). It is Solmara Lab's
 public tour, organized as three doors: visit as a citizen, as a relying agency running a guided
-story, or as an engineer. Scroll to the Engineer door section. It republishes the same four
-synthetic Notary tokens this tutorial's `.env` generates: `child-benefit-notary`, `pension-notary`,
-`nagdi-notary`, and `citizen-notary`. They appear as ready-made copy-as-curl examples, including
-the evaluation call you make by hand next.
+story, or as an engineer. Scroll to the Engineer door section for ready-made copy-as-curl examples
+against the running stack.
 
-## Call a Notary evaluation route directly
+## Ask Evidence one question
 
-The birth-to-child-benefit journey is one of the lab's guided stories. Its positive fixture is Mateo
-Santos, Solmara UIN `2300010248`: a child whose birth is registered, who is under five, whose
-household falls below the poverty threshold, and who is not already enrolled.
+A benefits desk needs to know one thing about an applicant: whether they are an adult. It does not
+need a date of birth, and the Civil Registration Authority would rather not hand one over. That is
+the question the Evidence overlay answers.
 
-Load the generated Notary token for this journey from `.env`, then evaluate the same four claims
-the birth-to-child-benefit story checks:
+Getting an access token is the first hop. Registry Mint does not accept a password or a shared key:
+the caller proves who it is by signing a short-lived assertion with its own private key, and Mint
+answers with an access token good for a few minutes. The lab's demo caller key lives in the
+generated `.env`, and one recipe does the whole exchange:
 
 ```sh
-export CHILD_BENEFIT_NOTARY_TOKEN="$(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)"
+export EVIDENCE_TOKEN="$(just evidence-token)"
 ```
 
+Now ask the question. Elena's fixture record, Solmara UIN `2300018263`, carries a date of birth in
+1992:
+
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $CHILD_BENEFIT_NOTARY_TOKEN" \
-  -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" \
+curl -sS --cacert config/evidence/tls/lab-ca.crt \
+  -X POST \
+  -H "Authorization: Bearer $EVIDENCE_TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  -d '{
-    "target": {"type": "Person", "identifiers": [{"scheme": "solmara_uin", "value": "2300010248"}]},
-    "claims": ["birth-is-registered", "child-age-under-5", "household-below-poverty-threshold", "not-already-enrolled"],
-    "disclosure": "predicate",
-    "format": "application/vnd.registry-notary.claim-result+json"
-  }' \
-  http://127.0.0.1:4321/v1/evaluations
+  -H "Accept: application/jose+json" \
+  -d "{
+    \"requestNonce\": \"$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')\",
+    \"requirement\": \"https://id.registrystack.org/solmara/requirement/adult-status/v1\",
+    \"purpose\": \"adult-status-verification\",
+    \"subjects\": [{\"role\": \"subject\", \"selector\": {\"profile\": \"civil-record-v1\", \"values\": {\"record_reference\": \"2300018263\"}}}]
+  }" \
+  https://127.0.0.1:4343/v1/evidence
 ```
 
-The Notary returns `200 OK` with all four claims `satisfied`. The important fields look like this;
-other fields are omitted:
+The response is `200 OK` and a flattened JWS: a JSON object of `protected`, `payload`, and
+`signature`. Decode the payload and it reads like this, with the volatile identifiers and
+timestamps left as they came back:
 
 ```json
 {
-  "results": [
-    { "claim_id": "birth-is-registered", "satisfied": true, "value": true },
-    { "claim_id": "child-age-under-5", "satisfied": true, "value": true },
-    { "claim_id": "household-below-poverty-threshold", "satisfied": true, "value": true },
-    { "claim_id": "not-already-enrolled", "satisfied": true, "value": true }
+  "schema": "registry.assertion-evidence/v1",
+  "requestNonce": "7mfZrjyeJnBy3oAIPTwXgwnKFFY_KM-vg0-E9WhGMow",
+  "id": "urn:ulid:01KZ3RHVZ4N3ETVVPQZ08A11KY",
+  "type": "Evidence",
+  "supportsRequirement": "https://id.registrystack.org/solmara/requirement/adult-status/v1",
+  "isConformantTo": "https://id.registrystack.org/solmara/evidence-type/adult-status/v1",
+  "issuedBy": "https://id.registrystack.org/solmara/issuer/civil-registration-authority",
+  "providedBy": "https://id.registrystack.org/solmara/evidence/civil-registration-authority",
+  "issuedAt": "2026-08-03T12:11:08Z",
+  "observedAt": "2026-08-03T12:11:08Z",
+  "validUntil": "2026-08-04T12:11:08Z",
+  "purpose": "adult-status-verification",
+  "audience": "https://id.registrystack.org/solmara/party/benefits-desk",
+  "configurationRevision": "sha256:c067a9c3e0167a5f2ef601ef1defc4fd873ccb7dd61fbfd4c1f15f88073fd744",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_1tZ8Tpn1A5A36GCa5Q8D1ZC76ms-INzA7yvAnj9UWMw"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "https://id.registrystack.org/solmara/concept/adult-status",
+      "value": true
+    }
   ]
 }
 ```
 
-The `x-api-key` header carries the caller's credential. `Data-Purpose` declares why the caller is
-asking, and the Notary's configuration allows this token to ask only under the
-`child-benefit-review` purpose. The `disclosure: predicate` request means the response discloses a
-true or false satisfaction per claim, never the underlying civil, population, social, or programme
-registry rows Relay consulted to answer it. The Notary can also issue a signed
-[SD-JWT verifiable credential (SD-JWT VC)](../../reference/glossary/) for this same eligibility
-claim set; that holder-bound issuance flow is out of scope for this tutorial. See
-[Registry Notary](../../products/registry-notary/) for the credential issuance contract.
+Read what is not in it. The UIN you sent is gone, replaced by an opaque `binding` that identifies
+the subject within this assertion and nowhere else. The date of birth Relay disclosed to Evidence
+is gone. What travels is one boolean against one named concept, plus enough provenance to check it
+later: who issued it, under which purpose, for which audience, against which configuration
+revision, and how long it stays valid. That is the whole product in one response.
+
+Repeat the call with `2300010248`, a fixture child born in 2022, and `value` comes back `false`
+with the same shape. Repeat it with `9900000001`, which no record resolves, and Evidence answers
+`422` with the problem code `evidence_not_available`: one refusal for every reason a subject cannot
+be resolved, so a caller cannot use the refusal to probe who exists.
 
 ## Verify
 
-`just smoke` (step 3) is the authoritative check. These commands confirm its artifacts are on
-disk, and reproduce the call from
-[Call a Notary evaluation route directly](#call-a-notary-evaluation-route-directly) in a single
-command so it can run without a shell variable.
+`just smoke` and `just smoke-evidence` (steps 3 and 4) are the authoritative checks. These commands
+confirm the country smoke's artifacts are on disk, and reproduce the call from
+[Ask Evidence one question](#ask-evidence-one-question) in a single command that also asserts what
+the assertion does not carry.
 
 ```sh
 ls output/smoke/story-previews.json
@@ -225,49 +285,61 @@ ls output/smoke/portal-compose.json
 ```
 
 ```sh
-curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5","household-below-poverty-threshold","not-already-enrolled"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}' http://127.0.0.1:4321/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); got = {r['claim_id']: r['satisfied'] for r in data['results']}; expected = ['birth-is-registered', 'child-age-under-5', 'household-below-poverty-threshold', 'not-already-enrolled']; raise SystemExit(0 if len(data['results']) == 4 and all(got.get(c) is True for c in expected) else 1)"
+curl -sS --cacert config/evidence/tls/lab-ca.crt -X POST -H "Authorization: Bearer $(just evidence-token)" -H "Content-Type: application/json" -H "Accept: application/jose+json" -d "{\"requestNonce\":\"$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')\",\"requirement\":\"https://id.registrystack.org/solmara/requirement/adult-status/v1\",\"purpose\":\"adult-status-verification\",\"subjects\":[{\"role\":\"subject\",\"selector\":{\"profile\":\"civil-record-v1\",\"values\":{\"record_reference\":\"2300018263\"}}}]}" https://127.0.0.1:4343/v1/evidence | python3 -c "import base64, json, sys; envelope = json.load(sys.stdin); payload = json.loads(base64.urlsafe_b64decode(envelope['payload'] + '=' * (-len(envelope['payload']) % 4))); text = json.dumps(payload); raise SystemExit(0 if payload['supportedValues'][0]['value'] is True and '2300018263' not in text and '1992-11-02' not in text else 1)"
 ```
+
+The last command exits `0` only if the answer is `true` and neither the reference you sent nor the
+date of birth behind it appears anywhere in the signed payload.
 
 ## What you built
 
-You brought up 16 Relay, Notary, portal, and supporting services on your laptop from a single
-`just up`, and the smoke suite verified the topology. You then called the child benefit Notary
-directly and watched it return four satisfied predicates for Mateo Santos without exposing the
-civil, population, social, or programme registry rows Relay consulted to answer. The same
-synthetic token and evaluation call are also visible through the Visitor's Center's Engineer door,
-so you can confirm what you ran by hand against what the lab publishes.
+You brought up 41 services on your laptop from a single `just up-evidence`, and two smoke suites
+verified them. You then held a short-lived access token from Registry Mint, asked Registry Evidence
+one question about one person, and got a signed boolean back. Behind that boolean, Evidence read
+two fields of one row from a Registry Relay deployment under a recorded purpose, and disclosed
+neither to you. The Civil Registration Authority answered the question without handing over the
+record, which is the point of the whole arrangement.
 
 ## Next
 
+- [Get a first Evidence assertion](../first-evidence-assertion/): build your own Evidence project
+  from scratch, offline, without a country around it.
+- [Registry Evidence](../../products/registry-evidence/): the assertion contract, the acceptance
+  definition model, and the operator contract.
 - [Build and run an HTTP registry project](../author-registry-project/): create the maintained
-  local project and verify Relay and Notary outcomes.
-- [When to use Registry Stack](../../start/when-to-use/): decide whether Relay, Notary, or both fit
-  your integration.
+  local project and verify its outcomes.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
   guide.
-- [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and
-  credential issuance.
 
 ## Troubleshooting
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `just up` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up` again. |
-| `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4324`, `4331`, `54329`, or `63799`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
+| `just up-evidence` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up-evidence` again. |
+| `just up-evidence` fails with `No Registry Stack release ships Registry Evidence or Registry Mint yet` | `REGISTRY_STACK_SOURCE_DIR` is unset. | Export it with the path to your Registry Stack checkout, then run `just up-evidence` again. |
+| `just up-evidence` fails with `Registry Stack source checkout must be clean` | The named checkout has uncommitted changes, so the built image could not be labelled with a real commit. | Commit or stash the changes, or point `REGISTRY_STACK_SOURCE_DIR` at a separate clean checkout or `git worktree`. |
+| `just up-evidence` fails with `service "registry-postgresql-bootstrap" didn't complete successfully: exit 2` | You ran `just generate` a second time. It rotates every local credential, including the Postgres password, and the data volume from your earlier run still holds the old one. | Run `just reset-evidence` to drop this checkout's volumes, then `just generate` and `just up-evidence` again. |
+| `docker compose` reports a port already allocated | Another process holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4323`, `4325` through `4328`, `4331`, `4341` through `4343`, or `54329`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up-evidence`. |
+| `curl` reports a certificate problem against `4341`, `4342`, or `4343` | The lab's certificate authority was not passed, or `just generate` never wrote it. | Pass `--cacert config/evidence/tls/lab-ca.crt`, and run `just generate` if that file is missing. |
+| `just evidence-token` reports `missing SOLMARA_EVIDENCE_CALLER_JWK` | `.env` predates the Evidence overlay, so it has no caller key. | Run `just gen-secrets`, then `just up-evidence` again so Mint picks up the new registration. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
 | `docker compose ps -a` lists lab containers you did not start | The lab derives a per-checkout Compose project name (`solmara-lab-` plus a hash of the checkout path), so two checkouts never share a project. Leftover containers come from a lab version that used the shared project name `solmara-lab`. | Inspect the old project with `docker compose -p solmara-lab ps`, then remove it with `docker compose -p solmara-lab down` (add `-v` only if you also want its volumes deleted). |
-| The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up`; later runs are faster once the images are cached. |
-| The first `just up` appears to hang | The first run pulls the pinned Relay and Notary images and builds the `portal`, `home`, and `scenario-runner` images locally. | Let it finish; do not interrupt it. |
+| The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up-evidence`; later runs are faster once the images are cached. |
+| The first `just up-evidence` appears to hang | The first run compiles Evidence and Mint from source, pulls the pinned images, and builds the local application images. | Let it finish; do not interrupt it. |
 
 ## Cleanup
 
 Stop the containers:
 
 ```sh
-just down
+just down-evidence
 ```
 
-`just down` runs `docker compose ... down`, keeping the Postgres data volume and the Relay and
-Notary state volumes, so a later `just up` resumes with the same data. To also remove the
-volumes, run `just reset` instead; that is the lab's documented clean slate: rerun
-`just generate` and `just up` for a fresh topology.
+`just down-evidence` runs `docker compose ... down`, keeping the Postgres data volume, the Relay
+and Notary state volumes, and the Evidence and Mint secret volumes, so a later `just up-evidence`
+resumes with the same data. Do not rerun `just generate` before that: it rotates the Postgres
+password, and the kept volume still holds the old one.
+
+To also remove the volumes, run `just reset-evidence` instead; that is the lab's documented clean
+slate, and the one starting point from which rerunning the whole tutorial works: `just generate`,
+then `just up-evidence`, for a fresh topology.

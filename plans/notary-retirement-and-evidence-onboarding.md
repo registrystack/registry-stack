@@ -123,7 +123,7 @@ gates for its area (see Verification), and committed.
 
 - [x] D1. Compose runs Relay + Mint + Evidence: spreadsheet source through
       Relay, Evidence assertion over Relay's API, smoke suite green.
-- [ ] D2. `tutorials/first-run-with-solmara-lab` rewritten against the
+- [x] D2. `tutorials/first-run-with-solmara-lab` rewritten against the
       rebuilt demo and passing its gate.
 
 ### E. Shared docs rewrites
@@ -507,3 +507,21 @@ is parallel; B has no upstream dependencies and is the standing priority
   workload agent wrote a trailing newline into the token file, which Notary
   trims and Evidence does not, since Evidence treats a file secret as opaque
   bytes; it now publishes the token alone.
+- 2026-08-03: D2 done. `first-run-with-solmara-lab` is rewritten against the
+  composed demo: four Steps ending in `just smoke-evidence`, a new section
+  that asks Evidence one question by hand and reads the decoded answer, and a
+  Verify command that fails unless the answer is `true` and carries neither
+  the subject reference nor the date of birth. The gate was rebuilt with it,
+  because it had drifted well past the Evidence work: it still expected
+  `redis` and three shared Notary instances that no longer exist. It now names
+  the 17 services the page names and asserts the running total of 41
+  separately, so the count on the page is checked rather than asserted twice.
+  Two prerequisites are real and documented rather than worked around. The
+  reader needs a clean Registry Stack checkout in `REGISTRY_STACK_SOURCE_DIR`
+  until F3 publishes Evidence and Mint images, and the gate's clone mode stays
+  pinned to a lab ref that predates the Evidence overlay until the lab commits
+  are pushed, so this run used `SOLMARA_LAB_PATH`. Found on the way: `just
+  generate` rotates every credential including the Postgres password, so a
+  second run against kept volumes dies in `registry-postgresql-bootstrap`
+  with a message naming neither cause; the page now has that row and the gate
+  refuses to start against a checkout still holding volumes.
