@@ -1,0 +1,70 @@
+---
+title: Registry Notary retirement decision
+description: Record of the decision to retire Registry Notary and direct current adoption to Registry Relay and Evidence.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-docs
+last_reviewed: "2026-08-03"
+doc_type: decision
+locale: en
+standards_referenced: []
+draft: true
+---
+
+Registry Stack decided on 2026-08-03 to retire Registry Notary and direct
+current adopters to Registry Relay and Evidence.
+
+## Decision
+
+**Date:** 2026-08-03
+
+**Status:** Accepted
+
+Retire Registry Notary from the current product surface, source workspace,
+release train, and continuous integration gates.
+Keep Registry Relay as the protected read product and Evidence as the
+minimum-disclosure assertion product.
+Registry Mint remains a supporting token issuer for deployments without an
+identity provider.
+
+Present two paths to adopters:
+
+- Use Registry Relay when another system must read specific, authorized data.
+- Use Evidence when another system must learn only a fact.
+
+Evidence can consume a Relay-protected API as a fixed source.
+This composition does not make Evidence a Notary mode or a continuation of
+the Notary credential lifecycle.
+
+## Context
+
+Registry Notary combined claim evaluation, credential issuance, disclosure
+policy, replay handling, and audit provenance.
+Evidence defines a smaller, stateless assertion boundary with its own frozen
+Version 1 contracts.
+Keeping both products on the current surface would give adopters overlapping
+entry points while preserving two different product models.
+
+The retirement narrows the supported surface without changing Registry
+Relay's role or Evidence's name, contracts, or independence.
+
+## Consequences
+
+- Completing the retirement removes Registry Notary from workspace components,
+  new release manifests, continuous integration gates, and current product
+  documentation.
+- Registry Relay and Evidence remain separate products with separate runtime
+  and configuration boundaries.
+- Evidence Version 1 wire identifiers and production behavior remain
+  unchanged.
+- Historical changelogs, decision records, release manifests, and archived
+  documentation retain Registry Notary references.
+- Publishing this decision redirects current Notary documentation URLs to the
+  corresponding Evidence guidance or to this decision record.
+- Archiving retired Notary source and product material is deferred to a
+  separate decision.
+
+## Superseded by
+
+None.

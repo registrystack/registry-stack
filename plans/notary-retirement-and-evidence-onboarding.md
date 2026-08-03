@@ -92,7 +92,7 @@ gates for its area (see Verification), and committed.
 
 ### C. Notary deletion cascade
 
-- [ ] C1. Decisions on record before deletion: ROADMAP pilot line reframed
+- [x] C1. Decisions on record before deletion: ROADMAP pilot line reframed
       to Relay + Evidence; retirement decision page drafted (published in
       C7); changelog entry drafted.
 - [ ] C2. registryctl surgery complete: Notary compiler target, dev
@@ -491,3 +491,8 @@ is parallel; B has no upstream dependencies and is the standing priority
   six per-tutorial times, the 23 and 12 fixture counts, and the five
   refusals cited on the overview were each read back out of the tutorial
   they describe rather than recalled.
+- 2026-08-03: C1 done after Jeremi approved the framing. The ROADMAP pilot
+  line now names Registry Relay and Evidence; the docs changelog records the
+  retirement decision without claiming the deletion is complete; and the
+  retirement decision page is drafted with `draft: true` for publication in
+  C7. No runtime, contract, or Relay implementation changed. Next in C: C2.
