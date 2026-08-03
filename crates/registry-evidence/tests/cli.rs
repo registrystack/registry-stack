@@ -318,7 +318,8 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         SecretFailureCase {
             label: "audit hash key below the minimum length",
             break_secrets: |deployment| deployment.write_secret("audit-hash-key", "short"),
-            expected: "evidence: runtime audit initialization failed\n",
+            expected: "evidence: runtime audit initialization failed: the audit hash secret is \
+                       unusable\n",
         },
         SecretFailureCase {
             label: "subject binding key missing",
@@ -341,6 +342,83 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         assert!(
             output.stdout.is_empty(),
             "{}: check wrote output for a refused deployment",
+            case.label
+        );
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert_eq!(
+            stderr, case.expected,
+            "{}: unexpected diagnostic",
+            case.label
+        );
+    }
+}
+
+/// One audit initialization failure class, with the exact operator text it
+/// must produce and any handle the fault needs held open while `serve` runs.
+struct AuditFaultCase {
+    label: &'static str,
+    break_audit: fn(&Deployment) -> Option<fs::File>,
+    expected: &'static str,
+}
+
+/// The audit boundary refuses to start for unrelated reasons, and from outside
+/// the process they are indistinguishable: a mode an operator fixes with
+/// `chmod`, a chain that no longer verifies, and a second writer already
+/// holding the sink lock are three different questions with three different
+/// answers. Each names itself, and none of them names the audit path, which
+/// the operator already has in the runtime file.
+#[test]
+fn serve_names_why_the_audit_boundary_refused_to_initialize() {
+    let cases = [
+        AuditFaultCase {
+            label: "an audit file readable beyond its owner",
+            break_audit: |deployment| {
+                deployment.stage_audit_chain("");
+                set_mode(&deployment.path("audit.jsonl"), 0o644);
+                None
+            },
+            expected: "evidence: runtime audit initialization failed: the audit file, its lock, \
+                       or its directory is unavailable or is not owner-only\n",
+        },
+        AuditFaultCase {
+            label: "an audit chain that does not verify",
+            break_audit: |deployment| {
+                deployment.stage_audit_chain("{\"not\":\"an audit record\"}\n");
+                None
+            },
+            expected: "evidence: runtime audit initialization failed: the existing audit chain \
+                       did not verify\n",
+        },
+        AuditFaultCase {
+            label: "a second writer holding the audit sink lock",
+            break_audit: |deployment| {
+                let path = deployment.path("audit.jsonl.lock");
+                fs::write(&path, "").expect("stage audit sink lock");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .expect("set owner-only audit lock mode");
+                let held = fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .expect("open audit sink lock");
+                held.try_lock().expect("hold the audit sink lock");
+                Some(held)
+            },
+            expected: "evidence: runtime audit initialization failed: another writer already \
+                       holds the audit sink lock\n",
+        },
+    ];
+
+    for case in cases {
+        let deployment = Deployment::stage_on_port("all-definitions", free_port());
+        deployment.stage_acceptance_secrets();
+        deployment.seal();
+        let _held = (case.break_audit)(&deployment);
+        let output = invoke(&deployment.path("runtime.yaml"), &["serve"]);
+        deployment.unseal();
+
+        assert!(
+            !output.status.success(),
+            "{}: serve started on a refused audit boundary",
             case.label
         );
         let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
@@ -1020,6 +1098,15 @@ outboundTls:
         self.write_secret("source-d-token", "synthetic-source-token");
     }
 
+    /// Place an audit chain the service will find on start, owner-only as the
+    /// sink requires. A case that is about a mode widens it afterwards.
+    fn stage_audit_chain(&self, contents: &str) {
+        let path = self.path("audit.jsonl");
+        fs::write(&path, contents).expect("stage audit chain");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set owner-only audit chain mode");
+    }
+
     /// Overwrite the staged signing key with a fresh key whose kid is not
     /// the bundle's `signing.activeKeyId`.
     fn write_mismatched_signing_key(&self) {
@@ -1111,6 +1198,10 @@ fn copy_tree(source: &Path, destination: &Path) {
             fs::copy(entry.path(), target).expect("copy staged artifact");
         }
     }
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set staged mode");
 }
 
 fn set_tree_mode(path: &Path, directory_mode: u32, file_mode: u32) {

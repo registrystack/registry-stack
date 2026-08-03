@@ -746,13 +746,25 @@ material parsed, and the audit chain opened and verified. Readiness rechecks
 the subject-binding key, signing provider, pinned audit sink, and every source
 credential. Basic, static Bearer, and static API-key credentials are checked
 locally. OAuth client-credentials readiness performs its bounded token
-bootstrap against the configured token endpoint. OIDC JWKS retrieval is lazy
-and follows the verifier cache lifecycle, so readiness does not prefetch it.
+bootstrap against the configured token endpoint.
 Neither startup nor readiness sends an evidence-data request or probes a source
 data endpoint. Readiness
 fails when a required local runtime or bundle input, selector binding,
 credential, CA binding, audit dependency, or signing dependency is absent,
 mutable, or invalid.
+
+The access-token issuer's `jwksUri` is retrieved once at startup and again on
+each readiness check, subject to the verifier cache lifecycle and a short
+suppression interval after a failure. Both report and neither refuses: a
+`jwksUri` that cannot be used is named in the log at startup rather than
+discovered one rejected request at a time, but the issuer is a shared
+dependency this deployment does not own, so an issuer outage does not withhold
+its readiness or prevent it from starting. A key set already retrieved keeps
+being accepted for a bounded allowance past its cache lifetime while the issuer
+is unreachable, so a brief issuer outage does not turn into total rejection
+here; once that allowance runs out, every request is rejected with the same
+closed `401` a bad token receives, and the reason appears only in this
+deployment's log.
 
 The native operations are:
 

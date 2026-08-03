@@ -716,6 +716,7 @@ mod tests {
                 refresh_cooldown: Duration::from_millis(1),
                 max_doc_bytes: 16 * 1024,
                 request_timeout: Duration::from_secs(5),
+                outage_tolerance: Duration::from_secs(900),
             },
             FetchUrlPolicy::dev(),
         ));
@@ -773,6 +774,7 @@ mod tests {
                 refresh_cooldown: Duration::from_millis(1),
                 max_doc_bytes: 16 * 1024,
                 request_timeout: Duration::from_secs(5),
+                outage_tolerance: Duration::from_secs(900),
             },
             FetchUrlPolicy::dev(),
         ));

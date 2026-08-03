@@ -29,8 +29,8 @@ use registry_evidence::{
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
     runtime::{
-        source_failure_problem, validate_secret_material, EvidenceRuntime,
-        RuntimeInitializationError,
+        source_failure_problem, validate_secret_material, AuditInitializationFault,
+        EvidenceRuntime, RuntimeInitializationError,
     },
     secrets::{SecretProvider, SecretResolver},
     selector::{
@@ -146,6 +146,12 @@ impl std::error::Error for CliError {}
 enum CommandError {
     Cli(CliError),
     Deployment(&'static str, ArtifactFault),
+    /// The audit boundary refused, with the value-free cause it reported.
+    ///
+    /// It is the one startup boundary that separates its causes, because a
+    /// permission bit, a chain that no longer verifies, and a second writer
+    /// holding the sink lock have nothing in common but the moment they fail.
+    Audit(&'static str, AuditInitializationFault),
     Service(String),
 }
 
@@ -154,6 +160,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::Cli(error) => fmt::Display::fmt(error, formatter),
             Self::Deployment(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::Audit(message, fault) => write!(formatter, "{message}: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
     }
@@ -290,15 +297,25 @@ fn deployment_load_error(error: BundleError) -> CommandError {
     }
 }
 
-fn runtime_initialization_error(error: RuntimeInitializationError) -> CliError {
+fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandError {
     match error {
-        RuntimeInitializationError::Bundle => CliError("runtime bundle initialization failed"),
-        RuntimeInitializationError::Secrets => CliError("runtime secret initialization failed"),
-        RuntimeInitializationError::Audit => CliError("runtime audit initialization failed"),
-        RuntimeInitializationError::Signing => CliError("runtime signing initialization failed"),
-        RuntimeInitializationError::Source => CliError("runtime source initialization failed"),
+        RuntimeInitializationError::Bundle => {
+            CliError("runtime bundle initialization failed").into()
+        }
+        RuntimeInitializationError::Secrets => {
+            CliError("runtime secret initialization failed").into()
+        }
+        RuntimeInitializationError::Audit(fault) => {
+            CommandError::Audit("runtime audit initialization failed", fault)
+        }
+        RuntimeInitializationError::Signing => {
+            CliError("runtime signing initialization failed").into()
+        }
+        RuntimeInitializationError::Source => {
+            CliError("runtime source initialization failed").into()
+        }
         RuntimeInitializationError::RateLimit => {
-            CliError("runtime rate-limit initialization failed")
+            CliError("runtime rate-limit initialization failed").into()
         }
     }
 }

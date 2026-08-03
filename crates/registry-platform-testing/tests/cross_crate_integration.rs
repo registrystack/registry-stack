@@ -137,6 +137,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
             refresh_cooldown: Duration::from_millis(10),
             max_doc_bytes: 16 * 1024,
             request_timeout: Duration::from_secs(5),
+            outage_tolerance: Duration::from_secs(900),
         },
         FetchUrlPolicy::dev(),
     ));

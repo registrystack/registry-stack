@@ -230,6 +230,7 @@ where
     let bundle_revision = runtime.bundle().revision().to_owned();
     let runtime_revision = runtime.runtime_revision().to_owned();
     let listener = bind(&listener_config.bind_host, listener_config.port).await?;
+    let startup_runtime = Arc::clone(&runtime);
     let (app, evaluations, metrics) = build_app_with_tracker(runtime);
 
     // Both listeners are bound before either serves, so a misconfigured
@@ -254,6 +255,10 @@ where
         metrics = metrics_config.is_some(),
         "evidence service listening"
     );
+    // Said here rather than left to the first rejected request, which an
+    // operator reads as a bad token. Reported, not fatal: readiness is what
+    // withholds traffic until the key set is in hand.
+    startup_runtime.announce_key_source().await;
     let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
     let metrics_server = metrics_listener.map(|listener| {
         let mut stopped = metrics_stopped;

@@ -93,6 +93,21 @@ chmod -R a-w {{bundle_directory}}
 chmod 444 {{project_root}}/runtime.yaml
 ```
 
+Each refusal names one artifact, so a `chmod -R` over the whole project is
+discovered one restart at a time. To see all of them at once:
+
+```bash
+evidencectl doctor --project {{project_root}}
+```
+
+`doctor` walks the project and reports every artifact whose mode or owner the
+runtime would refuse: the bundle tree, `runtime.yaml`, the secret root, each
+secret the bundle references, the audit chain once it exists, and the key files
+of a paired Mint. It starts nothing and needs no `evidence` binary, so it works
+before the deployment is complete. It is advisory: `evidence check` and startup
+remain authoritative, and `doctor` compares ownership against the user running
+it rather than the user the service runs as.
+
 ## Signing the revision
 
 Evidence computes a revision hash over the exact bundle bytes it loaded and

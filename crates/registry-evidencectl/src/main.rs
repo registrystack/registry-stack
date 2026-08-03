@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod doctor;
 mod fixtures;
 mod jwks;
 mod keygen;
@@ -38,6 +39,8 @@ enum Command {
     /// Work with a project's sources, starting from their own API documents.
     #[command(subcommand)]
     Source(suggest::SourceCommand),
+    /// Report every project artifact whose mode or owner the runtime refuses.
+    Doctor(doctor::DoctorArgs),
 }
 
 fn main() -> ExitCode {
@@ -48,6 +51,7 @@ fn main() -> ExitCode {
         Command::New(args) => scaffold::run(args),
         Command::Fixtures(command) => fixtures::run(command),
         Command::Source(command) => suggest::run(command),
+        Command::Doctor(args) => doctor::run(args),
     };
     match result {
         Ok(code) => code,

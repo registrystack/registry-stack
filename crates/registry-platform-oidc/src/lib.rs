@@ -118,6 +118,17 @@ pub struct JwksFetcherConfig {
     pub refresh_cooldown: Duration,
     pub max_doc_bytes: u64,
     pub request_timeout: Duration,
+    /// How long past `cache_ttl` a key set already held keeps being served when
+    /// the issuer cannot be reached to replace it.
+    ///
+    /// An expired cache is not a statement that the keys in it are wrong; it is
+    /// a statement that they have not been rechecked. Discarding them because
+    /// the issuer is briefly unreachable turns an issuer blip into total
+    /// rejection here, for keys that would have verified. The allowance is
+    /// bounded rather than open-ended because it is also the window in which a
+    /// key the issuer has since withdrawn stays trusted, and an attacker who
+    /// can keep the issuer unreachable would otherwise hold that window open.
+    pub outage_tolerance: Duration,
 }
 
 impl JwksFetcherConfig {
@@ -129,6 +140,7 @@ impl JwksFetcherConfig {
             refresh_cooldown: Duration::from_secs(30),
             max_doc_bytes: DEFAULT_DOC_BYTES,
             request_timeout: Duration::from_secs(5),
+            outage_tolerance: Duration::from_secs(900),
         }
     }
 }
@@ -139,6 +151,13 @@ struct JwksState {
     fetched_at: Option<Instant>,
     last_forced_refresh: Option<Instant>,
     negative: HashMap<String, Instant>,
+    /// Since when the issuer has been unreachable while the key set already
+    /// held stood in for the replacement, if it is standing in now.
+    ///
+    /// Kept so a caller can report a deployment that is verifying tokens
+    /// against keys it can no longer confirm. Nothing else would say so: every
+    /// such request succeeds.
+    tolerating_since: Option<Instant>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -227,6 +246,170 @@ impl JwksFetcher {
         }
     }
 
+    /// The configured key-set location, when this fetcher has one.
+    ///
+    /// A static source has none, which is the honest answer: nothing is
+    /// fetched, so there is no address for an operator to go and check.
+    #[must_use]
+    pub fn jwks_uri(&self) -> Option<&str> {
+        match &self.source {
+            JwksSource::Http { jwks_uri, .. } => Some(jwks_uri),
+            JwksSource::Static(_) => None,
+        }
+    }
+
+    /// Confirm a usable key set is in hand, fetching one if the cache is empty
+    /// or stale.
+    ///
+    /// This answers the question a resource server has before it accepts
+    /// traffic: not whether one particular key exists, but whether the issuer's
+    /// keys can be reached at all. A deployment that cannot reach them rejects
+    /// every token presented to it, and each rejection is indistinguishable
+    /// from an invalid token.
+    ///
+    /// A fresh cache is proof enough and costs no request, so a probe repeated
+    /// every few seconds fetches at most once per `cache_ttl`. A failure is
+    /// deliberately not cached: how often to retry an issuer that is down is
+    /// the caller's decision, since only the caller knows how often it probes.
+    ///
+    /// This answers the same question the verification path asks, including
+    /// outage tolerance, so it never reports unready a deployment that is in
+    /// fact still verifying tokens. Use `outage_duration` to tell the two
+    /// apart.
+    pub async fn ensure_key_set(&self) -> Result<(), OidcError> {
+        if self
+            .has_key_set_within(Instant::now(), self.config.cache_ttl)
+            .await
+        {
+            return Ok(());
+        }
+        let _guard = self.refresh_lock.lock().await;
+        if self
+            .has_key_set_within(Instant::now(), self.config.cache_ttl)
+            .await
+        {
+            return Ok(());
+        }
+        match self.refresh(false).await {
+            Ok(()) => {
+                if self
+                    .has_key_set_within(Instant::now(), self.config.cache_ttl)
+                    .await
+                {
+                    Ok(())
+                } else {
+                    Err(OidcError::EmptyKeySet)
+                }
+            }
+            Err(error) => {
+                if self
+                    .has_key_set_within(Instant::now(), self.tolerated_age())
+                    .await
+                {
+                    self.begin_tolerating(Instant::now()).await;
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    /// How long this fetcher has been serving a key set the issuer could not be
+    /// asked to replace, or `None` when the key set is current.
+    ///
+    /// Exposed so the deployment can say so. A tolerated outage is invisible
+    /// from every other vantage point: requests succeed, the key set verifies,
+    /// and the only thing that has changed is that nothing has confirmed those
+    /// keys for a while.
+    pub async fn outage_duration(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.state
+            .read()
+            .await
+            .tolerating_since
+            .map(|since| now.duration_since(since))
+    }
+
+    /// The oldest a key set may be and still be served during an outage.
+    fn tolerated_age(&self) -> Duration {
+        self.config.cache_ttl + self.config.outage_tolerance
+    }
+
+    /// Whether the cache holds at least one key and is no older than `allowance`.
+    ///
+    /// Emptiness matters on its own: a key set with no keys parses, so the
+    /// fetch reports success, and every token verified against it then fails
+    /// for want of a key.
+    async fn has_key_set_within(&self, now: Instant, allowance: Duration) -> bool {
+        let state = self.state.read().await;
+        !state.keys.is_empty()
+            && state
+                .fetched_at
+                .is_some_and(|fetched| now.duration_since(fetched) <= allowance)
+    }
+
+    /// Record that the key set already held is standing in for a replacement,
+    /// keeping the start of an outage already under way.
+    async fn begin_tolerating(&self, now: Instant) {
+        let mut state = self.state.write().await;
+        state.tolerating_since.get_or_insert(now);
+    }
+
+    /// Replace an aged-out key set, or keep serving the one already held when
+    /// the issuer cannot be reached to replace it.
+    ///
+    /// An expired cache means the keys have not been rechecked, not that they
+    /// are wrong. Failing every request for want of a recheck would turn a
+    /// short issuer outage into a total one here, using keys that are sitting
+    /// in the cache and would have verified.
+    async fn refresh_or_tolerate_outage(
+        &self,
+        kid: &str,
+        forced: bool,
+    ) -> Result<JwksCacheLookup, OidcError> {
+        let error = match self.refresh_and_cached_key(kid, forced).await {
+            Ok(lookup) => return Ok(lookup),
+            Err(error) => error,
+        };
+        let now = Instant::now();
+        match self.tolerated_key(kid, now).await? {
+            Some(key) => {
+                self.begin_tolerating(now).await;
+                Ok(JwksCacheLookup::Hit(key))
+            }
+            None => Err(error),
+        }
+    }
+
+    /// The key already held for `kid`, if the key set is young enough to keep
+    /// serving through an outage.
+    async fn tolerated_key(
+        &self,
+        kid: &str,
+        now: Instant,
+    ) -> Result<Option<CachedJwkKey>, OidcError> {
+        let state = self.state.read().await;
+        if state
+            .fetched_at
+            .is_none_or(|fetched| now.duration_since(fetched) > self.tolerated_age())
+        {
+            return Ok(None);
+        }
+        let Some(jwk) = state.keys.get(kid) else {
+            return Ok(None);
+        };
+        validate_jwk(jwk)?;
+        DecodingKey::from_jwk(jwk)
+            .map(|decoding_key| {
+                Some(CachedJwkKey {
+                    decoding_key,
+                    jwk: jwk.clone(),
+                })
+            })
+            .map_err(|_| OidcError::InvalidJwk)
+    }
+
     pub async fn key_for_kid(&self, kid: &str) -> Result<DecodingKey, OidcError> {
         if kid.is_empty() {
             return Err(OidcError::MissingKid);
@@ -249,14 +432,16 @@ impl JwksFetcher {
                 return Err(OidcError::UnknownKid);
             }
             JwksCacheLookup::FreshMiss => {}
-            JwksCacheLookup::StaleOrEmpty => match self.refresh_and_cached_key(kid, false).await? {
-                JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
-                JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
-                JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {
-                    self.remember_unknown_kid(kid).await;
-                    return Err(OidcError::UnknownKid);
+            JwksCacheLookup::StaleOrEmpty => {
+                match self.refresh_or_tolerate_outage(kid, false).await? {
+                    JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
+                    JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
+                    JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {
+                        self.remember_unknown_kid(kid).await;
+                        return Err(OidcError::UnknownKid);
+                    }
                 }
-            },
+            }
         }
 
         if self.should_force_refresh(Instant::now()).await {
@@ -302,7 +487,9 @@ impl JwksFetcher {
             }
             JwksCacheLookup::FreshMiss => {}
             JwksCacheLookup::StaleOrEmpty => {
-                if let JwksCacheLookup::Hit(key) = self.refresh_and_cached_key(kid, false).await? {
+                if let JwksCacheLookup::Hit(key) =
+                    self.refresh_or_tolerate_outage(kid, false).await?
+                {
                     return Ok(key);
                 }
                 self.remember_unknown_kid(kid).await;
@@ -429,6 +616,7 @@ impl JwksFetcher {
         state.keys = keys;
         state.fetched_at = Some(Instant::now());
         state.negative.clear();
+        state.tolerating_since = None;
         if forced {
             state.last_forced_refresh = Some(Instant::now());
         }
@@ -779,6 +967,16 @@ impl TokenVerifier {
             allowed_id_typ,
             allowed_userinfo_typ,
         }
+    }
+
+    /// The key source this verifier resolves signing keys through.
+    ///
+    /// Exposed so a resource server can prove at readiness that the issuer's
+    /// keys are reachable, rather than discovering they are not one rejected
+    /// request at a time.
+    #[must_use]
+    pub fn key_source(&self) -> &Arc<JwksFetcher> {
+        &self.fetcher
     }
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
@@ -1210,6 +1408,8 @@ pub enum OidcError {
     UnknownKid,
     #[error("JWK is invalid")]
     InvalidJwk,
+    #[error("key set contains no usable keys")]
+    EmptyKeySet,
     #[error("token is expired")]
     TokenExpired,
     #[error("token is not yet valid")]
@@ -1229,12 +1429,12 @@ pub enum OidcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Json, Router};
+    use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::json;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::net::TcpListener;
 
     async fn serve_discovery(jwks_uri: &str) -> String {
@@ -1282,6 +1482,36 @@ mod tests {
         format!("http://{addr}/jwks")
     }
 
+    /// A key-set endpoint that can be made unreachable and reachable again,
+    /// standing in for an issuer that goes down while this process keeps
+    /// running.
+    async fn serve_jwks_with_outage(
+        document: Arc<RwLock<Value>>,
+        outage: Arc<AtomicBool>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read listener addr");
+        let app = Router::new().route(
+            "/jwks",
+            get(move || {
+                let document = Arc::clone(&document);
+                let outage = Arc::clone(&outage);
+                async move {
+                    if outage.load(Ordering::SeqCst) {
+                        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({}))).into_response();
+                    }
+                    Json(document.read().await.clone()).into_response()
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        format!("http://{addr}/jwks")
+    }
+
     fn jwks_with_kids(kids: &[&str]) -> Value {
         let keys: Vec<Value> = kids
             .iter()
@@ -1305,6 +1535,7 @@ mod tests {
             refresh_cooldown: Duration::from_secs(3600),
             max_doc_bytes: DEFAULT_DOC_BYTES,
             request_timeout: Duration::from_secs(1),
+            outage_tolerance: Duration::from_secs(3600),
         }
     }
 
@@ -2638,6 +2869,168 @@ mod tests {
         assert!(!rendered.contains("identity.example.test"));
         assert!(rendered.contains("source: Http"));
         assert!(rendered.contains("source: Static"));
+    }
+
+    #[tokio::test]
+    async fn ensure_key_set_fetches_once_and_then_answers_from_cache() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["readiness-kid"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        );
+
+        // A readiness probe repeated every few seconds must not become an
+        // outbound request every few seconds: a fresh cache is proof enough.
+        for _ in 0..5 {
+            fetcher
+                .ensure_key_set()
+                .await
+                .expect("a reachable issuer key set is ready");
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_key_set_reports_an_unreachable_issuer() {
+        // Port 1 on the loopback interface refuses, which is the shape of the
+        // failure an operator hits: the address resolves and nothing answers.
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            "http://127.0.0.1:1/jwks".to_owned(),
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        );
+
+        let error = fetcher
+            .ensure_key_set()
+            .await
+            .expect_err("an unreachable issuer key set is not ready");
+        assert!(matches!(error, OidcError::Transport(_)));
+    }
+
+    #[tokio::test]
+    async fn ensure_key_set_rejects_a_key_set_with_no_usable_keys() {
+        // The document parses and the fetch succeeds, so nothing below this
+        // would fail: only the emptiness distinguishes it from a healthy issuer.
+        let document = Arc::new(RwLock::new(jwks_with_kids(&[])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        );
+
+        let error = fetcher
+            .ensure_key_set()
+            .await
+            .expect_err("an empty key set verifies nothing");
+        assert!(matches!(error, OidcError::EmptyKeySet));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_key_set_is_satisfied_by_a_static_key_set_and_names_no_uri() {
+        let keys: JwkSet =
+            serde_json::from_value(jwks_with_kids(&["static-kid"])).expect("static key set parses");
+        let fetcher = JwksFetcher::new_static(keys, jwks_test_config());
+
+        fetcher
+            .ensure_key_set()
+            .await
+            .expect("a static key set is always in hand");
+        assert!(fetcher.jwks_uri().is_none());
+    }
+
+    /// An expired cache says the keys have not been rechecked, not that they are
+    /// wrong. Discarding them because the issuer is briefly unreachable would
+    /// reject every request using keys that are sitting in the cache and would
+    /// have verified: a short outage at the issuer becomes a total one here.
+    #[tokio::test]
+    async fn an_unreachable_issuer_does_not_discard_the_key_set_already_held() {
+        let outage = Arc::new(AtomicBool::new(false));
+        let jwks_uri = serve_jwks_with_outage(
+            Arc::new(RwLock::new(jwks_with_kids(&["held-kid"]))),
+            Arc::clone(&outage),
+        )
+        .await;
+        let mut config = jwks_test_config();
+        config.cache_ttl = Duration::from_millis(50);
+        config.outage_tolerance = Duration::from_secs(3600);
+        let fetcher =
+            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+
+        fetcher
+            .key_for_kid("held-kid")
+            .await
+            .expect("the key set is retrievable to begin with");
+        assert_eq!(fetcher.outage_duration().await, None);
+
+        outage.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        fetcher
+            .key_for_kid("held-kid")
+            .await
+            .expect("a key already held still verifies while the issuer is unreachable");
+        assert!(
+            fetcher.outage_duration().await.is_some(),
+            "the deployment can say it is running on a key set it cannot confirm"
+        );
+        fetcher
+            .ensure_key_set()
+            .await
+            .expect("readiness reports what the verification path actually does");
+
+        outage.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        fetcher
+            .key_for_kid("held-kid")
+            .await
+            .expect("the issuer is reachable again");
+        assert_eq!(
+            fetcher.outage_duration().await,
+            None,
+            "a reachable issuer ends the outage"
+        );
+    }
+
+    /// The allowance is bounded because it is also the window in which a key the
+    /// issuer has withdrawn stays trusted here. Left open-ended, anyone able to
+    /// keep the issuer unreachable could hold that window open.
+    #[tokio::test]
+    async fn a_key_set_past_its_outage_allowance_is_no_longer_served() {
+        let outage = Arc::new(AtomicBool::new(false));
+        let jwks_uri = serve_jwks_with_outage(
+            Arc::new(RwLock::new(jwks_with_kids(&["expiring-kid"]))),
+            Arc::clone(&outage),
+        )
+        .await;
+        let mut config = jwks_test_config();
+        config.cache_ttl = Duration::from_millis(20);
+        config.outage_tolerance = Duration::from_millis(30);
+        let fetcher =
+            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+
+        fetcher
+            .key_for_kid("expiring-kid")
+            .await
+            .expect("the key set is retrievable to begin with");
+
+        outage.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let error = fetcher
+            .key_for_kid("expiring-kid")
+            .await
+            .expect_err("the allowance runs out");
+        assert!(matches!(error, OidcError::HttpStatus(503)), "{error:?}");
+        assert!(
+            fetcher.ensure_key_set().await.is_err(),
+            "readiness stops vouching for it at the same moment"
+        );
     }
 
     #[tokio::test]

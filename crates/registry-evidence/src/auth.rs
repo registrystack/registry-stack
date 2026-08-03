@@ -1,12 +1,15 @@
 //! Strict OIDC access-token authentication and configured claim extraction.
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -18,6 +21,39 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 const MAX_CLAIMS_BYTES: usize = 64 * 1024;
 const MAX_PRINCIPAL_BYTES: usize = 512;
 const MAX_TAGS: usize = 32;
+
+/// How long an unreachable issuer key set stays quiet after it has been named
+/// once.
+///
+/// A deployment that cannot reach the key set rejects every request, so the
+/// unthrottled report is one log line per request: the fault would bury the
+/// traffic that revealed it, and a caller could provoke the writing. One line a
+/// minute names it and keeps naming it while it lasts.
+const KEY_SOURCE_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long a failed readiness probe is trusted before another is attempted.
+///
+/// Readiness is polled on a schedule the service does not choose. Without this,
+/// a probe every second against an issuer that is down is an outbound request
+/// every second, from every replica. A successful probe needs no equivalent:
+/// the verifier's own cache answers it without a request.
+const KEY_SOURCE_PROBE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Stands in for the key-set location in the log when there is none to name.
+///
+/// Only an in-memory key set reaches this, which no deployment configures.
+const STATIC_KEY_SOURCE: &str = "<static key set>";
+
+/// How many causes below the reported error are rendered.
+///
+/// `reqwest` reports a transport failure as "error sending request" and keeps
+/// the reason underneath it: the connection that was refused, the certificate
+/// that did not verify. That reason is the whole diagnosis, and it is two or
+/// three levels down.
+const REPORTED_CAUSES: usize = 3;
+
+/// The bound on the rendered cause, which is remote text in part.
+const MAX_CAUSE_BYTES: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticationClaimsConfig {
@@ -33,6 +69,19 @@ pub struct AuthenticationClaimsConfig {
 pub struct Authenticator {
     verifier: Arc<TokenVerifier>,
     claims: AuthenticationClaimsConfig,
+    key_source: Arc<Mutex<KeySourceState>>,
+}
+
+/// What is known about the issuer key set, and when it was last said aloud.
+///
+/// Shared rather than copied when the authenticator is cloned, so the two
+/// intervals bound the process and not each handle.
+#[derive(Debug, Default)]
+struct KeySourceState {
+    /// When the failure was last written to the log.
+    last_reported: Option<Instant>,
+    /// When a readiness probe last failed, and so has not been retried since.
+    last_failed_probe: Option<Instant>,
 }
 
 impl std::fmt::Debug for Authenticator {
@@ -213,7 +262,11 @@ impl Authenticator {
     }
 
     pub fn new(verifier: Arc<TokenVerifier>, claims: AuthenticationClaimsConfig) -> Self {
-        Self { verifier, claims }
+        Self {
+            verifier,
+            claims,
+            key_source: Arc::new(Mutex::new(KeySourceState::default())),
+        }
     }
 
     pub async fn authenticate(
@@ -221,12 +274,145 @@ impl Authenticator {
         access_token: &str,
     ) -> Result<AuthenticatedContext, AuthenticationError> {
         strict_jwt_preflight(access_token)?;
-        let verified = self
-            .verifier
-            .verify(access_token)
-            .await
-            .map_err(|_| AuthenticationError::Verification)?;
+        let verified = match self.verifier.verify(access_token).await {
+            Ok(verified) => verified,
+            Err(error) => {
+                if is_key_source_failure(&error) {
+                    self.report_key_source_failure(&error);
+                }
+                return Err(AuthenticationError::Verification);
+            }
+        };
         self.extract_context(verified)
+    }
+
+    /// Ask the issuer for its key set on a readiness check, and name what comes
+    /// back, without letting the answer decide readiness.
+    ///
+    /// Readiness answers whether this deployment should be sent traffic, and
+    /// the honest answer during an issuer outage is yes: the verifier keeps
+    /// serving a key set it cannot recheck for a bounded while, so requests
+    /// carrying tokens signed by keys already held still succeed. Withholding
+    /// readiness would take every replica out of rotation at once for a
+    /// dependency none of them owns, which is the shape of a cascading failure
+    /// rather than a diagnosis. So the probe reports and the report is the
+    /// point: an operator watching this deployment is told the issuer has gone
+    /// quiet while requests still work, and told again when the allowance is
+    /// what stands between them and rejecting everything.
+    ///
+    /// A failed probe is remembered for a short interval, so an orchestrator's
+    /// polling schedule cannot become this deployment's retry schedule against
+    /// an issuer that is down.
+    pub async fn probe_key_source(&self) {
+        if self.probe_is_suppressed(Instant::now()) {
+            return;
+        }
+        match self.verifier.key_source().ensure_key_set().await {
+            Ok(()) => {
+                self.lock_key_source().last_failed_probe = None;
+                self.report_key_source_outage().await;
+            }
+            Err(error) => {
+                self.report_key_source_failure(&error);
+                self.lock_key_source().last_failed_probe = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Attempt the issuer's key set once at startup, and name it if it cannot
+    /// be had.
+    ///
+    /// A misspelled or unreachable `jwksUri` is otherwise discovered one
+    /// rejected request at a time, and the rejection an operator sees is the
+    /// same closed `401` a bad token gets. Startup is where an operator is
+    /// looking, so startup is where it should be said.
+    ///
+    /// It reports rather than refuses, for the same reason readiness does:
+    /// refusing would tie this deployment's start to the issuer's, so a restart
+    /// during an issuer outage could not come back, and an issuer that starts
+    /// alongside this service would race it.
+    pub async fn announce_key_source(&self) {
+        if let Err(error) = self.verifier.key_source().ensure_key_set().await {
+            self.report_key_source_failure(&error);
+        }
+    }
+
+    /// Whether the last probe failed recently enough to stand for this one.
+    fn probe_is_suppressed(&self, now: Instant) -> bool {
+        self.lock_key_source()
+            .last_failed_probe
+            .is_some_and(|failed| now.duration_since(failed) < KEY_SOURCE_PROBE_INTERVAL)
+    }
+
+    /// Name an unreachable issuer key set, at most once per interval.
+    ///
+    /// The caller learns nothing from this. Their rejection is the same closed
+    /// `401` whether the token was bad or this deployment could not check it,
+    /// which is the right answer to give a caller and the reason the operator
+    /// has nothing else to go on. The distinction exists only here.
+    fn report_key_source_failure(&self, error: &OidcError) {
+        if !self.claim_report_interval(Instant::now()) {
+            return;
+        }
+        tracing::warn!(
+            target: "registry_evidence::authentication",
+            jwks_uri = self
+                .verifier
+                .key_source()
+                .jwks_uri()
+                .unwrap_or(STATIC_KEY_SOURCE),
+            cause = describe_causes(error),
+            "the access-token issuer key set could not be retrieved; every request is rejected until it can be"
+        );
+    }
+
+    /// Name a key set that is being served without being confirmed, at most
+    /// once per interval.
+    ///
+    /// Nothing else would say so. The verifier keeps serving a key set it
+    /// cannot recheck, so requests succeed, readiness holds, and the only
+    /// thing that has changed is that the issuer has stopped answering. That
+    /// is worth an operator's attention before the allowance runs out and the
+    /// deployment starts rejecting everything.
+    async fn report_key_source_outage(&self) {
+        let Some(outage) = self.verifier.key_source().outage_duration().await else {
+            return;
+        };
+        if !self.claim_report_interval(Instant::now()) {
+            return;
+        }
+        tracing::warn!(
+            target: "registry_evidence::authentication",
+            jwks_uri = self
+                .verifier
+                .key_source()
+                .jwks_uri()
+                .unwrap_or(STATIC_KEY_SOURCE),
+            outage_seconds = outage.as_secs(),
+            "the access-token issuer key set has not been retrievable; the key set already held is still being accepted, and requests will be rejected once its allowance runs out"
+        );
+    }
+
+    /// Take the reporting interval if it is free, so exactly one caller logs.
+    fn claim_report_interval(&self, now: Instant) -> bool {
+        let mut state = self.lock_key_source();
+        if state
+            .last_reported
+            .is_some_and(|reported| now.duration_since(reported) < KEY_SOURCE_REPORT_INTERVAL)
+        {
+            return false;
+        }
+        state.last_reported = Some(now);
+        true
+    }
+
+    /// Recover the guard even from a poisoned lock: the state behind it is two
+    /// timestamps, which a panicking holder cannot leave inconsistent, and
+    /// readiness must not panic because a report once did.
+    fn lock_key_source(&self) -> MutexGuard<'_, KeySourceState> {
+        self.key_source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn extract_context(
@@ -290,6 +476,70 @@ impl Authenticator {
             verified_claims: claims,
         })
     }
+}
+
+/// Whether a verification failure was this deployment's key source rather than
+/// the caller's token.
+///
+/// Every known failure is listed rather than folded into the wildcard, which
+/// covers only variants added to the shared verifier after this was written.
+/// Those default to the caller's side: a failure this code has never seen is
+/// one it cannot honestly describe as an unreachable key set, and an operator
+/// misdirected by a confident wrong message is worse off than one who reads
+/// the same `authentication_failed` twice.
+fn is_key_source_failure(error: &OidcError) -> bool {
+    match error {
+        OidcError::Transport(_)
+        | OidcError::BoundedRead(_)
+        | OidcError::FetchUrl(_)
+        | OidcError::HttpStatus(_)
+        | OidcError::InvalidUrl
+        | OidcError::Parse
+        | OidcError::InvalidJwk
+        | OidcError::EmptyKeySet
+        | OidcError::MissingIssuer => true,
+        OidcError::IssuerMismatch { .. }
+        | OidcError::MalformedToken
+        | OidcError::AlgorithmNotAllowed
+        | OidcError::TokenTypeNotAllowed
+        | OidcError::MissingKid
+        | OidcError::KidTooLong
+        | OidcError::UnknownKid
+        | OidcError::TokenExpired
+        | OidcError::TokenNotYetValid
+        | OidcError::AudienceMismatch
+        | OidcError::SignatureInvalid
+        | OidcError::InvalidToken
+        | OidcError::ClientNotAllowed => false,
+        _ => false,
+    }
+}
+
+/// Render an error together with the causes beneath it, bounded.
+///
+/// Separated from the logging call so what reaches the log can be asserted
+/// directly. Every part of it is either this crate's own text or the transport
+/// library's account of a connection to an address the bundle configured;
+/// nothing the caller supplied passes through here.
+fn describe_causes(error: &dyn std::error::Error) -> String {
+    let mut rendered = error.to_string();
+    let mut cause = error.source();
+    let mut remaining = REPORTED_CAUSES;
+    while let (Some(current), 1..) = (cause, remaining) {
+        rendered.push_str(": ");
+        rendered.push_str(&current.to_string());
+        cause = current.source();
+        remaining -= 1;
+    }
+    if rendered.len() > MAX_CAUSE_BYTES {
+        let mut end = MAX_CAUSE_BYTES;
+        while !rendered.is_char_boundary(end) {
+            end -= 1;
+        }
+        rendered.truncate(end);
+        rendered.push_str("...");
+    }
+    rendered
 }
 
 pub fn strict_jwt_preflight(token: &str) -> Result<(), AuthenticationError> {
@@ -446,6 +696,198 @@ mod tests {
         );
         assert!(resolve_claim_path(&claims, "grant.missing").is_none());
         assert!(resolve_claim_path(&claims, "grant..subject-id").is_none());
+    }
+
+    #[test]
+    fn key_source_failures_are_separated_from_token_failures() {
+        // The operator's half: nothing here is anything the caller did, and
+        // each one leaves the deployment unable to verify any token at all.
+        for error in [
+            OidcError::HttpStatus(503),
+            OidcError::InvalidUrl,
+            OidcError::Parse,
+            OidcError::InvalidJwk,
+            OidcError::EmptyKeySet,
+            OidcError::MissingIssuer,
+        ] {
+            assert!(
+                is_key_source_failure(&error),
+                "{error} is a fault in this deployment's key source"
+            );
+        }
+
+        // The caller's half: reporting these would let a caller write to the
+        // operator log by presenting bad tokens, and none of them says
+        // anything about the deployment.
+        for error in [
+            OidcError::MalformedToken,
+            OidcError::AlgorithmNotAllowed,
+            OidcError::TokenTypeNotAllowed,
+            OidcError::MissingKid,
+            OidcError::KidTooLong,
+            OidcError::UnknownKid,
+            OidcError::TokenExpired,
+            OidcError::TokenNotYetValid,
+            OidcError::AudienceMismatch,
+            OidcError::SignatureInvalid,
+            OidcError::InvalidToken,
+            OidcError::ClientNotAllowed,
+            OidcError::IssuerMismatch {
+                expected: "https://issuer.invalid".to_owned(),
+                actual: "https://other.invalid".to_owned(),
+            },
+        ] {
+            assert!(
+                !is_key_source_failure(&error),
+                "{error} is a fault in the presented token"
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    struct Layered {
+        message: &'static str,
+        below: Option<Box<Layered>>,
+    }
+
+    impl std::fmt::Display for Layered {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for Layered {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.below
+                .as_deref()
+                .map(|below| below as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    fn layered(messages: &[&'static str]) -> Layered {
+        let mut layers = messages.iter().rev();
+        let mut error = Layered {
+            message: layers.next().expect("at least one layer"),
+            below: None,
+        };
+        for message in layers {
+            error = Layered {
+                message,
+                below: Some(Box::new(error)),
+            };
+        }
+        error
+    }
+
+    #[test]
+    fn the_reported_cause_reaches_past_the_summary_to_the_reason() {
+        // The shape a refused TLS handshake arrives in: the top layer says
+        // only that a request failed, and the layer an operator needs is
+        // underneath it.
+        let described = describe_causes(&layered(&[
+            "error sending request",
+            "connection error",
+            "invalid peer certificate: UnknownIssuer",
+        ]));
+        assert_eq!(
+            described,
+            "error sending request: connection error: invalid peer certificate: UnknownIssuer"
+        );
+    }
+
+    #[test]
+    fn the_reported_cause_is_bounded_in_depth_and_length() {
+        let deep = describe_causes(&layered(&["first", "second", "third", "fourth", "fifth"]));
+        assert_eq!(deep, "first: second: third: fourth");
+
+        let long = describe_causes(&layered(&["x".repeat(4096).leak()]));
+        assert!(
+            long.len() <= MAX_CAUSE_BYTES + 3,
+            "an unbounded remote message reached the log: {} bytes",
+            long.len()
+        );
+        assert!(long.ends_with("..."), "truncation is not marked: {long}");
+    }
+
+    #[test]
+    fn a_failing_key_source_is_named_once_per_interval() {
+        let authenticator = Authenticator::new(
+            Arc::new(TokenVerifier::new(
+                TokenVerifierConfig::access_token_profile(
+                    "https://issuer.invalid".to_owned(),
+                    vec!["urn:example:audience".to_owned()],
+                    vec![jsonwebtoken::Algorithm::EdDSA],
+                    vec!["at+jwt".to_owned()],
+                ),
+                Arc::new(JwksFetcher::new(
+                    "https://issuer.invalid/jwks".to_owned(),
+                    JwksFetcherConfig::defaults(),
+                )),
+            )),
+            AuthenticationClaimsConfig {
+                principal_claim: "sub".to_owned(),
+                requester_tags_claim: "evidence_tags".to_owned(),
+                evidence_audience_claim: "evidence_audience".to_owned(),
+                grant_id_claim: "evidence_grant_id".to_owned(),
+                grant_authority_claim: "evidence_authority".to_owned(),
+                actor_claim: None,
+            },
+        );
+
+        let now = Instant::now();
+        assert!(
+            authenticator.claim_report_interval(now),
+            "the first failure is always named"
+        );
+        assert!(
+            !authenticator.claim_report_interval(now + KEY_SOURCE_REPORT_INTERVAL / 2),
+            "a deployment rejecting every request must not log every request"
+        );
+        assert!(
+            authenticator.claim_report_interval(now + KEY_SOURCE_REPORT_INTERVAL),
+            "a fault that lasts keeps being named"
+        );
+    }
+
+    #[test]
+    fn a_failed_readiness_probe_stands_in_for_the_next_one() {
+        let authenticator = Authenticator::new(
+            Arc::new(TokenVerifier::new(
+                TokenVerifierConfig::access_token_profile(
+                    "https://issuer.invalid".to_owned(),
+                    vec!["urn:example:audience".to_owned()],
+                    vec![jsonwebtoken::Algorithm::EdDSA],
+                    vec!["at+jwt".to_owned()],
+                ),
+                Arc::new(JwksFetcher::new(
+                    "https://issuer.invalid/jwks".to_owned(),
+                    JwksFetcherConfig::defaults(),
+                )),
+            )),
+            AuthenticationClaimsConfig {
+                principal_claim: "sub".to_owned(),
+                requester_tags_claim: "evidence_tags".to_owned(),
+                evidence_audience_claim: "evidence_audience".to_owned(),
+                grant_id_claim: "evidence_grant_id".to_owned(),
+                grant_authority_claim: "evidence_authority".to_owned(),
+                actor_claim: None,
+            },
+        );
+
+        let now = Instant::now();
+        assert!(
+            !authenticator.probe_is_suppressed(now),
+            "nothing is known yet, so the first probe must run"
+        );
+        authenticator.lock_key_source().last_failed_probe = Some(now);
+        assert!(
+            authenticator.probe_is_suppressed(now + KEY_SOURCE_PROBE_INTERVAL / 2),
+            "an orchestrator's polling rate must not become the retry rate"
+        );
+        assert!(
+            !authenticator.probe_is_suppressed(now + KEY_SOURCE_PROBE_INTERVAL),
+            "an issuer that comes back must be found"
+        );
     }
 
     #[test]
