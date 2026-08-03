@@ -887,3 +887,24 @@ is parallel; B has no upstream dependencies and is the standing priority
   `test_check_release_source_model.py` 13 passed,
   `check_adopter_compose_contract.sh` PASS on current and minimum-2.35.0, and
   `registry-release validate` clean on beta-27.
+
+- 2026-08-04: Fixed an untracked deletion cascade found while rewriting the
+  spreadsheet tutorials: `registryctl dev` failed on every project with
+  `[registryctl.dev.invalid_plan] empty development result expectation is
+  invalid`. The development compiler still built a Notary-era claim-results
+  commitment, and `dev_claim_results_commitment` rejects an empty result set,
+  which is now the only set a claim-free project can produce. The whole surface
+  was vestigial: `request_json`, `minimized_claim_ids`, and
+  `expected_claim_results_sha256` were compiled empty, had no remaining reader
+  (the request materializer that wrote `request.curl` went with Notary), and
+  their plan-side validation could no longer be satisfied. Removed all three
+  from `AuthoredDevScenario` and `DevScenarioPlan` with the commitment helper
+  and its validation. The smoke report keeps `minimized_claim_ids` and its
+  `minimized_claim_ids=none` output line, which is a live output contract. The
+  regression survived because `dev_runtime_core.rs`'s hand-built scenario
+  fixture still populated the deleted fields, so no test ever exercised what
+  the compiler actually emits; the new test drives the real `init` templates
+  through `compile_dev_runtime_authoring`, and it fails on the pre-fix tree.
+  Gates: `cargo fmt --check` clean, `cargo clippy -p registryctl --all-targets`
+  with `-D warnings` clean, `cargo check --locked --workspace --all-targets`
+  clean, `cargo test --locked -p registryctl` green (28 targets, 0 failures).

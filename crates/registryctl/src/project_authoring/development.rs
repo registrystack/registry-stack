@@ -6,7 +6,7 @@ use crate::dev_credentials::{
     DevSourceCredentialProjection, PreparedDevCredentialClosure,
 };
 use crate::dev_runtime::{
-    dev_claim_results_commitment, AuthoredDevScenario, AuthoredDevelopment,
+    AuthoredDevScenario, AuthoredDevelopment,
     AuthoredLocalSnapshot, AuthoredSyntheticOauthRequest, AuthoredSyntheticSourcePlan,
     AuthoredSyntheticSourceRequest, DevEnvironmentProfile,
     DevOAuthProfile, DevSourceMode, DevSourceProvider, SyntheticOAuthResponseCase,
@@ -187,10 +187,6 @@ pub(crate) fn compile_dev_runtime_authoring(
             oauth_request,
             response_body,
         });
-    let request_json = Vec::new();
-    let minimized_claim_ids = Vec::new();
-    let expected_claim_results_sha256 = dev_claim_results_commitment(Vec::new())
-        .map_err(|_| anyhow!("empty development result expectation is invalid"))?;
     let scenario = AuthoredDevScenario {
         integration_id: default_integration.to_owned(),
         fixture_id: default_fixture.to_owned(),
@@ -200,10 +196,7 @@ pub(crate) fn compile_dev_runtime_authoring(
         oauth_profile,
         denial_scenario_id: "unauthorized".to_string(),
         authorized_scenario_id: "authorized".to_string(),
-        minimized_claim_ids,
-        expected_claim_results_sha256,
         synthetic_source,
-        request_json,
     };
 
     Ok(DevAuthoringProjection {

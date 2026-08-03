@@ -1809,3 +1809,23 @@ source:
         assert!(serde_norway::from_str::<EnvironmentIntegration>(legacy).is_err());
     }
 }
+
+/// `registryctl dev` compiles this projection before it reaches Docker, so an
+/// `init` template that cannot produce one has no development path at all.
+#[test]
+fn every_init_template_compiles_a_development_runtime_projection() {
+    for starter in [ProjectStarter::Http, ProjectStarter::Spreadsheet] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = temporary.path().join("registry-project");
+        init_registry_project(&ProjectInitOptions {
+            starter,
+            directory: project.clone(),
+        })
+        .expect("starter initializes");
+
+        let authoring = compile_dev_runtime_authoring(&project, "local")
+            .unwrap_or_else(|error| panic!("{starter:?} has no development plan: {error}"));
+
+        assert_eq!(authoring.scenarios.len(), 1, "{starter:?}");
+    }
+}

@@ -520,7 +520,6 @@ use registry_platform_config::{
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 
 const RESPONSE_CANARY: &str = "fixture-response-canary-value";
-const REQUEST_CANARY: &str = "fixture-request-canary-value";
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
 
 fn free_port() -> u16 {
@@ -671,14 +670,6 @@ fn write_development_trust_material(
 }
 
 fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> AuthoredDevScenario {
-    let expected_claim_results_sha256 =
-        dev_claim_results_commitment(vec![DevClaimResultExpectation {
-            claim_id: "eligibility".to_string(),
-            value: serde_json::json!(true),
-            satisfied: Some(true),
-            disclosure: "predicate".to_string(),
-        }])
-        .unwrap();
     AuthoredDevScenario {
         integration_id: "citizen-source".to_string(),
         fixture_id: "passing-default".to_string(),
@@ -692,8 +683,6 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
         oauth_profile,
         denial_scenario_id: "default-denied".to_string(),
         authorized_scenario_id: "default-authorized".to_string(),
-        minimized_claim_ids: vec!["eligibility".to_string()],
-        expected_claim_results_sha256,
         synthetic_source: Some(AuthoredSyntheticSourcePlan {
             scenario: SyntheticSourceScenario::AuthoredResponse,
             source_request: AuthoredSyntheticSourceRequest {
@@ -719,7 +708,6 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
             }),
             response_body: Some(format!(r#"{{"result":"{RESPONSE_CANARY}"}}"#).into_bytes()),
         }),
-        request_json: format!(r#"{{"subject":"{REQUEST_CANARY}"}}"#).into_bytes(),
     }
 }
 
@@ -911,10 +899,8 @@ fn generic_plan_uses_locked_images_loopback_development_identity_and_exact_sourc
             }));
         }
         assert!(!format!("{plan:?}").contains(RESPONSE_CANARY));
-        assert!(!format!("{plan:?}").contains(REQUEST_CANARY));
         let report_json = serde_json::to_string(&plan).unwrap();
         assert!(!report_json.contains(RESPONSE_CANARY));
-        assert!(!report_json.contains(REQUEST_CANARY));
     }
 }
 
@@ -1381,7 +1367,7 @@ fn stopped_degraded_and_changed_running_starts_replace_without_orphan_generation
             "0000000000000002",
         );
         if changed {
-            input.scenarios[0].request_json = br#"{"subject":"changed"}"#.to_vec();
+            input.scenarios[0].denial_scenario_id = "replaced-denied".to_string();
         }
         let replacement = DevRuntimePlan::derive(input).unwrap();
         let replacement_artifacts = replacement

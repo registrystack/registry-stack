@@ -20,7 +20,6 @@ use registry_platform_config::{
     verify_config_bundle, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
     ProductAcceptanceProductV1, ProductTrustDomainV1, MAX_MANIFEST_BYTES,
 };
-use registry_platform_crypto::canonicalize_json;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -58,7 +57,6 @@ const SYNTHETIC_SOURCE_PLAN_SCHEMA_V1: &str = "registry.relay.synthetic-source-p
 const SYNTHETIC_SOURCE_PLAN_CONTAINER_PATH: &str = "/run/registry/synthetic-source-plan.json";
 const SYNTHETIC_SOURCE_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
 const MAX_RUNTIME_STATE_BYTES: u64 = 256 * 1024;
-const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const MAX_SYNTHETIC_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_COMPOSE_BYTES: u64 = 1024 * 1024;
 const MAX_RUNTIME_PLAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -121,14 +119,7 @@ pub struct AuthoredDevScenario {
     pub oauth_profile: DevOAuthProfile,
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
-    pub minimized_claim_ids: Vec<String>,
-    /// Binds the request-selected claim values and disclosure semantics without
-    /// persisting those values in the generated runtime plan.
-    pub expected_claim_results_sha256: String,
     pub synthetic_source: Option<AuthoredSyntheticSourcePlan>,
-    /// The compiler-produced governed request. It is intentionally private to
-    /// the owner-only request materializer and is never serialized or logged.
-    pub request_json: Vec<u8>,
 }
 
 impl fmt::Debug for AuthoredDevScenario {
@@ -143,16 +134,10 @@ impl fmt::Debug for AuthoredDevScenario {
             .field("oauth_profile", &self.oauth_profile)
             .field("denial_scenario_id", &self.denial_scenario_id)
             .field("authorized_scenario_id", &self.authorized_scenario_id)
-            .field("minimized_claim_ids", &self.minimized_claim_ids)
-            .field(
-                "expected_claim_results_sha256",
-                &self.expected_claim_results_sha256,
-            )
             .field(
                 "synthetic_source",
                 &self.synthetic_source.as_ref().map(|_| "<redacted>"),
             )
-            .field("request_json", &"<redacted>")
             .finish()
     }
 }
@@ -933,37 +918,7 @@ pub struct DevScenarioPlan {
     pub oauth_profile: DevOAuthProfile,
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
-    pub minimized_claim_ids: Vec<String>,
-    /// Value-free commitment checked against the authorized smoke response.
-    pub expected_claim_results_sha256: String,
     pub synthetic_source_origin: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct DevClaimResultExpectation {
-    pub claim_id: String,
-    pub value: serde_json::Value,
-    pub satisfied: Option<bool>,
-    pub disclosure: String,
-}
-
-pub(crate) fn dev_claim_results_commitment(
-    mut results: Vec<DevClaimResultExpectation>,
-) -> Result<String, ()> {
-    results.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
-    if results.is_empty()
-        || results
-            .windows(2)
-            .any(|pair| pair[0].claim_id == pair[1].claim_id)
-    {
-        return Err(());
-    }
-    let canonical = canonicalize_json(&serde_json::json!({
-        "schema": "registryctl.dev_claim_results_commitment.v1",
-        "results": results,
-    }))
-    .map_err(|_| ())?;
-    Ok(sha256_uri(&canonical))
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -1396,8 +1351,6 @@ impl DevRuntimePlan {
             oauth_profile: scenario.oauth_profile,
             denial_scenario_id: scenario.denial_scenario_id.clone(),
             authorized_scenario_id: scenario.authorized_scenario_id.clone(),
-            minimized_claim_ids: scenario.minimized_claim_ids.clone(),
-            expected_claim_results_sha256: scenario.expected_claim_results_sha256.clone(),
             synthetic_source_origin: (input.development.source_mode == DevSourceMode::Synthetic)
                 .then(|| DEV_SYNTHETIC_SOURCE_ORIGIN.to_string()),
         };
@@ -1777,38 +1730,6 @@ fn select_authored_scenario<'a>(
             DevFailureCategory::InvalidPlan,
             "denial and authorized smoke scenario ids must be distinct",
             "author distinct denial and authorized smoke scenarios",
-        ));
-    }
-    if selected.request_json.is_empty() || selected.request_json.len() > MAX_REQUEST_BODY_BYTES {
-        return Err(DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "compiled local request exceeds its closed byte contract",
-            "reduce the authored development request and rebuild",
-        ));
-    }
-    let _: serde_json::Value = parse_json_strict(&selected.request_json).map_err(|_| {
-        DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "compiled local request is not strict JSON",
-            "fix the authored fixture request and rebuild",
-        )
-    })?;
-    let mut claims = BTreeSet::new();
-    for claim in &selected.minimized_claim_ids {
-        validate_id("minimized claim id", claim)?;
-        if !claims.insert(claim) {
-            return Err(DevRuntimeError::new(
-                DevFailureCategory::InvalidPlan,
-                "minimized claim ids must be unique",
-                "remove the duplicate expected claim id",
-            ));
-        }
-    }
-    if validate_sha256(&selected.expected_claim_results_sha256).is_err() {
-        return Err(DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "expected development claim result commitment is invalid",
-            "rebuild the development plan from a valid authored fixture",
         ));
     }
     Ok(selected)
