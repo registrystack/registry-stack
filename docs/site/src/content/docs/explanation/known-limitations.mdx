@@ -5,15 +5,15 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
+  - registry-evidence
+  - registry-mint
   - solmara-lab
-last_reviewed: "2026-06-28"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced:
   - sd-jwt-vc
-  - oid4vci
   - cccev
-  - verifiable-credentials
   - odrl
 ---
 
@@ -55,28 +55,124 @@ It is not a production support commitment and carries no hosted service-level ag
 Two things follow.
 First, the behaviors and boundaries here may change as the specifications move toward `current`.
 Second, aligning with an external standard is not the same as conforming to it: speaking the shape
-of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, or the rest does not certify conformance to any of
-them.
+of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to any of them.
 The [standards register](../../reference/standards/) records how each one is actually adopted.
+
+## Registry Notary is retired
+
+Registry Notary was the stack's claim-evaluation and credential-issuance service. It is retired: it
+is not a supported starting point, not a fallback, and not a deprecated-but-usable option, and its
+credential lifecycle, delegated subject access, and peer federation are gone with it. If you are
+running it today, the closest supported replacement is Evidence, which answers one bounded question
+about one subject with a signed assertion carrying the answer and not the record. Evidence does not
+reproduce Notary's issuance sessions, holder binding, status lists, revocation, wallet-facing
+issuance, or peer-to-peer evaluation, so a move is a redesign of the integration rather than a
+configuration change. The limits in the next section are Evidence's own, stated on their own terms.
+
+## Evidence limits
+
+Evidence releases one stateless assertion per request under a frozen Version 1 contract.
+Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and the
+[Evidence security model](../../security/evidence/).
+
+- A serialization, not a credential lifecycle: enabling the SD-JWT VC response format adds an
+  encoding of the same assertion. There is no issuance session, holder binding ceremony, status
+  list, revocation, or presentation verification, and `/.well-known/jwt-vc-issuer` publishes no
+  per-requester or per-requirement information. A released assertion stays verifiable until its
+  declared validity expires; nothing recalls it.
+- The holder key is unverified: a request may carry an optional `holderKey` that is echoed into the
+  `cnf` member. Evidence issues no holder key, binds none, and verifies none, so `cnf` is a
+  caller-supplied convenience for whatever presentation layer the operator runs elsewhere.
+- Assertions are audience-scoped, not multi-verifier: the subject identifier is an audience-scoped
+  pseudonym, so the same person requested for a different audience yields a different identifier.
+  Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
+  linkable across purposes. This is deliberate, and it means an Evidence assertion is not a
+  general-purpose credential a holder presents to several verifiers.
+- The request nonce is not replay protection: every request carries one canonical 32-byte random
+  nonce that is echoed into the payload and never stored, uniqueness-checked, or exposed to
+  authorization, rate limits, scripts, source requests, logs, metrics, traces, or audit. It is
+  uninterpreted correlation data, never a subject binding, identifier, or freshness proof. It
+  becomes a freshness check only for a verifier that independently retained the value it sent.
+- Unsigned output is not evidence: the unsigned JSON format is releasable only where the immutable
+  bundle and the one matched grant both name it. The envelope is self-identifying with a fixed
+  schema, type, integrity marker, warning, and exact vendor media type, carries no JWS member, and
+  the strict verifier rejects it. Treat it as transport-authenticated convenience, never as
+  something a third party can verify later.
+- CCCEV is an alignment, not conformance: the payload field names map to CCCEV 2.2.0 as a frozen
+  semantic reference with Evidence-specific extensions. No JSON-LD envelope is emitted and no
+  conformance to CCCEV is claimed.
+- Disclosure families are an attestation, not a classifier: the runtime rejects two simultaneously
+  enabled requirements that declare the same `disclosureGuard` family, but a declared family is a
+  reviewed operator assertion. Nothing detects that two differently labelled families are
+  semantically equivalent, so the combined-bundle disclosure review stays an operator duty.
+- No cumulative disclosure budget: Evidence has no application database and persists no selector,
+  source, evidence, or response data, so nothing tracks cumulative disclosure across repeated or
+  overlapping requests. Native rate controls are uniform per principal, tracked per process in
+  in-process memory, bounded at 100,000 tracked keys, multiplied by replica count, and reset to
+  full by a restart. Per-client quotas are a gateway responsibility.
+- One trust domain per process: the authentication profile admits exactly one token issuer and one
+  set of claim names. Mutually distrustful issuers or customers, or one issuer whose clients carry
+  the same authority under different claim names, require a second deployment with its own bundle,
+  signer, and audit boundary.
+- Bearer tokens only: a token carrying a proof-of-possession confirmation claim is denied rather
+  than accepted as an ordinary bearer, because Evidence validates no sender proof. An authorization
+  server that binds tokens to DPoP keys or client certificates must issue Evidence clients unbound
+  tokens.
+- No hot reload, no admin surface, Unix targets only: there is no runtime upload, editor, approval
+  API, hot reload, merge, mutation, governed-field override, or fallback path. Any change is a new
+  reviewed revision and a restart. Version 1 supports Unix targets.
+- Startup does not detect overlapping authority: exactly one authority path may match a request,
+  and zero paths and two or more paths both deny. Startup validation does not detect two paths
+  covering the same requirement, purpose, and subject tuple, so that misconfiguration surfaces at
+  request time as a refusal rather than at deployment time.
+- Readiness does not prove a source returns data: neither startup nor readiness sends an
+  evidence-data request or probes a source data endpoint. A ready service is one whose credentials,
+  trust bindings, signing provider, and audit sink resolved, not one whose sources are answering.
+- One secret provider: the reference file provider is the only one. There is no hardware
+  security module or PKCS#11 option, so signing-key custody is a property of the host, its disk,
+  its backups, and its operators.
+
+## Registry Mint limits
+
+Registry Mint issues the short-lived access tokens a resource server such as Evidence verifies,
+for deployments with no identity provider. A deployment that already has an identity provider does
+not run it. Read the full surface in the [Registry Mint reference](../../reference/mint/).
+
+- Machine clients only: the token endpoint supports the `client_credentials` grant with
+  `private_key_jwt` client authentication and nothing else. There is no authorization-code flow, no
+  user-facing login, no refresh token, and no consent surface.
+- No revocation and no introspection: the service exposes authorization-server metadata, a token
+  endpoint, a JWKS endpoint, and health and readiness probes. A minted token is accepted by its
+  audience until it expires, so token lifetime inside the `60..=3600` second bound is the only
+  containment lever.
+- Authority is registry-owned: the authority a token asserts is written from the client's registry
+  entry, never from the request, and a client registration whose subject claim path would overwrite
+  an authority claim refuses to load.
+- Client-authentication failures are opaque by design: they collapse to one `401 invalid_client`
+  response, so the endpoint is not an oracle for which part of the assertion failed.
+- The client registry is a watched directory: entries are reloaded on `SIGHUP` without a restart,
+  so any file written into that directory registers a client and the authority Registry Mint will
+  assert for it. Treat the directory as key material.
+- Transport is the operator's: Registry Mint serves plain HTTP and expects TLS termination it does
+  not manage.
 
 ## Stack-wide boundaries at a glance
 
-These boundaries cut across components. Read them first.
+These boundaries cut across components.
 
 - No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
-  source registry data, and it has no event-stream backend. Registry-backed Notary claims consume
-  Relay consultations; Registry Notary does not connect to registry sources directly.
+  source registry data, and it has no event-stream backend. Evidence reads its fixed sources
+  read-only as well, and persists nothing it read.
 - Aggregate routes are not a privacy budget: Relay aggregate routes return the configured
   statistical observations, but provide no built-in longitudinal privacy budget and do not track
   cumulative disclosure across repeated or overlapping queries.
   Do not describe an aggregate route as privacy-budgeted unless a separate deployed control
   provides that protection.
-- A published manifest grants nothing: Publishing a dataset, policy, evidence offering, or
-  federation relationship in a discovery artifact grants no access, enforces nothing, and asserts
-  no fact about a live record.
-  Federation discovery metadata is not a trust anchor: a published manifest does not bind a
-  consumer to trust a JWKS endpoint, federation API host, or peer identity.
-  Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
+- A published manifest grants nothing: Publishing a dataset, policy, or evidence offering in a
+  discovery artifact grants no access, enforces nothing, and asserts no fact about a live record.
+  Discovery metadata is not a trust anchor: a published manifest does not bind a consumer to trust
+  a JWKS endpoint or a service host.
+  Trust bootstrap stays in the consumer's local policy.
 - Solmara Lab and its hosted instance are demonstrations, not infrastructure: Solmara Lab is a
   separately maintained adopter demo that uses generated synthetic data and demo configuration.
   It is not a formal Registry Stack product and provides no production deployment guidance.
@@ -84,78 +180,6 @@ These boundaries cut across components. Read them first.
   it carries no uptime or data-retention commitment.
 
 For the rationale behind each of these, follow the linked specifications in each section.
-
-## Credential issuance and lifecycle limits (Notary)
-
-Registry Notary issues credentials, but the issuance surface is deliberately narrow.
-Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/).
-
-- One credential format, one OID4VCI holder profile: Issued Registry Notary credentials are
-  [SD-JWT VC](../../reference/standards/) only. Issuer signing supports EdDSA and ES256.
-  Holder binding is a per-credential-profile setting that defaults to `mode: did` with `did:jwk`
-  as the supported holder DID method.
-  Direct issuance requires a holder DID by default; it verifies a fresh holder proof only when
-  `proof_of_possession: required` is configured.
-  An operator can explicitly set `holder_binding.mode: none` for a bearer-style credential
-  profile, in which case `registry-notary doctor` reports a warning and the issued credential is
-  unbound.
-  The OID4VCI path requires EdDSA `did:jwk` binding. ES256 holder proof is not supported.
-- A profiled issuance subset, not a full issuer: The [OID4VCI](../../reference/standards/) surface
-  is a registry-backed issuer-initiated pre-authorized profile using the
-  `dc+sd-jwt` format, not a full OID4VCI issuer and not a claim of general
-  external-wallet interoperability. The identity provider's authorization code
-  is internal to Notary. There is no wallet-facing authorization-code grant,
-  public nonce endpoint, response next nonce, EUDI, HAIP, PAR, DPoP, or wallet
-  attestation profile.
-  The capability-discovery document (`/.well-known/evidence-service`) declares
-  `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives
-  there rather than in the OID4VCI credential-issuer metadata.
-- Delegated subject access is evaluation-only unless the credential
-  configuration explicitly selects the representative ceremony. Direct
-  `/v1/credentials` and other OID4VCI configurations reject delegated
-  evaluations.
-  Configuration load rejects delegated relationship `credential_profiles` and credential-profile
-  bindings on delegated claims. Remove that capability to keep delegated evaluation, or issue a
-  separately modeled registry-backed, non-delegated claim.
-- No revocation flow, no issuer-metadata discovery endpoint, no erasure workflow: The RS-* specs
-  define no revocation flow.
-  The credential-status surface is optional and off by default; when an operator enables it, the
-  public status endpoint reads a credential's status, and only the admin status endpoint (which
-  requires the `registry_notary:admin` scope) can mark a credential `revoked`.
-  There is no `/.well-known/jwt-vc-issuer` endpoint and no built-in data-subject erasure workflow.
-  A rotated-out signing key may remain published for verification, which is not revocation.
-  These are documented pilot limitations, recorded in `SECURITY.md`.
-- Status-bearing credentials fail closed: The top-level status claim is never
-  selectively disclosable. A client accepts a status-bearing credential only
-  after validating the signed status response from its exact configured HTTPS
-  trusted origin. Missing, invalid, unavailable, suspended, revoked, or expired
-  status denies the credential.
-- CCCEV output is a profiled shape, not conformant: [CCCEV](../../reference/standards/)-shaped
-  output is a profiled subset and is not conformant to CCCEV 2.00.
-  It is consumed by parsing the `@graph` for `cccev:Evidence` nodes.
-- Notary owns credential issuance: Notary issues SD-JWT VC credentials (`dc+sd-jwt`, signed with
-  EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C
-  [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope).
-  Relay no longer issues signed response credentials or hosts issuer DID documents.
-- Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
-  returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
-  non-swappable changes require a service restart.
-  Signed config bundles are verified from a local bundle directory and activated by placing the
-  bundle on the node and restarting; there is no admin config apply route and no hot apply.
-
-## Federation limits
-
-Federation across institutions is static-peer only.
-Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/) and the
-[security model](../../spec/rs-sec-g/).
-
-- Static peers only: Federation uses the global typed Notary correctness-state backend for request
-  replay and `jti` checks. Production and multi-instance deployments require the Notary-owned
-  PostgreSQL schema. Explicit in-memory state is limited to local, single-instance development.
-  There is still no dynamic trust-chain discovery and no federated credential issuance; both are
-  out of scope for this version.
-- Delegated evaluation returns a result, never a credential: Across a federation boundary, what
-  crosses is a scoped evaluation result, never an issued credential.
 
 ## Registry Relay limits
 
@@ -170,34 +194,22 @@ Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/
   Do not infer their presence in one build from another build's route catalog.
 - Aggregates are not privacy-budgeted: As noted stack-wide, Relay aggregate routes provide no
   longitudinal privacy-budget or cumulative-differencing protection.
-- Relay does not evaluate or own the manifest: Relay does not evaluate claims or issue Notary's
-  SD-JWT VC credentials (that is Notary's role), and it does not issue response credentials of its
-  own.
-  Relay also does not own or version the metadata manifest format, which belongs to Registry
-  Manifest.
+- Relay does not evaluate or own the manifest: Relay evaluates no claims and issues no credentials
+  of its own, and it does not own or version the metadata manifest format, which belongs to
+  Registry Manifest.
   Relay only serves and scopes compiled artifacts.
 - Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy
-  enforcement covers only the supported Evidence Gateway PDP profile
+  enforcement covers only the supported PDP profile
   (`registry-evidence-gateway-pdp/v1`, the single PDP profile this build recognizes).
-  It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not dynamic
-  external policy discovery, and not enforcement of [ODRL](../../reference/standards/) terms
-  outside the supported set.
+  It is not dynamic external policy discovery, and not enforcement of
+  [ODRL](../../reference/standards/) terms outside the supported set.
 
-## Data-model limits (Claim and Manifest)
+## Data-model limits (Manifest)
 
-These limits concern what the claim and manifest configuration loaders do and do not enforce.
-Read them in full in the [Claim data model](../../spec/rs-dm-claim/) and [Manifest data
-model](../../spec/rs-dm-manifest/).
+These limits concern what the manifest configuration loader does and does not enforce.
+Read them in full in the [Manifest data model](../../spec/rs-dm-manifest/).
 
-- The `plugin` rule type is unavailable: The enum remains declared, but configuration validation
-  rejects it. A conforming claim uses
-  `consultation_output`, `consultation_matched`, or `cel` under the constraints of its evidence
-  mode.
-- Claim evaluation formats are closed: A claim must include the canonical
-  `application/vnd.registry-notary.claim-result+json` response format and may additionally use
-  `application/ld+json; profile="cccev"`. An empty list, SD-JWT VC, and unknown formats are
-  rejected during configuration load. SD-JWT VC remains a credential-profile issuance format.
-- Manifests describe; they do not enforce: The portable metadata layer only describes: publishing in a discovery artifact grants no access and asserts no fact about a live record. Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
+- Manifests describe; they do not enforce: The portable metadata layer only describes: publishing in a discovery artifact grants no access and asserts no fact about a live record. Trust bootstrap stays in the consumer's local policy.
 - Rendered standards artifacts are well-formed, not certified: Manifest rendering emits standards-shaped artifacts but does not validate them against external standard bodies: a rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard.
 - Vocabulary influence is not vocabulary emission: PROV-O is a design influence only: provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD. No standalone SKOS artifact is published yet (only embedded SKOS-shaped nodes), and CPSV-AP has no Relay runtime metadata route.
 
@@ -215,10 +227,9 @@ Read the full security boundary in the [security model](../../spec/rs-sec-g/).
   rotation schedule, audit retention and storage, tenant isolation, transport termination, edge
   rate limiting, deployment configuration, and incident response are operator responsibilities,
   not behaviors the stack guarantees.
-- Audit fail-closed is a capability, not a guarantee about every build: A deployment can run audit
-  fail-closed, so that a request whose audit record cannot be written does not return success.
-  That is a switch a deployment is able to turn on, not a promise that every route in a given
-  build has been individually audited, nor that every build ships with it on.
+- Audit retention is not audit completeness: a keyed hash chain detects reordering and corruption
+  inside the records a deployment still holds. It does not prove that every record ever written is
+  still present, and nothing in either service deletes, compacts, or ships sealed history for you.
 - Demo and template code is not a production profile: Demo helper code and generated workflow
   snippets are integration examples, not a production freshness or replay-protection profile, and
   must not be relied on for freshness, expiry, or replay protection.
@@ -241,9 +252,8 @@ in the repository.
 ## Where to go next
 
 - Why a given limit exists: the rationale and trade-offs live in each specification's own
-  limitations section: [RS-PR-NOTARY](../../spec/rs-pr-notary/),
-  [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-DM-CLAIM](../../spec/rs-dm-claim/), and
-  [RS-DM-MANIFEST](../../spec/rs-dm-manifest/).
+  limitations section: [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/),
+  [RS-PR-RELAY](../../spec/rs-pr-relay/), and [RS-DM-MANIFEST](../../spec/rs-dm-manifest/).
   For the security and architecture boundaries, read [RS-SEC-G](../../spec/rs-sec-g/) and
   [RS-ARC-G](../../spec/rs-arc-g/).
 - How each external standard is actually adopted: the [standards

@@ -110,6 +110,10 @@ function assertOverlayChecksum(relativePath) {
 const compose =
   'docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml';
 const actions = `${compose} -f generated/compose.initialize.yaml`;
+// Registry Notary is retired. `servingStages`, `stateVerifiers`, and `productUpdate` below still
+// include its lane because they back `upgrade-and-rollback.mdx`, a page owned by a different
+// rewrite pass. `firstInstallation` and `ordinaryStartAndStop` back the two-lane
+// `single-node-compose-behind-proxy.mdx` and use their own two-lane arrays instead of these.
 const servingStages = [
   'registry-relay-consultation-stage-secrets',
   'registry-notary-stage-secrets',
@@ -121,28 +125,34 @@ const stateVerifiers = [
   'registry-notary-verify-state',
 ].map((service) => `${actions} run --rm --no-deps ${service}`);
 
+const twoLaneServingStages = [
+  'registry-relay-consultation-stage-secrets',
+  'registry-postgresql-stage-secrets',
+].map((service) => `${compose} run --rm --no-deps ${service}`);
+const twoLaneStateVerifiers = [
+  'registry-relay-public-verify-state',
+  'registry-relay-consultation-verify-state',
+].map((service) => `${actions} run --rm --no-deps ${service}`);
+
 const firstInstallation = [
   `${actions} config --no-interpolate --no-env-resolution --quiet`,
   `${actions} run --rm --no-deps registry-relay-consultation-actions-stage-secrets`,
-  `${actions} run --rm --no-deps registry-notary-actions-stage-secrets`,
   `${actions} run --rm --no-deps registry-postgresql-actions-stage-secrets`,
   `${actions} run --rm registry-postgres-bootstrap`,
   `${actions} run --rm registry-relay-public-prepare-state`,
   `${actions} run --rm registry-relay-consultation-prepare-state`,
-  `${actions} run --rm registry-notary-prepare-state`,
   `${actions} run --rm registry-relay-public-initialize`,
   `${actions} run --rm registry-relay-consultation-initialize`,
-  `${actions} run --rm registry-notary-initialize`,
-  ...stateVerifiers,
-  ...servingStages,
+  ...twoLaneStateVerifiers,
+  ...twoLaneServingStages,
   `${compose} up --detach --wait --wait-timeout 120`,
   `${compose} ps`,
 ].join('\n');
 
 const ordinaryStartAndStop = [
   `${compose} config --no-interpolate --no-env-resolution --quiet`,
-  ...stateVerifiers,
-  ...servingStages,
+  ...twoLaneStateVerifiers,
+  ...twoLaneServingStages,
   `${compose} up --detach --wait --wait-timeout 120`,
   `${compose} ps`,
   `${compose} down`,
@@ -407,7 +417,6 @@ test('transferred package acceptance uses external closure and operator-file che
   assert.match(page, /generated\/\n    compose\.empty\.env[\s\S]*postgresql-server\.env/);
   assert.match(page, /exact environment keys copied from the signed/);
   assert.match(page, /Registryctl never\s+creates production values/);
-  assert.match(page, /compact Notary-to-Relay workload JWT/);
   assert.match(page, /Product startup and preparation remain the semantic validation boundary/);
   assert.match(
     verifyBlock,
@@ -440,7 +449,7 @@ test('Compose include remains operator-owned and outside package verification', 
 
 test('initial approval bridge covers every lane before approved-set assembly', () => {
   const page = read('src/content/docs/operate/approve-initial-baseline.mdx');
-  for (const lane of ['relay-public', 'relay-consultation', 'notary']) {
+  for (const lane of ['relay-public', 'relay-consultation']) {
     assert.match(page, new RegExp(`--lane ${lane}`));
     assert.match(page, new RegExp(`build/local/signing-inputs/${lane}`));
     assert.match(page, new RegExp(`${lane}-anchor\\.json`));
@@ -515,7 +524,7 @@ test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK p
   );
 
   const publicMembers = new Set();
-  for (const lane of ['relay-public', 'relay-consultation', 'notary']) {
+  for (const lane of ['relay-public', 'relay-consultation']) {
     const privatePath = resolve(root, `evaluation-keys/${lane}.private.jwk`);
     const publicPath = resolve(root, `evaluation-keys/${lane}.public.jwk`);
     const privateFile = readRegularUtf8WithMode(privatePath);
@@ -544,5 +553,5 @@ test('evaluation-only lane key procedure emits distinct owner-only Ed25519 JWK p
     assertPathMissing(resolve(root, `evaluation-keys/${lane}.private.der`));
     assertPathMissing(resolve(root, `evaluation-keys/${lane}.public.der`));
   }
-  assert.equal(publicMembers.size, 3);
+  assert.equal(publicMembers.size, 2);
 });

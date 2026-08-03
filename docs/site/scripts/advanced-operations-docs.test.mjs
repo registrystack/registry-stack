@@ -114,7 +114,6 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
 
   for (const code of [
     'relay.consultation.activation.source_credentials_unavailable',
-    'notary.relay.credentials_rejected',
     'pdp.purpose_not_permitted',
     'pdp.evidence_stale',
     'source.cardinality_violation',
@@ -123,8 +122,6 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
     'rejected_validation',
     'rejected_rollback',
     'relay.consultation.activation.unsupported_plan',
-    'notary.relay.profile_mismatch',
-    'registry.admin.capability.not_supported',
   ]) {
     assert.ok(source.includes(`\`${code}\``), `missing stable code ${code}`);
   }

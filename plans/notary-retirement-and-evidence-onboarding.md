@@ -128,7 +128,7 @@ gates for its area (see Verification), and committed.
 
 ### E. Shared docs rewrites
 
-- [ ] E1. Heavy pages rewritten (~20: architecture, boundaries-and-map,
+- [x] E1. Heavy pages rewritten (~20: architecture, boundaries-and-map,
       glossary, rs-terms, rs-arc-g, rs-sec-g, rs-op-posture, threat-model,
       hardening-checklist, known-limitations, records-stay-home,
       disclosure-modes-and-computed-answers, integration-patterns,
@@ -542,3 +542,46 @@ is parallel; B has no upstream dependencies and is the standing priority
   no redirect, page published rather than draft, sidebar entry present. It
   failed on the missing quickstart link before the edits. Gates: `npm test`
   281 pass 0 fail, `npm run check` exit 0.
+
+- 2026-08-03: E1 done. All 21 heavy pages rewritten around Registry Relay,
+  Evidence, and Registry Mint. The lever was a new gate,
+  `docs/site/scripts/check-notary-surface.mjs`, written failing first: it
+  refuses a published page that names Notary in a block (paragraph, table row,
+  or list item) that does not also say it is retired, and it skips the marked
+  past, unpublished pages, the synced `products/` docsets, the pages the
+  deletion cascade removes, and the pages E2 still owns. It flagged exactly
+  360 blocks across the 21 pages and nothing else, which confirmed the page
+  list, and it now passes with zero findings and 45 pages of tracked E2 debt
+  named in the file itself. It runs in `npm run check` between `check:cutover`
+  and `check:markdown`. Four inherited claims turned out to be false and were
+  corrected rather than reworded: purpose-bound authorization does not narrow
+  what a requirement discloses, only whether it may be invoked
+  (`OPERATOR-CONTRACT.md`); Evidence has no caller-selectable disclosure modes
+  at all, because `request.schema.yaml` is closed on four members plus an
+  optional `holderKey`, so the old value/predicate/redacted table described
+  machinery with no Evidence analogue; the shared platform error section was
+  untrue, since `body_limit_problem_response` had exactly one caller and it
+  was Notary's; and Solmara Lab builds Evidence and Mint from source, because
+  no release ships those binaries. Sections that only existed to describe
+  Notary machinery were deleted rather than given an invented Evidence
+  equivalent: federation trust, credential issuance and lifecycle, wallets,
+  delegated subject access, the Notary approval lane, and the Notary posture
+  producer. Five contract tests changed in lockstep with their pages, each
+  narrowing to what still exists rather than weakening an assertion:
+  `advanced-operations-docs` dropped three Notary-only diagnostic codes,
+  `public-registryctl-journeys` added two-lane arrays for the rewritten
+  journeys while leaving the three-lane constants for E2's
+  `upgrade-and-rollback`, and `replay-protection-contract` followed the
+  RS-SEC-G section renumbering and gained two tests holding that Evidence has
+  no replay state and that in-process single use is not a cross-instance
+  guarantee. `docs/style-guide.md` stopped naming Registry Notary as one of
+  the four formal product names, and `src/data/projects.yaml` plus its
+  generated `projects.json` dropped the Notary entry and gained Evidence and
+  Mint, so the map page's table and prose agree again. Gates: `npm test` 289
+  pass 0 fail, `npm run check` exit 0 with 52529 internal links checked.
+  Known red, and deliberately not fixed here:
+  `release/scripts/check-stable-surface-compatibility.py` parses
+  `reference/errors.mdx` as the machine-readable error registry with
+  `## Registry Notary` hardcoded as a product section, so removing that
+  section reports 40 released error codes as removed. The fix belongs to C5 in
+  `release/`, a different owning area with work already in flight.

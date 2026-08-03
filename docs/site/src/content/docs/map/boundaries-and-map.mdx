@@ -1,6 +1,6 @@
 ---
 title: Boundaries and map
-description: The four formal Registry Stack products, the separate Solmara Lab adopter demo, and the boundaries between them.
+description: The four formal Registry Stack products, the supporting token issuer, the separate Solmara Lab adopter demo, and the boundaries between them.
 wide: true
 status: current
 owner: registry-docs
@@ -8,9 +8,10 @@ source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-notary
+  - registry-evidence
+  - registry-mint
   - solmara-lab
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -26,18 +27,25 @@ standards_referenced:
 import ProjectMap from '../../../components/ProjectMap.astro';
 
 The formal Registry Stack has four products with distinct responsibilities: Registry Platform,
-Registry Manifest, Registry Relay, and Registry Notary.
-Solmara Lab is a separate adopter project that demonstrates the four products together.
-Use this page to decide which repository owns a question before opening implementation docs,
+Registry Manifest, Registry Relay, and Evidence.
+Registry Mint is a supporting service beside them, issuing short-lived access tokens for deployments
+that have callers and no identity provider.
+Solmara Lab is a separate adopter project that demonstrates the products together.
+Use this page to decide which project owns a question before opening implementation docs,
 and to understand how the products and the external demo connect at runtime.
+
+Registry Notary is retired. It is not one of the four products, and no boundary on this page assigns
+it work.
 
 <figure>
   <img src="../../images/registry-family-map.svg"
-       alt="Four formal Registry Stack products and the separate Solmara Lab adopter demo. Registry
-            Platform provides shared primitives. Registry Manifest compiles portable metadata.
-            Registry Relay binds metadata to runtime sources and exposes protected APIs. Registry
-            Notary evaluates claims and issues credentials. Solmara Lab runs published images of
-            the runtime services in demo topologies." />
+       alt="Four formal Registry Stack products, with Registry Mint as a supporting service and the
+            separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
+            crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
+            validation, and renderers. Registry Relay serves protected read-only APIs over sensitive
+            registry sources. Evidence answers one bounded question about one subject with a signed
+            assertion. Registry Mint issues the short-lived access tokens Evidence verifies. Solmara
+            Lab runs Relay, Evidence, and Mint together." />
 </figure>
 
 <ProjectMap />
@@ -47,7 +55,7 @@ and to understand how the products and the external demo connect at runtime.
 
 ## Flow across the stack
 
-For how the four products connect at runtime and how Solmara Lab demonstrates them, see the
+For how the products connect at runtime and how Solmara Lab demonstrates them, see the
 [architecture overview](../../explanation/architecture/).
 
 ## Ownership quick reference
@@ -57,7 +65,8 @@ For how the four products connect at runtime and how Solmara Lab demonstrates th
 | Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](https://github.com/registrystack/registry-stack) |
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
-| How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../products/registry-notary/) |
+| How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence](../../products/registry-evidence/) |
+| How does a deployment with callers and no identity provider issue access tokens? | [Registry Mint](../../reference/mint/) |
 | How do the services run together in a local demo? | [Solmara Lab](https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
@@ -72,8 +81,11 @@ Registry Platform is a shared crate workspace. It does not run a service or deci
 
 - Registry Relay route behavior, runtime source binding, metadata publication, or
   Relay-specific scope semantics.
-- Registry Notary claim definitions, evaluation rules, disclosure decisions, service routes, or
-  claim-to-credential mapping.
+- Evidence requirement definitions, authorization grants, disclosure decisions, service routes,
+  assertion construction, or signing policy.
+  {/* Evidence: Rust in registry-evidence owns authentication, authorization, fixed source
+       execution, output validation, evidence construction, signing, and audit; the platform
+       crates it consumes are listed in crates/registry-evidence/Cargo.toml. */}
 - Operator responsibilities such as tenant isolation, audit retention, secret provisioning,
   deployment configuration, and incident response.
 
@@ -97,9 +109,9 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Production source configuration. Source paths, table IDs, scopes, cache paths, and backend
   runtime details belong in Registry Relay configuration, not in portable manifests.
   {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
-- Runtime federation policy. Manifest can publish public Notary federation metadata, but peer
-  allowlists, signing keys, replay stores, purpose policy, and evaluation scopes belong in Registry
-  Notary config.
+- Evidence deployment configuration. An Evidence process loads one immutable governed bundle and
+  one closed runtime file mounted read-only at startup, and reads no portable manifest.
+  {/* Evidence: "Governed bundle and operator runtime", products/evidence/OPERATOR-CONTRACT.md. */}
 
 No HTTP serving, no database queries, no authorization scoping. The manifest compiles and renders only.
 
@@ -116,10 +128,12 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
   them for callers, but the schema is defined and versioned in Registry Manifest.
   {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership);
        registry-relay evidence packet, metadata publication section. */}
-- Standalone claim service internals owned by Registry Notary. Registry Relay can declare
-  evidence offerings and route clients to a Registry Notary endpoint, but claim evaluation,
-  disclosure policy, and credential issuance run in Registry Notary.
-  {/* Evidence: registry-relay evidence packet, evidence offering verification section. */}
+- Assertion evaluation, disclosure, and signing owned by Evidence. Registry Relay can declare
+  evidence offerings and route clients onward, but requirement evaluation, disclosure form, and
+  signing run in Evidence, which reads a Relay API as one ordinary fixed HTTP source.
+  {/* Evidence: registry-relay evidence packet, evidence offering verification section; contract
+       registry.evidence.fixed-http-json-source/v1,
+       products/evidence/contracts/source-contract.yaml. */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives
   owned by Registry Platform. Registry Relay owns how those primitives are configured and
   enforced on Relay routes.
@@ -131,49 +145,75 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
 Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
 systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */}
 
-## Registry Notary
+## Evidence
 
-Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not own:
+Evidence answers one bounded question about one subject and returns a signed assertion carrying the
+answer rather than the record. It does not own:
 
-- Registry source access or adaptation. Registry Notary calls Registry Relay through a
-  compiler-pinned consultation contract for every claim. A Notary deployment
-  does not open a registry source directly.
-  Relay owns HTTP, script, and snapshot adaptation, including protocol helpers used by authored
-  integrations.
-- Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce
-  DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts.
-  {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no
-       data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
-- Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives
-  owned by Registry Platform. Registry Notary owns the claim service behavior that composes
-  those primitives.
-- Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint
-  exchange, or federated credential issuance. The current federation implementation is
-  static-peer delegated evaluation only.
-  {/* Evidence: FederationRuntimeState::from_config iterates config.peers with no dynamic
-       discovery path, crates/registry-notary-server/src/federation/runtime.rs:32-50 at
-       tag v0.9.0. */}
-- Registry Notary does not inspect published discovery artifacts, parse DCAT catalogs, or run
-  capability queries.
+- Source access as a general capability. Each evaluation makes exactly one fixed, bounded HTTP JSON
+  request with a fixed method, a fixed or selector-bound path, fixed non-secret headers, denied
+  redirects, and a client-side response projection. Pagination, transport retry, multi-source
+  fulfillment, and source-planning scripts are outside the Version 1 contract.
+  {/* Evidence: contract registry.evidence.fixed-http-json-source/v1,
+       products/evidence/contracts/source-contract.yaml (frozen). */}
+- Record lookup and identity resolution. The authoritative provider owns lookup. Evidence accepts
+  only `match`, `no_match`, or `ambiguous`, and does not score candidates, choose a provider record,
+  or expose counts, near-match hints, or per-field diagnostics.
+  {/* Evidence: "Source and selector controls", products/evidence/OPERATOR-CONTRACT.md. */}
+- Portable metadata renderers owned by Registry Manifest. Evidence produces no DCAT, SHACL,
+  BRegDCAT-AP, or OGC Records artifacts and consumes no manifest.
+- Shared auth, OIDC, audit, HTTP security, crypto, SD-JWT, and testing primitives owned by Registry
+  Platform. Evidence owns the assertion behavior that composes those primitives.
+  {/* Evidence: crates/registry-evidence/Cargo.toml depends on registry-platform-audit, -crypto,
+       -httpsec, -httputil, -oidc, and -sdjwt, and on no other product crate. */}
+- Token issuance and identity proofing. Evidence verifies access tokens under one reviewed OIDC
+  profile with exactly one trusted issuer; it issues none. Registry Mint issues them for a
+  deployment with no identity provider.
+  {/* Evidence: "Supported deployment", products/evidence/OPERATOR-CONTRACT.md. */}
+- Consumer decisions. Requirements, eligibility, ranking, approval, routing, payment, workflow, and
+  action policy stay with the accountable decision owner. Evidence is not a workflow, orchestration,
+  or case-management engine and not a runtime policy engine or general PDP.
+  {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4. */}
+- A credential lifecycle. Version 1 has no issuance session, holder binding ceremony, status list,
+  revocation, or presentation verification, and no federated or delegated evaluation between peers.
+  {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4; "Response formats",
+       products/evidence/OPERATOR-CONTRACT.md. */}
 
-Registry Notary credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
-Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present
-in the issued credential.
-{/* Evidence: registry-notary evidence packet, credential issuance section, "W3C Verifiable
-     Credentials Data Model: NOT PRESENT". */}
+The default Evidence response is a flattened JWS JSON assertion (`application/jose+json`), not a W3C
+Verifiable Credentials Data Model JSON-LD envelope. An SD-JWT VC serialization
+(`application/dc+sd-jwt`) of the same stateless assertion is releasable only where the immutable
+bundle and the one matched authority grant both name that format, under the frozen profile in
+`products/evidence/contracts/sd-jwt-vc-profile.yaml`. That profile adds a response format, never a
+credential lifecycle.
+
+## Registry Mint
+
+Registry Mint issues short-lived access tokens to registered machine clients so a deployment with no
+identity provider still has one. It does not own:
+
+- End-user authentication, identity proofing, or consent. Registry Mint authenticates registered
+  machine clients through `private_key_jwt`, not people.
+- Caller-declared authority. Token authority is written from the client registry and never from the
+  caller's own request.
+- Evidence authorization. Evidence independently verifies the token and re-authorizes every request
+  against its own bundle and authority grants.
+
+{/* Evidence: contract status and stable properties, docs/site/src/content/docs/reference/mint.mdx,
+     sourced from crates/registry-mint/src/clients.rs and crates/registry-mint/src/token.rs;
+     one-way dependency, crates/registry-mint/Cargo.toml dev-dependencies. */}
 
 ## Solmara Lab
 
 Solmara Lab is a separately maintained adopter demo for the fictional Republic of Solmara.
-It runs published Registry Stack images in local and hosted topologies, but it is not a formal
+It runs Relay, Evidence, and Mint together in local and hosted topologies, but it is not a formal
 Registry Stack product. It does not own:
 
 - Production deployment guidance. The demo uses generated synthetic data and demo configuration.
   It is not a reference for production configuration.
   {/* Evidence: the pinned Solmara Lab README linked in the ownership table and
        src/data/projects.yaml, solmara-lab does_not_own "Production deployment guidance". */}
-- Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry
-  Notary; metadata contracts are owned by Registry Manifest.
+- Normative API or metadata contracts. API contracts are owned by the runtime services; metadata
+  contracts are owned by Registry Manifest.
   {/* Evidence: src/data/projects.yaml, solmara-lab does_not_own. */}
 - Real product integrations. The services simulate civil, social protection, and health
   registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS,
@@ -189,5 +229,5 @@ When a page needs both, these docs summarize the decision and link to the owning
 
 ## Next
 
-- [Architecture overview](../../explanation/architecture/): how the four formal products connect
+- [Architecture overview](../../explanation/architecture/): how the formal products connect
   at runtime and how the separate Solmara Lab demo consumes them.

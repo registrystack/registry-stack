@@ -97,9 +97,10 @@ Preferred terms.
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
 | Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Formal product names  | `Registry Platform`, `Registry Manifest`, `Registry Relay`, and `Registry Notary` (Title Case) |
+| Formal product names  | `Registry Platform`, `Registry Manifest`, `Registry Relay` (Title Case), and `Evidence` (a proper noun, no `Registry` prefix); `Registry Mint` is a supporting service, not one of the four |
+| Retired product       | `Registry Notary` keeps its Title Case name, but only where the page says in the same block that it is retired |
 | External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |
-| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, and `registry-notary` for formal products; `solmara-lab` for the external adopter demo (monospace) |
+| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, `registry-evidence`, and `registry-mint`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 
@@ -109,7 +110,7 @@ Preferred terms.
 - All items start with a capital letter.
 - Parallel structure. All items are noun phrases, or all are imperative verbs. Do not mix.
 - No period if every item is a fragment. Period on every item if any item is a complete sentence.
-- Use the Oxford comma in prose: `Manifest, Relay, and Notary`.
+- Use the Oxford comma in prose: `Manifest, Relay, and Evidence`.
 - Do not use bold inside list items for keywords. Reserve bold for UI labels.
 
 ## Code, commands, paths
@@ -188,8 +189,8 @@ This applies to every page that touches a standard or a contract.
 - When you cannot find evidence for an existing claim, mark it inline with a TODO and propose a demotion:
 
   ```mdx
-  Registry Notary emits SD-JWT VC credentials.
-  {/* TODO[evidence]: no SD-JWT issuer found in registry-notary/crates/.
+  Registry Relay emits SD-JWT VC credentials.
+  {/* TODO[evidence]: no SD-JWT issuer found in crates/registry-relay/.
        Suggest demoting to `aligns_with` until a fixture lands. */}
   ```
 

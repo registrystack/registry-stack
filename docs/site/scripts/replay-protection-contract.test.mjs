@@ -10,13 +10,13 @@ const spec = readFileSync(
   'utf8',
 );
 const replaySection = spec.match(
-  /^## 8[.] Replay-protection authority\n(?<body>[\s\S]*?)(?=^## 9[.] )/m,
+  /^## 7[.] Replay-protection authority\n(?<body>[\s\S]*?)(?=^## 8[.] )/m,
 )?.groups?.body;
 
 assert.ok(replaySection, 'RS-SEC-G must contain the replay-protection authority section');
 
 test('RS-SEC-G keeps the exact product replay matrix', () => {
-  const productRows = replaySection.match(/^\| Registry (?:Relay|Notary) \|.*$/gm) ?? [];
+  const productRows = replaySection.match(/^\| Registry (?:Relay|Mint) \|.*$/gm) ?? [];
   assert.equal(productRows.length, 2, 'expected one replay-contract row per product');
 
   assert.match(
@@ -25,20 +25,37 @@ test('RS-SEC-G keeps the exact product replay matrix', () => {
   );
   assert.match(
     replaySection,
-    /\| Registry Notary \| Scoped, domain-separated protocol one-time and completion domains,[\s\S]*?Product-specific scope and identifier hashes[\s\S]*?\| The product-specific absolute expiry or bounded retention for the domain,/,
+    /\| Registry Mint \| Single use of a client assertion identifier at the token endpoint[.] \|[\s\S]*?verified against the named client's registered keys[\s\S]*?\| The assertion's own expiry, bounded by the configured maximum assertion lifetime,/,
   );
+});
+
+// Evidence has no replay subsystem, and the page must not imply that the echoed
+// request nonce is one.
+test('RS-SEC-G states that Evidence holds no replay state', () => {
+  assert.match(replaySection, /Evidence holds no replay state at all/);
+  assert.match(replaySection, /never stored, uniqueness-checked, or exposed/);
 });
 
 test('RS-SEC-G keeps replay authority product-owned and isolated', () => {
   assert.match(replaySection, /production or multi-instance deployment MUST keep replay correctness state in\nthe PostgreSQL state owned by the product/);
   assert.match(replaySection, /Replicas of one product authority MUST share only that authority's product state/);
-  assert.match(replaySection, /Separate federation authorities MUST NOT share replay state/);
+  assert.match(replaySection, /Separate product authorities MUST NOT share replay state/);
   assert.match(
     replaySection,
-    /Registry Relay and Registry Notary MUST NOT share replay tables, schemas, database roles,\nmigrations, or correctness transactions/,
+    /Two products MUST NOT share replay tables, schemas, database roles,\nmigrations, or correctness transactions/,
   );
   assert.match(replaySection, /MUST NOT turn these boundaries into a shared correctness-state abstraction/);
   assert.doesNotMatch(replaySection, /\bRedis\b/i);
+});
+
+// In-process single use is not a cross-instance guarantee, and the page must
+// not let a reader read it as one.
+test('RS-SEC-G bounds in-process single-use enforcement', () => {
+  assert.match(replaySection, /MUST fail closed when\nthe cache is saturated rather than evict a live entry/);
+  assert.match(
+    replaySection,
+    /deployment that runs more than one instance MUST NOT\nclaim single use across those instances/,
+  );
 });
 
 test('RS-SEC-G links retention and recovery and requires fail-closed recovery', () => {
