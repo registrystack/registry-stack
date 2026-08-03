@@ -447,6 +447,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-policy",
                 "rust-quality",
                 "rust-tests",
+                "evidence-contracts",
                 "notary-contracts",
                 "relay-contracts",
             },
