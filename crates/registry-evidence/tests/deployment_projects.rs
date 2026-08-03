@@ -194,7 +194,11 @@ impl Drop for LoadedProject {
 
 #[tokio::test]
 async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
-    for project_name in ["dhis2-tracker-evidence", "opencrvs-family-evidence"] {
+    for project_name in [
+        "dhis2-tracker-evidence",
+        "opencrvs-family-evidence",
+        "relay-protected-read-evidence",
+    ] {
         let project = load_project(project_name);
         let signer = fixture_signer().await;
         for requirement in &project.bundle.config.requirements {

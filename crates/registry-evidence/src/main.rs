@@ -3146,7 +3146,11 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn offline_cli_evaluates_every_reference_deployment_fixture() {
-        for project in ["dhis2-tracker-evidence", "opencrvs-family-evidence"] {
+        for project in [
+            "dhis2-tracker-evidence",
+            "opencrvs-family-evidence",
+            "relay-protected-read-evidence",
+        ] {
             let directory = tempfile::tempdir().expect("temporary bundle");
             let source = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../products/evidence/reference/request-adapter/deployment-projects")

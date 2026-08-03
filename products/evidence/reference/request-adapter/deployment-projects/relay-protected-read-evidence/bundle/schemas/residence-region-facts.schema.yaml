@@ -1,0 +1,12 @@
+type: object
+additionalProperties: false
+required: [record_reference, official_residence_code]
+properties:
+  record_reference:
+    type: string
+    minLength: 1
+    maxLength: 64
+  official_residence_code:
+    type: string
+    minLength: 1
+    maxLength: 32

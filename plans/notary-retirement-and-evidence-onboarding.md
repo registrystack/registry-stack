@@ -57,7 +57,7 @@ gates for its area (see Verification), and committed.
 - [x] A2. An ordinary sanitized Relay-shaped mock test in
       `crates/registry-evidence` proves a full signed assertion over an
       OAuth client-credentials source, with zero production-code changes.
-- [ ] A3. A reference deployment-project example for the Relay-backed
+- [x] A3. A reference deployment-project example for the Relay-backed
       pattern exists under `products/evidence/reference`.
 
 ### B. Evidence onboarding (docs site, evidencectl, CI)
@@ -321,3 +321,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   tutorial readers use to build the RFC 7523 client assertion for Mint
   (the demo uses a Python walkthrough; an evidencectl helper would be
   new CLI surface outside the frozen runtime contract).
+- 2026-08-03: A3 done, zero production-code changes; the only Rust edits
+  are the three `#[cfg(test)]` project lists. The new
+  products/evidence/reference/request-adapter/deployment-projects/relay-protected-read-evidence/
+  is a complete deployable bundle plus runtime file for a protected,
+  scoped, read-only registry API of the shape Relay presents, and it
+  covers residence region, the coequal acceptance definition the other
+  two reference projects do not. It earns its place on lookup shape, not
+  on branding: this envelope reports no total, only a page and a
+  further-pages flag, so uniqueness is decided from both signals
+  together and a single record on a page claiming more pages is
+  ambiguous, unlike the tracker project's pager arithmetic. The bundle
+  names no registry product. Eighteen fixture cases run through the
+  production ABI offline; a deliberate tamper (REGION-SOUTH to
+  REGION-NORTH) failed with a scalar value mismatch, proving the
+  expectations are load-bearing rather than vacuous. Next in A: none, A
+  is complete, which unblocks D. Next unblocked elsewhere: B5 tutorials
+  E3 to E5 (E2 still waits on the client-assertion tooling call above).

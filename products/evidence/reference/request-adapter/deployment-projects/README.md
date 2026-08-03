@@ -37,6 +37,10 @@ the same fixtures with `evidence evaluate` before deployment.
 - [`opencrvs-family-evidence/`](opencrvs-family-evidence/) resolves one
   registered birth event and supports adult status, exact registered-parent
   confirmation, and bounded registered-parent identification.
+- [`relay-protected-read-evidence/`](relay-protected-read-evidence/) resolves
+  one record through a protected, scoped, read-only registry API of the shape
+  Registry Relay presents, and supports residence region as a coarse
+  controlled code mapped from the register's own code.
 
 Every hostname, issuer, identifier, and fixture value is synthetic. `.example`
 hosts must be replaced during deployment. Secret files are referenced only by
@@ -57,7 +61,7 @@ validation, audience-scoped entity references, signing, and disclosure audit.
 Scripts are reviewed and trusted but remain deterministic and unable to
 perform I/O.
 
-Both projects declare `responseFormats: [signed-jws]` at the bundle level and
+Every project declares `responseFormats: [signed-jws]` at the bundle level and
 on every grant, so they release only signed flattened JWS. That is the
 production-shaped default: unsigned output is a development convenience that a
 deployment must enable deliberately in both places.
@@ -77,7 +81,7 @@ complete for the declared relationship contract. If a provider's namespace or
 contract varies by record, extraction must derive and validate that value from
 projected provider data instead of copying a bundle constant.
 
-Before copying either project, apply the
+Before copying a project, apply the
 [provider prerequisites](CONFIG.md#provider-prerequisites). A source that cannot
 distinguish zero, one, and multiple matches in one bounded request is not a
 Version 1 integration even if its JSON can otherwise be mapped by Rhai.

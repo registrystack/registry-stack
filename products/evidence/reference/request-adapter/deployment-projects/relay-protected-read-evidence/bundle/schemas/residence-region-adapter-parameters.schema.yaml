@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+required: [providerFields, resultLimit]
+properties:
+  # Both parameters are pinned. The field list is the projection the protected
+  # read applies, and the page size is the smallest one that can still tell a
+  # unique match from an ambiguous one, so neither is an operator dial.
+  providerFields: {const: "id,region"}
+  resultLimit: {const: "2"}
