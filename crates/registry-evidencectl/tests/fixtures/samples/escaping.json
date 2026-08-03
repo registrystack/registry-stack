@@ -1,0 +1,4 @@
+{
+  "a/b": "slash-key",
+  "a~b": "tilde-key"
+}

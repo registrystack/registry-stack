@@ -54,6 +54,7 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
+inquire = { version = "0.7", default-features = false, features = ["crossterm"] }
 registry-config-report = { path = "crates/registry-config-report", version = "0.16.3" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.16.3" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.16.3" }

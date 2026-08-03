@@ -21,6 +21,7 @@ base64.workspace = true
 clap.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
+inquire.workspace = true
 registry-platform-crypto.workspace = true
 serde.workspace = true
 serde_json.workspace = true

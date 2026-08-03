@@ -112,3 +112,25 @@ Work through `bundle/evidence.yaml` in this order:
 The full configuration contract, including the authoring and promotion workflow,
 is documented in `products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`
 in the Registry Stack repository.
+
+### Suggesting source configuration from an API description
+
+When the system you are pointing step 3 at publishes an OpenAPI description,
+`evidencectl` can draft that source for you: a closed response schema, an
+extraction script, and the facts schema the extraction fills. Unfreeze the
+project first, since the draft is written into `bundle/`.
+
+```bash
+evidencectl source suggest \
+  --openapi ./api.yaml \
+  --sample ./sample-response.json \
+  --project {{project_root}}
+```
+
+Run in a terminal with no `--operation` and no `--select`, it asks which
+operation the source calls and which response fields the projection carries,
+then prints the equivalent fully flagged command so the same draft can be
+reproduced in review. The sample is optional and never printed; it only widens
+bounds the description leaves open. Nothing existing is overwritten, and every
+bound that neither the description nor the sample implies is left as an explicit
+`TODO` that `evidence check` rejects until you resolve it.

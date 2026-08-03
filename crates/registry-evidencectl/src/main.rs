@@ -10,6 +10,7 @@ mod fixtures;
 mod jwks;
 mod keygen;
 mod scaffold;
+mod suggest;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -34,6 +35,9 @@ enum Command {
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]
     Fixtures(fixtures::FixturesCommand),
+    /// Author source configuration from external API descriptions.
+    #[command(subcommand)]
+    Source(suggest::SourceCommand),
 }
 
 fn main() -> ExitCode {
@@ -43,6 +47,7 @@ fn main() -> ExitCode {
         Command::Jwks(args) => jwks::run(args),
         Command::New(args) => scaffold::run(args),
         Command::Fixtures(command) => fixtures::run(command),
+        Command::Source(command) => suggest::run(command),
     };
     match result {
         Ok(code) => code,

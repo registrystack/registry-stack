@@ -1,0 +1,28 @@
+openapi: 3.0.3
+info:
+  title: Ref Cycle
+  version: "1.0.0"
+paths:
+  /records:
+    get:
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/A'
+components:
+  schemas:
+    A:
+      type: object
+      additionalProperties: false
+      properties:
+        child:
+          $ref: '#/components/schemas/B'
+    B:
+      type: object
+      additionalProperties: false
+      properties:
+        parent:
+          $ref: '#/components/schemas/A'
