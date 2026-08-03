@@ -2,6 +2,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import YAML from 'yaml';
 
+import { DOC_PERSONAS } from '../src/lib/doc-personas.mjs';
+
 const docsDir = 'src/content/docs';
 const required = [
   'title',
@@ -26,6 +28,10 @@ const validEvidence = new Set(['aspirational', 'partial', 'verified']);
 // layers, audience the reader roles.
 const validLayer = new Set(['metadata', 'consultation', 'evaluation', 'credential', 'federation', 'administration', 'operations']);
 const validAudience = new Set(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']);
+// Deployment roles, defined for readers in start/when-to-use.mdx. Required on
+// tutorials so a reader can tell whose page it is before starting it, optional
+// elsewhere. Not the same axis as audience; see src/lib/doc-personas.mjs.
+const validPersona = new Set(DOC_PERSONAS);
 const docIdPattern = /^RS-[A-Z0-9]+(-[A-Z0-9]+)*$/;
 const seenDocIds = new Map();
 const standardsRegister = YAML.parse(await readFile('src/data/standards.yaml', 'utf8'));
@@ -98,6 +104,17 @@ for (const file of await files(docsDir)) {
           if (!validAudience.has(value)) errors.push(`${relative('.', file)} has invalid audience "${value}"`);
         }
       }
+    }
+    if (data.persona !== undefined) {
+      if (!Array.isArray(data.persona) || data.persona.length === 0) {
+        errors.push(`${relative('.', file)} persona must be a non-empty list`);
+      } else {
+        for (const value of data.persona) {
+          if (!validPersona.has(value)) errors.push(`${relative('.', file)} has invalid persona "${value}"`);
+        }
+      }
+    } else if (data.doc_type === 'tutorial') {
+      errors.push(`${relative('.', file)} (tutorial) missing persona`);
     }
     if (data.doc_type === 'specification') {
       const rel = relative('.', file);

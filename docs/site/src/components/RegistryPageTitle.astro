@@ -42,6 +42,12 @@ const isWide = starlightRoute.entry.data.wide === true;
 // Compute the .md URL for this page (BASE_URL-aware). The data attribute is
 // read by the client script so the script doesn't need to recompute it.
 const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
+
+// Whose page this is, in the deployment roles start/when-to-use.mdx defines.
+// Required on tutorials by scripts/check-doc-frontmatter.mjs, so every tutorial
+// says who it is for before the reader starts it; other pages may omit it.
+const personas = starlightRoute.entry.data.persona ?? [];
+const personaHref = `${import.meta.env.BASE_URL}start/when-to-use/#who-does-what`;
 ---
 
 {isWide && (
@@ -69,6 +75,17 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
 )}
 
 <h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>
+
+{personas.length > 0 && (
+  <p class="registry-persona">
+    For the {personas.map((persona: string, index: number) => (
+      <Fragment>
+        {index > 0 && ' and '}
+        <a href={personaHref}>{persona}</a>
+      </Fragment>
+    ))}
+  </p>
+)}
 
 <!-- Vendor-neutral AI affordances: Copy as Markdown / View as Markdown.
      The .md URL follows the contract: strip trailing slash, append .md; root -> index.md.
@@ -162,6 +179,31 @@ const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
 </script>
 
 <style>
+  /* Persona line sits between the <h1> and the control group, in the same mono
+     utility type, so "whose page is this" is answered before the first
+     paragraph without competing with the title. */
+  .registry-persona {
+    font-family: var(--__sl-font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+    color: var(--registry-muted);
+    margin-top: 10px;
+    margin-bottom: 0;
+  }
+
+  .registry-persona a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid var(--registry-rule);
+  }
+
+  .registry-persona a:hover {
+    color: var(--registry-blue);
+    border-bottom-color: var(--registry-blue);
+  }
+
   /* Control group sits directly below the <h1>, flush-left, using mono type
      to read as a utility annotation rather than navigation. */
   .registry-md-actions {

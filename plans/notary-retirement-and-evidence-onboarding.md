@@ -167,7 +167,7 @@ channel; it does not get a parallel one.
       reproducible baseline; registryctl already publishes optional
       macos-arm64 and linux-arm64 assets; decide and record the same
       optional set for the Evidence binaries.
-- [ ] F5. Personas named on the docs site (assertion provider, data
+- [x] F5. Personas named on the docs site (assertion provider, data
       publisher, consumer/verifier, operator) and every tutorial labeled
       with whose it is.
 - [x] F6. An Evidence errors and problems reference page exists for
@@ -369,3 +369,16 @@ is parallel; B has no upstream dependencies and is the standing priority
   source block are byte-identical with the cycle present, so nothing
   downstream moved. The gate pins one line of each of the two verbatim
   transcripts the page quotes.
+- 2026-08-03: F5 done. The four deployment roles start/when-to-use.mdx names
+  are now a checked vocabulary (`src/lib/doc-personas.mjs`), a unit test holds
+  the list and the page in step in both directions, every `doc_type: tutorial`
+  page must carry a `persona:` label, and the label renders under the title
+  linking back to the definitions. Kept deliberately separate from the
+  `audience` key, which is the specification-reader axis from RS-TERMS
+  Section 6; conflating them would have made one word mean two things.
+  Assignments: assertion provider gets the three Evidence authoring
+  tutorials, data publisher the three spreadsheet and HTTP registry ones,
+  operator the production-signing and Solmara Lab ones. No tutorial claims
+  consumer or verifier yet; E5 is that page, so the gap is real and visible
+  rather than papered over. The three how-to pages under tutorials/ are not
+  labeled: the requirement keys off `doc_type`, not the URL segment.
