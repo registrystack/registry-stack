@@ -361,3 +361,11 @@ is parallel; B has no upstream dependencies and is the standing priority
   while the reference schemas keep their top-level `required` lists; the
   scope is "of every record" and the contract line would be clearer
   saying so, but it is a frozen V1 contract so no edit was made.
+- 2026-08-03: E4's synthetic document gained a self-referring schema, so the
+  tutorial now covers the construct most likely to make a reader's own
+  document behave unlike the page's: `evidencectl` cuts a `$ref` cycle at
+  the first repetition and says so on standard error. Verified against the
+  real binary; the drafted schema, the derived-bounds report, and the
+  source block are byte-identical with the cycle present, so nothing
+  downstream moved. The gate pins one line of each of the two verbatim
+  transcripts the page quotes.

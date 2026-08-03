@@ -128,10 +128,11 @@ load_spec() {
 			'2 passed, 0 failed (12 cases evaluated)'
 		)
 		SPEC_OUTPUTS=(
-			# The page quotes this drafting run verbatim, so pin one line of
-			# it: a reworded report fails here instead of leaving the quoted
-			# transcript silently stale.
+			# The page quotes this drafting run verbatim, so pin the two
+			# lines it leans on: a reworded report fails here instead of
+			# leaving the quoted transcript silently stale.
 			'Still needs your input (the source block below):'
+			'the repeat is cut there, so nothing below it can be projected'
 			'PASS: check'
 			'PASS: fixtures/cases.yaml (12 cases)'
 			'2 passed, 0 failed (12 cases evaluated)'

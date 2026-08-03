@@ -170,6 +170,19 @@ components:
         remarks:
           type: string
           maxLength: 4096
+        office:
+          $ref: '#/components/schemas/Office'
+    # Offices nest: a district office names the regional office above it, and
+    # so on. The document expresses that as a schema that refers to itself.
+    Office:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 32
+        parent:
+          $ref: '#/components/schemas/Office'
 YAML
 ```
 
@@ -198,11 +211,19 @@ Run without `--operation` and `--select` and the command becomes interactive, li
 operations it found and the candidate leaves of the response you pick. The flags make the same run
 reproducible in a script or a review.
 
-One note goes to standard error, and it is the most important line of the run:
+Three notes go to standard error, and they are the most important lines of the run:
 
 ```text
+evidencectl: `/records/*/office/parent` repeats the $ref cycle `#/components/schemas/Office`; the repeat is cut there, so nothing below it can be projected
+evidencectl: `/records/*/office/parent` repeats the $ref cycle `#/components/schemas/Office`; a schema with no end cannot be projected, so the repeat is skipped
 evidencectl: adopting maxItems 25 for `/records`, derived from a page-size parameter in the spec
 ```
+
+The first two report the self-referring `Office` schema. A document that describes a hierarchy this
+way describes a shape with no end, and Evidence projects only shapes with an end, so the repeat is
+cut at the first repetition and the candidate leaves stop there. Nothing is lost here, because this
+selection never reaches an office. It matters for your own document: if the leaf you need sits
+below such a cut, select the members you need individually rather than the subtree above it.
 
 Expected output, first part:
 
