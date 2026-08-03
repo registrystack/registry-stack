@@ -21,7 +21,13 @@ pub enum KeygenCommand {
     /// Ed25519 signing keypair as private and public JWK files.
     Signing(SigningArgs),
     /// One random raw secret file, 32 bytes (audit or subject-binding HMAC).
+    ///
+    /// This is HMAC key material, not a credential a source will accept: the
+    /// bytes are arbitrary and an HTTP header value rejects most of them. Use
+    /// `keygen token` for a bearer token.
     Secret(SecretArgs),
+    /// One random bearer token file, printable and header-safe.
+    Token(TokenArgs),
     /// Ed25519 holder keypair for SD-JWT VC confirmation binding.
     Holder(HolderArgs),
 }
@@ -48,6 +54,17 @@ pub struct SigningArgs {
 #[derive(Debug, Args)]
 pub struct SecretArgs {
     /// Output file for the raw secret (written 0600).
+    #[arg(long)]
+    pub out: PathBuf,
+
+    /// Overwrite an existing output file.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TokenArgs {
+    /// Output file for the bearer token (written 0600).
     #[arg(long)]
     pub out: PathBuf,
 
@@ -89,6 +106,9 @@ const PRIVATE_DIR_MODE: u32 = 0o700;
 /// Exactly 32 raw bytes: one HMAC secret (audit or subject-binding).
 const SECRET_FILE_BYTES: usize = 32;
 
+/// How much randomness a generated bearer token carries, before encoding.
+const TOKEN_ENTROPY_BYTES: usize = 32;
+
 pub fn run(command: KeygenCommand) -> Result<ExitCode> {
     match command {
         KeygenCommand::Signing(args) => run_keypair(
@@ -100,6 +120,7 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
             SIGNING_PUBLIC_FILENAME,
         ),
         KeygenCommand::Secret(args) => run_secret(&args),
+        KeygenCommand::Token(args) => run_token(&args),
         KeygenCommand::Holder(args) => run_keypair(
             &args.out_dir,
             args.kid.as_deref(),
@@ -209,6 +230,38 @@ fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
         ensure_secret_parent_dir(parent)?;
     }
     write_owner_file(&args.out, secret.as_slice(), PRIVATE_FILE_MODE, args.force)?;
+
+    println!("wrote {}", args.out.display());
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Write one bearer token, for a source that has no token of its own to issue.
+///
+/// A real source issues its own credential and this command has no business
+/// inventing one. It exists for the stand-in source a project is stood up
+/// against first, where the alternative is `keygen secret`: the obvious
+/// neighbour, and the wrong tool, because its raw bytes reach an HTTP header
+/// that rejects most of them.
+fn run_token(args: &TokenArgs) -> Result<ExitCode> {
+    reject_existing(&[&args.out], args.force)?;
+
+    let mut entropy = Zeroizing::new([0_u8; TOKEN_ENTROPY_BYTES]);
+    getrandom::fill(entropy.as_mut_slice()).context("failed to generate random key material")?;
+    // base64url without padding: every character is unreserved in a header
+    // value and never NUL, so no draw has to be rejected. Written without a
+    // trailing newline, because the runtime reads the file whole and would
+    // carry one into the header.
+    let token = Zeroizing::new(URL_SAFE_NO_PAD.encode(entropy.as_slice()));
+
+    if let Some(parent) = args
+        .out
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        ensure_secret_parent_dir(parent)?;
+    }
+    write_owner_file(&args.out, token.as_bytes(), PRIVATE_FILE_MODE, args.force)?;
 
     println!("wrote {}", args.out.display());
 

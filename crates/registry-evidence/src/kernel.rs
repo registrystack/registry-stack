@@ -364,7 +364,12 @@ impl OfflineKernel {
             .response_schemas
             .get(&requirement.source)
             .ok_or(KernelError::Bundle)?;
-        if !response_schema.is_valid(source_response) {
+        if let Err(errors) = response_schema.validate(source_response) {
+            report_response_shape_rejection(
+                &requirement.source,
+                source.response_schema.as_str(),
+                errors,
+            );
             return Err(KernelError::SourceProtocol);
         }
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
@@ -568,6 +573,72 @@ impl OfflineKernel {
 
 fn map_context_error(_: RhaiRuntimeError) -> KernelError {
     KernelError::Bundle
+}
+
+/// How many response shape violations one rejection reports.
+///
+/// A rejected response is one event, and the first few violations already say
+/// which member disagrees with which rule. An unbounded list would let a source
+/// decide how much an operator log holds.
+const REPORTED_SHAPE_VIOLATIONS: usize = 5;
+
+/// Record which member of a projected response failed which schema rule.
+///
+/// The two pointers are the whole diagnosis and neither is a value. Without
+/// them a stale response schema and a source that changed its protocol are the
+/// same `dependency_unavailable`, which sends an operator to the provider for a
+/// defect that lives in the bundle.
+///
+/// Nothing from the response body is recorded: the paths are members the
+/// bundle's own projection selected, and the schema path is bundle text. The
+/// library's own error message embeds the offending value, so it is deliberately
+/// not used here.
+fn report_response_shape_rejection<'a>(
+    source_id: &str,
+    schema_artifact: &str,
+    errors: impl Iterator<Item = jsonschema::ValidationError<'a>>,
+) {
+    let (violations, total) = describe_response_shape_rejection(errors);
+    tracing::warn!(
+        target: "registry_evidence::source",
+        source = source_id,
+        schema = schema_artifact,
+        violations = violations.join("; "),
+        total_violations = total,
+        "the projected source response does not match its declared response shape"
+    );
+}
+
+/// Reduce validation errors to bounded, value-free violation descriptions.
+///
+/// Separated from the logging call so the property that matters can be asserted
+/// directly: what is produced here is the only thing that reaches the log.
+fn describe_response_shape_rejection<'a>(
+    errors: impl Iterator<Item = jsonschema::ValidationError<'a>>,
+) -> (Vec<String>, usize) {
+    let mut violations = Vec::new();
+    let mut total = 0usize;
+    for error in errors {
+        total += 1;
+        if violations.len() < REPORTED_SHAPE_VIOLATIONS {
+            violations.push(format!(
+                "{} violates {}",
+                display_pointer(&error.instance_path),
+                display_pointer(&error.schema_path)
+            ));
+        }
+    }
+    (violations, total)
+}
+
+/// Render a JSON Pointer, naming the document root rather than printing nothing.
+fn display_pointer(pointer: &jsonschema::paths::JSONPointer) -> String {
+    let rendered = pointer.to_string();
+    if rendered.is_empty() {
+        "the response root".to_owned()
+    } else {
+        rendered
+    }
 }
 
 fn compile_schema(schema: &Value) -> Result<JSONSchema, KernelError> {
@@ -1255,6 +1326,68 @@ mod tests {
                 json!("1970-01-01")
             )])))
         );
+    }
+
+    /// A shape rejection reaches the requester as `dependency_unavailable`,
+    /// which names the provider. When the real defect is a bundle schema that
+    /// no longer describes the source, the operator log is the only place that
+    /// can say so, and it can only say it by naming the member and the rule.
+    /// It must do that without recording any part of the response.
+    #[test]
+    fn a_response_shape_rejection_names_the_member_and_the_rule_but_no_value() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let requirement = &bundle.config.requirements[0];
+        let source = bundle
+            .config
+            .sources
+            .get(&requirement.source)
+            .expect("the requirement names a configured source");
+        let schema = bundle
+            .fact_schema(&source.response_schema)
+            .expect("the response schema is a bundle artifact");
+        let compiled = compile_schema(schema).expect("the response schema compiles");
+
+        let secret = "0451-mrs-hunt-was-born-in-caracas";
+        let response = json!({"total": 1, "date_of_birth": secret});
+        let errors = compiled
+            .validate(&response)
+            .expect_err("a malformed date violates the shape");
+        let (violations, total) = describe_response_shape_rejection(errors);
+        assert_eq!(total, 1);
+        assert_eq!(
+            violations,
+            vec!["/date_of_birth violates /properties/date_of_birth/format".to_owned()]
+        );
+
+        // The library's own message would carry the value here, which is the
+        // reason the description is built from the two pointers instead.
+        assert!(
+            !violations
+                .iter()
+                .any(|violation| violation.contains(secret)),
+            "no response value reaches the log: {violations:?}"
+        );
+
+        // A violation at the document root still names somewhere.
+        let not_an_object = json!([]);
+        let errors = compiled
+            .validate(&not_an_object)
+            .expect_err("an array is not the declared object");
+        let (violations, _) = describe_response_shape_rejection(errors);
+        assert_eq!(
+            violations,
+            vec!["the response root violates /type".to_owned()]
+        );
+
+        // A source cannot decide how much the log holds.
+        let many = json!({"total": -1, "date_of_birth": "not-a-date", "extra": 1});
+        let errors = compiled
+            .validate(&many)
+            .expect_err("several rules are violated at once");
+        let (violations, total) = describe_response_shape_rejection(errors);
+        assert!(total >= 3, "the count is the whole number of violations");
+        assert!(violations.len() <= REPORTED_SHAPE_VIOLATIONS);
     }
 
     #[test]

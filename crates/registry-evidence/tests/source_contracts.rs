@@ -2273,7 +2273,12 @@ fn runtime_ca_capture_rejects_symlink_malformed_and_mutable_files() {
         match case {
             CaCase::Symlink => assert_eq!(error, BundleError::InvalidPath),
             CaCase::Malformed => assert!(matches!(error, BundleError::InvalidArtifact(_))),
-            CaCase::Mutable => assert_eq!(error, BundleError::NotImmutable),
+            // The CA bundle sits outside the bundle directory, so the refusal
+            // has to name it. Re-freezing the bundle would not touch it.
+            CaCase::Mutable => assert_eq!(
+                error.artifact_fault().map(|fault| fault.fault().cause()),
+                Some("the TLS CA bundle the runtime file names is writable")
+            ),
         }
     }
 }

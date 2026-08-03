@@ -29,7 +29,7 @@ requesterTags: [{{requester_tag}}]
 
 # Public JWKs only, at most eight, each with a distinct kid. Replace `x` with
 # the public half of the caller's key, from
-# {{mint_caller_secret_root}}/signing-ed25519-public.jwk.json.
+# {{caller_secret_root}}/signing-ed25519-public.jwk.json.
 # A document carrying a private member is refused.
 keys:
   - kty: OKP

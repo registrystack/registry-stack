@@ -11,7 +11,7 @@ bundleDirectory: {{bundle_directory}}
 
 listener:
   bindHost: 127.0.0.1
-  port: 8080
+  port: {{listener_port}}
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

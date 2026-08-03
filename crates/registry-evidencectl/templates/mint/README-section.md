@@ -12,8 +12,12 @@ mint/
   clients/                              one registration per caller, public data
     {{mint_client_id}}.yaml.example     rename it once its key is real
   secrets/                              Mint's signing key, created empty, mode 0700
-    caller/                             the example caller's own key
+caller/                                 the example caller's own key, mode 0700
 ```
+
+`caller/` is deliberately outside `mint/`. The caller is a different party from
+the service that registers it, and only the public half of its key belongs to
+Mint. Promote `mint/` to its own host and the caller's private key stays here.
 
 The dependency runs one way. Evidence knows nothing about Mint beyond an issuer,
 a key set and a set of claim names, and these values were written from one
@@ -51,12 +55,12 @@ than to Mint: keep the public half here and move the private half to wherever
 that client runs.
 
 ```bash
-evidencectl keygen signing --out-dir {{mint_caller_secret_root}} \
+evidencectl keygen signing --out-dir {{caller_secret_root}} \
   --kid {{mint_client_key_id}}
 ```
 
 Copy the `x` member of
-`{{mint_caller_secret_root}}/signing-ed25519-public.jwk.json` into the `keys`
+`{{caller_secret_root}}/signing-ed25519-public.jwk.json` into the `keys`
 entry of `{{mint_clients_directory}}/{{mint_client_id}}.yaml.example`, rename
 that file to `{{mint_client_id}}.yaml`, then load the deployment:
 
@@ -76,7 +80,7 @@ never restarts Evidence.
 ```bash
 mint token --url {{mint_token_endpoint}} \
   --client-id {{mint_client_id}} \
-  --key {{mint_caller_secret_root}}/signing-ed25519-private-jwk
+  --key {{caller_secret_root}}/signing-ed25519-private-jwk
 ```
 
 `mint token` is a caller tool. It signs a client assertion with the caller's own

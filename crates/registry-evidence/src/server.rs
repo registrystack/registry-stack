@@ -227,6 +227,8 @@ where
 {
     let listener_config = runtime.runtime_config().listener.clone();
     let metrics_config = runtime.runtime_config().metrics_listener.clone();
+    let bundle_revision = runtime.bundle().revision().to_owned();
+    let runtime_revision = runtime.runtime_revision().to_owned();
     let listener = bind(&listener_config.bind_host, listener_config.port).await?;
     let (app, evaluations, metrics) = build_app_with_tracker(runtime);
 
@@ -237,6 +239,21 @@ where
         Some(config) => Some(bind(&config.bind_host, config.port).await?),
         None => None,
     };
+
+    // Announced only once both listeners are held, because whatever already
+    // owns a taken port answers in this service's place. A start announced
+    // before the bind reads as success to anyone who backgrounds the process
+    // and greps the log, and their verification run then tests the deployment
+    // that won the port.
+    tracing::info!(
+        target: "registry_evidence::startup",
+        bundle_revision,
+        runtime_revision,
+        bind_host = listener_config.bind_host,
+        port = listener_config.port,
+        metrics = metrics_config.is_some(),
+        "evidence service listening"
+    );
     let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
     let metrics_server = metrics_listener.map(|listener| {
         let mut stopped = metrics_stopped;
@@ -267,11 +284,24 @@ where
     result
 }
 
+/// Bind one listener, naming the address in any failure.
+///
+/// A bind failure is reported to an operator who configured two addresses and
+/// controls neither exclusively. Without the address, the two most common
+/// causes read alike and neither points at its fix: a port already taken by
+/// another process, and an address this host does not own.
 async fn bind(bind_host: &str, port: u16) -> io::Result<TcpListener> {
-    let ip = bind_host
-        .parse::<IpAddr>()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    TcpListener::bind(SocketAddr::new(ip, port)).await
+    let ip = bind_host.parse::<IpAddr>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{bind_host} is not an address: {error}"),
+        )
+    })?;
+    TcpListener::bind(SocketAddr::new(ip, port))
+        .await
+        .map_err(|error| {
+            io::Error::new(error.kind(), format!("could not bind {ip}:{port}: {error}"))
+        })
 }
 
 /// Serve a pre-bound listener and drain client-bound handlers on shutdown.
@@ -730,6 +760,38 @@ fn empty_response(status: StatusCode) -> Response {
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    /// A port this service did not get is the one failure whose symptom is
+    /// another service answering correctly in its place. The refusal has to
+    /// carry the address, because an operator reading it is deciding whether
+    /// the configuration is wrong or a previous instance is still running.
+    #[tokio::test]
+    async fn a_taken_port_is_refused_by_address() {
+        let held = bind("127.0.0.1", 0).await.expect("an ephemeral port binds");
+        let taken = held.local_addr().expect("the held listener has an address");
+
+        let refused = bind("127.0.0.1", taken.port())
+            .await
+            .expect_err("a held port cannot be bound twice");
+        assert_eq!(refused.kind(), io::ErrorKind::AddrInUse);
+        assert!(
+            refused
+                .to_string()
+                .starts_with(&format!("could not bind 127.0.0.1:{}: ", taken.port())),
+            "the refusal names the address it failed on: {refused}"
+        );
+
+        let malformed = bind("localhost", 0)
+            .await
+            .expect_err("a host name is not an address");
+        assert_eq!(malformed.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            malformed
+                .to_string()
+                .starts_with("localhost is not an address: "),
+            "the refusal names the value it could not parse: {malformed}"
+        );
+    }
 
     #[test]
     fn authorization_requires_one_unambiguous_bearer_value() {

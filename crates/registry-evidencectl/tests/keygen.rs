@@ -454,3 +454,107 @@ fn signing_error_names_the_offending_paths() {
         "error should name the offending path: {stderr}"
     );
 }
+
+/// A bearer token ends up in an HTTP header, where the raw bytes `keygen
+/// secret` writes are not valid. `keygen token` must therefore emit only
+/// characters a header value accepts, with no trailing newline: the runtime
+/// reads the file whole and would carry one into the header.
+#[test]
+fn token_writes_a_header_safe_value_with_owner_only_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("secrets").join("source-bearer-token");
+
+    let output = evidencectl()
+        .args(["keygen", "token", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(mode_of(out.parent().unwrap()), 0o700, "parent dir mode");
+    assert_eq!(mode_of(&out), 0o600, "token file mode");
+
+    let token = fs::read_to_string(&out).expect("read token");
+    assert_eq!(token.len(), 43, "token: {token}");
+    assert!(
+        token
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'),
+        "token carries a character an HTTP header value rejects: {token}"
+    );
+
+    // The generated credential is as secret as any private key, and this tool
+    // never prints those either.
+    assert_output_excludes(&output, &token);
+}
+
+#[test]
+fn token_invocations_generate_independent_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.token");
+    let second = dir.path().join("second.token");
+
+    for out in [&first, &second] {
+        let output = evidencectl()
+            .args(["keygen", "token", "--out"])
+            .arg(out)
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+    }
+
+    assert_ne!(
+        fs::read_to_string(&first).expect("read first token"),
+        fs::read_to_string(&second).expect("read second token")
+    );
+}
+
+#[test]
+fn token_refuses_overwrite_without_force_then_succeeds_with_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("source-bearer-token");
+    fs::write(&out, b"already here").expect("seed token");
+
+    let refused = evidencectl()
+        .args(["keygen", "token", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(!refused.status.success());
+    assert_eq!(
+        fs::read_to_string(&out).expect("read token"),
+        "already here",
+        "a refused run must leave the existing token alone"
+    );
+
+    let forced = evidencectl()
+        .args(["keygen", "token", "--force", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(forced.status.success(), "{}", stderr_of(&forced));
+    assert_ne!(
+        fs::read_to_string(&out).expect("read token"),
+        "already here"
+    );
+}
+
+/// `keygen secret` is the obvious tool for the one secret every scaffolded
+/// bundle needs, and it is the wrong one. Its own help has to say so, because
+/// the alternative is discovering it at the first live request.
+#[test]
+fn secret_help_says_it_does_not_make_bearer_tokens() {
+    let output = evidencectl()
+        .args(["keygen", "secret", "--help"])
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let help = stdout_of(&output);
+    assert!(
+        help.contains("keygen token"),
+        "keygen secret's help never points at the token generator:\n{help}"
+    );
+}
