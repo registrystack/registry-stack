@@ -62,7 +62,7 @@ jobs:
               crates/registry-platform-authcommon/*|crates/registry-platform-crypto/*)
                 return 0
                 ;;
-              crates/registry-platform-cache/*|crates/registry-platform-oid4vci/*|crates/registry-platform-replay/*|crates/registry-platform-sdjwt/*)
+              crates/registry-platform-sdjwt/*)
                 return 0
                 ;;
               crates/registry-manifest-core/*|crates/registry-manifest-cli/*)
@@ -191,7 +191,6 @@ jobs:
           set -euo pipefail
           for target in \
             authcommon_parsers \
-            oid4vci_request_and_proof \
             sdjwt_holder_proof \
             sdjwt_issuance
           do

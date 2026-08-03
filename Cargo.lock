@@ -5586,17 +5586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-cache"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-canonical-json"
 version = "0.16.3"
 dependencies = [
@@ -5687,21 +5676,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-oid4vci"
-version = "0.16.3"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-replay",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-oidc"
 version = "0.16.3"
 dependencies = [
@@ -5742,18 +5716,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-replay"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "registry-platform-cache",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-sdjwt"
 version = "0.16.3"
 dependencies = [
@@ -5783,14 +5745,11 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
- "registry-platform-replay",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tower",
  "wiremock",

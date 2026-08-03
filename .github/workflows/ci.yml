@@ -266,7 +266,6 @@ jobs:
       matrix:
         target:
           - authcommon_parsers
-          - oid4vci_request_and_proof
           - sdjwt_holder_proof
           - sdjwt_issuance
     steps:

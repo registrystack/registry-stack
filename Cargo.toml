@@ -5,17 +5,14 @@ members = [
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
-    "crates/registry-platform-cache",
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
-    "crates/registry-platform-oid4vci",
     "crates/registry-platform-oidc",
     "crates/registry-platform-ops",
     "crates/registry-platform-pdp",
-    "crates/registry-platform-replay",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
@@ -26,10 +23,6 @@ members = [
     "crates/registryctl",
 ]
 exclude = [
-    # Parked until Assisted Access or the delegation profile work supplies a
-    # release-surface consumer (#298). Keep the source in git, but out of
-    # workspace CI.
-    "crates/registry-platform-sts",
     "products/platform/fuzz",
     "products/manifest/fuzz",
 ]
@@ -55,17 +48,14 @@ registry-mint = { path = "crates/registry-mint", version = "0.16.3" }
 registry-relay = { path = "crates/registry-relay", version = "0.16.3" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.16.3" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.16.3" }
-registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.16.3" }
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.16.3" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.16.3" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.16.3" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.16.3" }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.16.3" }
-registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci", version = "0.16.3" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.16.3" }
 registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.16.3" }
 registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.16.3" }
-registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.16.3" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.16.3" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.16.3" }
 

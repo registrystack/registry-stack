@@ -690,8 +690,6 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_root_secret_scan_names_all_synthetic_platform_jwt_fixtures(self) -> None:
         for fixture_path in (
-            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\.json$",
-            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
             r"^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\.jwt$",
             r"^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
         ):

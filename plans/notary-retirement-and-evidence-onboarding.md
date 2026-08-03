@@ -101,7 +101,7 @@ gates for its area (see Verification), and committed.
 - [x] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
       Notary dev-dependency contract tests dropped; workspace members,
       `deny.toml`, and `Cargo.lock` updated; workspace green.
-- [ ] C4. Platform crates with no remaining consumers deleted (candidates:
+- [x] C4. Platform crates with no remaining consumers deleted (candidates:
       `oid4vci`, `pdp`, `replay`); verified with `cargo tree`, including
       `registry-platform-testing` usage.
 - [x] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
@@ -569,3 +569,15 @@ is parallel; B has no upstream dependencies and is the standing priority
   both Evidence gates passed. The full docs suite now reaches seven stale
   post-C2/C3 consumers and generated closures reserved for C7; its C5-owned
   reference tests pass byte-exactly. Next in C: C4 orphan platform cleanup.
+- 2026-08-03: C4 done. The orphaned `registry-platform-cache`,
+  `registry-platform-oid4vci`, `registry-platform-replay`, and
+  `registry-platform-sts` crates and the OID4VCI fuzz target/corpus are
+  deleted. `registry-platform-pdp` remains in Relay's production dependency
+  tree, and `registry-platform-testing` remains in Relay's development tree;
+  both reverse trees terminate through `registry-relay` and `registryctl`.
+  Workspace and fuzz manifests, lockfiles, CI routing, nightly security,
+  secret-scanning paths, platform docs, and testing helpers now match the
+  retained surface. Formatting, workspace check, Clippy, complete workspace
+  tests, cargo-deny, Evidence contracts and neutrality, platform hygiene and
+  config audits, fuzz compilation, CI classifier/inventory tests, and the
+  explicit package-absence proof passed. Next in C: C7 docs surface removal.

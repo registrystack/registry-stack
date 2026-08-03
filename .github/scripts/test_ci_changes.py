@@ -42,6 +42,31 @@ class CiRetirementTest(unittest.TestCase):
         )
 
 
+class PlatformRetirementTest(unittest.TestCase):
+    def test_orphan_platform_crates_and_oid4vci_fuzz_surface_are_absent(self) -> None:
+        retired_crates = (
+            "registry-platform-cache",
+            "registry-platform-oid4vci",
+            "registry-platform-replay",
+            "registry-platform-sts",
+        )
+        for crate in retired_crates:
+            with self.subTest(crate=crate):
+                self.assertNotIn(crate, SHARDS["platform"])
+                self.assertFalse(Path("crates", crate).exists())
+
+        self.assertIn("registry-platform-pdp", SHARDS["platform"])
+        self.assertIn("registry-platform-testing", SHARDS["platform"])
+        self.assertFalse(
+            Path(
+                "products/platform/fuzz/fuzz_targets/oid4vci_request_and_proof.rs"
+            ).exists()
+        )
+        self.assertFalse(
+            Path("products/platform/fuzz/corpus/oid4vci_request_and_proof").exists()
+        )
+
+
 class CiChangesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

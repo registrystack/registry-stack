@@ -1443,16 +1443,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-cache"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "sha2 0.11.0",
- "thiserror",
- "time",
-]
-
-[[package]]
 name = "registry-platform-canonical-json"
 version = "0.16.3"
 dependencies = [
@@ -1492,7 +1482,6 @@ dependencies = [
  "libfuzzer-sys",
  "registry-platform-authcommon",
  "registry-platform-crypto",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
  "registry-platform-sdjwt",
  "serde",
@@ -1526,19 +1515,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-oid4vci"
-version = "0.16.3"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-replay",
- "serde",
- "serde_json",
- "thiserror",
- "time",
-]
-
-[[package]]
 name = "registry-platform-oidc"
 version = "0.16.3"
 dependencies = [
@@ -1551,17 +1527,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "registry-platform-replay"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "registry-platform-cache",
- "thiserror",
- "time",
 ]
 
 [[package]]
