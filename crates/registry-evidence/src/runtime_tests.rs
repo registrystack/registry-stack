@@ -22,6 +22,7 @@ use registry_platform_crypto::{
     sign, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
     SigningProvider,
 };
+use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -1384,6 +1385,59 @@ async fn readiness_fails_for_missing_credentials_tampered_audit_and_unready_sign
     assert!(
         !runtime.ready().await,
         "unready signing provider denies readiness"
+    );
+}
+
+/// Readiness asks the access-token issuer for its key set and does not let the
+/// answer decide readiness.
+///
+/// The issuer is not this deployment's to fix, and every replica shares it. A
+/// readiness check that failed on it would take the whole deployment out of
+/// rotation at once, for a cause removing it from rotation cannot address, and
+/// would do so while the verifier was still accepting tokens signed by keys
+/// already in hand. The probe stays because the log line it produces is worth
+/// having; readiness stays local because the traffic decision is.
+#[tokio::test]
+async fn readiness_reports_an_unretrievable_issuer_key_set_without_denying_readiness() {
+    let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
+    let issuer = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys": [private.public()]})))
+        .mount(&issuer)
+        .await;
+
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let reachable = EvidenceRuntime::initialize_with_authenticator(
+        &prepared.runtime_path,
+        fetching_authenticator(&format!("{}/jwks", issuer.uri())),
+    )
+    .await
+    .expect("runtime initializes");
+    assert!(
+        reachable.ready().await,
+        "a retrievable issuer key set is ready"
+    );
+
+    // Port 1 on the loopback interface refuses: the shape of a private CA the
+    // service does not trust or an issuer that is down, where the address is
+    // configured and nothing answers on it.
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let unreachable = EvidenceRuntime::initialize_with_authenticator(
+        &prepared.runtime_path,
+        fetching_authenticator("http://127.0.0.1:1/jwks"),
+    )
+    .await
+    .expect("runtime initializes");
+    assert!(
+        unreachable.ready().await,
+        "an unretrievable issuer key set is reported, not made a traffic decision"
+    );
+    // The probe answered, which is what the report is made from, and answering
+    // did not disturb the local readiness verdict on a second check either.
+    assert!(
+        unreachable.ready().await,
+        "a repeated check under a suppressed probe holds the same verdict"
     );
 }
 
@@ -3884,6 +3938,39 @@ fn authenticator() -> Authenticator {
             vec!["at+jwt".to_owned()],
         ),
         fetcher,
+    ));
+    Authenticator::new(
+        verifier,
+        AuthenticationClaimsConfig {
+            principal_claim: "sub".to_owned(),
+            requester_tags_claim: "evidence_tags".to_owned(),
+            evidence_audience_claim: "evidence_audience".to_owned(),
+            grant_id_claim: "evidence_grant_id".to_owned(),
+            grant_authority_claim: "evidence_authority".to_owned(),
+            actor_claim: None,
+        },
+    )
+}
+
+/// The same authenticator, but resolving the issuer's keys over HTTP from a
+/// given address rather than from a key set held in memory.
+///
+/// The fetch policy is the permissive one so a loopback test server is a legal
+/// address; the deployed policy is built in `Authenticator::from_config` and is
+/// not what this exercises.
+fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
+    let verifier = Arc::new(TokenVerifier::new(
+        TokenVerifierConfig::access_token_profile(
+            TOKEN_ISSUER,
+            vec![TOKEN_AUDIENCE.to_owned()],
+            vec![Algorithm::EdDSA],
+            vec!["at+jwt".to_owned()],
+        ),
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri.to_owned(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
     ));
     Authenticator::new(
         verifier,

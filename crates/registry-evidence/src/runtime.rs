@@ -439,7 +439,15 @@ impl EvidenceRuntime {
 
     /// Readiness proves all locally required material and source credentials.
     /// It never performs an evidence-data request.
+    ///
+    /// It also asks the access-token issuer for its key set, but only so an
+    /// issuer that has gone quiet is named in the log while requests still
+    /// work. The answer does not decide readiness: the verifier keeps serving
+    /// a key set it cannot recheck for a bounded while, and an issuer outage
+    /// that pulled every replica out of rotation at once would be a cascading
+    /// failure, not a diagnosis.
     pub async fn ready(&self) -> bool {
+        self.authenticator.probe_key_source().await;
         if validate_subject_binding_key(
             self.subject_binding_secret.expose_secret(),
             self.bundle().config.subject_binding.key_version,
@@ -457,6 +465,13 @@ impl EvidenceRuntime {
             }
         }
         true
+    }
+
+    /// Attempt the access-token issuer's key set once, so a `jwksUri` this
+    /// deployment cannot use is named at startup rather than discovered one
+    /// rejected request at a time. It reports; it does not refuse to start.
+    pub async fn announce_key_source(&self) {
+        self.authenticator.announce_key_source().await;
     }
 
     /// List only the complete request shapes that the authenticated caller can
