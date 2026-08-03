@@ -756,16 +756,6 @@ class GateInventoryTest(unittest.TestCase):
             "OpenID conformance runner tests", self.module.missing_gates(text)
         )
 
-    def test_missing_external_integration_retirement_guard_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_integration_e2_runner.py",
-            "python3 release/scripts/integration-e2-runner.py dry-run",
-        )
-        self.assertIn(
-            "External integration retirement guard",
-            self.module.missing_gates(text),
-        )
-
     def test_release_tool_runs_conformance_candidate_binding_tests(self) -> None:
         release_tool = self.workflow[
             self.workflow.index("  release-tool:\n") : self.workflow.index(

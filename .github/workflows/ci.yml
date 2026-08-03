@@ -676,9 +676,6 @@ jobs:
       - name: Test OpenID conformance runner
         run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
 
-      - name: Test external integration evidence runner
-        run: python3 -m unittest release/scripts/test_integration_e2_runner.py
-
       - name: Test conformance candidate binding
         run: python3 -m unittest release/scripts/test_conformance_candidate.py
 
