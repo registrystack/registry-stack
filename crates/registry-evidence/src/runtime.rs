@@ -44,7 +44,7 @@ use crate::{
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
         ResolvedAuthorization, ResolvedSelectorValue,
     },
-    signing::{jwks_document, EvidenceSigner},
+    signing::{jwks_document, EvidenceSigner, EvidenceSigningError},
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
@@ -62,6 +62,13 @@ pub enum RuntimeInitializationError {
     Audit,
     #[error("the Evidence signing boundary could not initialize")]
     Signing,
+    /// The signing key material is well formed but names a different key than
+    /// the bundle's `signing.activeKeyId`. It is separated from `Signing`
+    /// because it is the one signing failure an operator fixes by editing a
+    /// reviewed field rather than by replacing key material, and the generic
+    /// message sends them looking at the key file instead.
+    #[error("the signing key identifier does not match the configured active key")]
+    SigningActiveKeyId,
     #[error("an Evidence source plan could not initialize")]
     Source,
     #[error("the Evidence rate limiter could not initialize")]
@@ -116,7 +123,10 @@ pub async fn validate_secret_material(
     );
     let signer = EvidenceSigner::initialize(provider, &bundle.config.signing.active_key_id)
         .await
-        .map_err(|_| RuntimeInitializationError::Signing)?;
+        .map_err(|error| match error {
+            EvidenceSigningError::ActiveKeyId => RuntimeInitializationError::SigningActiveKeyId,
+            _ => RuntimeInitializationError::Signing,
+        })?;
     let retired = bundle
         .retired_public_jwks
         .values()

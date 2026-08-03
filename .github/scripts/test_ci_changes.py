@@ -58,35 +58,6 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
 
-    def test_evidence_tutorial_routing(self) -> None:
-        infrastructure = (
-            "docs/site/scripts/check-evidence-tutorials.sh",
-            "docs/site/scripts/check-evidence-tutorials.test.mjs",
-            "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-            "docs/site/package.json",
-        )
-        for path in infrastructure:
-            with self.subTest(path=path):
-                self.assertTrue(
-                    classify(self.workspace, (path,))["evidence_tutorial"]
-                )
-        self.assertTrue(
-            classify(self.workspace, ("crates/registry-evidence/src/runtime.rs",))[
-                "evidence_tutorial"
-            ]
-        )
-        self.assertTrue(
-            classify(self.workspace, ("crates/registry-evidencectl/src/scaffold.rs",))[
-                "evidence_tutorial"
-            ]
-        )
-        self.assertFalse(
-            classify(
-                self.workspace,
-                ("docs/site/src/content/docs/tutorials/author-registry-project.mdx",),
-            )["evidence_tutorial"]
-        )
-
     def test_reverse_dependencies_are_included(self) -> None:
         outputs = classify(
             self.workspace,

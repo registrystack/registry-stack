@@ -16,10 +16,10 @@ properties:
     items:
       type: object
       additionalProperties: false
-      # No projected leaf can be required of every record. Projection drops a
-      # leaf the record did not carry, and an ambiguous page is decided before
-      # any record is read, so a record on that page need not be complete.
-      # Which leaves a single matched record must carry stays with the script.
+      # Nothing can be required of every record here. Projection drops a leaf
+      # the record did not carry, and an ambiguous page is decided before any
+      # record is read, so a record on that page need not be complete. Which
+      # leaves a single matched record must carry stays with the script.
       required: []
       properties:
         type:

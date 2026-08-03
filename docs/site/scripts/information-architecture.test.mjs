@@ -57,7 +57,6 @@ test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
     'Connect an existing registry',
-    'Answer with Evidence',
     'Operate',
     'Security',
     'Reference',

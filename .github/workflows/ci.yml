@@ -53,7 +53,6 @@ jobs:
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       editors: ${{ steps.filter.outputs.editors }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
-      evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -986,69 +985,6 @@ jobs:
             target/registryctl-tutorial-source \
             2>/dev/null || true
 
-  evidence-tutorials:
-    name: Evidence tutorials from source
-    needs: changes
-    if: needs.changes.outputs.evidence_tutorial == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          fetch-depth: 0
-          submodules: false
-
-      - name: Assert amd64 runner
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$(uname -m)" == "x86_64" ]]
-
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: docs/site/package-lock.json
-
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: workspace-registry
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Test the tutorial gate helpers
-        working-directory: docs/site
-        run: npm run test:tutorial:evidence
-
-      - name: Check tutorial command drift
-        working-directory: docs/site
-        run: npm run check:tutorial:evidence:dry-run
-
-      - name: Build the Evidence toolset under test
-        shell: bash
-        run: |
-          set -euo pipefail
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo build --locked --profile ci \
-            -p registry-evidence -p registry-evidencectl
-
-      - name: Execute the Evidence tutorials in a clean container
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The image is the repository's pinned release-builder digest, used
-          # here only as a clean Debian userland: the gate exercises a shell
-          # and coreutils, and the toolset binaries are mounted in prebuilt.
-          docker run --rm \
-            --mount "type=bind,src=${PWD},dst=/work,readonly" \
-            --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
-            --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
-            rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
-            bash /work/docs/site/scripts/check-evidence-tutorials.sh
-
   docs:
     name: Docs checks
     needs: changes
@@ -1222,7 +1158,6 @@ jobs:
       - release-tool
       - release-source-proof
       - registryctl-tutorials
-      - evidence-tutorials
       - docs
       - editor-extensions
     runs-on: ubuntu-24.04

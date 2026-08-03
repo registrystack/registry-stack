@@ -372,8 +372,7 @@ jobs:
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
-            -p registryctl -p registry-evidence -p registry-evidencectl \
-            -p registry-mint --target "${{ matrix.target }}"
+            -p registryctl --target "${{ matrix.target }}"
           mkdir -p platform
           asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/registryctl" "platform/${asset}"
@@ -381,12 +380,6 @@ jobs:
           release/scripts/registry-release verify-registryctl-binary-version \
             "platform/${asset}" \
             --version "${{ needs.validate.outputs.version }}"
-          for evidence_binary in evidence evidencectl mint; do
-            asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-            cp "target/${{ matrix.target }}/release/${evidence_binary}" \
-              "platform/${asset}"
-            chmod 0755 "platform/${asset}"
-          done
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 
@@ -687,9 +680,6 @@ jobs:
           installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
           cp crates/registryctl/install.sh "candidate/bundle-root/${installer}"
           chmod 0755 "candidate/bundle-root/${installer}"
-          evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
-          cp crates/registry-evidencectl/install.sh "candidate/bundle-root/${evidencectl_installer}"
-          chmod 0755 "candidate/bundle-root/${evidencectl_installer}"
           for name in registry-notary registry-relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"

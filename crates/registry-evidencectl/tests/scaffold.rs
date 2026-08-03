@@ -44,11 +44,13 @@ fn a_mint_paired_project_passes_check_and_every_fixture() {
 
 /// The scaffolded source authenticates with a bearer token the source system
 /// issues and nothing here generates. `check` and every fixture pass without
-/// it, and the service starts without it, so a reader who follows only the
-/// printed steps first discovers it missing at the first live request. The
-/// printed steps must name it, as the generated README already does.
+/// it by design, because readiness owns source credentials, so the printed
+/// steps have to name both halves of that contract: the token the operator
+/// must supply, and `/ready` as the gate that reports it missing. `/health`
+/// answers 200 either way, so a reader told only to check health concludes a
+/// deployment that can answer nothing is healthy.
 #[test]
-fn the_printed_next_steps_name_the_source_bearer_token() {
+fn the_printed_next_steps_name_the_source_bearer_token_and_the_readiness_gate() {
     let workspace = TempDir::new().expect("temporary directory");
     let project = workspace.path().join("project");
     let outcome = evidencectl(&["new", project.to_str().expect("project path")]);
@@ -62,6 +64,10 @@ fn the_printed_next_steps_name_the_source_bearer_token() {
     assert!(
         printed.contains("source-bearer-token"),
         "the printed next steps never mention the source bearer token:\n{printed}"
+    );
+    assert!(
+        printed.contains("/ready"),
+        "the printed next steps never mention the readiness gate:\n{printed}"
     );
 }
 
@@ -556,15 +562,8 @@ fn provision_secrets(project: &Path) {
         private_jwk.as_bytes(),
     );
     for name in SECRET_FILES {
-        // Regenerate until no byte is zero: the runtime rejects secret
-        // material containing NUL bytes, exactly as `keygen secret` does.
         let mut material = [0_u8; 32];
-        loop {
-            getrandom::fill(&mut material).expect("random secret");
-            if !material.contains(&0) {
-                break;
-            }
-        }
+        getrandom::fill(&mut material).expect("random secret");
         write_secret(&secrets.join(name), &material);
     }
     assert_eq!(

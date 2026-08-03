@@ -84,10 +84,6 @@ cases:
       derivationRuns: false
       signed: false
   - id: ambiguous-child
-    # The second record carries no leaf at all, only the declaration the
-    # projection insists on. An ambiguous page is refused before any record is
-    # read, so a response shape that demanded a complete record here would turn
-    # an ordinary ambiguous lookup into a source-protocol failure.
     response:
       total: 2
       results:
@@ -95,23 +91,13 @@ cases:
           status: REGISTERED
           trackingId: TRACKING-SYNTHETIC-001
           declaration: {mother.personReference: PERSON-SYNTHETIC-A}
-        - declaration: {}
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-002
+          declaration: {father.personReference: PERSON-SYNTHETIC-B}
     expected:
       lookup: ambiguous
       publicProblem: evidence_not_available
-      derivationRuns: false
-      signed: false
-  - id: negative-matched-record-without-tracking-id
-    # The other side of the same rule: what a page need not carry, a single
-    # matched record must, and the script is what says so.
-    response:
-      total: 1
-      results:
-        - type: birth
-          status: REGISTERED
-          declaration: {mother.personReference: PERSON-SYNTHETIC-A}
-    expected:
-      error: source_protocol_error
       derivationRuns: false
       signed: false
   - id: negative-duplicate-parent-reference

@@ -18,14 +18,8 @@ fn extract(source_response, parameters) {
     if results.len != 1 { throw("source_protocol_error"); }
 
     let result = results[0];
-    // The shape cannot require these of every record, because the ambiguous
-    // page is decided before any record is read. A single matched record that
-    // omits one is a source this adapter does not understand. declaration is
-    // not checked here: it carries projected children, so a record without it
-    // never survives projection.
     if result["type"] != parameters["eventType"] ||
-       result["status"] != parameters["registeredStatus"] ||
-       is_missing(result["trackingId"]) {
+       result["status"] != parameters["registeredStatus"] {
         throw("source_protocol_error");
     }
 
