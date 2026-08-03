@@ -96,6 +96,12 @@ so `evidence check` rejects the draft until a human resolves it.
 evidencectl source suggest --openapi ./api.yaml --project ./deployment-project
 ```
 
+`--openapi` also takes the URL a description is published at, which is read
+under the same rule the runtime applies to the source URLs it will itself call:
+`https` anywhere, plain `http` only to a numeric loopback host, and never a
+credential in the URL. A description behind authentication is fetched with your
+own client and passed as a file.
+
 ## Installing the toolset
 
 Releases that include the Evidence toolset publish reproducible bare binaries
