@@ -138,6 +138,29 @@ test('gives Evidence a lane on both front doors, ahead of the retiring Notary pa
   );
 });
 
+test('ends the onboarding spine on Evidence answering over a Relay-protected API', () => {
+  // The two doors are only shown working together in one place: the composed
+  // lab, where Evidence answers over a Relay API rather than a local fixture.
+  // The chooser has to close there, and that page has to be published rather
+  // than redirected back to the chooser.
+  assertOrdered(
+    quickstartSource,
+    [
+      'tutorials/first-evidence-assertion/',
+      'tutorials/verify-claim-registry-api/',
+      'tutorials/first-run-with-solmara-lab/',
+    ],
+    'quickstart lane',
+  );
+  assert.doesNotMatch(configSource, /'\/tutorials\/first-run-with-solmara-lab\/':/);
+  assert.ok(
+    hasDocForSlug('tutorials/first-run-with-solmara-lab'),
+    'the composed lab tutorial is still a draft',
+  );
+  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence');
+  assert.match(evidence, /slug: 'tutorials\/first-run-with-solmara-lab'/);
+});
+
 test('keeps validation on offline test and nested development commands', () => {
   assertOrdered(
     validationSource,

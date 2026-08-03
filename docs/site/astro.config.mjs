@@ -143,10 +143,10 @@ export default defineConfig({
     // Retired first-call and source-review routes enter the supported local path.
     '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
-    // Retired hosted and Solmara Lab tutorials now land on a chooser that
-    // distinguishes those flows from the supported local beginner path.
+    // The retired hosted lab tutorial lands on a chooser that distinguishes
+    // that flow from the supported local beginner path. Solmara Lab keeps its
+    // own route: it is where the two doors are shown working together.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
-    '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/quickstart/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
@@ -337,6 +337,7 @@ export default defineConfig({
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
             { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },
             { label: 'Move to production signing', slug: 'tutorials/move-evidence-to-production-signing' },
+            { label: 'See it over a Relay API', slug: 'tutorials/first-run-with-solmara-lab' },
           ],
         },
         {

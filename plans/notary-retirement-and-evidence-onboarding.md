@@ -85,7 +85,7 @@ gates for its area (see Verification), and committed.
 - [x] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
 - [x] B7. Mint has real docs presence: a Configure page and a reference page.
-- [ ] B8. Onboarding spine: glossary disambiguates Evidence (product) from
+- [x] B8. Onboarding spine: glossary disambiguates Evidence (product) from
       the retired Notary evidence credentials; `start/when-to-use` presents
       the two doors; the quickstart ends in an Evidence assertion over the
       Relay-protected API (this last flip needs A and D).
@@ -121,9 +121,9 @@ gates for its area (see Verification), and committed.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
 
-- [ ] D1. Compose runs Relay + Mint + Evidence: spreadsheet source through
+- [x] D1. Compose runs Relay + Mint + Evidence: spreadsheet source through
       Relay, Evidence assertion over Relay's API, smoke suite green.
-- [ ] D2. `tutorials/first-run-with-solmara-lab` rewritten against the
+- [x] D2. `tutorials/first-run-with-solmara-lab` rewritten against the
       rebuilt demo and passing its gate.
 
 ### E. Shared docs rewrites
@@ -581,3 +581,54 @@ is parallel; B has no upstream dependencies and is the standing priority
   tests, cargo-deny, Evidence contracts and neutrality, platform hygiene and
   config audits, fuzz compilation, CI classifier/inventory tests, and the
   explicit package-absence proof passed. Next in C: C7 docs surface removal.
+- 2026-08-03: D1 done in solmara-lab. `just up-evidence` runs a second CRA
+  Relay serving the civil register as a governed records API, Registry Mint
+  issuing the caller token, and Registry Evidence answering adult status over
+  that Relay under `adult-status-verification`. `just smoke-evidence` is green
+  on four cases: adult 200 true, minor 200 false, unresolved reference 422,
+  bad token 401, each signed answer verified against the published key set and
+  checked to carry neither the subject reference nor the date of birth the
+  Relay disclosed. Two things are honestly incomplete. A1's Mint-as-Relay-IdP
+  branch stays unexercised: the Relay still trusts its own co-located workload
+  identity agent, and only Evidence's caller goes through Mint. And no release
+  ships Evidence or Mint, so the overlay builds those two images from a named
+  Registry Stack checkout while every other image stays a pinned digest; F3
+  would let the lab consume them like the rest. Found on the way: the lab's
+  workload agent wrote a trailing newline into the token file, which Notary
+  trims and Evidence does not, since Evidence treats a file secret as opaque
+  bytes; it now publishes the token alone.
+- 2026-08-03: D2 done. `first-run-with-solmara-lab` is rewritten against the
+  composed demo: four Steps ending in `just smoke-evidence`, a new section
+  that asks Evidence one question by hand and reads the decoded answer, and a
+  Verify command that fails unless the answer is `true` and carries neither
+  the subject reference nor the date of birth. The gate was rebuilt with it,
+  because it had drifted well past the Evidence work: it still expected
+  `redis` and three shared Notary instances that no longer exist. It now names
+  the 17 services the page names and asserts the running total of 41
+  separately, so the count on the page is checked rather than asserted twice.
+  Two prerequisites are real and documented rather than worked around. The
+  reader needs a clean Registry Stack checkout in `REGISTRY_STACK_SOURCE_DIR`
+  until F3 publishes Evidence and Mint images, and the gate's clone mode stays
+  pinned to a lab ref that predates the Evidence overlay until the lab commits
+  are pushed, so this run used `SOLMARA_LAB_PATH`. Found on the way: `just
+  generate` rotates every credential including the Postgres password, so a
+  second run against kept volumes dies in `registry-postgresql-bootstrap`
+  with a message naming neither cause; the page now has that row and the gate
+  refuses to start against a checkout still holding volumes.
+
+- 2026-08-03: B8 done. Its third part was the one still open: the quickstart
+  now ends where Evidence answers over a Relay-protected API rather than a
+  local fixture. `first-run-with-solmara-lab` stops being a draft, loses its
+  redirect back to the chooser, and takes a sidebar entry under Answer with
+  Evidence as "See it over a Relay API". `start/quickstart` closes with a
+  section that says plainly what the composed run shows: one institution can
+  publish through Relay and answer through Evidence over those same records,
+  because Evidence treats a Relay API as an ordinary fixed HTTP source.
+  `start/when-to-use` and the Evidence track overview both link there, so
+  either door reaches the place they meet. The glossary's Notary sense of
+  evidence credential now says outright that it describes deployments already
+  running Notary rather than a path to start on. A new
+  `information-architecture` test holds the shape: quickstart lane order,
+  no redirect, page published rather than draft, sidebar entry present. It
+  failed on the missing quickstart link before the edits. Gates: `npm test`
+  281 pass 0 fail, `npm run check` exit 0.
