@@ -153,7 +153,7 @@ components:
             $ref: '#/components/schemas/EventRecord'
     EventRecord:
       type: object
-      required: [recordId, officeCode, registeredAt]
+      required: [recordId, officeCode, registeredAt, eventDate]
       properties:
         recordId:
           type: string
@@ -173,8 +173,10 @@ components:
 YAML
 ```
 
-The document is read from disk and never fetched. `evidencectl` does not resolve remote `$ref`
-targets and does not contact the server the document names.
+This tutorial passes a file, so nothing is fetched. `--openapi` also accepts the URL a description
+is published at, read under the same rule the runtime applies to the source URLs it will itself
+call; `products/evidence/README.md` states that rule. Either way `evidencectl` does not resolve
+remote `$ref` targets and does not contact the server the document names.
 
 ## Draft the source configuration
 
@@ -267,7 +269,7 @@ evidencectl source suggest: draft for source `event-records` (GET /v1/event-reco
 Derived automatically:
   - /records (maxItems): derived from a page-size parameter in the spec
 
-Still needs your input (0 schema bound(s), plus the source block below):
+Still needs your input (the source block below):
   - TODO(evidencectl): sources.<id>.request selectorInputs, prepareScript,
     adapterParameters, and adapterParametersSchema in the pasted source block.
   - TODO(evidencectl): review authentication and baseUrl in the pasted source block.
@@ -336,7 +338,7 @@ properties:
     items:
       type: object
       additionalProperties: false
-      required: []
+      required: [eventDate]
       properties:
         eventDate:
           type: string
@@ -349,29 +351,35 @@ schema runs and before any script is compiled.
 
 ## Narrow the drafted response schema
 
-One line of that draft is wrong, and it is wrong in a way worth understanding. An Evidence response
-schema describes the response **after** projection, not the response the API returns. The draft
-copied `required: [matchCount, records]` from the document, where both fields are indeed always
-present. But projection keeps a key only when it yields at least one selected leaf underneath it,
-and the only selected leaf under `records` is `eventDate`, which the document marks optional. A
-genuine zero-match response, `{"matchCount": 0, "records": []}`, projects to `{"matchCount": 0}`,
-and a schema that requires `records` rejects it.
+One line of that draft is wrong, and it is wrong in a way worth understanding. The drafting tool
+copied the document's record-level `required` list into the projected record shape, because the
+document is the only evidence it has. But a published document states the shape a provider intends
+to return, and an Evidence response schema is a boundary check, not a restatement of that intent.
+Records do arrive without a field their own document marks required.
+
+The consequence is not a rejected record. It is the wrong answer to the requester. A response that
+fails the schema is a source-protocol failure, so the requester is told `dependency_unavailable`, as
+though the institution were down, when the truthful answer is `evidence_not_available`: the source
+answered, and this subject's record cannot support the claim.
 
 Find this line in `bundle/schemas/event-records-response.schema.yaml`:
 
 ```yaml
-required: [matchCount, records]
+      required: [eventDate]
 ```
 
 Replace it with:
 
 ```yaml
-required: [matchCount]
+      required: []
 ```
 
-The rule generalizes: mark a leaf required only when the projection always yields it. `matchCount`
-qualifies, because it is a required scalar at the top of the response. Nothing under an optional
-leaf does.
+The rule has two halves and only one of them is a defect. Requiring a projected leaf of every record
+is the defect, and the check belongs in the extract script instead, on the records that have to carry
+the field, where you choose which problem the requester sees. Requiring an intermediate container is
+merely redundant: an intermediate cannot be absent, because projection rejects the response before
+this schema is read. That is why `required: [matchCount, records]` at the top of the draft stays
+exactly as drafted.
 
 ## Write the request adapter
 
@@ -770,8 +778,10 @@ cases:
     signed_success: true
 
   # One record resolved, but it carries no event date. The operation's own
-  # schema marks that field optional, so this is a record the source really can
-  # return. The requester learns only that evidence is not available.
+  # schema marks that field required, and a source that returns this record
+  # anyway is exactly why the response schema does not require it: the script
+  # catches the gap, so the requester learns only that evidence is not
+  # available rather than that the institution is down.
   - id: missing-event-date
     source:
       matchCount: 1

@@ -338,3 +338,26 @@ is parallel; B has no upstream dependencies and is the standing priority
   expectations are load-bearing rather than vacuous. Next in A: none, A
   is complete, which unblocks D. Next unblocked elsewhere: B5 tutorials
   E3 to E5 (E2 still waits on the client-assertion tooling call above).
+- 2026-08-03: E4 (connect an institution source) corrected against the
+  `source suggest` work merged into main. A subagent review settled three
+  stale facts empirically. The page taught that projection drops an
+  intermediate container whose only selected leaf is absent, so
+  `{"matchCount": 0, "records": []}` would project to `{"matchCount": 0}`;
+  it does not. `crates/registry-evidence/src/source.rs` omits a key only
+  when it is absent and its projection node is terminal, and an absent
+  intermediate is a projection violation, which is what
+  `products/evidence/contracts/source-contract.yaml` already states. The
+  repair step the page taught was therefore a no-op. It now teaches the
+  defect that is real: requiring a projected leaf of every record turns an
+  incomplete record into a source-protocol failure, so the requester is
+  told `dependency_unavailable` instead of `evidence_not_available`, and
+  the check belongs in the extract script. Also fixed: one verbatim
+  `source suggest` output line stale since the report wording changed, and
+  the claim that `--openapi` never fetches, which stopped being true when
+  the flag gained URL support. The gate now pins that output line so the
+  next rewording fails CI rather than leaving the quoted transcript stale.
+  Open for Jeremi: the source contract's `required_rule` reads as
+  condemning any required selected leaf, including a top-level scalar,
+  while the reference schemas keep their top-level `required` lists; the
+  scope is "of every record" and the contract line would be clearer
+  saying so, but it is a frozen V1 contract so no edit was made.
