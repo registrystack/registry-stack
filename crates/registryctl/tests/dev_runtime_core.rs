@@ -77,9 +77,6 @@ mod release_lock {
         pub fn relay(&self) -> &str {
             unreachable!()
         }
-        pub fn notary(&self) -> &str {
-            unreachable!()
-        }
         pub fn postgresql_state_plane(&self) -> &str {
             unreachable!()
         }
@@ -138,9 +135,6 @@ mod release_lock {
             unreachable!()
         }
         pub fn relay_consultation(&self) -> &ProductRuntime {
-            unreachable!()
-        }
-        pub fn notary(&self) -> &ProductRuntime {
             unreachable!()
         }
         pub fn postgresql_state_plane(&self) -> &PostgresqlRuntime {
@@ -221,29 +215,20 @@ mod dev_credentials {
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct PreparedDevCredentialFiles {
         pub root: PathBuf,
-        pub caller_token: PathBuf,
         pub relay_match_token: Option<PathBuf>,
         pub relay_no_match_token: Option<PathBuf>,
-        pub workload_token: PathBuf,
-        pub workload_public_jwk: PathBuf,
-        pub workload_jwks: PathBuf,
         pub relay_public_prepare: PreparedDevActionCredentialFile,
         pub relay_public_initialize: PreparedDevActionCredentialFile,
         pub relay_public_serve: PreparedDevActionCredentialFile,
         pub relay_consultation_prepare: PreparedDevActionCredentialFile,
         pub relay_consultation_initialize: PreparedDevActionCredentialFile,
         pub relay_consultation_serve: PreparedDevActionCredentialFile,
-        pub notary_prepare: PreparedDevActionCredentialFile,
-        pub notary_initialize: PreparedDevActionCredentialFile,
-        pub notary_serve: PreparedDevActionCredentialFile,
         pub postgres_bootstrap: PreparedDevActionCredentialFile,
         pub postgres_admin_password: PathBuf,
-        pub notary_signing_key: PathBuf,
         pub postgres_tls_certificate: PathBuf,
         pub postgres_tls_private_key: PathBuf,
         pub source: Option<PreparedDevSourceCredentialFiles>,
-        pub issuance_public_jwk: Option<PathBuf>,
-        pub lane_public_jwks: [PathBuf; 3],
+        pub lane_public_jwks: [PathBuf; 2],
     }
 
     impl PreparedDevCredentialClosure {
@@ -347,34 +332,24 @@ mod dev_credentials {
             });
             PreparedDevCredentialFiles {
                 root: root.to_path_buf(),
-                caller_token: root.join("caller-token"),
                 relay_match_token: self.relay_api_keys.then(|| root.join("relay-match-token")),
                 relay_no_match_token: self
                     .relay_api_keys
                     .then(|| root.join("relay-no-match-token")),
-                workload_token: root.join("notary-relay-token"),
-                workload_public_jwk: root.join("notary-workload-public.jwk"),
-                workload_jwks: root.join("notary-workload-jwks.json"),
                 relay_public_prepare: action("relay-public-prepare.env"),
                 relay_public_initialize: action("relay-public-initialize.env"),
                 relay_public_serve: action("relay-public-serve.env"),
                 relay_consultation_prepare: action("relay-consultation-prepare.env"),
                 relay_consultation_initialize: action("relay-consultation-initialize.env"),
                 relay_consultation_serve: action("relay-consultation-serve.env"),
-                notary_prepare: action("notary-prepare.env"),
-                notary_initialize: action("notary-initialize.env"),
-                notary_serve: action("notary-serve.env"),
                 postgres_bootstrap: action("postgres-bootstrap.env"),
                 postgres_admin_password: root.join("postgres-admin-password"),
-                notary_signing_key: root.join("notary-signing-key.jwk"),
                 postgres_tls_certificate: root.join("postgres-tls.crt"),
                 postgres_tls_private_key: root.join("postgres-tls.key"),
                 source,
-                issuance_public_jwk: None,
                 lane_public_jwks: [
                     root.join("relay-public-lane.jwk"),
                     root.join("relay-consultation-lane.jwk"),
-                    root.join("notary-lane.jwk"),
                 ],
             }
         }
@@ -391,27 +366,18 @@ mod dev_credentials {
                 fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
             }
             let mut paths = vec![
-                (&files.caller_token, "test-caller-token"),
-                (&files.workload_token, "test-workload-token"),
-                (&files.workload_public_jwk, "{}"),
-                (&files.workload_jwks, "{\"keys\":[]}"),
                 (&files.relay_public_prepare.host_path, "A=1\n"),
                 (&files.relay_public_initialize.host_path, "A=1\n"),
                 (&files.relay_public_serve.host_path, "A=1\n"),
                 (&files.relay_consultation_prepare.host_path, "A=1\n"),
                 (&files.relay_consultation_initialize.host_path, "A=1\n"),
                 (&files.relay_consultation_serve.host_path, "A=1\n"),
-                (&files.notary_prepare.host_path, "A=1\n"),
-                (&files.notary_initialize.host_path, "A=1\n"),
-                (&files.notary_serve.host_path, "A=1\n"),
                 (&files.postgres_bootstrap.host_path, "A=1\n"),
                 (&files.postgres_admin_password, "postgres-admin-password"),
-                (&files.notary_signing_key, "{}"),
                 (&files.postgres_tls_certificate, "certificate"),
                 (&files.postgres_tls_private_key, "private-key"),
                 (&files.lane_public_jwks[0], "{}"),
                 (&files.lane_public_jwks[1], "{}"),
-                (&files.lane_public_jwks[2], "{}"),
             ];
             if let Some(path) = &files.relay_match_token {
                 paths.push((path, "test-relay-match-token"));
@@ -485,9 +451,7 @@ mod project_authoring {
         pub relay_public_anchor: PathBuf,
         pub relay_consultation_bundle: PathBuf,
         pub relay_consultation_anchor: PathBuf,
-        pub notary_bundle: PathBuf,
-        pub notary_anchor: PathBuf,
-        pub lane_config_digests: [String; 3],
+        pub lane_config_digests: [String; 2],
     }
 
     pub struct ProjectBuildOptions {
@@ -575,10 +539,6 @@ fn verified_release() -> VerifiedDevReleaseProjection {
             "ghcr.io/registrystack/registry-relay@sha256:{}",
             "a".repeat(64)
         ),
-        format!(
-            "ghcr.io/registrystack/registry-notary@sha256:{}",
-            "b".repeat(64)
-        ),
         format!("docker.io/library/postgres@sha256:{}", "c".repeat(64)),
         "2.24.0".to_string(),
     )
@@ -607,22 +567,12 @@ fn create_artifacts_generation(root: &Path, generation: &str) -> DevRuntimeArtif
     fs::write(&compose_file, "services: {}\n").unwrap();
     let relay_public_bundle = bundles.join("relay-public");
     let relay_consultation_bundle = bundles.join("relay-consultation");
-    let notary_bundle = bundles.join("notary");
-    for path in [
-        &relay_public_bundle,
-        &relay_consultation_bundle,
-        &notary_bundle,
-    ] {
+    for path in [&relay_public_bundle, &relay_consultation_bundle] {
         fs::create_dir(path).unwrap();
     }
     let relay_public_anchor = anchors.join("relay-public.json");
     let relay_consultation_anchor = anchors.join("relay-consultation.json");
-    let notary_anchor = anchors.join("notary.json");
-    for path in [
-        &relay_public_anchor,
-        &relay_consultation_anchor,
-        &notary_anchor,
-    ] {
+    for path in [&relay_public_anchor, &relay_consultation_anchor] {
         assert!(!path.exists());
     }
     write_development_trust_material(
@@ -639,21 +589,12 @@ fn create_artifacts_generation(root: &Path, generation: &str) -> DevRuntimeArtif
         ProductAcceptanceProductV1::RegistryRelay,
         "relay-consultation",
     );
-    write_development_trust_material(
-        &notary_bundle,
-        &notary_anchor,
-        ProductAcceptanceLaneV1::Notary,
-        ProductAcceptanceProductV1::RegistryNotary,
-        "notary",
-    );
     DevRuntimeArtifactInputs {
         compose_file,
         relay_public_bundle,
         relay_public_anchor,
         relay_consultation_bundle,
         relay_consultation_anchor,
-        notary_bundle,
-        notary_anchor,
     }
 }
 
@@ -771,7 +712,7 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
                 .then_some(SyntheticOAuthResponseCase::Valid),
             oauth_request: (oauth_profile != DevOAuthProfile::None).then(|| {
                 AuthoredSyntheticOauthRequest {
-                    audience: Some("registry-notary".to_string()),
+                    audience: Some("registry-relay".to_string()),
                     scope: Some("registry.read".to_string()),
                     resource: Some("registry-source".to_string()),
                 }
@@ -779,115 +720,6 @@ fn scenario(provider: DevSourceProvider, oauth_profile: DevOAuthProfile) -> Auth
             response_body: Some(format!(r#"{{"result":"{RESPONSE_CANARY}"}}"#).into_bytes()),
         }),
         request_json: format!(r#"{{"subject":"{REQUEST_CANARY}"}}"#).into_bytes(),
-    }
-}
-
-fn authorized_claim_result() -> serde_json::Value {
-    serde_json::json!({
-        "evaluation_id": "evaluation-1",
-        "claim_id": "eligibility",
-        "claim_version": "1",
-        "subject_type": "Person",
-        "target_ref": {
-            "type": "Person",
-            "handle": "rnref:v1:test",
-            "identifier_schemes": []
-        },
-        "value": true,
-        "satisfied": true,
-        "disclosure": "predicate",
-        "format": "application/vnd.registry-notary.claim-result+json",
-        "issued_at": "2026-07-31T00:00:00Z",
-        "expires_at": null,
-        "provenance": {
-            "schema_version": "registry-notary-claim-provenance/v2",
-            "generated_by": {
-                "type": "claim_evaluation",
-                "service_id": "registry-notary",
-                "evaluation_id": "evaluation-1",
-                "claim_id": "eligibility",
-                "claim_version": "1"
-            },
-            "used": {"relay_consultation_count": 1},
-            "derived_from": []
-        }
-    })
-}
-
-#[test]
-fn authorized_evaluation_requires_the_committed_claim_outcome() {
-    let temporary = tempfile::tempdir().unwrap();
-    let mut plan = DevRuntimePlan::derive(plan_input(
-        temporary.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-    ))
-    .unwrap();
-    let valid = serde_json::json!({"results": [authorized_claim_result()]});
-    let valid_bytes = serde_json::to_vec(&valid).unwrap();
-    assert_eq!(
-        validate_authorized_evaluation_response(&plan, &valid_bytes).unwrap(),
-        ["eligibility"]
-    );
-
-    for (field, unexpected) in [
-        ("value", serde_json::json!(false)),
-        ("satisfied", serde_json::json!(false)),
-        ("disclosure", serde_json::json!("value")),
-    ] {
-        let mut changed = valid.clone();
-        changed["results"][0][field] = unexpected;
-        assert!(
-            validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&changed).unwrap())
-                .is_err(),
-            "{field} mismatch must fail smoke"
-        );
-    }
-
-    let mut missing = valid.clone();
-    missing["results"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("satisfied");
-    assert!(
-        validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&missing).unwrap())
-            .is_err()
-    );
-
-    let duplicate = serde_json::json!({
-        "results": [authorized_claim_result(), authorized_claim_result()]
-    });
-    assert!(validate_authorized_evaluation_response(
-        &plan,
-        &serde_json::to_vec(&duplicate).unwrap()
-    )
-    .is_err());
-
-    plan.scenario.expected_claim_results_sha256 =
-        dev_claim_results_commitment(vec![DevClaimResultExpectation {
-            claim_id: "eligibility".to_string(),
-            value: serde_json::Value::Null,
-            satisfied: None,
-            disclosure: "redacted".to_string(),
-        }])
-        .unwrap();
-    let mut redacted = valid;
-    redacted["results"][0]["value"] = serde_json::Value::Null;
-    redacted["results"][0]["satisfied"] = serde_json::Value::Null;
-    redacted["results"][0]["disclosure"] = serde_json::json!("redacted");
-    assert!(validate_authorized_evaluation_response(
-        &plan,
-        &serde_json::to_vec(&redacted).unwrap()
-    )
-    .is_ok());
-    for field in ["value", "satisfied"] {
-        let mut missing = redacted.clone();
-        missing["results"][0].as_object_mut().unwrap().remove(field);
-        assert!(
-            validate_authorized_evaluation_response(&plan, &serde_json::to_vec(&missing).unwrap())
-                .is_err(),
-            "nullable {field} must still be present"
-        );
     }
 }
 
@@ -911,10 +743,6 @@ fn plan_input_generation(
     let build_manifest_bytes = b"{\"schema_version\":\"registry.project.artifact_manifest.v1\"}\n";
     fs::write(&build_manifest_path, build_manifest_bytes).unwrap();
     let relay_port = free_port();
-    let mut notary_port = free_port();
-    while notary_port == relay_port {
-        notary_port = free_port();
-    }
     DevRuntimePlanInput {
         project_root: root,
         project_id: "citizen-registry".to_string(),
@@ -933,7 +761,6 @@ fn plan_input_generation(
             default_fixture: "passing-default".to_string(),
             operator_source_binding_present: false,
             relay_port: Some(relay_port),
-            notary_port: Some(notary_port),
         },
         scenarios: vec![scenario(provider, oauth_profile)],
         records_request: None,
@@ -966,6 +793,39 @@ fn local_snapshot_plan_input(root: &Path) -> DevRuntimePlanInput {
         digest: registry_platform_config::sha256_uri(b"bounded workbook fixture"),
     });
     input
+}
+
+#[test]
+fn disposable_runtime_plan_and_credentials_are_relay_only() {
+    let temporary = tempfile::tempdir().unwrap();
+    let input = plan_input(
+        temporary.path(),
+        DevSourceProvider::Http,
+        DevOAuthProfile::None,
+    );
+    let credential_root = temporary.path().join("credential-inventory");
+    input
+        .credentials
+        .materialize_owner_only(&credential_root)
+        .unwrap();
+    let credential_names = fs::read_dir(&credential_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    let plan = DevRuntimePlan::derive(input).unwrap();
+
+    assert!(
+        plan.workloads
+            .iter()
+            .all(|workload| !workload.id.compose_service().contains("notary")),
+        "the disposable runtime plan must not contain a Notary workload"
+    );
+    assert!(
+        credential_names
+            .iter()
+            .all(|name| !name.contains("notary") && !name.contains("workload")),
+        "the disposable credential inventory must not contain Notary material: {credential_names:?}"
+    );
 }
 
 #[test]
@@ -1059,176 +919,6 @@ fn generic_plan_uses_locked_images_loopback_development_identity_and_exact_sourc
 }
 
 #[test]
-fn credential_mount_inventory_is_lane_and_action_specific() {
-    let temp = tempfile::tempdir().unwrap();
-    let plan = DevRuntimePlan::derive(plan_input(
-        temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::Oauth2Bearer,
-    ))
-    .unwrap();
-    let notary = plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::Notary)
-        .unwrap();
-    assert!(notary
-        .mounts
-        .iter()
-        .any(|mount| mount.container_path == "/run/secrets/relay-workload-token"));
-    let relay_consultation = plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::RelayConsultation)
-        .unwrap();
-    assert!(!relay_consultation
-        .mounts
-        .iter()
-        .any(|mount| mount.container_path == "/run/secrets/relay-workload-token"));
-    let secret_targets = |action: &DevProductActionPlan| {
-        action
-            .mounts
-            .iter()
-            .filter(|mount| mount.container_path.starts_with("/run/secrets/"))
-            .map(|mount| mount.container_path.clone())
-            .collect::<BTreeSet<_>>()
-    };
-    let environment_inputs = |mounts: &[DevWorkloadMount]| {
-        mounts
-            .iter()
-            .filter(|mount| {
-                mount
-                    .host_path
-                    .extension()
-                    .is_some_and(|extension| extension == "env")
-            })
-            .map(|mount| {
-                mount
-                    .host_path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect::<BTreeSet<_>>()
-    };
-    let public = plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::RelayPublic)
-        .unwrap();
-    assert_eq!(
-        environment_inputs(&public.prepare_state_store.as_ref().unwrap().mounts),
-        BTreeSet::from(["relay-public-prepare.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&public.initialize_state.as_ref().unwrap().mounts),
-        BTreeSet::from(["relay-public-initialize.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&public.mounts),
-        BTreeSet::from(["relay-public-serve.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(
-            &relay_consultation
-                .prepare_state_store
-                .as_ref()
-                .unwrap()
-                .mounts
-        ),
-        BTreeSet::from(["relay-consultation-prepare.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&relay_consultation.initialize_state.as_ref().unwrap().mounts),
-        BTreeSet::from(["relay-consultation-initialize.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&relay_consultation.mounts),
-        BTreeSet::from(["relay-consultation-serve.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&notary.prepare_state_store.as_ref().unwrap().mounts),
-        BTreeSet::from(["notary-prepare.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&notary.initialize_state.as_ref().unwrap().mounts),
-        BTreeSet::from(["notary-initialize.env".to_string()])
-    );
-    assert_eq!(
-        environment_inputs(&notary.mounts),
-        BTreeSet::from(["notary-serve.env".to_string()])
-    );
-    assert!(secret_targets(public.prepare_state_store.as_ref().unwrap()).is_empty());
-    assert!(secret_targets(public.initialize_state.as_ref().unwrap()).is_empty());
-    let database_ca = BTreeSet::from(["/run/secrets/postgresql-ca.pem".to_string()]);
-    assert_eq!(
-        secret_targets(relay_consultation.prepare_state_store.as_ref().unwrap()),
-        database_ca
-    );
-    assert_eq!(
-        secret_targets(relay_consultation.initialize_state.as_ref().unwrap()),
-        database_ca
-    );
-    assert_eq!(
-        secret_targets(notary.prepare_state_store.as_ref().unwrap()),
-        database_ca
-    );
-    assert_eq!(
-        secret_targets(notary.initialize_state.as_ref().unwrap()),
-        database_ca
-    );
-    assert_eq!(
-        notary
-            .mounts
-            .iter()
-            .filter(|mount| mount.container_path.starts_with("/run/secrets/"))
-            .map(|mount| mount.container_path.clone())
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "/run/secrets/notary-signing-key.jwk".to_string(),
-            "/run/secrets/postgresql-ca.pem".to_string(),
-            "/run/secrets/relay-workload-token".to_string(),
-        ])
-    );
-    assert!(relay_consultation.mounts.iter().any(|mount| {
-        mount.container_path == "/run/registry/dev-public/notary-workload-jwks.json"
-            && mount.read_only
-            && mount.kind == DevWorkloadMountKind::Bind
-    }));
-    for workload in plan
-        .workloads
-        .iter()
-        .filter(|workload| workload.id != DevWorkloadId::RelayConsultation)
-    {
-        assert!(workload.mounts.iter().all(|mount| {
-            mount.container_path != "/run/registry/dev-public/notary-workload-jwks.json"
-        }));
-    }
-    for action in plan
-        .workloads
-        .iter()
-        .flat_map(|workload| {
-            [
-                workload.prepare_state_store.as_ref(),
-                workload.initialize_state.as_ref(),
-            ]
-        })
-        .flatten()
-    {
-        assert!(action.mounts.iter().any(|mount| mount
-            .host_path
-            .extension()
-            .is_some_and(|value| value == "env")));
-        assert!(!action.mounts.iter().any(|mount| {
-            mount
-                .container_path
-                .starts_with("/run/registry/synthetic-source-secrets")
-        }));
-    }
-}
-
-#[test]
 fn local_snapshot_mounts_one_bounded_workbook_only_into_relay_serve_workloads() {
     let temporary = tempfile::tempdir().unwrap();
     let plan = DevRuntimePlan::derive(local_snapshot_plan_input(temporary.path())).unwrap();
@@ -1293,233 +983,9 @@ fn local_snapshot_cannot_shadow_runtime_owned_mounts() {
     let temporary = tempfile::tempdir().unwrap();
     let mut input = local_snapshot_plan_input(temporary.path());
     input.local_snapshot.as_mut().unwrap().container_path =
-        "/run/registry/dev-public/notary-workload-jwks.json".to_string();
+        "/run/registry/dev-public/relay-public-signing-public.jwk".to_string();
 
     assert!(DevRuntimePlan::derive(input).is_err());
-}
-
-#[test]
-fn local_snapshot_rejects_changed_extra_escaped_and_oversized_project_files() {
-    let changed = tempfile::tempdir().unwrap();
-    let changed_plan = DevRuntimePlan::derive(local_snapshot_plan_input(changed.path())).unwrap();
-    let mut changed_controller = DevRuntimeController::new(FakeBackend::default());
-    changed_controller.start(&changed_plan, true).unwrap();
-    fs::write(changed.path().join("data.xlsx"), b"changed workbook").unwrap();
-    assert!(validate_local_snapshot(&changed_plan).is_err());
-    assert_eq!(
-        changed_controller
-            .status(&changed_plan)
-            .unwrap_err()
-            .category,
-        DevFailureCategory::ProjectBinding
-    );
-    changed_controller.down(&changed_plan).unwrap();
-
-    let extra = tempfile::tempdir().unwrap();
-    let mut extra_plan = DevRuntimePlan::derive(local_snapshot_plan_input(extra.path())).unwrap();
-    let mount = extra_plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::RelayPublic)
-        .unwrap()
-        .mounts
-        .iter()
-        .find(|mount| mount.kind == DevWorkloadMountKind::ProjectFile)
-        .unwrap()
-        .clone();
-    extra_plan
-        .workloads
-        .iter_mut()
-        .find(|workload| workload.id == DevWorkloadId::Notary)
-        .unwrap()
-        .mounts
-        .push(mount);
-    assert!(validate_local_snapshot(&extra_plan).is_err());
-
-    let escaped = tempfile::tempdir().unwrap();
-    let external = tempfile::NamedTempFile::new().unwrap();
-    let mut escaped_input = local_snapshot_plan_input(escaped.path());
-    escaped_input.local_snapshot.as_mut().unwrap().host_path =
-        fs::canonicalize(external.path()).unwrap();
-    escaped_input.local_snapshot.as_mut().unwrap().digest =
-        registry_platform_config::sha256_uri(&fs::read(external.path()).unwrap());
-    assert!(DevRuntimePlan::derive(escaped_input).is_err());
-
-    let oversized = tempfile::tempdir().unwrap();
-    let mut oversized_input = local_snapshot_plan_input(oversized.path());
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(oversized.path().join("data.xlsx"))
-        .unwrap()
-        .set_len(MAX_LOCAL_SNAPSHOT_BYTES + 1)
-        .unwrap();
-    oversized_input.local_snapshot.as_mut().unwrap().digest =
-        registry_platform_config::sha256_uri(b"");
-    assert!(DevRuntimePlan::derive(oversized_input).is_err());
-}
-
-#[cfg(unix)]
-#[test]
-fn local_snapshot_rejects_a_symlink_swap_after_planning() {
-    use std::os::unix::fs::symlink;
-
-    let temporary = tempfile::tempdir().unwrap();
-    let plan = DevRuntimePlan::derive(local_snapshot_plan_input(temporary.path())).unwrap();
-    let external = tempfile::NamedTempFile::new().unwrap();
-    fs::remove_file(temporary.path().join("data.xlsx")).unwrap();
-    symlink(external.path(), temporary.path().join("data.xlsx")).unwrap();
-    assert!(validate_local_snapshot(&plan).is_err());
-}
-
-#[test]
-fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets() {
-    let synthetic_temp = tempfile::tempdir().unwrap();
-    let synthetic = DevRuntimePlan::derive(plan_input(
-        synthetic_temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-    ))
-    .unwrap();
-    let synthetic_compose = synthetic_temp
-        .path()
-        .join(".registry-stack/build/local/dev/synthetic-compose.json");
-    render_closed_compose(
-        &synthetic_compose,
-        &synthetic.workloads,
-        DevSourceMode::Synthetic,
-    )
-    .unwrap();
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(synthetic_compose).unwrap()).unwrap();
-    assert!(value["networks"].get("registry_egress").is_none());
-    assert_eq!(
-        value["networks"]["registry_private"]["ipam"]["config"][0]["subnet"],
-        "10.89.0.0/24"
-    );
-    assert_eq!(
-        value["services"]["registry-synthetic-source"]["networks"]["registry_private"]
-            ["ipv4_address"],
-        "10.89.0.3"
-    );
-    assert_eq!(
-        value["services"]["registry-relay-consultation"]["networks"]["registry_private"]
-            ["ipv4_address"],
-        "10.89.0.4"
-    );
-    let consultation_mounts = value["services"]["registry-relay-consultation"]["volumes"]
-        .as_array()
-        .unwrap();
-    assert!(consultation_mounts.iter().any(|mount| {
-        mount["target"] == "/run/registry/dev-public/synthetic-source-tls.crt"
-            && mount["read_only"] == true
-    }));
-    assert!(consultation_mounts.iter().any(|mount| {
-        mount["target"] == "/run/registry/dev-public/notary-workload-jwks.json"
-            && mount["read_only"] == true
-    }));
-    let notary_mounts = value["services"]["registry-notary"]["volumes"]
-        .as_array()
-        .unwrap();
-    assert!(notary_mounts.iter().all(|mount| {
-        mount["target"] != "/run/secrets/relay-consultation-ca.pem"
-            && mount["target"] != "/run/registry/dev-public/notary-workload-jwks.json"
-    }));
-    #[cfg(unix)]
-    {
-        let expected_user = format!(
-            "{}:{}",
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw()
-        );
-        for (service, document) in value["services"].as_object().unwrap() {
-            match service.as_str() {
-                "registry-postgres" | "registry-postgres-bootstrap" => {
-                    assert_eq!(document["user"], "999:999");
-                }
-                "registry-postgres-stage-secrets" => {
-                    assert_eq!(document["user"], "0:0");
-                    assert_eq!(document["network_mode"], "none");
-                    assert_eq!(
-                        document["cap_add"],
-                        serde_json::json!(["CHOWN", "DAC_READ_SEARCH"])
-                    );
-                }
-                _ => {
-                    assert_eq!(document["user"], expected_user);
-                    assert_ne!(document["user"], "0:0");
-                }
-            }
-        }
-    }
-    let postgres = &value["services"]["registry-postgres"];
-    assert_eq!(postgres["read_only"], true);
-    assert_eq!(postgres["cap_drop"], serde_json::json!(["ALL"]));
-    assert_eq!(
-        postgres["environment"],
-        serde_json::json!([
-            "POSTGRES_USER=registry_stack_bootstrap",
-            "POSTGRES_DB=postgres",
-            "POSTGRES_PASSWORD_FILE=/run/secrets/postgresql-admin-password",
-            "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=peer"
-        ])
-    );
-    let stage_command = value["services"]["registry-postgres-stage-secrets"]["command"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(stage_command.contains("/usr/bin/install -m 0400"));
-    assert!(stage_command.contains("/usr/bin/chown 999:999"));
-    assert!(!stage_command.contains("postgres-admin-password"));
-    assert_eq!(
-        value["services"]["registry-postgres-bootstrap"]["networks"]["registry_private"],
-        serde_json::json!({})
-    );
-
-    let operator_temp = tempfile::tempdir().unwrap();
-    let mut input = plan_input(
-        operator_temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-    );
-    input.development.source_mode = DevSourceMode::OperatorBound;
-    input.development.operator_source_binding_present = true;
-    input.scenarios[0].synthetic_source = None;
-    input.credentials = PreparedDevCredentialClosure::operator_bound();
-    input.operator_source_secret_env = vec!["FICTIONAL_REGISTRY_TOKEN".to_string()];
-    let operator = DevRuntimePlan::derive(input).unwrap();
-    let operator_compose = operator_temp
-        .path()
-        .join(".registry-stack/build/local/dev/operator-compose.json");
-    render_closed_compose(
-        &operator_compose,
-        &operator.workloads,
-        DevSourceMode::OperatorBound,
-    )
-    .unwrap();
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(operator_compose).unwrap()).unwrap();
-    assert!(value["networks"].get("registry_egress").is_some());
-    for (service, document) in value["services"].as_object().unwrap() {
-        if document.get("network_mode").is_some() {
-            assert_eq!(service, "registry-postgres-stage-secrets");
-            assert_eq!(document["network_mode"], "none");
-            continue;
-        }
-        let networks = document["networks"].as_object().unwrap();
-        let has_egress = networks.contains_key("registry_egress");
-        assert_eq!(has_egress, service == "registry-relay-consultation");
-        if service == "registry-relay-consultation" {
-            assert_eq!(
-                document["environment"],
-                serde_json::json!(["FICTIONAL_REGISTRY_TOKEN"])
-            );
-        } else if service != "registry-postgres" {
-            assert!(document.get("environment").is_none());
-        }
-    }
 }
 
 #[test]
@@ -1574,22 +1040,148 @@ fn compose_health_requires_the_exact_complete_healthy_workload_set() {
     );
 }
 
-#[test]
-fn operator_bound_smoke_reports_unobserved_source_counters() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut input = plan_input(temp.path(), DevSourceProvider::Http, DevOAuthProfile::None);
-    input.development.source_mode = DevSourceMode::OperatorBound;
-    input.development.operator_source_binding_present = true;
-    input.scenarios[0].synthetic_source = None;
-    input.credentials = PreparedDevCredentialClosure::operator_bound();
-    input.operator_source_secret_env = vec!["FICTIONAL_REGISTRY_TOKEN".to_string()];
-    let plan = DevRuntimePlan::derive(input).unwrap();
-    let mut controller = DevRuntimeController::new(FakeBackend::default());
-    controller.start(&plan, true).unwrap();
-    let report = controller.smoke(&plan).unwrap();
-    assert!(report.results.iter().all(|result| {
-        result.token_counter_delta.is_none() && result.source_counter_delta.is_none()
-    }));
+#[derive(Default)]
+struct FakeBackend {
+    calls: Vec<String>,
+    running: bool,
+    health: Option<DevRuntimeHealth>,
+    down_calls: usize,
+    fail_down: bool,
+    doctor_report: Option<DevDoctorReport>,
+}
+
+impl DevRuntimeBackend for FakeBackend {
+    fn doctor(&mut self, _plan: &DevRuntimePlan) -> DevRuntimeResult<DevDoctorReport> {
+        self.calls.push("doctor".to_string());
+        Ok(self.doctor_report.clone().unwrap_or(DevDoctorReport {
+            docker_installed: true,
+            daemon_available: true,
+            compose_supported: true,
+        }))
+    }
+
+    fn image_availability(&mut self, image: &str) -> DevRuntimeResult<DevImageAvailability> {
+        self.calls.push(format!("inspect:{image}"));
+        Ok(DevImageAvailability::Local)
+    }
+
+    fn pull_image(&mut self, image: &str) -> DevRuntimeResult<()> {
+        self.calls.push(format!("pull:{image}"));
+        Ok(())
+    }
+
+    fn health(&mut self, _state: &DevRuntimeStateV1) -> DevRuntimeResult<DevRuntimeHealth> {
+        Ok(self.health.unwrap_or(if self.running {
+            DevRuntimeHealth::Running
+        } else {
+            DevRuntimeHealth::Stopped
+        }))
+    }
+
+    fn start(
+        &mut self,
+        _plan: &DevRuntimePlan,
+        _state: &DevRuntimeStateV1,
+        detach: bool,
+    ) -> DevRuntimeResult<()> {
+        self.calls.push(format!("start:{detach}"));
+        self.running = true;
+        Ok(())
+    }
+
+    fn attach(
+        &mut self,
+        _plan: &DevRuntimePlan,
+        _state: &DevRuntimeStateV1,
+    ) -> DevRuntimeResult<()> {
+        self.calls.push("attach".to_string());
+        Ok(())
+    }
+
+    fn status(
+        &mut self,
+        plan: &DevRuntimePlan,
+        _state: &DevRuntimeStateV1,
+    ) -> DevRuntimeResult<Vec<DevWorkloadStatus>> {
+        Ok(plan
+            .lifecycle
+            .status_services
+            .iter()
+            .map(|workload| DevWorkloadStatus {
+                workload: *workload,
+                state: DevRuntimeHealthWire::Running,
+            })
+            .collect())
+    }
+
+    fn logs(
+        &mut self,
+        plan: &DevRuntimePlan,
+        _state: &DevRuntimeStateV1,
+    ) -> DevRuntimeResult<Vec<DevProductLogSummary>> {
+        Ok(plan
+            .lifecycle
+            .log_services
+            .iter()
+            .map(|workload| DevProductLogSummary {
+                workload: *workload,
+                available: true,
+            })
+            .collect())
+    }
+
+    fn smoke(
+        &mut self,
+        plan: &DevRuntimePlan,
+        _state: &DevRuntimeStateV1,
+    ) -> DevRuntimeResult<DevSmokeReportV1> {
+        let results = plan
+            .records_request_digest
+            .as_ref()
+            .map(|_| {
+                vec![
+                    DevSmokeScenarioResult {
+                        scenario_id: plan.lifecycle.smoke_denial_scenario.clone(),
+                        status: DevSmokeStatus::Denied,
+                        token_counter_delta: None,
+                        source_counter_delta: None,
+                        minimized_claim_ids: Vec::new(),
+                        passed: true,
+                    },
+                    DevSmokeScenarioResult {
+                        scenario_id: plan.lifecycle.smoke_authorized_scenario.clone(),
+                        status: DevSmokeStatus::Authorized,
+                        token_counter_delta: None,
+                        source_counter_delta: None,
+                        minimized_claim_ids: Vec::new(),
+                        passed: true,
+                    },
+                ]
+            })
+            .unwrap_or_default();
+        Ok(DevSmokeReportV1 {
+            schema_version: DEV_SMOKE_REPORT_SCHEMA_V1.to_string(),
+            project: plan.binding.project.clone(),
+            environment: plan.binding.environment.clone(),
+            results,
+            passed: true,
+        })
+    }
+
+    fn down(&mut self, _state: &DevRuntimeStateV1, timeout_seconds: u16) -> DevRuntimeResult<()> {
+        assert_eq!(timeout_seconds, 15);
+        if self.fail_down {
+            return Err(DevRuntimeError::new(
+                DevFailureCategory::DockerUnavailable,
+                "injected down failure",
+                "retry",
+            ));
+        }
+        self.calls.push("down".to_string());
+        self.down_calls += 1;
+        self.running = false;
+        Ok(())
+    }
 }
 
 #[test]
@@ -1620,9 +1212,7 @@ fn attached_flow_returns_report_before_wait_and_cleans_up_normally() {
     .unwrap();
     let mut controller = DevRuntimeController::new(FakeBackend::default());
     let report = controller.start(&plan, false).unwrap();
-    assert!(report
-        .evidence_request_command
-        .starts_with("curl --config "));
+    assert!(report.relay_api_url.starts_with("http://127.0.0.1:"));
     assert!(plan.paths.state_file.exists());
     controller.attach(&plan).unwrap();
     let backend = controller.into_backend();
@@ -1739,457 +1329,6 @@ fn unsigned_or_tampered_development_bundle_is_refused() {
 }
 
 #[test]
-fn release_projection_and_oauth_profiles_fail_closed() {
-    assert_eq!(
-        VerifiedDevReleaseProjection::test_only(
-            "release-v1.0.0".to_string(),
-            "v1.0.0".to_string(),
-            "ghcr.io/registrystack/registry-relay:v1.0.0".to_string(),
-            format!(
-                "ghcr.io/registrystack/registry-notary@sha256:{}",
-                "b".repeat(64)
-            ),
-            format!("docker.io/library/postgres@sha256:{}", "c".repeat(64)),
-            "2.24.0".to_string(),
-        )
-        .unwrap_err()
-        .category,
-        DevFailureCategory::InvalidImageLock
-    );
-
-    let temp = tempfile::tempdir().unwrap();
-    let mut no_oauth = plan_input(temp.path(), DevSourceProvider::Rhai, DevOAuthProfile::None);
-    no_oauth.scenarios[0]
-        .synthetic_source
-        .as_mut()
-        .unwrap()
-        .oauth_response_case = Some(SyntheticOAuthResponseCase::Valid);
-    let error = DevRuntimePlan::derive(no_oauth).unwrap_err();
-    assert!(error.summary.contains("non-OAuth source"));
-
-    let temp = tempfile::tempdir().unwrap();
-    let mut forbidden_body =
-        plan_input(temp.path(), DevSourceProvider::Http, DevOAuthProfile::None);
-    forbidden_body.scenarios[0]
-        .synthetic_source
-        .as_mut()
-        .unwrap()
-        .scenario = SyntheticSourceScenario::SourceTimeout;
-    let error = DevRuntimePlan::derive(forbidden_body).unwrap_err();
-    assert!(error.summary.contains("response_body presence"));
-
-    let temp = tempfile::tempdir().unwrap();
-    let mut reserved_request =
-        plan_input(temp.path(), DevSourceProvider::Http, DevOAuthProfile::None);
-    reserved_request.scenarios[0]
-        .synthetic_source
-        .as_mut()
-        .unwrap()
-        .source_request
-        .path = "/oauth/token".to_string();
-    let error = DevRuntimePlan::derive(reserved_request).unwrap_err();
-    assert!(error.summary.contains("closed authored operation"));
-}
-
-#[derive(Default)]
-struct FakeBackend {
-    calls: Vec<String>,
-    absent_images: BTreeSet<String>,
-    running: bool,
-    health: Option<DevRuntimeHealth>,
-    down_calls: usize,
-    fail_down: bool,
-    fail_start: bool,
-    doctor_report: Option<DevDoctorReport>,
-}
-
-impl DevRuntimeBackend for FakeBackend {
-    fn doctor(&mut self, _plan: &DevRuntimePlan) -> DevRuntimeResult<DevDoctorReport> {
-        self.calls.push("doctor".to_string());
-        Ok(self.doctor_report.clone().unwrap_or(DevDoctorReport {
-            docker_installed: true,
-            daemon_available: true,
-            compose_supported: true,
-        }))
-    }
-
-    fn image_availability(&mut self, image: &str) -> DevRuntimeResult<DevImageAvailability> {
-        self.calls.push(format!("inspect:{image}"));
-        Ok(if self.absent_images.contains(image) {
-            DevImageAvailability::Absent
-        } else {
-            DevImageAvailability::Local
-        })
-    }
-
-    fn pull_image(&mut self, image: &str) -> DevRuntimeResult<()> {
-        self.calls.push(format!("pull:{image}"));
-        Ok(())
-    }
-
-    fn health(&mut self, _state: &DevRuntimeStateV1) -> DevRuntimeResult<DevRuntimeHealth> {
-        Ok(self.health.unwrap_or(if self.running {
-            DevRuntimeHealth::Running
-        } else {
-            DevRuntimeHealth::Stopped
-        }))
-    }
-
-    fn start(
-        &mut self,
-        _plan: &DevRuntimePlan,
-        _state: &DevRuntimeStateV1,
-        detach: bool,
-    ) -> DevRuntimeResult<()> {
-        self.calls.push(format!("start:{detach}"));
-        if self.fail_start {
-            return Err(DevRuntimeError::new(
-                DevFailureCategory::Startup,
-                "injected startup failure",
-                "retry",
-            ));
-        }
-        self.running = true;
-        Ok(())
-    }
-
-    fn attach(
-        &mut self,
-        _plan: &DevRuntimePlan,
-        _state: &DevRuntimeStateV1,
-    ) -> DevRuntimeResult<()> {
-        self.calls.push("attach".to_string());
-        Ok(())
-    }
-
-    fn status(
-        &mut self,
-        plan: &DevRuntimePlan,
-        _state: &DevRuntimeStateV1,
-    ) -> DevRuntimeResult<Vec<DevWorkloadStatus>> {
-        Ok(plan
-            .lifecycle
-            .status_services
-            .iter()
-            .map(|workload| DevWorkloadStatus {
-                workload: *workload,
-                state: DevRuntimeHealthWire::Running,
-            })
-            .collect())
-    }
-
-    fn logs(
-        &mut self,
-        plan: &DevRuntimePlan,
-        _state: &DevRuntimeStateV1,
-    ) -> DevRuntimeResult<Vec<DevProductLogSummary>> {
-        Ok(plan
-            .lifecycle
-            .log_services
-            .iter()
-            .map(|workload| DevProductLogSummary {
-                workload: *workload,
-                available: true,
-            })
-            .collect())
-    }
-
-    fn smoke(
-        &mut self,
-        plan: &DevRuntimePlan,
-        _state: &DevRuntimeStateV1,
-    ) -> DevRuntimeResult<DevSmokeReportV1> {
-        let token_delta = if plan.scenario.oauth_profile == DevOAuthProfile::None {
-            0
-        } else {
-            1
-        };
-        let observed = plan.source_mode == DevSourceMode::Synthetic;
-        Ok(DevSmokeReportV1 {
-            schema_version: DEV_SMOKE_REPORT_SCHEMA_V1.to_string(),
-            project: plan.binding.project.clone(),
-            environment: plan.binding.environment.clone(),
-            results: vec![
-                DevSmokeScenarioResult {
-                    scenario_id: plan.scenario.denial_scenario_id.clone(),
-                    status: DevSmokeStatus::Denied,
-                    token_counter_delta: observed.then_some(0),
-                    source_counter_delta: observed.then_some(0),
-                    minimized_claim_ids: Vec::new(),
-                    passed: true,
-                },
-                DevSmokeScenarioResult {
-                    scenario_id: plan.scenario.authorized_scenario_id.clone(),
-                    status: DevSmokeStatus::Authorized,
-                    token_counter_delta: observed.then_some(token_delta),
-                    source_counter_delta: observed.then_some(1),
-                    minimized_claim_ids: plan.scenario.minimized_claim_ids.clone(),
-                    passed: true,
-                },
-            ],
-            passed: true,
-        })
-    }
-
-    fn down(&mut self, _state: &DevRuntimeStateV1, timeout_seconds: u16) -> DevRuntimeResult<()> {
-        assert_eq!(timeout_seconds, 15);
-        if self.fail_down {
-            return Err(DevRuntimeError::new(
-                DevFailureCategory::DockerUnavailable,
-                "injected down failure",
-                "retry",
-            ));
-        }
-        self.calls.push("down".to_string());
-        self.down_calls += 1;
-        self.running = false;
-        Ok(())
-    }
-}
-
-#[test]
-fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
-    let temp = tempfile::tempdir().unwrap();
-    let plan = DevRuntimePlan::derive(plan_input(
-        temp.path(),
-        DevSourceProvider::Rhai,
-        DevOAuthProfile::Oauth2BearerNoExpiry,
-    ))
-    .unwrap();
-    let generated_artifacts = plan.artifacts.compose_file.parent().unwrap().to_path_buf();
-    let mut backend = FakeBackend::default();
-    backend
-        .absent_images
-        .insert(plan.workloads[0].image.clone());
-    let mut controller = DevRuntimeController::new(backend);
-    let startup = controller.start(&plan, true).unwrap();
-    assert_eq!(startup.source_mode, DevSourceMode::Synthetic);
-    assert!(startup.disposable_notice.contains("not production inputs"));
-    assert!(startup.evidence_request_command.contains("curl --config"));
-    assert!(!format!("{startup:?}").contains(RESPONSE_CANARY));
-    assert!(!format!("{startup:?}").contains(REQUEST_CANARY));
-
-    let request_config = fs::read_to_string(&plan.paths.request_config).unwrap();
-    assert!(request_config.contains("/v1/evaluations"));
-    assert!(request_config.contains("url = \"http://127.0.0.1:"));
-    assert!(!request_config.contains("url = \"https://"));
-    assert!(!request_config.contains("cacert = "));
-    assert!(startup.relay_api_url.starts_with("http://127.0.0.1:"));
-    assert!(startup.evidence_api_url.starts_with("http://127.0.0.1:"));
-    for obsolete_listener_credential in [
-        "relay-public-tls.crt",
-        "relay-public-tls.key",
-        "relay-consultation-tls.crt",
-        "relay-consultation-tls.key",
-        "notary-tls.crt",
-        "notary-tls.key",
-    ] {
-        assert!(!plan
-            .paths
-            .credentials
-            .join(obsolete_listener_credential)
-            .exists());
-    }
-    let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
-    assert!(request_config.contains(&caller_token));
-    assert!(!startup.evidence_request_command.contains(&caller_token));
-    assert!(fs::read_to_string(&plan.paths.synthetic_source_plan)
-        .unwrap()
-        .contains(RESPONSE_CANARY));
-    let source_plan: serde_json::Value =
-        serde_json::from_slice(&fs::read(&plan.paths.synthetic_source_plan).unwrap()).unwrap();
-    assert_eq!(
-        source_plan["version"],
-        "registry.relay.synthetic-source-plan.v1"
-    );
-    assert_eq!(source_plan["scenario"], "authored_response");
-    assert_eq!(source_plan["source_request"]["method"], "get");
-    assert_eq!(
-        source_plan["source_request"]["path"],
-        "/people/example-person"
-    );
-    assert_eq!(
-        source_plan["source_request"]["query"]["expand"],
-        "eligibility"
-    );
-    assert!(source_plan.get("routes").is_none());
-    assert!(source_plan.get("path").is_none());
-    assert_eq!(
-        source_plan["oauth"]["response_profile"],
-        "oauth2_bearer_no_expiry"
-    );
-    assert_eq!(source_plan["request_encoding"], "form");
-    assert_eq!(
-        source_plan["oauth"]["request"]["audience"],
-        "registry-notary"
-    );
-    assert_eq!(source_plan["oauth"]["request"]["scope"], "registry.read");
-    assert_eq!(
-        source_plan["oauth"]["request"]["resource"],
-        "registry-source"
-    );
-    assert_eq!(
-        source_plan["secrets"]["control_token"]["file"],
-        "control-token"
-    );
-    assert_eq!(source_plan["secrets"]["control_token"]["generation"], 1);
-    let same_runtime = controller.start(&plan, true).unwrap();
-    assert_eq!(
-        same_runtime.evidence_request_command,
-        startup.evidence_request_command
-    );
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        for path in [
-            &plan.paths.state_file,
-            &plan.paths.request_config,
-            &plan.paths.request_body,
-            &plan.paths.synthetic_source_plan,
-        ] {
-            assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        assert_eq!(
-            fs::metadata(&plan.paths.credentials)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
-    }
-
-    let status = controller.status(&plan).unwrap();
-    assert_eq!(status.schema_version, DEV_STATUS_REPORT_SCHEMA_V1);
-    assert_eq!(
-        status.evidence_request_command,
-        startup.evidence_request_command
-    );
-    assert_eq!(status.workloads.len(), plan.lifecycle.status_services.len());
-    let status_json = serde_json::to_value(&status).unwrap();
-    assert_eq!(status_json["schema_version"], DEV_STATUS_REPORT_SCHEMA_V1);
-    assert_eq!(status_json.as_object().unwrap().len(), 9);
-    let serialized_status = serde_json::to_string(&status).unwrap();
-    assert!(!serialized_status.contains(&caller_token));
-    assert!(!serialized_status.contains(RESPONSE_CANARY));
-    let logs = controller.logs(&plan).unwrap();
-    assert_eq!(logs.schema_version, DEV_LOGS_REPORT_SCHEMA_V1);
-    assert_eq!(logs.products.len(), plan.lifecycle.log_services.len());
-    let logs_json = serde_json::to_value(&logs).unwrap();
-    assert_eq!(logs_json["schema_version"], DEV_LOGS_REPORT_SCHEMA_V1);
-    assert_eq!(logs_json.as_object().unwrap().len(), 3);
-    let serialized_logs = serde_json::to_string(&logs).unwrap();
-    assert!(!serialized_logs.contains(&caller_token));
-    assert!(!serialized_logs.contains(RESPONSE_CANARY));
-    let smoke = controller.smoke(&plan).unwrap();
-    assert!(smoke.passed);
-    assert_eq!(smoke.results[0].token_counter_delta, Some(0));
-    assert_eq!(smoke.results[0].source_counter_delta, Some(0));
-    assert_eq!(smoke.results[1].token_counter_delta, Some(1));
-    assert_eq!(smoke.results[1].source_counter_delta, Some(1));
-
-    controller.down(&plan).unwrap();
-    assert!(!plan.paths.root.exists());
-    assert!(!generated_artifacts.exists());
-    let backend = controller.into_backend();
-    assert_eq!(backend.down_calls, 1);
-    assert_eq!(
-        backend
-            .calls
-            .iter()
-            .filter(|call| call.starts_with("start:"))
-            .count(),
-        1
-    );
-    assert_eq!(backend.calls.first().unwrap(), "doctor");
-    assert!(backend.calls.iter().any(|call| call.starts_with("pull:")));
-}
-
-#[test]
-fn records_requests_are_owner_only_minimal_and_credential_separated() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut input = plan_input(
-        temp.path(),
-        DevSourceProvider::Spreadsheet,
-        DevOAuthProfile::None,
-    );
-    input.records_request = Some(project_authoring::AuthoredRecordsRequest {
-        dataset_id: "projects".to_string(),
-        entity_id: "projects".to_string(),
-        record_id: "pw_001".to_string(),
-        purpose: "public-works-case-management".to_string(),
-    });
-    input.credentials = PreparedDevCredentialClosure::synthetic_records();
-    let plan = DevRuntimePlan::derive(input).unwrap();
-    let mut controller = DevRuntimeController::new(FakeBackend::default());
-    let startup = controller.start(&plan, true).unwrap();
-
-    assert!(startup.relay_api_url.starts_with("http://127.0.0.1:"));
-    assert!(startup
-        .records_denied_command
-        .as_ref()
-        .unwrap()
-        .contains("records-denied.curl"));
-    assert!(startup
-        .records_request_command
-        .as_ref()
-        .unwrap()
-        .contains("records-request.curl"));
-    assert!(!startup.evidence_request_command.contains("records"));
-
-    let authorized = fs::read_to_string(&plan.paths.records_request_config).unwrap();
-    let denied = fs::read_to_string(&plan.paths.records_denied_config).unwrap();
-    let match_token = fs::read_to_string(plan.paths.credentials.join("relay-match-token")).unwrap();
-    let no_match_token =
-        fs::read_to_string(plan.paths.credentials.join("relay-no-match-token")).unwrap();
-    let caller_token = fs::read_to_string(plan.paths.credentials.join("caller-token")).unwrap();
-    assert!(authorized.contains("/v1/datasets/projects/entities/projects/records/pw_001"));
-    assert!(authorized.contains("url = \"http://127.0.0.1:"));
-    assert!(!authorized.contains("cacert = "));
-    assert!(authorized.contains("header = \"Data-Purpose: public-works-case-management\""));
-    assert!(authorized.contains(&match_token));
-    assert!(authorized.contains("fail\n"));
-    assert!(!authorized.contains(&no_match_token));
-    assert!(!authorized.contains(&caller_token));
-    assert!(denied.contains("include\n"));
-    assert!(denied.contains("silent\n"));
-    assert!(denied.contains("show-error\n"));
-    assert!(!denied.contains("Authorization"));
-    assert!(!denied.contains("fail\n"));
-    for token in [&match_token, &no_match_token, &caller_token] {
-        assert!(!denied.contains(token));
-        assert!(!startup
-            .records_request_command
-            .as_ref()
-            .unwrap()
-            .contains(token));
-    }
-    let status = controller.status(&plan).unwrap();
-    let status_json = serde_json::to_string(&status).unwrap();
-    for token in [&match_token, &no_match_token, &caller_token] {
-        assert!(!status_json.contains(token));
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        for path in [
-            &plan.paths.records_request_config,
-            &plan.paths.records_denied_config,
-        ] {
-            assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-}
-
-#[test]
 fn records_request_percent_encodes_each_path_segment_without_encoding_separators() {
     let temp = tempfile::tempdir().unwrap();
     let mut input = plan_input(
@@ -2214,69 +1353,6 @@ fn records_request_percent_encodes_each_path_segment_without_encoding_separators
         "/v1/datasets/pro%2Fjects/entities/entity%3Fx%23y/records/PW%2F%25%3F%23caf%C3%A9"
     ));
     assert!(!request.contains("/datasets/pro/jects/"));
-}
-
-#[test]
-fn healthy_unchanged_start_rebinds_candidate_attach_to_retained_runtime() {
-    let temp = tempfile::tempdir().unwrap();
-    let plan = DevRuntimePlan::derive(plan_input(
-        temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-    ))
-    .unwrap();
-    let old_artifacts = plan.artifacts.compose_file.parent().unwrap().to_path_buf();
-    let relay_port = plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::RelayPublic)
-        .and_then(|workload| workload.host_endpoint)
-        .unwrap()
-        .port();
-    let notary_port = plan
-        .workloads
-        .iter()
-        .find(|workload| workload.id == DevWorkloadId::Notary)
-        .and_then(|workload| workload.host_endpoint)
-        .unwrap()
-        .port();
-    let mut controller = DevRuntimeController::new(FakeBackend::default());
-    controller.start(&plan, true).unwrap();
-
-    let mut input = plan_input_generation(
-        temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-        "0000000000000002",
-    );
-    input.development.relay_port = Some(relay_port);
-    input.development.notary_port = Some(notary_port);
-    let candidate = DevRuntimePlan::derive(input).unwrap();
-    let candidate_artifacts = candidate
-        .artifacts
-        .compose_file
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    controller.start(&candidate, true).unwrap();
-
-    assert!(plan.paths.root.exists());
-    assert!(old_artifacts.exists());
-    assert!(!candidate_artifacts.exists());
-    controller.attach(&candidate).unwrap();
-    assert!(!plan.paths.root.exists());
-    assert!(!old_artifacts.exists());
-    let backend = controller.into_backend();
-    assert_eq!(backend.down_calls, 1);
-    assert_eq!(
-        backend
-            .calls
-            .iter()
-            .filter(|call| call.starts_with("start:"))
-            .count(),
-        1
-    );
-    assert!(backend.calls.iter().any(|call| call == "attach"));
 }
 
 #[test]
@@ -2381,55 +1457,6 @@ fn terminal_errors_include_stable_public_category_code() {
         error.to_string(),
         "[registryctl.dev.port_collision] port is occupied; remediation: select another port"
     );
-}
-
-#[test]
-fn bound_plan_loader_is_read_only_and_rebinds_exact_request_body() {
-    fn snapshot(root: &Path) -> BTreeSet<(String, Vec<u8>)> {
-        fn collect(root: &Path, directory: &Path, out: &mut BTreeSet<(String, Vec<u8>)>) {
-            for entry in fs::read_dir(directory).unwrap() {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                if entry.file_type().unwrap().is_dir() {
-                    collect(root, &path, out);
-                } else {
-                    out.insert((
-                        path.strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .into_owned(),
-                        fs::read(path).unwrap(),
-                    ));
-                }
-            }
-        }
-        let mut files = BTreeSet::new();
-        collect(root, root, &mut files);
-        files
-    }
-
-    let temp = tempfile::tempdir().unwrap();
-    let plan = DevRuntimePlan::derive(plan_input(
-        temp.path(),
-        DevSourceProvider::Http,
-        DevOAuthProfile::None,
-    ))
-    .unwrap();
-    let mut controller = DevRuntimeController::new(FakeBackend::default());
-    controller.start(&plan, true).unwrap();
-    let before = snapshot(&plan.paths.root);
-
-    let loaded = load_bound_dev_runtime_plan(temp.path(), "local").unwrap();
-    assert_eq!(loaded.request_digest, plan.request_digest);
-    assert_eq!(
-        loaded.evidence_request_command(),
-        plan.evidence_request_command()
-    );
-    assert_eq!(snapshot(&plan.paths.root), before);
-
-    fs::write(&plan.paths.request_body, br#"{"subject":"tampered"}"#).unwrap();
-    let error = load_bound_dev_runtime_plan(temp.path(), "local").unwrap_err();
-    assert_eq!(error.category, DevFailureCategory::ProjectBinding);
 }
 
 #[test]

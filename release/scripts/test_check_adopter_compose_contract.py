@@ -24,7 +24,6 @@ def expected_images() -> dict[str, str]:
     return {
         "registry-relay-public": "example.invalid/relay@sha256:" + "a" * 64,
         "registry-relay-consultation": ("example.invalid/relay@sha256:" + "a" * 64),
-        "registry-notary": "example.invalid/notary@sha256:" + "b" * 64,
         "registry-postgres": "example.invalid/postgres@sha256:" + "c" * 64,
     }
 
@@ -180,7 +179,6 @@ def ordinary_model() -> dict:
     for name, lane in (
         ("registry-relay-public", "relay-public"),
         ("registry-relay-consultation", "relay-consultation"),
-        ("registry-notary", "notary"),
     ):
         services[name] = {
             **product_hardening(),
@@ -202,15 +200,6 @@ def ordinary_model() -> dict:
             "protocol": "tcp",
             "published": "4242",
             "target": 8080,
-        }
-    ]
-    services["registry-notary"]["ports"] = [
-        {
-            "host_ip": "127.0.0.1",
-            "mode": "ingress",
-            "protocol": "tcp",
-            "published": "4255",
-            "target": 8081,
         }
     ]
     return {
@@ -282,7 +271,7 @@ def initialization_model(ordinary: dict) -> dict:
         requires_postgresql = (
             lane == "relay-consultation"
             and action in {"prepare", "initialize"}
-        ) or (lane == "notary" and action == "prepare")
+        )
         if requires_postgresql:
             service["networks"] = {CHECKER.NETWORK_RUNTIME: {}}
         else:
@@ -327,7 +316,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         model["services"]["registry-private-namespace"] = {}
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "four workloads and three secret stagers",
+            "three workloads and two secret stagers",
         ):
             assert_ordinary(model)
 
@@ -342,22 +331,22 @@ class AdopterComposeContractTests(unittest.TestCase):
         model["services"][action_stager] = stager(action_stager, action=True)
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "four workloads and three secret stagers",
+            "three workloads and two secret stagers",
         ):
             assert_ordinary(model)
 
     def test_ordinary_model_requires_each_closed_runtime_field(self) -> None:
         mutations = {
-            "workload-image": lambda model: model["services"]["registry-notary"].pop(
+            "workload-image": lambda model: model["services"]["registry-relay-public"].pop(
                 "image"
             ),
-            "workload-command": lambda model: model["services"]["registry-notary"].pop(
+            "workload-command": lambda model: model["services"]["registry-relay-public"].pop(
                 "command"
             ),
             "hardening": lambda model: model["services"]["registry-relay-public"].pop(
                 "read_only"
             ),
-            "publication": lambda model: model["services"]["registry-notary"].pop(
+            "publication": lambda model: model["services"]["registry-relay-public"].pop(
                 "ports"
             ),
             "unauthorized-publication": lambda model: model["services"][
@@ -394,20 +383,20 @@ class AdopterComposeContractTests(unittest.TestCase):
             "anchor": lambda model: model["services"]["registry-relay-public"][
                 "volumes"
             ].pop(1),
-            "state": lambda model: model["services"]["registry-notary"]["volumes"].pop(
+            "state": lambda model: model["services"]["registry-relay-consultation"]["volumes"].pop(
                 2
             ),
-            "audit": lambda model: model["services"]["registry-notary"]["volumes"].pop(
+            "audit": lambda model: model["services"]["registry-relay-consultation"]["volumes"].pop(
                 3
             ),
             "staged-secret": lambda model: model["services"]["registry-postgres"][
                 "volumes"
             ].pop(),
             "volume-inventory": lambda model: model["volumes"].pop(
-                "registry-notary-state"
+                "registry-relay-consultation-state"
             ),
             "operator-secret": lambda model: model["secrets"].pop(
-                "registry-notary-signing-key"
+                "registry-postgresql-tls-certificate"
             ),
         }
         for name, mutate in mutations.items():
@@ -499,7 +488,7 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_ordinary_publications_are_exact_and_private_services_stay_private(
         self,
     ) -> None:
-        for service_name in ("registry-relay-public", "registry-notary"):
+        for service_name in ("registry-relay-public",):
             with self.subTest(service=service_name, mutation="missing"):
                 model = ordinary_model()
                 model["services"][service_name].pop("ports")
@@ -512,7 +501,6 @@ class AdopterComposeContractTests(unittest.TestCase):
                     assert_ordinary(model)
         for service_name in CHECKER.ORDINARY_SERVICES - {
             "registry-relay-public",
-            "registry-notary",
         }:
             with self.subTest(service=service_name, mutation="published"):
                 model = ordinary_model()
@@ -534,7 +522,6 @@ class AdopterComposeContractTests(unittest.TestCase):
         lanes = {
             "registry-relay-public": "relay-public",
             "registry-relay-consultation": "relay-consultation",
-            "registry-notary": "notary",
         }
         for service_name, lane in lanes.items():
             other_lane = next(
@@ -580,8 +567,8 @@ class AdopterComposeContractTests(unittest.TestCase):
                 "secrets"
             ].append(
                 {
-                    "source": "registry-notary-signing-key",
-                    "target": "/run/secrets/notary-signing-key",
+                    "source": "registry-postgresql-admin-password",
+                    "target": "/run/secrets/postgresql-admin-password",
                 }
             )
 
@@ -590,7 +577,7 @@ class AdopterComposeContractTests(unittest.TestCase):
                 "volumes"
             ].append(
                 volume(
-                    "registry-operator-files-notary-serve",
+                    "registry-operator-files-postgresql-serve",
                     "/registryctl-stage/cross-lane",
                 )
             )
@@ -674,8 +661,8 @@ class AdopterComposeContractTests(unittest.TestCase):
 
     def test_operator_files_must_stay_under_operator_directory(self) -> None:
         model = ordinary_model()
-        model["secrets"]["registry-notary-signing-key"]["file"] = (
-            "/fixture/generated/notary-signing-key"
+        model["secrets"]["registry-postgresql-tls-certificate"]["file"] = (
+            "/fixture/generated/postgresql-tls-certificate"
         )
         with self.assertRaisesRegex(
             CHECKER.ContractError,
@@ -685,8 +672,8 @@ class AdopterComposeContractTests(unittest.TestCase):
 
     def test_value_free_model_rejects_resolved_sentinel(self) -> None:
         model = ordinary_model()
-        model["services"]["registry-notary"]["environment"] = {
-            "REGISTRY_CONFORMANCE_SENTINEL": ("notary-value-must-not-enter-compose")
+        model["services"]["registry-relay-public"]["environment"] = {
+            "REGISTRY_CONFORMANCE_SENTINEL": ("relay-value-must-not-enter-compose")
         }
         with self.assertRaisesRegex(CHECKER.ContractError, "sentinel value"):
             assert_ordinary(model)
@@ -765,7 +752,7 @@ class AdopterComposeContractTests(unittest.TestCase):
     ) -> None:
         ordinary = ordinary_model()
         initialized = initialization_model(ordinary)
-        for lane in ("relay-public", "relay-consultation", "notary"):
+        for lane in ("relay-public", "relay-consultation"):
             accept_name = f"registry-{lane}-accept-state"
             accept = initialized["services"][accept_name]
             self.assertEqual(
@@ -796,16 +783,16 @@ class AdopterComposeContractTests(unittest.TestCase):
                 )
 
         changed = initialization_model(ordinary)
-        changed["services"]["registry-notary-accept-state"]["env_file"] = [
-            "/fixture/package/operator/secrets/relay-public-environment"
+        changed["services"]["registry-relay-public-accept-state"]["env_file"] = [
+            "/fixture/package/operator/secrets/relay-consultation-environment"
         ]
         with self.assertRaises(CHECKER.ContractError):
             assert_initialization(changed, ordinary)
 
         changed = initialization_model(ordinary)
-        changed["services"]["registry-notary-accept-state"]["volumes"].append(
+        changed["services"]["registry-relay-public-accept-state"]["volumes"].append(
             volume(
-                "registry-operator-files-notary-serve",
+                "registry-operator-files-relay-consultation-serve",
                 "/run/secrets",
                 read_only=True,
             )
@@ -837,9 +824,6 @@ class AdopterComposeContractTests(unittest.TestCase):
             "registry-relay-consultation-initialize": (
                 "registry-relay-consultation-actions-stage-secrets"
             ),
-            "registry-notary-prepare-state": (
-                "registry-notary-actions-stage-secrets"
-            ),
         }
         for service_name, stager_name in expected.items():
             dependencies = initialized["services"][service_name]["depends_on"]
@@ -870,13 +854,13 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_initialization_requires_each_closed_action_field(self) -> None:
         mutations = {
             "service": lambda model: model["services"].pop(
-                "registry-notary-initialize"
+                "registry-relay-consultation-initialize"
             ),
-            "image": lambda model: model["services"]["registry-notary-initialize"].pop(
+            "image": lambda model: model["services"]["registry-relay-consultation-initialize"].pop(
                 "image"
             ),
             "command": lambda model: model["services"][
-                "registry-notary-initialize"
+                "registry-relay-consultation-initialize"
             ].pop("command"),
             "hardening": lambda model: model["services"][
                 "registry-postgres-bootstrap"
@@ -885,7 +869,7 @@ class AdopterComposeContractTests(unittest.TestCase):
                 "registry-relay-consultation-prepare-state"
             ].pop("networks"),
             "dependency": lambda model: model["services"][
-                "registry-notary-prepare-state"
+                "registry-relay-consultation-prepare-state"
             ]["depends_on"].pop("registry-postgres"),
             "restart": lambda model: model["services"][
                 "registry-relay-public-initialize"
@@ -896,17 +880,17 @@ class AdopterComposeContractTests(unittest.TestCase):
             "bundle": lambda model: model["services"][
                 "registry-relay-public-prepare-state"
             ]["volumes"].pop(0),
-            "anchor": lambda model: model["services"]["registry-notary-initialize"][
+            "anchor": lambda model: model["services"]["registry-relay-consultation-initialize"][
                 "volumes"
             ].pop(1),
-            "state": lambda model: model["services"]["registry-notary-initialize"][
+            "state": lambda model: model["services"]["registry-relay-consultation-initialize"][
                 "volumes"
             ].pop(2),
-            "audit": lambda model: model["services"]["registry-notary-initialize"][
+            "audit": lambda model: model["services"]["registry-relay-consultation-initialize"][
                 "volumes"
             ].pop(3),
             "staged-secret": lambda model: model["services"][
-                "registry-notary-initialize"
+                "registry-relay-consultation-initialize"
             ]["volumes"].pop(),
         }
         ordinary = ordinary_model()
@@ -951,7 +935,6 @@ class AdopterComposeContractTests(unittest.TestCase):
                     metadata[1] == "relay-consultation"
                     and metadata[2] in {"prepare", "initialize"}
                 )
-                or (metadata[1] == "notary" and metadata[2] == "prepare")
             )
             network_field = "networks" if requires_postgresql else "network_mode"
             for field in ("command", "restart", network_field):
@@ -1030,10 +1013,10 @@ class AdopterComposeContractTests(unittest.TestCase):
     def test_initialization_delta_cannot_change_ordinary_service(self) -> None:
         ordinary = ordinary_model()
         initialized = initialization_model(ordinary)
-        initialized["services"]["registry-notary"]["command"] = ["changed"]
+        initialized["services"]["registry-relay-public"]["command"] = ["changed"]
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "changed ordinary service registry-notary",
+            "changed ordinary service registry-relay-public",
         ):
             assert_initialization(initialized, ordinary)
 
@@ -1200,8 +1183,8 @@ class AdopterComposeContractTests(unittest.TestCase):
             parent["volumes"][name] = {"name": f"{parent_name}_{name}"}
         for name in parent["secrets"]:
             parent["secrets"][name]["name"] = f"{parent_name}_{name}"
-        parent["volumes"]["registry-notary-state"] = {
-            "name": f"{parent_name}_registry-notary-state"
+        parent["volumes"]["registry-relay-public-state"] = {
+            "name": f"{parent_name}_registry-relay-public-state"
         }
         parent["services"]["parent-runtime-client"] = {
             "image": (
@@ -1211,7 +1194,7 @@ class AdopterComposeContractTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(
             CHECKER.ContractError,
-            "renamed durable volume registry-notary-state",
+            "renamed durable volume registry-relay-public-state",
         ):
             CHECKER.assert_parent_include(parent, ordinary)
 

@@ -10,7 +10,6 @@ workspace = true
 
 [features]
 default = []
-relay-contract-test-support = ["registry-notary-server/relay-contract-test-support"]
 
 [dependencies]
 anyhow = "1"
@@ -27,8 +26,6 @@ ipnet.workspace = true
 jsonschema.workspace = true
 registry-config-report = { workspace = true }
 registry-language-server.workspace = true
-registry-notary-core.workspace = true
-registry-notary-server = { workspace = true, features = ["registry-notary-cel"] }
 registry-platform-authcommon = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }

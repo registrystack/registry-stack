@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 60,
-      "maxItems": 60,
+      "minItems": 42,
+      "maxItems": 42,
       "uniqueItems": true,
       "items": {
         "allOf": [
@@ -56,7 +56,6 @@
         "family": {
           "enum": [
             "bundle_verification",
-            "notary_activation",
             "operator_preflight",
             "relay_activation",
             "relay_process_startup"
@@ -69,7 +68,6 @@
         },
         "owner": {
           "enum": [
-            "registry_notary",
             "registry_platform_ops",
             "registry_relay",
             "registryctl"
@@ -77,7 +75,6 @@
         },
         "product": {
           "enum": [
-            "registry_notary",
             "registry_platform_ops",
             "registry_relay",
             "registryctl"
@@ -153,44 +150,6 @@
             },
             "docs_anchor": {
               "pattern": "^/reference/diagnostics/operator/#registry_platform_ops--[a-z0-9]+(?:-[a-z0-9]+)*$"
-            }
-          }
-        },
-        {
-          "properties": {
-            "family": {
-              "const": "notary_activation"
-            },
-            "code": {
-              "enum": [
-                "notary.cel.worker_unavailable",
-                "notary.configuration.invalid",
-                "notary.deployment.gate_failed",
-                "notary.relay.activation_failed",
-                "notary.relay.configuration_invalid",
-                "notary.relay.credential_unavailable",
-                "notary.relay.credentials_rejected",
-            "notary.relay.profile_mismatch",
-            "notary.relay.profile_not_found",
-            "notary.relay.unavailable",
-            "notary.runtime.activation_failed",
-            "notary.runtime.activation_required",
-            "notary.state.postgresql.database_read_only",
-            "notary.state.postgresql.database_unavailable",
-            "notary.state.postgresql.database_unsupported",
-            "notary.state.postgresql.durability_unsafe",
-            "notary.state.postgresql.role_incompatible",
-            "notary.state.postgresql.schema_incompatible"
-              ]
-            },
-            "owner": {
-              "const": "registry_notary"
-            },
-            "product": {
-              "const": "registry_notary"
-            },
-            "docs_anchor": {
-              "pattern": "^/reference/diagnostics/operator/#registry_notary--[a-z0-9]+(?:-[a-z0-9]+)*$"
             }
           }
         },

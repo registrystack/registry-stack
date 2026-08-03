@@ -75,8 +75,7 @@
         "integration",
         "fixture",
         "entity",
-        "relay",
-        "notary"
+        "relay"
       ]
     },
     "pathKind": {
@@ -157,13 +156,10 @@
         "runtime_intent": {
           "type": "array",
           "minItems": 0,
-          "maxItems": 2,
+          "maxItems": 1,
           "uniqueItems": true,
           "items": {
-            "enum": [
-              "crates/registry-relay/config/documentation-intent.json",
-              "crates/registry-notary-core/config/documentation-intent.json"
-            ]
+            "const": "crates/registry-relay/config/documentation-intent.json"
           }
         },
         "reads_country_workspaces": {
@@ -289,10 +285,7 @@
           "if": {
             "properties": {
               "schema": {
-                "enum": [
-                  "relay",
-                  "notary"
-                ]
+                "const": "relay"
               }
             }
           },

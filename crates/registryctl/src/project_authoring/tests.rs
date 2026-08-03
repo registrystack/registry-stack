@@ -76,68 +76,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_subject_type_is_closed_and_omission_normalizes_to_person() {
-        let bytes = PROJECT_STARTERS
-            .get_file("bounded-http/registry-stack.yaml")
-            .expect("bounded HTTP project is embedded")
-            .contents();
-        let omitted =
-            parse_current_authoring_document::<RegistryProject>(bytes).expect("project parses");
-        let service = &omitted.services["person-verification"];
-        assert_eq!(service.subject_type, None);
-        assert_eq!(
-            service.effective_subject_type(),
-            EvidenceSubjectType::Person
-        );
-        assert!(
-            serde_json::to_value(&omitted)
-                .expect("project serializes")
-                .pointer("/services/person-verification/subject_type")
-                .is_none(),
-            "normalized omission must preserve authored-content serialization"
-        );
-
-        let mut invalid: Value = serde_norway::from_slice(bytes).expect("project YAML parses");
-        invalid["services"]["person-verification"]["subject_type"] = json!("organisation");
-        let invalid_bytes =
-            serde_norway::to_string(&invalid).expect("invalid subject project serializes");
-        parse_current_authoring_document::<RegistryProject>(invalid_bytes.as_bytes())
-            .expect_err("unknown evidence subject type must fail closed");
-
-        invalid["services"]["person-verification"]["subject_type"] = json!("project");
-        let project_bytes =
-            serde_norway::to_string(&invalid).expect("project subject project serializes");
-        let explicit =
-            parse_current_authoring_document::<RegistryProject>(project_bytes.as_bytes())
-                .expect("project is an allowed subject type");
-        assert_eq!(
-            explicit.services["person-verification"].subject_type,
-            Some(EvidenceSubjectType::Project)
-        );
-    }
-
-    #[test]
-    fn records_service_rejects_an_explicit_evidence_subject_type() {
-        let bytes = PROJECT_STARTERS
-            .get_file("spreadsheet/registry-stack.yaml")
-            .expect("spreadsheet project is embedded")
-            .contents();
-        let mut value: Value = serde_norway::from_slice(bytes).expect("project YAML parses");
-        value["services"]["projects-records"]["subject_type"] = json!("person");
-        let invalid = serde_norway::to_string(&value).expect("records subject project serializes");
-        parse_current_authoring_document::<RegistryProject>(invalid.as_bytes())
-            .expect_err("public schema rejects evidence fields on records services");
-
-        let typed: RegistryProject =
-            serde_norway::from_str(&invalid).expect("presence-aware typed model retains the field");
-        let error = validate_project_shape(&typed)
-            .expect_err("typed validation also rejects evidence fields on records services");
-        assert!(error
-            .to_string()
-            .contains("records_api service cannot declare evidence-service fields"));
-    }
-
-    #[test]
     fn corrected_http_authoring_lowers_to_one_product_neutral_request() {
         let authored: AuthoredIntegrationDocument = serde_norway::from_str(
             r#"
@@ -438,90 +376,6 @@ items:
     }
 
     #[test]
-    fn authored_output_count_preserves_the_generic_non_notary_limit() {
-        fn boolean_output() -> AuthoredOutputDeclaration {
-            AuthoredOutputDeclaration::Scalar(AuthoredScalarOutputDeclaration {
-                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
-                format: None,
-                max_length: None,
-                minimum: None,
-                maximum: None,
-                source: None,
-            })
-        }
-
-        const {
-            assert!(MAX_OUTPUTS > registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1);
-        }
-        let outputs = |count| {
-            (0..count)
-                .map(|index| (format!("field_{index}"), boolean_output()))
-                .collect::<BTreeMap<_, _>>()
-        };
-        validate_authored_outputs(&outputs(
-            registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1 + 1,
-        ))
-        .expect("generic authoring retains more outputs than a Notary consultation");
-        validate_authored_outputs(&outputs(MAX_OUTPUTS))
-            .expect("the generic integration output limit validates");
-        assert!(validate_authored_outputs(&outputs(MAX_OUTPUTS + 1))
-            .expect_err("one output beyond the generic integration limit rejects")
-            .to_string()
-            .contains(&format!("between one and {MAX_OUTPUTS} fields")));
-    }
-
-    #[test]
-    fn notary_output_count_applies_only_to_evidence_consultations() {
-        let mut evidence =
-            load_registry_project(&project_golden("opencrvs"), None).expect("OpenCRVS project loads");
-        let birth = evidence
-            .integrations
-            .get_mut("birth-record")
-            .expect("birth integration exists");
-        let template = serde_json::to_value(&birth.document.outputs["sex"])
-            .expect("scalar output serializes");
-        while birth.document.outputs.len()
-            <= registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
-        {
-            let index = birth.document.outputs.len();
-            birth.document.outputs.insert(
-                format!("extra_{index}"),
-                serde_json::from_value(template.clone()).expect("scalar output clones"),
-            );
-        }
-        validate_integration("birth-record", &birth.document)
-            .expect("the generic integration contract still accepts 33 outputs");
-        let error = validate_service_integration_links(&evidence.project, &evidence.integrations)
-            .expect_err("an Evidence consultation cannot exceed the Notary output limit");
-        assert!(error.to_string().contains(&format!(
-            "integration outputs must contain no more than {} entries",
-            registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
-        )));
-
-        let records_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/project-starters/spreadsheet");
-        let mut records =
-            load_registry_project(&records_root, None).expect("Records API project loads");
-        records.project.integrations.insert(
-            "wide".to_string(),
-            IntegrationReference {
-                file: PathBuf::from("integrations/wide/integration.yaml"),
-            },
-        );
-        records.integrations.insert(
-            "wide".to_string(),
-            evidence
-                .integrations
-                .remove("birth-record")
-                .expect("wide integration remains available"),
-        );
-        validate_project_shape(&records.project)
-            .expect("a Records API-only project may retain the generic integration limit");
-        validate_service_integration_links(&records.project, &records.integrations)
-            .expect("Records API-only integrations are not narrowed to the Notary limit");
-    }
-
-    #[test]
     fn structured_output_byte_caps_must_encode_a_non_null_value() {
         fn validate(source: &str) -> Result<()> {
             let output: AuthoredOutputDeclaration =
@@ -584,118 +438,6 @@ fields:
             .expect_err("an impossible nested object cap rejects")
             .to_string()
             .contains("outputs.record.fields.child.schema.max_bytes must be at least 2"));
-    }
-
-    #[test]
-    fn structured_output_limits_reserve_the_notary_result_envelope() {
-        fn boolean_schema() -> AuthoredOutputSchema {
-            AuthoredOutputSchema::Scalar(AuthoredScalarOutputSchema {
-                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
-                format: None,
-                max_length: None,
-                minimum: None,
-                maximum: None,
-            })
-        }
-
-        fn boolean_output() -> AuthoredOutputDeclaration {
-            AuthoredOutputDeclaration::Scalar(AuthoredScalarOutputDeclaration {
-                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
-                format: None,
-                max_length: None,
-                minimum: None,
-                maximum: None,
-                source: None,
-            })
-        }
-
-        fn object_declaration(field_count: usize) -> AuthoredOutputObjectDeclaration {
-            AuthoredOutputObjectDeclaration {
-                output_type: AuthoredOutputObjectType::Object,
-                nullable: false,
-                max_bytes: 65_536,
-                fields: (0..field_count)
-                    .map(|index| {
-                        (
-                            format!("field_{index}"),
-                            AuthoredOutputObjectField {
-                                required: true,
-                                schema: Box::new(boolean_schema()),
-                            },
-                        )
-                    })
-                    .collect(),
-            }
-        }
-
-        fn object_output(field_count: usize) -> AuthoredOutputDeclaration {
-            AuthoredOutputDeclaration::Object(object_declaration(field_count))
-        }
-
-        fn array_output(array_nodes: usize) -> AuthoredOutputDeclaration {
-            assert!(array_nodes > 0);
-            let mut items = boolean_schema();
-            for _ in 1..array_nodes {
-                items = AuthoredOutputSchema::Array(AuthoredOutputArrayDeclaration {
-                    output_type: AuthoredOutputArrayType::Array,
-                    nullable: false,
-                    max_bytes: 65_536,
-                    max_items: 1,
-                    items: Box::new(items),
-                });
-            }
-            AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
-                output_type: AuthoredOutputArrayType::Array,
-                nullable: false,
-                max_bytes: 65_536,
-                max_items: 1,
-                items: Box::new(items),
-            })
-        }
-
-        let maximum_depth = BTreeMap::from([("nested".to_string(), array_output(5))]);
-        validate_authored_outputs(&maximum_depth)
-            .expect("five array nodes plus one leaf fit downstream depth eight");
-        let excessive_depth = BTreeMap::from([("nested".to_string(), array_output(6))]);
-        assert!(validate_authored_outputs(&excessive_depth)
-            .expect_err("one more nested node exceeds downstream depth eight")
-            .to_string()
-            .contains("maximum depth of 8"));
-
-        let node_budget = |extra_scalars| {
-            let mut outputs = (0..7)
-                .map(|index| (format!("wide_{index}"), object_output(32)))
-                .collect::<BTreeMap<_, _>>();
-            for index in 0..(5 + extra_scalars) {
-                outputs.insert(format!("scalar_{index}"), boolean_output());
-            }
-            outputs
-        };
-        validate_authored_outputs(&node_budget(0))
-            .expect("236 authored nodes plus the 20-node envelope fit exactly");
-        assert!(validate_authored_outputs(&node_budget(1))
-            .expect_err("237 authored nodes exceed the downstream node budget")
-            .to_string()
-            .contains("more than 256 nodes"));
-
-        let expanded_output = |field_count| {
-            BTreeMap::from([(
-                "expanded".to_string(),
-                AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
-                    output_type: AuthoredOutputArrayType::Array,
-                    nullable: false,
-                    max_bytes: 65_536,
-                    max_items: 255,
-                    items: Box::new(AuthoredOutputSchema::Object(object_declaration(field_count))),
-                }),
-            )])
-        };
-        validate_authored_outputs(&expanded_output(14))
-            .expect("expanded schema remains below the downstream envelope-adjusted bound");
-        assert!(validate_authored_outputs(&expanded_output(15))
-            .expect_err("the result envelope pushes expanded nodes beyond 4096")
-            .to_string()
-            .contains("recursive expansion exceeds 4096 nodes"));
     }
 
     #[test]
@@ -954,6 +696,164 @@ outputs:
             .join(name)
     }
 
+    fn relay_validation_project(kind: ServiceKind) -> RegistryProject {
+        let (kind, consultations) = match kind {
+            ServiceKind::ConsultationApi => (
+                "consultation_api",
+                "consultations:\n      check:\n        integration: check\n        input: {}",
+            ),
+            ServiceKind::RecordsApi => ("records_api", ""),
+        };
+        serde_norway::from_str(&format!(
+            r#"
+version: 1
+registry: {{ id: relay-validation }}
+services:
+  api:
+    kind: {kind}
+    {consultations}
+"#
+        ))
+        .expect("Relay validation project parses")
+    }
+
+    fn relay_validation_environment(
+        allowed_clients: &[&str],
+        consultation: Option<(&str, &str)>,
+        local_api_keys: bool,
+    ) -> EnvironmentDocument {
+        EnvironmentDocument {
+            version: 1,
+            development: None,
+            integrations: BTreeMap::new(),
+            entities: BTreeMap::new(),
+            relay: Some(RelayBinding {
+                origin: "https://relay.invalid".to_string(),
+                issuer: "https://issuer.invalid".to_string(),
+                jwks_url: "https://issuer.invalid/.well-known/jwks.json".to_string(),
+                audience: "registry-relay".to_string(),
+                allowed_clients: allowed_clients
+                    .iter()
+                    .map(|client| (*client).to_string())
+                    .collect(),
+                consultation: consultation.map(|(client_id, principal_id)| {
+                    RelayConsultationBinding {
+                        client_id: client_id.to_string(),
+                        principal_id: principal_id.to_string(),
+                    }
+                }),
+                local_api_keys: local_api_keys.then(|| RelayLocalApiKeyBinding {
+                    match_principal: "local-match".to_string(),
+                    no_match_principal: "local-no-match".to_string(),
+                    scopes: vec!["records:read".to_string()],
+                }),
+            }),
+            relay_state: None,
+            deployment: DeploymentBinding {
+                profile: DeploymentProfile::Local,
+                relay: Some(ServiceBinding {
+                    service: "relay-validation".to_string(),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn consultation_relay_requires_an_explicit_identity_even_with_local_api_keys() {
+        let project = relay_validation_project(ServiceKind::ConsultationApi);
+        let environment = relay_validation_environment(&[], None, true);
+
+        let error =
+            validate_environment(&project, &BTreeMap::new(), &BTreeMap::new(), &environment)
+                .expect_err("local public API keys must not authorize consultation workloads");
+        assert_eq!(
+            error.to_string(),
+            "a consultation_api service requires relay.consultation"
+        );
+    }
+
+    #[test]
+    fn consultation_relay_client_must_be_separate_from_the_public_oidc_allowlist() {
+        let project = relay_validation_project(ServiceKind::ConsultationApi);
+        let environment = relay_validation_environment(
+            &["shared-client"],
+            Some(("shared-client", "consultation-principal")),
+            false,
+        );
+
+        let error =
+            validate_environment(&project, &BTreeMap::new(), &BTreeMap::new(), &environment)
+                .expect_err("consultation client must not be admitted by the public Relay");
+        assert_eq!(
+            error.to_string(),
+            "Relay consultation client_id must be separate from relay.allowed_clients"
+        );
+    }
+
+    #[test]
+    fn consultation_relay_accepts_a_distinct_workload_client() {
+        let project = relay_validation_project(ServiceKind::ConsultationApi);
+        let environment = relay_validation_environment(
+            &["public-client"],
+            Some(("consultation-client", "consultation-principal")),
+            false,
+        );
+
+        validate_environment(&project, &BTreeMap::new(), &BTreeMap::new(), &environment)
+            .expect("distinct public and consultation Relay clients are accepted");
+    }
+
+    #[test]
+    fn consultation_relay_validates_both_identity_tokens() {
+        let project = relay_validation_project(ServiceKind::ConsultationApi);
+        for (allowed_client, client_id, principal_id, expected_field) in [
+            (
+                "valid-client",
+                "invalid client",
+                "valid-principal",
+                "consultation client id",
+            ),
+            (
+                "valid-client",
+                "valid-client",
+                "invalid principal",
+                "consultation principal id",
+            ),
+        ] {
+            let environment = relay_validation_environment(
+                &[allowed_client],
+                Some((client_id, principal_id)),
+                false,
+            );
+
+            let error =
+                validate_environment(&project, &BTreeMap::new(), &BTreeMap::new(), &environment)
+                    .expect_err("invalid consultation identity token must fail closed");
+            assert!(
+                error.to_string().contains(expected_field),
+                "unexpected consultation token diagnostic: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_only_relay_rejects_a_consultation_identity() {
+        let project = relay_validation_project(ServiceKind::RecordsApi);
+        let environment = relay_validation_environment(
+            &["records-client"],
+            Some(("records-client", "consultation-principal")),
+            false,
+        );
+
+        let error =
+            validate_environment(&project, &BTreeMap::new(), &BTreeMap::new(), &environment)
+                .expect_err("records-only projects must not bind a consultation workload");
+        assert_eq!(
+            error.to_string(),
+            "relay.consultation is valid only with a consultation_api service"
+        );
+    }
+
     #[test]
     fn nia_userinfo_release_is_minimized_hash_covered_and_relay_valid() {
         let project = project_golden("nia-attribute-release");
@@ -1048,68 +948,6 @@ outputs:
             compiled.approval_state["generated_closure_digests"]["relay"],
             changed_compiled.approval_state["generated_closure_digests"]["relay"],
             "release claim changes must alter the signed Relay closure digest"
-        );
-    }
-
-    #[test]
-    fn normalized_subject_type_changes_claim_semantics_and_notary_compilation() {
-        let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
-            .expect("golden project loads");
-        let baseline = loaded.semantic_digests.claim.clone();
-        let service = loaded
-            .project
-            .services
-            .get_mut("household-eligibility")
-            .expect("evidence service exists");
-        assert_eq!(service.subject_type, None);
-        service.subject_type = Some(EvidenceSubjectType::Person);
-        let explicit_person = semantic_digests(
-            &loaded.project,
-            &loaded.integrations,
-            &loaded.entities,
-            loaded.environment.as_ref(),
-        )
-        .expect("explicit person digest compiles");
-        assert_eq!(
-            explicit_person.claim, baseline,
-            "omitted and explicit person must share normalized Claim semantics"
-        );
-
-        loaded
-            .project
-            .services
-            .get_mut("household-eligibility")
-            .expect("evidence service exists")
-            .subject_type = Some(EvidenceSubjectType::Project);
-        let project_subject = semantic_digests(
-            &loaded.project,
-            &loaded.integrations,
-            &loaded.entities,
-            loaded.environment.as_ref(),
-        )
-        .expect("project subject digest compiles");
-        assert_ne!(
-            project_subject.claim, baseline,
-            "subject category changes must alter the Claim semantic digest"
-        );
-
-        let compiled = compile_project(&loaded, None).expect("project subject compiles");
-        let notary: Value = serde_norway::from_slice(
-            compiled
-                .notary_private
-                .get(Path::new("config/notary.yaml"))
-                .expect("Notary config exists"),
-        )
-        .expect("Notary config parses");
-        assert!(notary["evidence"]["claims"]
-            .as_array()
-            .expect("generated claims are an array")
-            .iter()
-            .all(|claim| claim["subject_type"] == "project"));
-        assert_eq!(
-            fixture_subject_type(&loaded, "eligibility")
-                .expect("offline fixture derives the project subject"),
-            EvidenceSubjectType::Project
         );
     }
 
@@ -1399,122 +1237,64 @@ outputs:
     }
 
     #[test]
-    fn generated_public_and_consultation_relays_are_separate_and_production_validated() {
+    fn generated_public_and_consultation_relay_lanes_remain_separate() {
         let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
-            .expect("golden project loads");
-        let compiled = compile_project(&loaded, None).expect("golden project compiles");
-        let public_path = Path::new("config/relay.yaml");
-        let consultation_path = Path::new("config/relay.yaml");
+            .expect("Relay consultation project loads");
+        let compiled = compile_project(&loaded, None).expect("Relay project compiles");
         let public_bytes = compiled
             .relay_private
-            .get(public_path)
+            .get(Path::new("config/relay.yaml"))
             .expect("public Relay config exists");
         let consultation_bytes = compiled
             .relay_consultation_private
-            .get(consultation_path)
+            .get(Path::new("config/relay.yaml"))
             .expect("consultation Relay config exists");
         let public: Value =
             serde_norway::from_slice(public_bytes).expect("public Relay config parses");
-        let consultation: Value =
-            serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
-
-        assert_eq!(
-            compiled
-                .relay_private
-                .keys()
-                .map(PathBuf::as_path)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                Path::new("config/relay.yaml"),
-                Path::new("descriptors/operations.json"),
-                Path::new("descriptors/secret-consumers.json"),
-            ]),
-            "the public Relay input contains only instance-applicable generated members"
-        );
-        let referenced_artifacts = consultation["consultation"]["artifacts"]
-            .as_object()
-            .expect("consultation artifact closure exists")
-            .values()
-            .flat_map(|entries| {
-                entries
-                    .as_array()
-                    .expect("consultation artifact class is a list")
-            })
-            .map(|entry| {
-                entry["path"]
-                    .as_str()
-                    .expect("consultation artifact has a path")
-            })
-            .collect::<BTreeSet<_>>();
-        let vendored_artifacts = compiled
-            .relay_consultation_private
-            .keys()
-            .filter_map(|path| path.strip_prefix("config").ok())
-            .filter_map(|path| path.to_str())
-            .filter(|path| path.starts_with("artifacts/"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            vendored_artifacts, referenced_artifacts,
-            "the consultation Relay input vendors exactly its selected artifacts"
-        );
+        let consultation: Value = serde_norway::from_slice(consultation_bytes)
+            .expect("consultation Relay config parses");
 
         assert!(public.get("consultation").is_none());
         assert!(consultation.get("consultation").is_some());
-        assert_eq!(public["instance"]["id"], "household-relay");
-        assert_eq!(
-            consultation["instance"]["id"],
-            "household-relay-consultation"
+        assert_ne!(public["instance"]["id"], consultation["instance"]["id"]);
+        assert!(
+            public["auth"]["oidc"]["allowed_clients"]
+                .as_array()
+                .expect("public OIDC allowlist is an array")
+                .iter()
+                .any(|client| client == "household-relay-client"),
+            "the public Relay admits its public client"
         );
-        assert_eq!(
-            public["auth"]["oidc"]["allowed_clients"],
-            json!(["household-relay-client"])
+        assert!(
+            !public["auth"]["oidc"]["allowed_clients"]
+                .as_array()
+                .expect("public OIDC allowlist is an array")
+                .iter()
+                .any(|client| client == "household-consultation-client"),
+            "the public Relay must not admit the consultation workload client"
         );
         assert_eq!(
             consultation["auth"]["oidc"]["allowed_clients"],
-            json!(["household-notary"])
+            json!(["household-consultation-client"]),
+            "the consultation Relay admits only its bound workload client"
         );
         assert_eq!(
-            consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
-            false
+            consultation["consultation"]["authorized_workload"]["client_claim_selector"],
+            "azp"
         );
-        let public_operations: Value = serde_json::from_slice(
-            compiled
-                .relay_private
-                .get(Path::new("descriptors/operations.json"))
-                .expect("public Relay operations descriptor exists"),
-        )
-        .expect("public Relay operations descriptor parses");
-        let consultation_operations: Value = serde_json::from_slice(
-            compiled
-                .relay_consultation_private
-                .get(Path::new("descriptors/operations.json"))
-                .expect("consultation Relay operations descriptor exists"),
-        )
-        .expect("consultation Relay operations descriptor parses");
-        assert_eq!(public_operations["service"], "household-relay");
-        assert_eq!(public_operations["consultation_profiles"], 0);
         assert_eq!(
-            consultation_operations["service"],
-            "household-relay-consultation"
+            consultation["consultation"]["authorized_workload"]["client_value"],
+            "household-consultation-client"
         );
-        assert_eq!(consultation_operations["consultation_profiles"], 1);
-
-        for (files, config) in [
-            (&compiled.relay_private, &public),
-            (&compiled.relay_consultation_private, &consultation),
-        ] {
-            let descriptor: Value = serde_json::from_slice(
-                files
-                    .get(Path::new("descriptors/secret-consumers.json"))
-                    .expect("Relay secret-consumer descriptor exists"),
-            )
-            .expect("Relay secret-consumer descriptor parses");
-            assert_eq!(
-                descriptor,
-                secret_consumer_descriptor("registry-relay", config),
-                "each Relay instance describes only the secrets selected by its primary config"
-            );
-        }
+        assert_eq!(
+            consultation["consultation"]["authorized_workload"]["principal_id"],
+            "household-consultation-principal"
+        );
+        assert_ne!(
+            consultation["consultation"]["authorized_workload"]["client_value"],
+            consultation["consultation"]["authorized_workload"]["principal_id"],
+            "the azp client and sub principal remain distinct identities"
+        );
         assert_eq!(
             compiled.approval_state["generated_closure_digests"]["relay"],
             json!(closure_digest(&compiled.relay_private).expect("public Relay closure digests"))
@@ -1524,11 +1304,6 @@ outputs:
             json!(closure_digest(&compiled.relay_consultation_private)
                 .expect("consultation Relay closure digests"))
         );
-        assert_ne!(
-            compiled.approval_state["generated_closure_digests"]["relay"],
-            compiled.approval_state["generated_closure_digests"]["relay_consultation"],
-            "the approval state independently binds both Relay instances"
-        );
         validate_generated_relay(public_bytes, &compiled.relay_private, "config/relay.yaml")
             .expect("public Relay passes production loading");
         validate_generated_relay(
@@ -1537,105 +1312,6 @@ outputs:
             "config/relay.yaml",
         )
         .expect("consultation Relay passes production loading and activation");
-    }
-
-    #[test]
-    fn local_notary_add_on_uses_stable_issuer_and_mounted_jwks_file() {
-        let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
-            .expect("golden project loads");
-        let environment = loaded.environment.as_mut().expect("environment exists");
-        environment
-            .relay
-            .as_mut()
-            .expect("Relay binding exists")
-            .local_api_keys = Some(RelayLocalApiKeyBinding {
-            match_principal: "local_match".to_string(),
-            no_match_principal: "local_no_match".to_string(),
-            scopes: vec!["registry_relay:ops_read".to_string()],
-        });
-        environment
-            .deployment
-            .notary
-            .as_mut()
-            .expect("Notary deployment exists")
-            .service = "registryctl-local-notary".to_string();
-
-        let unrelated =
-            compile_project(&loaded, None).expect("non-canonical local project compiles");
-        let unrelated_consultation: Value = serde_norway::from_slice(
-            unrelated
-                .relay_consultation_private
-                .get(Path::new("config/relay.yaml"))
-                .expect("consultation Relay config exists"),
-        )
-        .expect("consultation Relay config parses");
-        assert_eq!(
-            unrelated_consultation["auth"]["oidc"]["issuer"],
-            "https://workload-issuer.internal.invalid"
-        );
-        assert_eq!(
-            unrelated_consultation["auth"]["oidc"]["jwks_url"],
-            "https://workload-issuer.internal.invalid/.well-known/jwks.json"
-        );
-        assert_eq!(
-            unrelated_consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
-            false
-        );
-
-        let binding = loaded
-            .environment
-            .as_mut()
-            .expect("environment exists")
-            .notary_relay
-            .as_mut()
-            .expect("Notary-to-Relay binding exists");
-        binding.base_url = "http://10.89.0.4:8080".to_string();
-        binding.workload_client_id = "registryctl-local-notary".to_string();
-        binding.token_file = PathBuf::from("/run/secrets/relay-workload-token");
-        loaded
-            .environment
-            .as_mut()
-            .expect("environment exists")
-            .relay
-            .as_mut()
-            .expect("Relay binding exists")
-            .issuer = "https://registryctl-local-notary.invalid".to_string();
-
-        let compiled = compile_project(&loaded, None).expect("local add-on project compiles");
-        let public: Value = serde_norway::from_slice(
-            compiled
-                .relay_private
-                .get(Path::new("config/relay.yaml"))
-                .expect("public Relay config exists"),
-        )
-        .expect("public Relay config parses");
-        let consultation_bytes = compiled
-            .relay_consultation_private
-            .get(Path::new("config/relay.yaml"))
-            .expect("consultation Relay config exists");
-        let consultation: Value =
-            serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
-
-        assert_eq!(public["auth"]["mode"], "api_key");
-        assert_eq!(consultation["auth"]["mode"], "oidc");
-        assert_eq!(
-            consultation["auth"]["oidc"]["issuer"],
-            "https://registryctl-local-notary.invalid"
-        );
-        assert_eq!(
-            consultation["auth"]["oidc"]["development_jwks_file"],
-            "/run/registry/dev-public/notary-workload-jwks.json"
-        );
-        assert!(consultation["auth"]["oidc"].get("jwks_url").is_none());
-        assert!(consultation["auth"]["oidc"]
-            .get("discovery_url")
-            .is_none());
-        assert_eq!(
-            consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
-            false
-        );
-        validate_generated_product_configs(&compiled)
-            .expect("local add-on product configs pass production validation");
     }
 
     #[test]
@@ -1650,6 +1326,29 @@ outputs:
             .get(Path::new("config/relay.yaml"))
             .expect("Relay config exists");
         let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
+        let consultation: Value = serde_norway::from_slice(
+            compiled
+                .relay_consultation_private
+                .get(Path::new("config/relay.yaml"))
+                .expect("consultation Relay config exists"),
+        )
+        .expect("consultation Relay config parses");
+
+        assert_eq!(original["auth"]["mode"], "api_key");
+        assert_eq!(consultation["auth"]["mode"], "oidc");
+        assert_eq!(
+            consultation["auth"]["oidc"]["allowed_clients"],
+            json!(["public-works-consultation-client"]),
+            "public local API keys do not broaden consultation workload admission"
+        );
+        assert_eq!(
+            consultation["consultation"]["authorized_workload"]["client_value"],
+            "public-works-consultation-client"
+        );
+        assert_eq!(
+            consultation["consultation"]["authorized_workload"]["principal_id"],
+            "public-works-consultation-principal"
+        );
 
         validate_generated_relay(relay, &compiled.relay_private, "config/relay.yaml")
             .expect("temporary validation credentials satisfy production loading");
@@ -1805,75 +1504,6 @@ outputs:
     }
 
     #[test]
-    fn registry_cel_claims_reject_structured_members_and_constant_only_rules() {
-        let mut loaded =
-            load_registry_project(&project_golden("opencrvs"), None).expect("OpenCRVS project loads");
-        let set_claim_expression = |loaded: &mut LoadedRegistryProject, expression: &str| {
-            let claim = loaded
-                .project
-                .services
-                .get_mut("birth-verification")
-                .and_then(|service| service.claims.get_mut("parents"))
-                .expect("structured parents claim exists");
-            claim.output = None;
-            claim.cel = Some(expression.to_string());
-        };
-        set_claim_expression(
-            &mut loaded,
-            "birth.parents.exists(parent, parent.name != '')",
-        );
-
-        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
-            .expect_err("structured consultation members must not enter authored CEL claims");
-        assert!(error.to_string().contains(
-            "service birth-verification claim parents CEL cannot reference structured consultation output birth.parents"
-        ));
-
-        set_claim_expression(&mut loaded, r#"birth["parents"] != null"#);
-        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
-            .expect_err("registry-backed CEL index access must fail before generation");
-        assert!(error
-            .to_string()
-            .contains("registry-backed CEL cannot use index access"));
-
-        set_claim_expression(&mut loaded, "['literal-value'][0] == 'literal-value'");
-        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
-            .expect_err("constant-only CEL cannot replace Registry evidence");
-        assert!(error
-            .to_string()
-            .contains("every claim must derive from one declared Relay consultation"));
-    }
-
-    #[test]
-    fn secret_descriptor_includes_named_environment_providers() {
-        let descriptor = secret_consumer_descriptor(
-            "registry-notary",
-            &json!({
-                "authentication": {
-                    "fingerprint": { "provider": "env", "name": "CALLER_TOKEN_HASH" },
-                },
-                "audit": {
-                    "source": {
-                        "provider": "environment",
-                        "name": "AUDIT_PSEUDONYM_EPOCH_1",
-                    },
-                },
-            }),
-        );
-        let consumers = descriptor["consumers"]
-            .as_array()
-            .expect("descriptor consumers are present");
-        assert!(consumers.iter().any(|consumer| {
-            consumer["locator"] == "CALLER_TOKEN_HASH"
-                && consumer["config_pointer"] == "/authentication/fingerprint/name"
-        }));
-        assert!(consumers.iter().any(|consumer| {
-            consumer["locator"] == "AUDIT_PSEUDONYM_EPOCH_1"
-                && consumer["config_pointer"] == "/audit/source/name"
-        }));
-    }
-
-    #[test]
     fn released_rhai_capability_identity_is_not_a_source_product() {
         assert!(is_script_runtime_released(ReleasedScriptRuntime::RhaiV1));
         assert!(!is_script_runtime_released_in(
@@ -1883,176 +1513,20 @@ outputs:
     }
 
     #[test]
-    fn duplicate_project_claim_ids_fail_before_generation() {
-        let project = project_golden("custom-system");
-        let mut loaded = load_registry_project(&project, None).expect("golden project loads");
-        let duplicate: ServiceDeclaration = serde_json::from_value(
-            serde_json::to_value(&loaded.project.services["household-eligibility"])
-                .expect("service serializes"),
-        )
-        .expect("service clones through its strict model");
-        loaded
-            .project
-            .services
-            .insert("duplicate-service".to_string(), duplicate);
-        let error = validate_project_shape(&loaded.project)
-            .expect_err("duplicate project claim ids must fail closed");
-        assert!(error
-            .to_string()
-            .contains("claim ids must be unique across project services"));
-    }
-
-    #[test]
-    fn generated_notary_validation_rejects_empty_claim_formats() {
-        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
-            .expect("golden project loads");
-        let mut compiled = compile_project(&loaded, None).expect("golden project compiles");
-        let config_path = Path::new("config/notary.yaml").to_path_buf();
-        let mut notary: Value = serde_norway::from_slice(
-            compiled
-                .notary_private
-                .get(&config_path)
-                .expect("Notary config exists"),
-        )
-        .expect("generated Notary config parses");
-        notary["evidence"]["claims"][0]["formats"] = Value::Array(Vec::new());
-        compiled.notary_private.insert(
-            config_path,
-            serde_norway::to_string(&notary)
-                .expect("tampered Notary config serializes")
-                .into_bytes()
-                .into_boxed_slice(),
-        );
-
-        let error = validate_generated_notary(&compiled)
-            .expect_err("generated validation must reject an empty formats list");
-        let diagnostic = format!("{error:#}");
-        assert!(diagnostic.contains("formats must not be empty"));
-        assert!(diagnostic.contains("omit formats"));
-    }
-
-    #[test]
-    fn generated_products_persist_audit_records_to_the_managed_volume() {
-        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
-            .expect("golden project loads");
-        let compiled = compile_project(&loaded, None).expect("golden project compiles");
-        let product_configs = [
-            (
-                "Relay",
-                compiled
-                    .relay_private
-                    .get(Path::new("config/relay.yaml"))
-                    .expect("Relay config exists"),
-            ),
-            (
-                "consultation Relay",
-                compiled
-                    .relay_consultation_private
-                    .get(Path::new("config/relay.yaml"))
-                    .expect("consultation Relay config exists"),
-            ),
-            (
-                "Notary",
-                compiled
-                    .notary_private
-                    .get(Path::new("config/notary.yaml"))
-                    .expect("Notary config exists"),
-            ),
-        ];
-
-        for (product, bytes) in product_configs {
-            let config: Value =
-                serde_norway::from_slice(bytes).expect("generated product config parses");
-            assert_eq!(
-                config.pointer("/audit/sink"),
-                Some(&json!("file")),
-                "{product} must use a durable audit sink"
-            );
-            assert_eq!(
-                config.pointer("/audit/path"),
-                Some(&json!("/var/lib/registry/audit/audit.jsonl")),
-                "{product} must write to the managed audit volume"
-            );
-        }
-    }
-
-    #[test]
-    fn disclosure_review_classes_are_directional() {
-        let loaded = load_registry_project(&project_golden("custom-system"), None)
-            .expect("golden project loads");
-        let original = disclosure_review_profiles(&loaded.project);
-        let baseline = json!({ "disclosure_profiles": original });
-
-        let mut narrowed = disclosure_review_profiles(&loaded.project);
-        narrowed
-            .get_mut("household-eligibility")
-            .expect("service profile exists")
-            .insert(
-                "household-category".to_string(),
-                DisclosureReviewProfile {
-                    default: DisclosureMode::Redacted,
-                    allowed: BTreeSet::from([DisclosureMode::Redacted]),
-                },
-            );
-        assert_eq!(
-            disclosure_change_classes(&narrowed, Some(&baseline)),
-            (true, false)
-        );
-
-        let mut widened = disclosure_review_profiles(&loaded.project);
-        widened
-            .get_mut("household-eligibility")
-            .expect("service profile exists")
-            .insert(
-                "household-record-exists".to_string(),
-                DisclosureReviewProfile {
-                    default: DisclosureMode::Value,
-                    allowed: BTreeSet::from([DisclosureMode::Value, DisclosureMode::Redacted]),
-                },
-            );
-        assert_eq!(
-            disclosure_change_classes(&widened, Some(&baseline)),
-            (false, true)
-        );
-
-        let mut mixed = narrowed;
-        mixed
-            .get_mut("household-eligibility")
-            .expect("service profile exists")
-            .insert(
-                "household-record-exists".to_string(),
-                DisclosureReviewProfile {
-                    default: DisclosureMode::Value,
-                    allowed: BTreeSet::from([DisclosureMode::Value, DisclosureMode::Redacted]),
-                },
-            );
-        assert_eq!(
-            disclosure_change_classes(&mixed, Some(&baseline)),
-            (true, true)
-        );
-    }
-
-    #[test]
     fn compiler_upgrade_is_reported_independently_of_authored_semantic_changes() {
         let loaded = load_registry_project(&project_golden("custom-system"), None)
             .expect("golden project loads");
-        let disclosure_digest = format!("sha256:{}", "a".repeat(64));
         let baseline = json!({
             "compiler_version": "0.0.0",
             "semantic_digests": {
-                "claim": format!("sha256:{}", "0".repeat(64)),
                 "integration": loaded.semantic_digests.integration.as_str(),
                 "service_policy": loaded.semantic_digests.service_policy.as_str(),
                 "operator_security": loaded.semantic_digests.operator_security.as_str(),
             },
-            "disclosure_digest": disclosure_digest,
         });
         assert_eq!(
-            semantic_change_records(&loaded, Some(&baseline), &disclosure_digest)
-                .into_iter()
-                .map(|change| change.dimension)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["claim", "compiler"]),
+            changed_semantic_dimensions(&loaded, Some(&baseline)),
+            vec![SemanticDimension::Compiler],
         );
     }
 
@@ -2116,13 +1590,6 @@ outputs:
             .expect_err("approval state without semantic digests must fail")
             .to_string()
             .contains("missing or unknown fields"));
-
-        let mut inconsistent_products = approval_state.clone();
-        inconsistent_products["promotion_projection"]["products"] = json!(["relay"]);
-        assert!(validate_signed_approval_state(&inconsistent_products)
-            .expect_err("projection products must match signed generated closures")
-            .to_string()
-            .contains("product inventory disagrees"));
 
         let mut missing_projection = approval_state.clone();
         missing_projection

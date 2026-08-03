@@ -95,7 +95,7 @@ gates for its area (see Verification), and committed.
 - [x] C1. Decisions on record before deletion: ROADMAP pilot line reframed
       to Relay + Evidence; retirement decision page drafted (published in
       C7); changelog entry drafted.
-- [ ] C2. registryctl surgery complete: Notary compiler target, dev
+- [x] C2. registryctl surgery complete: Notary compiler target, dev
       credentials, deployment wiring, and release-lock entries removed;
       registryctl builds and tests green as Relay-only tooling.
 - [ ] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
@@ -496,3 +496,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   retirement decision without claiming the deletion is complete; and the
   retirement decision page is drafted with `draft: true` for publication in
   C7. No runtime, contract, or Relay implementation changed. Next in C: C2.
+- 2026-08-03: C2 done. registryctl is Relay-only tooling: the Notary compiler,
+  authoring model, credentials, runtime/deployment wiring, trust material, and
+  release-lock entries are gone. Public and consultation Relay lanes retain
+  distinct client identities, and malformed retired approved-set values fail
+  closed. This is a pre-1.0 breaking project/release-lock migration: operators
+  rebuild generated deployment material before later decommissioning or
+  archiving old Notary state; no automatic database cleanup occurs. Relay
+  production source and frozen Evidence contracts are unchanged. Formatting,
+  check, Clippy, registryctl/language-server/workspace tests, cargo-deny, and
+  the affected release-lock/compose gates passed. The full workspace command
+  still reaches the unchanged main-branch failure in
+  `registry-evidencectl/tests/scaffold.rs::the_rendered_mint_configuration_passes_mint_check`:
+  Mint validation succeeds but emits no stdout, while the test expects a
+  success sentence and client count. That failure reproduces in the untouched
+  original checkout and is outside C; the same workspace tests pass when the
+  unrelated `registry-evidencectl` crate is excluded. Next in C: the mandatory
+  C3 deletion approval stop, with C4 reverse-dependency evidence.

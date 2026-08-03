@@ -204,6 +204,11 @@ fn rotate_trust_anchor_with_resolver(
     mut resolve: impl FnMut(&KeyLocator) -> Result<Zeroizing<String>>,
 ) -> Result<TrustAnchorRotateReportV1> {
     let current = load_trust_anchor_input(&options.current_anchor)?;
+    validate_selected_lane(
+        &current.acceptance_identity,
+        current.acceptance_identity.lane,
+    )
+    .context("current trust anchor is not a supported Relay lane")?;
     if current.acceptance_identity.trust_domain != ProductTrustDomainV1::Governed {
         bail!("current trust anchor must use the governed trust domain");
     }
@@ -333,7 +338,7 @@ fn sign_product_bundle_with_resolver(
     let (sequence, previous_config_hash, anchor_history) = if let Some(preceding_set) =
         &options.preceding_approved_set
     {
-        let lane = crate::ApprovedLaneV1::from_acceptance_lane(options.lane);
+        let lane = crate::ApprovedLaneV1::try_from_acceptance_lane(options.lane)?;
         let preceding = crate::approved_set::verify_approved_lane_from_set(preceding_set, lane)
             .context("failed to verify preceding approved lane before signing")?;
         if preceding.acceptance_identity() != &marker.acceptance_identity {
@@ -560,13 +565,11 @@ fn validate_selected_lane(
     if identity.lane != selected {
         bail!("selected signing lane does not match the signing-input acceptance identity");
     }
-    let expected_product = match selected {
-        ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation => {
-            ProductAcceptanceProductV1::RegistryRelay
-        }
-        ProductAcceptanceLaneV1::Notary => ProductAcceptanceProductV1::RegistryNotary,
-    };
-    if identity.product != expected_product {
+    if !matches!(
+        selected,
+        ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation
+    ) || identity.product != ProductAcceptanceProductV1::RegistryRelay
+    {
         bail!("selected signing lane does not match the acceptance-identity product");
     }
     if identity.trust_domain != ProductTrustDomainV1::Governed {
@@ -812,12 +815,13 @@ fn primary_config_path(
     lane: ProductAcceptanceLaneV1,
     files: &[SigningInputFile],
 ) -> Result<String> {
-    let expected = match lane {
-        ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation => {
-            "config/relay.yaml"
-        }
-        ProductAcceptanceLaneV1::Notary => "config/notary.yaml",
-    };
+    if !matches!(
+        lane,
+        ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation
+    ) {
+        bail!("signing-input lane is not supported by registryctl");
+    }
+    let expected = "config/relay.yaml";
     if !files.iter().any(|file| file.relative_path == expected) {
         bail!("signing-input closure lacks the selected lane's primary product configuration");
     }
@@ -1192,18 +1196,12 @@ mod tests {
             project: "civil-registry".to_string(),
             environment: "production".to_string(),
             lane,
-            product: match lane {
-                ProductAcceptanceLaneV1::RelayPublic
-                | ProductAcceptanceLaneV1::RelayConsultation => {
-                    ProductAcceptanceProductV1::RegistryRelay
-                }
-                ProductAcceptanceLaneV1::Notary => ProductAcceptanceProductV1::RegistryNotary,
-            },
+            product: ProductAcceptanceProductV1::RegistryRelay,
             stream: "civil-registry".to_string(),
             instance: match lane {
                 ProductAcceptanceLaneV1::RelayPublic => "relay".to_string(),
                 ProductAcceptanceLaneV1::RelayConsultation => "relay-consultation".to_string(),
-                ProductAcceptanceLaneV1::Notary => "notary".to_string(),
+                _ => "unsupported".to_string(),
             },
         }
     }
@@ -1220,12 +1218,7 @@ mod tests {
     }
 
     fn write_signing_input(root: &Path, identity: ProductAcceptanceIdentityV1) {
-        let config = match identity.lane {
-            ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation => {
-                "config/relay.yaml"
-            }
-            ProductAcceptanceLaneV1::Notary => "config/notary.yaml",
-        };
+        let config = "config/relay.yaml";
         fs::create_dir_all(root.join("config")).expect("config directory creates");
         fs::write(root.join(config), b"instance:\n  id: synthetic\n").expect("config writes");
         let marker = SigningInputMarkerV1::governed(identity).expect("marker is valid");
@@ -1238,12 +1231,7 @@ mod tests {
 
     fn write_review_evidence(root: &Path, lane: ProductAcceptanceLaneV1) {
         fs::create_dir_all(root.join("approval")).unwrap();
-        let config = match lane {
-            ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation => {
-                "config/relay.yaml"
-            }
-            ProductAcceptanceLaneV1::Notary => "config/notary.yaml",
-        };
+        let config = "config/relay.yaml";
         let config_digest =
             registry_platform_config::sha256_uri(&fs::read(root.join(config)).unwrap());
         let lane_closure = serde_json::json!([{
@@ -1254,7 +1242,7 @@ mod tests {
             registry_platform_config::sha256_uri(&canonicalize_json(&lane_closure).unwrap());
         let consultations = match lane {
             ProductAcceptanceLaneV1::RelayPublic => serde_json::json!({}),
-            ProductAcceptanceLaneV1::RelayConsultation | ProductAcceptanceLaneV1::Notary => {
+            ProductAcceptanceLaneV1::RelayConsultation => {
                 serde_json::json!({
                     "evidence.lookup": {
                         "profile_id": "profile",
@@ -1263,6 +1251,7 @@ mod tests {
                     }
                 })
             }
+            _ => serde_json::json!({}),
         };
         fs::write(
             root.join("approval/review.json"),
@@ -1276,7 +1265,7 @@ mod tests {
                     (match lane {
                         ProductAcceptanceLaneV1::RelayPublic => "relay",
                         ProductAcceptanceLaneV1::RelayConsultation => "relay_consultation",
-                        ProductAcceptanceLaneV1::Notary => "notary",
+                        _ => "unsupported",
                     }): lane_digest,
                 },
             }))
@@ -1304,7 +1293,8 @@ mod tests {
     #[test]
     fn signing_input_marker_is_canonical_and_binds_every_identity_dimension() {
         let marker =
-            SigningInputMarkerV1::governed(identity(ProductAcceptanceLaneV1::Notary)).unwrap();
+            SigningInputMarkerV1::governed(identity(ProductAcceptanceLaneV1::RelayConsultation))
+                .unwrap();
         let first = canonical_signing_input_marker(&marker).unwrap();
         let second = canonical_signing_input_marker(&marker).unwrap();
         assert_eq!(first, second);
@@ -1315,21 +1305,21 @@ mod tests {
                 "trust_domain": "governed",
                 "project": "civil-registry",
                 "environment": "production",
-                "lane": "notary",
-                "product": "registry-notary",
+                "lane": "relay-consultation",
+                "product": "registry-relay",
                 "stream": "civil-registry",
-                "instance": "notary",
+                "instance": "relay-consultation",
             })
         );
     }
 
     #[test]
-    fn signing_rejects_swapped_lane_and_every_identity_mismatch_without_key_resolution() {
+    fn signing_rejects_swapped_lane_and_identity_mismatches_without_key_resolution() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        write_signing_input(&input, identity(ProductAcceptanceLaneV1::Notary));
+        write_signing_input(&input, identity(ProductAcceptanceLaneV1::RelayConsultation));
         let anchor_path = temp.path().join("anchor.json");
-        let base = identity(ProductAcceptanceLaneV1::Notary);
+        let base = identity(ProductAcceptanceLaneV1::RelayConsultation);
         write_anchor(&anchor_path, base.clone());
 
         let cases = [
@@ -1349,11 +1339,6 @@ mod tests {
                 value
             }),
             ("lane", identity(ProductAcceptanceLaneV1::RelayPublic)),
-            ("product", {
-                let mut value = base.clone();
-                value.product = ProductAcceptanceProductV1::RegistryRelay;
-                value
-            }),
             ("stream", {
                 let mut value = base.clone();
                 value.stream.push_str("-other");
@@ -1381,7 +1366,7 @@ mod tests {
             let calls = Cell::new(0);
             let error = sign_product_bundle_with_resolver(
                 &ProductBundleSignOptions {
-                    lane: ProductAcceptanceLaneV1::Notary,
+                    lane: ProductAcceptanceLaneV1::RelayConsultation,
                     input: input.clone(),
                     anchor: changed_anchor,
                     preceding_approved_set: None,
@@ -1421,7 +1406,7 @@ mod tests {
     fn anchor_create_sorts_keys_and_refuses_overwrite() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        write_signing_input(&input, identity(ProductAcceptanceLaneV1::Notary));
+        write_signing_input(&input, identity(ProductAcceptanceLaneV1::RelayConsultation));
         let public = signer().jwk;
         let first = temp.path().join("first.jwk");
         let second = temp.path().join("second.jwk");
@@ -1429,7 +1414,7 @@ mod tests {
         fs::write(&second, serde_json::to_vec(&public).unwrap()).unwrap();
         let output = temp.path().join("anchor.json");
         let error = create_trust_anchor(&TrustAnchorCreateOptions {
-            lane: ProductAcceptanceLaneV1::Notary,
+            lane: ProductAcceptanceLaneV1::RelayConsultation,
             input: input.clone(),
             public_keys: vec![second, first],
             threshold: 1,
@@ -1441,7 +1426,7 @@ mod tests {
         let public_path = temp.path().join("public.jwk");
         fs::write(&public_path, serde_json::to_vec(&public).unwrap()).unwrap();
         create_trust_anchor(&TrustAnchorCreateOptions {
-            lane: ProductAcceptanceLaneV1::Notary,
+            lane: ProductAcceptanceLaneV1::RelayConsultation,
             input: input.clone(),
             public_keys: vec![public_path.clone()],
             threshold: 1,
@@ -1450,7 +1435,7 @@ mod tests {
         .expect("initial anchor creates");
         let before = fs::read(&output).unwrap();
         create_trust_anchor(&TrustAnchorCreateOptions {
-            lane: ProductAcceptanceLaneV1::Notary,
+            lane: ProductAcceptanceLaneV1::RelayConsultation,
             input,
             public_keys: vec![public_path],
             threshold: 1,
@@ -1464,7 +1449,7 @@ mod tests {
     fn bundle_signing_enforces_threshold_distinctness_and_self_verifies() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        let identity = identity(ProductAcceptanceLaneV1::Notary);
+        let identity = identity(ProductAcceptanceLaneV1::RelayConsultation);
         write_signing_input(&input, identity.clone());
         let anchor_path = temp.path().join("anchor.json");
         let mut enabled_signers = vec![
@@ -1488,7 +1473,7 @@ mod tests {
         let calls = Cell::new(0);
         let error = sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input: input.clone(),
                 anchor: anchor_path.clone(),
                 preceding_approved_set: None,
@@ -1507,7 +1492,7 @@ mod tests {
         let duplicate_output = temp.path().join("duplicate");
         let error = sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input: input.clone(),
                 anchor: anchor_path.clone(),
                 preceding_approved_set: None,
@@ -1526,7 +1511,7 @@ mod tests {
         let output = temp.path().join("signed");
         let report = sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input,
                 anchor: anchor_path,
                 preceding_approved_set: None,
@@ -1561,14 +1546,14 @@ mod tests {
     fn approved_lane_verifier_rejects_signed_arbitrary_bundle_id() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::RelayConsultation);
         write_signing_input(&input, acceptance_identity.clone());
         fs::create_dir_all(input.join("approval")).unwrap();
         let config_digest = registry_platform_config::sha256_uri(
-            &fs::read(input.join("config/notary.yaml")).unwrap(),
+            &fs::read(input.join("config/relay.yaml")).unwrap(),
         );
         let lane_closure = serde_json::json!([{
-            "path": "config/notary.yaml",
+            "path": "config/relay.yaml",
             "sha256": config_digest,
         }]);
         let lane_digest =
@@ -1581,7 +1566,7 @@ mod tests {
         fs::write(
             input.join("approval/project-state.json"),
             canonical_json_line(&serde_json::json!({
-                "generated_closure_digests": { "notary": lane_digest },
+                "generated_closure_digests": { "relay_consultation": lane_digest },
             }))
             .unwrap(),
         )
@@ -1591,7 +1576,7 @@ mod tests {
         let output = temp.path().join("signed");
         sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input,
                 anchor: anchor_path,
                 preceding_approved_set: None,
@@ -1629,7 +1614,7 @@ mod tests {
         .expect("signature-valid arbitrary bundle_id passes platform verification");
 
         let error = crate::approved_set::verify_signed_lane_directory(
-            crate::ApprovedLaneV1::Notary,
+            crate::ApprovedLaneV1::RelayConsultation,
             &output,
         )
         .expect_err("approved-lane verifier must recompute the exact closure digest");
@@ -1644,9 +1629,9 @@ mod tests {
         for lane in [
             ProductAcceptanceLaneV1::RelayPublic,
             ProductAcceptanceLaneV1::RelayConsultation,
-            ProductAcceptanceLaneV1::Notary,
         ] {
-            let lane_label = crate::ApprovedLaneV1::from_acceptance_lane(lane).to_string();
+            let approved_lane = crate::ApprovedLaneV1::try_from_acceptance_lane(lane).unwrap();
+            let lane_label = approved_lane.to_string();
             let input = temporary.path().join(format!("{lane_label}-input"));
             let lane_identity = identity(lane);
             write_signing_input(&input, lane_identity.clone());
@@ -1667,21 +1652,16 @@ mod tests {
             )
             .unwrap();
             verified_lanes.insert(
-                crate::ApprovedLaneV1::from_acceptance_lane(lane),
-                crate::approved_set::verify_signed_lane_directory(
-                    crate::ApprovedLaneV1::from_acceptance_lane(lane),
-                    &signed,
-                )
-                .unwrap(),
+                approved_lane,
+                crate::approved_set::verify_signed_lane_directory(approved_lane, &signed).unwrap(),
             );
-            lane_paths.insert(crate::ApprovedLaneV1::from_acceptance_lane(lane), signed);
+            lane_paths.insert(approved_lane, signed);
         }
         let set_file = temporary.path().join("approved-set.json");
         crate::approved_set::assemble_initial_approved_set(
             &crate::approved_set::InitialApprovedSetInputs {
                 relay_public: lane_paths[&crate::ApprovedLaneV1::RelayPublic].clone(),
                 relay_consultation: lane_paths[&crate::ApprovedLaneV1::RelayConsultation].clone(),
-                notary: lane_paths[&crate::ApprovedLaneV1::Notary].clone(),
             },
             &set_file,
             |request| {
@@ -1692,21 +1672,21 @@ mod tests {
         )
         .unwrap();
 
-        let update_input = temporary.path().join("notary-update-input");
-        let notary_identity = identity(ProductAcceptanceLaneV1::Notary);
-        write_signing_input(&update_input, notary_identity);
+        let update_input = temporary.path().join("consultation-update-input");
+        let consultation_identity = identity(ProductAcceptanceLaneV1::RelayConsultation);
+        write_signing_input(&update_input, consultation_identity);
         fs::write(
-            update_input.join("config/notary.yaml"),
+            update_input.join("config/relay.yaml"),
             b"instance:\n  id: changed\n",
         )
         .unwrap();
-        write_review_evidence(&update_input, ProductAcceptanceLaneV1::Notary);
-        let update_output = temporary.path().join("notary-updated");
+        write_review_evidence(&update_input, ProductAcceptanceLaneV1::RelayConsultation);
+        let update_output = temporary.path().join("consultation-updated");
         sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input: update_input,
-                anchor: lane_paths[&crate::ApprovedLaneV1::Notary].join("anchor.json"),
+                anchor: lane_paths[&crate::ApprovedLaneV1::RelayConsultation].join("anchor.json"),
                 preceding_approved_set: Some(set_file.clone()),
                 keys: vec!["op://vault/item/key".to_string()],
                 output_dir: update_output.clone(),
@@ -1721,8 +1701,8 @@ mod tests {
         .unwrap();
         assert_eq!(updated.manifest.sequence, 2);
         let preceding = registry_platform_config::verify_config_bundle(
-            lane_paths[&crate::ApprovedLaneV1::Notary].join("bundle"),
-            lane_paths[&crate::ApprovedLaneV1::Notary].join("anchor.json"),
+            lane_paths[&crate::ApprovedLaneV1::RelayConsultation].join("bundle"),
+            lane_paths[&crate::ApprovedLaneV1::RelayConsultation].join("anchor.json"),
         )
         .unwrap();
         assert_eq!(
@@ -1731,7 +1711,7 @@ mod tests {
         );
 
         let verified_update = crate::approved_set::verify_signed_lane_directory(
-            crate::ApprovedLaneV1::Notary,
+            crate::ApprovedLaneV1::RelayConsultation,
             &update_output,
         )
         .unwrap();
@@ -1740,12 +1720,12 @@ mod tests {
         crate::approved_set::assemble_updated_approved_set(
             &set_file,
             &crate::ReviewedBuildUpdateV1 {
-                notary: Some(verified_update.entry().reviewed_binding()),
+                relay_consultation: Some(verified_update.entry().reviewed_binding()),
                 ..Default::default()
             },
             &[],
             &crate::approved_set::AffectedLaneReplacements {
-                notary: Some(update_output.clone()),
+                relay_consultation: Some(update_output.clone()),
                 ..Default::default()
             },
             &set_two,
@@ -1767,18 +1747,21 @@ mod tests {
             |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
         )
         .unwrap();
-        let rotated_input = temporary.path().join("notary-rotated-input");
-        write_signing_input(&rotated_input, identity(ProductAcceptanceLaneV1::Notary));
+        let rotated_input = temporary.path().join("consultation-rotated-input");
+        write_signing_input(
+            &rotated_input,
+            identity(ProductAcceptanceLaneV1::RelayConsultation),
+        );
         fs::write(
-            rotated_input.join("config/notary.yaml"),
+            rotated_input.join("config/relay.yaml"),
             b"instance:\n  id: rotated-two\n",
         )
         .unwrap();
-        write_review_evidence(&rotated_input, ProductAcceptanceLaneV1::Notary);
-        let rotated_output = temporary.path().join("notary-rotated");
+        write_review_evidence(&rotated_input, ProductAcceptanceLaneV1::RelayConsultation);
+        let rotated_output = temporary.path().join("consultation-rotated");
         sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input: rotated_input,
                 anchor: rotation_two.join("anchor.json"),
                 preceding_approved_set: Some(set_two.clone()),
@@ -1795,7 +1778,7 @@ mod tests {
             .join("anchor-history/0000.transition.json")
             .is_file());
         let verified_rotated = crate::approved_set::verify_signed_lane_directory(
-            crate::ApprovedLaneV1::Notary,
+            crate::ApprovedLaneV1::RelayConsultation,
             &rotated_output,
         )
         .unwrap();
@@ -1803,12 +1786,12 @@ mod tests {
         crate::approved_set::assemble_updated_approved_set(
             &set_two,
             &crate::ReviewedBuildUpdateV1 {
-                notary: Some(verified_rotated.entry().reviewed_binding()),
+                relay_consultation: Some(verified_rotated.entry().reviewed_binding()),
                 ..Default::default()
             },
-            &[crate::ApprovedLaneV1::Notary],
+            &[crate::ApprovedLaneV1::RelayConsultation],
             &crate::approved_set::AffectedLaneReplacements {
-                notary: Some(rotated_output.clone()),
+                relay_consultation: Some(rotated_output.clone()),
                 ..Default::default()
             },
             &set_three,
@@ -1828,21 +1811,24 @@ mod tests {
             |_| Ok(Zeroizing::new(TEST_PRIVATE_JWK.to_string())),
         )
         .unwrap();
-        let rotated_again_input = temporary.path().join("notary-rotated-again-input");
+        let rotated_again_input = temporary.path().join("consultation-rotated-again-input");
         write_signing_input(
             &rotated_again_input,
-            identity(ProductAcceptanceLaneV1::Notary),
+            identity(ProductAcceptanceLaneV1::RelayConsultation),
         );
         fs::write(
-            rotated_again_input.join("config/notary.yaml"),
+            rotated_again_input.join("config/relay.yaml"),
             b"instance:\n  id: rotated-three\n",
         )
         .unwrap();
-        write_review_evidence(&rotated_again_input, ProductAcceptanceLaneV1::Notary);
-        let rotated_again_output = temporary.path().join("notary-rotated-again");
+        write_review_evidence(
+            &rotated_again_input,
+            ProductAcceptanceLaneV1::RelayConsultation,
+        );
+        let rotated_again_output = temporary.path().join("consultation-rotated-again");
         sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input: rotated_again_input,
                 anchor: rotation_three.join("anchor.json"),
                 preceding_approved_set: Some(set_three),
@@ -1853,7 +1839,7 @@ mod tests {
         )
         .unwrap();
         let verified_twice_rotated = crate::approved_set::verify_signed_lane_directory(
-            crate::ApprovedLaneV1::Notary,
+            crate::ApprovedLaneV1::RelayConsultation,
             &rotated_again_output,
         )
         .expect("every historical transition verifies oldest to terminal anchor");
@@ -1872,7 +1858,7 @@ mod tests {
         )
         .unwrap();
         let error = crate::approved_set::verify_signed_lane_directory(
-            crate::ApprovedLaneV1::Notary,
+            crate::ApprovedLaneV1::RelayConsultation,
             &rotated_again_output,
         )
         .expect_err("tampering any historical transition must fail closed");
@@ -1941,7 +1927,10 @@ mod tests {
     fn rotation_writes_fresh_verified_transition_and_wrong_predecessor_fails() {
         let temp = tempfile::tempdir().unwrap();
         let current_path = temp.path().join("current.json");
-        let current = write_anchor(&current_path, identity(ProductAcceptanceLaneV1::Notary));
+        let current = write_anchor(
+            &current_path,
+            identity(ProductAcceptanceLaneV1::RelayConsultation),
+        );
         let public_path = temp.path().join("current.jwk");
         fs::write(
             &public_path,
@@ -1992,7 +1981,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::RelayConsultation);
         write_signing_input(&input, acceptance_identity.clone());
         let anchor_path = temp.path().join("anchor.json");
         write_anchor(&anchor_path, acceptance_identity);
@@ -2014,7 +2003,7 @@ mod tests {
         let calls = Cell::new(0);
         let error = sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input,
                 anchor: anchor_path,
                 preceding_approved_set: None,
@@ -2038,7 +2027,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        let acceptance_identity = identity(ProductAcceptanceLaneV1::Notary);
+        let acceptance_identity = identity(ProductAcceptanceLaneV1::RelayConsultation);
         write_signing_input(&input, acceptance_identity.clone());
         let anchor_path = temp.path().join("anchor.json");
         write_anchor(&anchor_path, acceptance_identity);
@@ -2062,7 +2051,7 @@ mod tests {
         let calls = Cell::new(0);
         let error = sign_product_bundle_with_resolver(
             &ProductBundleSignOptions {
-                lane: ProductAcceptanceLaneV1::Notary,
+                lane: ProductAcceptanceLaneV1::RelayConsultation,
                 input,
                 anchor: anchor_path,
                 preceding_approved_set: None,
@@ -2105,7 +2094,7 @@ mod tests {
     fn signing_input_closure_enforces_directory_depth_cap() {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("input");
-        write_signing_input(&input, identity(ProductAcceptanceLaneV1::Notary));
+        write_signing_input(&input, identity(ProductAcceptanceLaneV1::RelayConsultation));
         let mut nested = input;
         for index in 0..=MAX_SIGNING_INPUT_DEPTH {
             nested = nested.join(format!("d{index}"));

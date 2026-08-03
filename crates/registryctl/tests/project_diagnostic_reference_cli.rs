@@ -82,7 +82,6 @@ fn run(directory: &std::path::Path, catalog: &str, format: &str) -> Output {
         .env_clear()
         .env("REGISTRY_CONFIG", SENTINEL)
         .env("REGISTRY_RELAY_CONFIG", SENTINEL)
-        .env("REGISTRY_NOTARY_CONFIG", SENTINEL)
         .env("REGISTRYCTL_UPDATE_ENDPOINT", SENTINEL)
         .env("COUNTRY_SECRET", SENTINEL)
         .args([

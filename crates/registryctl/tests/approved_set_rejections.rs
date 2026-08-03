@@ -34,7 +34,7 @@ fn initial_assembly_rejects_mixed_project_identity_before_output_creation() {
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let output = temporary.path().join("mixed.json");
     let error = assemble_initial_approved_set(&path_set(temporary.path()), &output, |request| {
-        Ok(if request.lane == ApprovedLaneV1::Notary {
+        Ok(if request.lane == ApprovedLaneV1::RelayConsultation {
             verified(
                 request.lane,
                 "other-project",
@@ -44,7 +44,6 @@ fn initial_assembly_rejects_mixed_project_identity_before_output_creation() {
                 None,
                 'c',
                 'f',
-                Some('c'),
             )
         } else {
             initial_lane(request.lane)
@@ -68,38 +67,11 @@ fn independent_verification_rejects_development_trust_for_an_approved_lane() {
         1,
         digest('a'),
         None,
-        entry(lane, "approved", 'a', 'd', None),
+        entry(lane, "approved", 'a', 'd'),
     )
     .expect_err("development trust must not enter a governed approved set");
 
     assert!(format!("{error:#}").contains("governed trust domain"));
-}
-
-#[test]
-fn initial_assembly_rejects_mixed_cross_lane_contract_before_output_creation() {
-    let temporary = tempfile::tempdir().expect("temporary directory creates");
-    let output = temporary.path().join("mixed-interface.json");
-    let error = assemble_initial_approved_set(&path_set(temporary.path()), &output, |request| {
-        Ok(if request.lane == ApprovedLaneV1::Notary {
-            verified(
-                request.lane,
-                "example-project",
-                "approved",
-                1,
-                'c',
-                None,
-                'c',
-                'f',
-                Some('d'),
-            )
-        } else {
-            initial_lane(request.lane)
-        })
-    })
-    .expect_err("mixed interface must fail");
-
-    assert!(format!("{error:#}").contains("interface digests do not match"));
-    assert!(!output.exists());
 }
 
 #[test]
@@ -108,14 +80,12 @@ fn update_requires_exact_replacements_and_never_carries_an_unverified_lane() {
     let (preceding_file, _) = initial_set(&temporary);
     let output = temporary.path().join("next.json");
     let reviewed = ReviewedBuildUpdateV1 {
-        relay_public: None,
+        relay_public: Some(reviewed_binding(ApprovedLaneV1::RelayPublic)),
         relay_consultation: Some(reviewed_binding(ApprovedLaneV1::RelayConsultation)),
-        notary: Some(reviewed_binding(ApprovedLaneV1::Notary)),
     };
     let missing = AffectedLaneReplacements {
         relay_public: None,
         relay_consultation: Some(temporary.path().join("consultation-next")),
-        notary: None,
     };
     let mut verification_called = false;
     let error =
@@ -129,9 +99,8 @@ fn update_requires_exact_replacements_and_never_carries_an_unverified_lane() {
     assert!(!output.exists());
 
     let complete = AffectedLaneReplacements {
-        relay_public: None,
+        relay_public: Some(temporary.path().join("public-next")),
         relay_consultation: Some(temporary.path().join("consultation-next")),
-        notary: Some(temporary.path().join("notary-next")),
     };
     let planted_canary = "CANARY_PRIVATE_PRECEDING_PATH";
     let error = assemble_updated_approved_set(
@@ -167,12 +136,10 @@ fn update_rejects_non_successor_lineage_and_reviewed_closure_mismatch() {
     let reviewed = ReviewedBuildUpdateV1 {
         relay_public: None,
         relay_consultation: Some(reviewed_binding(ApprovedLaneV1::RelayConsultation)),
-        notary: Some(reviewed_binding(ApprovedLaneV1::Notary)),
     };
     let replacements = AffectedLaneReplacements {
         relay_public: None,
         relay_consultation: Some(temporary.path().join("consultation-next")),
-        notary: Some(temporary.path().join("notary-next")),
     };
 
     let error = assemble_updated_approved_set(
@@ -197,7 +164,6 @@ fn update_rejects_non_successor_lineage_and_reviewed_closure_mismatch() {
                     Some('b'),
                     '7',
                     '8',
-                    Some('9'),
                 ))
             }
             LaneVerificationSourceV1::LaneDirectory(_) => Ok(replacement_lane(request.lane)),
@@ -237,17 +203,17 @@ fn update_requires_explicit_anchor_rotation_and_rejects_selected_same_anchor() {
     let (preceding_file, _) = initial_set(&temporary);
     let output = temporary.path().join("next.json");
     let reviewed = ReviewedBuildUpdateV1 {
-        notary: Some(reviewed_binding(ApprovedLaneV1::Notary)),
+        relay_consultation: Some(reviewed_binding(ApprovedLaneV1::RelayConsultation)),
         ..Default::default()
     };
     let replacements = AffectedLaneReplacements {
-        notary: Some(temporary.path().join("notary-next")),
+        relay_consultation: Some(temporary.path().join("consultation-next")),
         ..Default::default()
     };
     let same_anchor = assemble_updated_approved_set(
         &preceding_file,
         &reviewed,
-        &[ApprovedLaneV1::Notary],
+        &[ApprovedLaneV1::RelayConsultation],
         &replacements,
         &output,
         |request| match request.source {

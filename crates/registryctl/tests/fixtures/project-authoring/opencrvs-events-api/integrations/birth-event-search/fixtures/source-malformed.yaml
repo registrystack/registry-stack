@@ -25,4 +25,4 @@ interactions:
     respond:
       status: 200
       body: { total: one, results: [] }
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }

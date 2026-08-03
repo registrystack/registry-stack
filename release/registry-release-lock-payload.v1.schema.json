@@ -39,14 +39,10 @@
       "additionalProperties": false,
       "required": [
         "relay",
-        "notary",
         "postgresql_state_plane"
       ],
       "properties": {
         "relay": {
-          "$ref": "#/$defs/image"
-        },
-        "notary": {
           "$ref": "#/$defs/image"
         },
         "postgresql_state_plane": {
@@ -60,7 +56,6 @@
       "required": [
         "relay_public",
         "relay_consultation",
-        "notary",
         "postgresql_state_plane",
         "operator_files"
       ],
@@ -71,16 +66,13 @@
         "relay_consultation": {
           "$ref": "#/$defs/product_runtime"
         },
-        "notary": {
-          "$ref": "#/$defs/product_runtime"
-        },
         "postgresql_state_plane": {
           "$ref": "#/$defs/postgresql_runtime"
         },
         "operator_files": {
           "type": "array",
-          "minItems": 9,
-          "maxItems": 9,
+          "minItems": 6,
+          "maxItems": 6,
           "items": {
             "$ref": "#/$defs/operator_file"
           }
@@ -502,8 +494,6 @@
             "dotenv",
             "pem_certificate",
             "pem_private_key",
-            "json_web_key",
-            "compact_jwt",
             "opaque"
           ]
         },
@@ -542,8 +532,7 @@
         "config_signature_schema",
         "trust_anchor_schema",
         "anchor_transition_schema",
-        "relay_config_schema",
-        "notary_config_schema"
+        "relay_config_schema"
       ],
       "properties": {
         "config_bundle_schema": {
@@ -560,9 +549,6 @@
         },
         "relay_config_schema": {
           "const": "https://id.registrystack.org/schemas/registry-relay/registry-relay.config.schema.json"
-        },
-        "notary_config_schema": {
-          "const": "https://id.registrystack.org/schemas/registry-notary/registry-notary.config.schema.json"
         }
       }
     },

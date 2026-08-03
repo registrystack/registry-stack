@@ -166,17 +166,20 @@ fn secret_missing_whitespace_and_present_states_never_expose_names_or_values() {
     input
         .add_secret_reference(
             EMPTY_NAME,
-            PreflightSecretConsumer::IssuanceSigningKey,
-            address("environments/production.yaml", "/issuance/signing_key"),
+            PreflightSecretConsumer::SourceOauthClientSecret,
+            address(
+                "environments/production.yaml",
+                "/integrations/alpha/source/oauth/client_secret",
+            ),
         )
         .expect("empty reference records");
     input
         .add_secret_reference(
             PRESENT_NAME,
-            PreflightSecretConsumer::CallerApiKeyFingerprint,
+            PreflightSecretConsumer::EntityPostgresConnection,
             address(
                 "environments/production.yaml",
-                "/callers/health/api_key_fingerprint",
+                "/entities/people/provider/connection/secret",
             ),
         )
         .expect("present reference records");
@@ -318,8 +321,8 @@ fn runtime_files_close_missing_empty_regular_symlink_and_unsafe_modes() {
         ),
         (
             unsafe_private.as_path(),
-            PreflightRuntimeFileKind::NotaryToRelayToken,
-            "/notary_relay/token_file",
+            PreflightRuntimeFileKind::EntityCsv,
+            "/entities/people/provider/path",
         ),
         (
             oversized.as_path(),
@@ -359,7 +362,7 @@ fn runtime_files_close_missing_empty_regular_symlink_and_unsafe_modes() {
         PreflightCheckState::UnsafeMode
     );
     assert_eq!(
-        states[&PreflightRuntimeFileKind::NotaryToRelayToken],
+        states[&PreflightRuntimeFileKind::EntityCsv],
         PreflightCheckState::UnsafeMode
     );
     assert_eq!(
@@ -392,8 +395,11 @@ fn public_trust_and_private_material_apply_distinct_unix_modes() {
     input
         .add_runtime_file(
             &shared,
-            PreflightRuntimeFileKind::NotaryToRelayToken,
-            address("environments/production.yaml", "/notary_relay/token_file"),
+            PreflightRuntimeFileKind::EntityCsv,
+            address(
+                "environments/production.yaml",
+                "/entities/people/provider/path",
+            ),
         )
         .expect("private material records");
 
@@ -408,7 +414,7 @@ fn public_trust_and_private_material_apply_distinct_unix_modes() {
         PreflightCheckState::Available
     );
     assert_eq!(
-        states[&PreflightRuntimeFileKind::NotaryToRelayToken],
+        states[&PreflightRuntimeFileKind::EntityCsv],
         PreflightCheckState::UnsafeMode
     );
 }
@@ -499,7 +505,7 @@ fn entity_provider_files_enforce_private_posture_and_relay_default_size_bound() 
 
 #[cfg(unix)]
 #[test]
-fn undeclared_generations_are_never_inferred_for_state_roots_or_workload_token() {
+fn undeclared_generations_are_never_inferred_for_relay_state_roots() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -516,14 +522,6 @@ fn undeclared_generations_are_never_inferred_for_state_roots_or_workload_token()
         (
             PreflightRuntimeFileKind::RelayStateRootCertificate,
             "/relay_state/postgresql/root_certificate_path",
-        ),
-        (
-            PreflightRuntimeFileKind::NotaryStateRootCertificate,
-            "/notary_state/postgresql/root_certificate_path",
-        ),
-        (
-            PreflightRuntimeFileKind::NotaryToRelayToken,
-            "/notary_relay/token_file",
         ),
     ] {
         input
@@ -545,20 +543,17 @@ fn undeclared_generations_are_never_inferred_for_state_roots_or_workload_token()
         generations[&PreflightRuntimeFileKind::SourceCa],
         PreflightGenerationState::Declared
     );
-    for kind in [
-        PreflightRuntimeFileKind::RelayStateRootCertificate,
-        PreflightRuntimeFileKind::NotaryStateRootCertificate,
-        PreflightRuntimeFileKind::NotaryToRelayToken,
-    ] {
-        assert_eq!(generations[&kind], PreflightGenerationState::NotDeclared);
-    }
+    assert_eq!(
+        generations[&PreflightRuntimeFileKind::RelayStateRootCertificate],
+        PreflightGenerationState::NotDeclared
+    );
 }
 
 #[test]
 fn offline_boundary_has_no_network_or_external_process_surface() {
     let authored_endpoints = [
         "https://source.country.invalid",
-        "https://issuer.country.invalid/jwks",
+        "https://source-identity.country.invalid/jwks",
         "https://relay.country.invalid",
     ];
     assert!(authored_endpoints
@@ -594,81 +589,6 @@ fn offline_boundary_has_no_network_or_external_process_surface() {
         report.execution.external_processes,
         PreflightAttemptState::NotAttempted
     );
-}
-
-#[test]
-fn command_adapter_keeps_invalid_endpoints_offline_and_has_no_build_side_effects() {
-    const SECRET_NAMES: [&str; 4] = [
-        "PREFLIGHT_COMMAND_CLIENT_ID",
-        "PREFLIGHT_COMMAND_CLIENT_SECRET",
-        "PREFLIGHT_COMMAND_ISSUER_KEY",
-        "PREFLIGHT_COMMAND_CALLER_FINGERPRINT",
-    ];
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let project = directory.path().join("project");
-    copy_tree(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/project-authoring/opencrvs")
-            .as_path(),
-        &project,
-    );
-    let environment_file = project.join("environments/local.yaml");
-    let original = fs::read_to_string(&environment_file).expect("environment reads");
-    let missing_token = directory.path().join("missing-workload-token");
-    let authored = original
-        .replace("CIVIL_REGISTRY_CLIENT_ID", SECRET_NAMES[0])
-        .replace("CIVIL_REGISTRY_CLIENT_SECRET", SECRET_NAMES[1])
-        .replace("REGISTRY_NOTARY_ISSUER_JWK", SECRET_NAMES[2])
-        .replace("BIRTH_VERIFIER_TOKEN_HASH", SECRET_NAMES[3])
-        .replace(
-            "/run/secrets/relay-workload-token",
-            missing_token.to_str().expect("temporary path is UTF-8"),
-        );
-    fs::write(&environment_file, authored).expect("environment writes");
-    let fixture_path = project.join("integrations/birth-record/fixtures/match.yaml");
-    let fixture_before = fs::read(&fixture_path).expect("fixture reads");
-
-    let report = registryctl::preflight_registry_project(&registryctl::ProjectPreflightOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-    })
-    .expect("offline preflight returns a closed report");
-    let serialized = serde_json::to_string(&report).expect("report serializes");
-
-    assert_eq!(report.secret_checks.len(), SECRET_NAMES.len());
-    assert_eq!(report.runtime_files.len(), 1);
-    assert_eq!(
-        report.runtime_files[0].state,
-        registryctl::PreflightCheckState::Missing
-    );
-    assert_eq!(
-        report.execution.network,
-        registryctl::PreflightAttemptState::NotAttempted
-    );
-    assert_eq!(
-        report.execution.fixture_execution,
-        registryctl::PreflightAttemptState::NotAttempted
-    );
-    assert_eq!(
-        report.execution.build_output,
-        registryctl::PreflightWriteState::NotWritten
-    );
-    assert!(!project.join(".registry-stack").exists());
-    assert_eq!(
-        fs::read(&fixture_path).expect("fixture rereads"),
-        fixture_before
-    );
-    for forbidden in SECRET_NAMES.into_iter().chain([
-        "https://civil-registry.invalid",
-        "https://identity.civil-registry.invalid",
-        "https://trust.civil-registry.invalid",
-        missing_token.to_str().expect("temporary path is UTF-8"),
-    ]) {
-        assert!(
-            !serialized.contains(forbidden),
-            "report must not expose {forbidden}"
-        );
-    }
 }
 
 #[cfg(unix)]
@@ -852,7 +772,7 @@ fn preflight_reads_only_declared_runtime_files_and_has_no_fixture_or_build_side_
 }
 
 #[test]
-fn project_workbook_is_validated_read_only_and_digest_bound_when_runtime_is_not_ready() {
+fn project_workbook_is_validated_read_only_and_digest_bound_when_runtime_is_ready() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let project = directory.path().join("spreadsheet-project");
     copy_tree(
@@ -876,7 +796,7 @@ fn project_workbook_is_validated_read_only_and_digest_bound_when_runtime_is_not_
             environment: "local".to_string(),
         })
         .expect("valid workbook passes preflight");
-    assert_eq!(preflight.status, registryctl::PreflightStatus::NotReady);
+    assert_eq!(preflight.status, registryctl::PreflightStatus::Ready);
     assert!(preflight.runtime_files.iter().any(|check| {
         check.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
             && check.state == registryctl::PreflightCheckState::Available
@@ -1026,19 +946,36 @@ fn all_declared_secret_consumer_classes_have_a_closed_report_identity() {
         PreflightSecretConsumer::SourceOauthMtlsPrivateKey,
         PreflightSecretConsumer::SourceJwksMtlsPrivateKey,
         PreflightSecretConsumer::EntityPostgresConnection,
-        PreflightSecretConsumer::IssuanceSigningKey,
-        PreflightSecretConsumer::CallerApiKeyFingerprint,
-        PreflightSecretConsumer::Oid4vciClientSigningKey,
-        PreflightSecretConsumer::Oid4vciAccessTokenSigningKey,
-        PreflightSecretConsumer::Oid4vciSensitiveStateKey,
     ];
-    assert_eq!(consumers.len(), 15);
+    assert_eq!(consumers.len(), 10);
     let serialized = consumers
         .iter()
         .map(|consumer| serde_json::to_string(consumer).expect("consumer serializes"))
         .collect::<BTreeSet<_>>();
     assert_eq!(serialized.len(), consumers.len());
     assert!(!serialized.iter().any(|value| value.contains("image")));
+}
+
+#[test]
+fn all_declared_runtime_file_classes_have_a_closed_report_identity() {
+    let kinds = [
+        PreflightRuntimeFileKind::SourceCa,
+        PreflightRuntimeFileKind::SourceMtlsCertificate,
+        PreflightRuntimeFileKind::SourceOauthCa,
+        PreflightRuntimeFileKind::SourceOauthMtlsCertificate,
+        PreflightRuntimeFileKind::SourceJwksCa,
+        PreflightRuntimeFileKind::SourceJwksMtlsCertificate,
+        PreflightRuntimeFileKind::EntityCsv,
+        PreflightRuntimeFileKind::EntityXlsx,
+        PreflightRuntimeFileKind::EntityParquet,
+        PreflightRuntimeFileKind::RelayStateRootCertificate,
+    ];
+    assert_eq!(kinds.len(), 10);
+    let serialized = kinds
+        .iter()
+        .map(|kind| serde_json::to_string(kind).expect("runtime file kind serializes"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(serialized.len(), kinds.len());
 }
 
 #[test]

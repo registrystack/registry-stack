@@ -44,8 +44,7 @@
         "integration",
         "fixture",
         "entity",
-        "relay",
-        "notary"
+        "relay"
       ]
     },
     "pathKind": {
@@ -85,10 +84,7 @@
           "if": {
             "properties": {
               "schema": {
-                "enum": [
-                  "relay",
-                  "notary"
-                ]
+                "const": "relay"
               }
             }
           },
@@ -199,13 +195,10 @@
         "runtime_intent": {
           "type": "array",
           "minItems": 0,
-          "maxItems": 2,
+          "maxItems": 1,
           "uniqueItems": true,
           "items": {
-            "enum": [
-              "crates/registry-relay/config/documentation-intent.json",
-              "crates/registry-notary-core/config/documentation-intent.json"
-            ]
+            "const": "crates/registry-relay/config/documentation-intent.json"
           }
         },
         "reads_country_workspaces": {
@@ -365,8 +358,7 @@
             "integration_contract",
             "fixture_harness",
             "entity_contract",
-            "relay_runtime",
-            "notary_runtime"
+            "relay_runtime"
           ]
         },
         "human_owner": {
@@ -376,8 +368,7 @@
             "integration_maintainers",
             "test_maintainers",
             "data_model_maintainers",
-            "relay_maintainers",
-            "notary_maintainers"
+            "relay_maintainers"
           ]
         },
         "scope": {
@@ -508,7 +499,7 @@
           "anyOf": [
             {
               "type": "string",
-              "pattern": "^(registryctl\\.authoring|registry\\.(relay|notary)\\.config|config)\\.[a-z0-9_.]+$"
+              "pattern": "^(registryctl\\.authoring|registry\\.relay\\.config|config)\\.[a-z0-9_.]+$"
             },
             {
               "$ref": "#/$defs/prose"
@@ -614,10 +605,7 @@
                 "type": "object",
                 "properties": {
                   "schema": {
-                    "enum": [
-                      "relay",
-                      "notary"
-                    ]
+                    "const": "relay"
                   }
                 }
               }
@@ -717,59 +705,6 @@
               }
             }
           }
-        },
-        {
-          "if": {
-            "properties": {
-              "address": {
-                "type": "object",
-                "properties": {
-                  "schema": {
-                    "const": "notary"
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "semantic_owner": {
-                "const": "notary_runtime"
-              },
-              "human_owner": {
-                "const": "notary_maintainers"
-              },
-              "products": {
-                "const": [
-                  "notary",
-                  "docs"
-                ]
-              },
-              "consumers": {
-                "const": [
-                  "registry_notary",
-                  "docs_generator"
-                ]
-              },
-              "generated_artifacts": {
-                "const": [
-                  "notary_config",
-                  "field_reference"
-                ]
-              },
-              "diagnostic": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "pattern": "^(registry\\.notary\\.config|config)\\.[a-z0-9_.]+$"
-                  },
-                  {
-                    "$ref": "#/$defs/prose"
-                  }
-                ]
-              }
-            }
-          }
         }
       ]
     },
@@ -795,7 +730,6 @@
         "enum": [
           "registryctl",
           "relay",
-          "notary",
           "editor",
           "docs"
         ]
@@ -824,7 +758,6 @@
         "enum": [
           "registryctl_authoring",
           "registry_relay",
-          "registry_notary",
           "editor_tooling",
           "docs_generator"
         ]
@@ -839,7 +772,6 @@
           "editor_schemas",
           "project_build",
           "relay_config",
-          "notary_config",
           "fixture_report",
           "field_reference"
         ]
@@ -855,7 +787,6 @@
           "security",
           "privacy",
           "relay",
-          "notary",
           "compatibility",
           "documentation",
           "testing"

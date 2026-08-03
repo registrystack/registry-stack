@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Deterministic Registry Stack project authoring for Relay and Notary.
+//! Deterministic Registry Stack project authoring for Relay.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -10,7 +10,6 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use cel::common::ast::{EntryExpr, Expr, IdedExpr};
 use clap::ValueEnum;
-use registry_notary_core::{config::StatePostgresqlConfig, StandaloneRegistryNotaryConfig};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_relay::source_plan::{
     authoring::{
@@ -51,7 +50,12 @@ const MAX_FIXTURES: usize = 128;
 const MAX_ENVIRONMENTS: usize = 64;
 const MAX_OPERATIONS: usize = 16;
 const MAX_OUTPUTS: usize = 64;
-const MAX_CLAIMS: usize = 64;
+const MAX_RELAY_OUTPUT_SCHEMA_DEPTH_V1: usize = 8;
+const MAX_RELAY_OUTPUT_SCHEMA_NODES_V1: usize = 256;
+const MAX_RELAY_OUTPUT_EXPANDED_NODES_V1: usize = 4_096;
+const MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1: usize = 32;
+const MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1: u16 = 256;
+const MAX_RELAY_OUTPUT_VALUE_BYTES_V1: u32 = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleasedScriptRuntime {
     RhaiV1,
@@ -95,7 +99,7 @@ include!("project_authoring/compiler/semantic_impact.rs");
 include!("project_authoring/compiler/explanation.rs");
 include!("project_authoring/compiler/artifacts.rs");
 include!("project_authoring/compiler/relay.rs");
-include!("project_authoring/compiler/notary.rs");
+include!("project_authoring/compiler/claim_semantics.rs");
 include!("project_authoring/project.rs");
 include!("project_authoring/fixtures.rs");
 include!("project_authoring/output.rs");

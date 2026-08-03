@@ -76,20 +76,9 @@
     { "schema": "project", "pointer": "/$defs/recordSpatialGeometry/oneOf/1", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/recordFieldMap/propertyNames", "path_kind": "map_key" },
     { "schema": "project", "pointer": "/$defs/recordFieldMap/additionalProperties", "path_kind": "map_value" },
-    { "schema": "project", "pointer": "/$defs/disclosure/oneOf/0", "path_kind": "branch" },
-    { "schema": "project", "pointer": "/$defs/disclosure/oneOf/1", "path_kind": "branch" },
-    { "schema": "project", "pointer": "/$defs/disclosure/oneOf/1/properties/allowed/items", "path_kind": "array_item" },
     { "schema": "project", "pointer": "/$defs/service/oneOf/0", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/service/oneOf/1", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/recordsService/properties/conforms_to/items", "path_kind": "array_item" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/claims/propertyNames", "path_kind": "map_key" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/claims/additionalProperties", "path_kind": "map_value" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/oneOf/0", "path_kind": "branch" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/oneOf/1", "path_kind": "branch" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/credential_profiles/propertyNames", "path_kind": "map_key" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/credential_profiles/additionalProperties", "path_kind": "map_value" },
-    { "schema": "project", "pointer": "/$defs/evidenceService/properties/credential_profiles/additionalProperties/properties/claims/items", "path_kind": "array_item" },
-    { "schema": "project", "pointer": "/$defs/access/properties/scopes/items", "path_kind": "array_item" },
     { "schema": "project", "pointer": "/$defs/variables/propertyNames", "path_kind": "map_key" },
     { "schema": "project", "pointer": "/$defs/variables/additionalProperties", "path_kind": "map_value" },
     { "schema": "project", "pointer": "/$defs/consultations/propertyNames", "path_kind": "map_key" },
@@ -100,13 +89,8 @@
     { "schema": "environment", "pointer": "/properties/integrations/additionalProperties", "path_kind": "map_value" },
     { "schema": "environment", "pointer": "/properties/entities/propertyNames", "path_kind": "map_key" },
     { "schema": "environment", "pointer": "/properties/entities/additionalProperties", "path_kind": "map_value" },
-    { "schema": "environment", "pointer": "/properties/callers/propertyNames", "path_kind": "map_key" },
-    { "schema": "environment", "pointer": "/properties/callers/additionalProperties", "path_kind": "map_value" },
-    { "schema": "environment", "pointer": "/properties/callers/additionalProperties/properties/scopes/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/properties/relay/properties/allowed_clients/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/properties/relay/properties/local_api_keys/properties/scopes/items", "path_kind": "array_item" },
-    { "schema": "environment", "pointer": "/properties/deployment/anyOf/0", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/properties/deployment/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/0/if", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/0/then", "path_kind": "branch" },
@@ -117,30 +101,12 @@
     { "schema": "environment", "pointer": "/allOf/1/then", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/2", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/2/if", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/2/then", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/3", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/3/if", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/3/then", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/4", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/4/if", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/4/then", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/5", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/5/if", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/5/then", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/5/else", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/6", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/6/if", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/6/else", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/allOf/6/else/properties/relay/not", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/0", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/1", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/2", "path_kind": "branch" },
+    { "schema": "environment", "pointer": "/allOf/2/else", "path_kind": "branch" },
+    { "schema": "environment", "pointer": "/allOf/2/else/properties/relay/not", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/1", "path_kind": "branch" },
-    { "schema": "environment", "pointer": "/$defs/oid4vci/properties/allowed_wallet_origins/items", "path_kind": "array_item" },
-    { "schema": "environment", "pointer": "/$defs/oid4vci/properties/registrar_clients/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/$defs/privateCidrs/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/$defs/credential/oneOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/credential/oneOf/1", "path_kind": "branch" },
@@ -214,13 +180,6 @@
     { "schema": "fixture", "pointer": "/properties/variables/propertyNames", "path_kind": "map_key" },
     { "schema": "fixture", "pointer": "/properties/variables/additionalProperties", "path_kind": "map_value" },
     { "schema": "fixture", "pointer": "/properties/interactions/items", "path_kind": "array_item" },
-    { "schema": "fixture", "pointer": "/$defs/governedRequest/properties/variables/propertyNames", "path_kind": "map_key" },
-    { "schema": "fixture", "pointer": "/$defs/governedRequest/properties/variables/additionalProperties", "path_kind": "map_value" },
-    { "schema": "fixture", "pointer": "/$defs/governedRequest/properties/claims/items", "path_kind": "array_item" },
-    { "schema": "fixture", "pointer": "/$defs/governedTarget/properties/identifiers/items", "path_kind": "array_item" },
-    { "schema": "fixture", "pointer": "/$defs/governedTarget/properties/attributes/additionalProperties", "path_kind": "map_value" },
-    { "schema": "fixture", "pointer": "/$defs/governedClaimRef/oneOf/0", "path_kind": "branch" },
-    { "schema": "fixture", "pointer": "/$defs/governedClaimRef/oneOf/1", "path_kind": "branch" },
     { "schema": "fixture", "pointer": "/$defs/request/properties/query/additionalProperties", "path_kind": "map_value" },
     { "schema": "fixture", "pointer": "/$defs/request/properties/query/additionalProperties/oneOf/0", "path_kind": "branch" },
     { "schema": "fixture", "pointer": "/$defs/request/properties/query/additionalProperties/oneOf/1", "path_kind": "branch" },
@@ -246,7 +205,7 @@
   "domains": [
     {
       "schema": "project",
-      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "scope": "The product-neutral project graph and the Relay services that consume its authored contracts.",
       "state": "authored",
       "environment_behavior": "narrows_reviewed_authority",
       "validation_stages": [
@@ -303,7 +262,7 @@
       ],
       "diagnostic": "registryctl.authoring.fixture.invalid",
       "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
-      "example_guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data."
+      "example_guidance": "Use unmistakably synthetic inputs, requests, responses, outputs, and errors; fixtures must not contain copied personal or source data."
     },
     {
       "schema": "entity",
@@ -346,41 +305,6 @@
       "schema": "environment",
       "pointer": "/properties/development/properties/relay_port",
       "purpose": "Overrides the loopback port exposed by the disposable local Relay runtime without changing a deployment endpoint."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/development/properties/notary_port",
-      "purpose": "Overrides the loopback port exposed by the disposable local Notary runtime without changing a deployment endpoint."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/issuance/properties/issuer",
-      "purpose": "Binds the operator-approved credential issuer identifier without granting claim or disclosure authority."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/issuance/properties/signing_key",
-      "purpose": "Names the operator-managed secret reference for credential signing; the signing key value is never authored or reported."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/issuance/properties/signing_kid",
-      "purpose": "Selects the reviewed signing-key identifier exposed in issued credential metadata without containing private key material."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/issuance/properties/generation",
-      "purpose": "Records the operator-controlled issuance-key generation used for explicit rotation and rollback checks."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/callers/additionalProperties/properties/api_key_fingerprint",
-      "purpose": "Names the secret reference used to verify one caller API key; neither the key nor fingerprint value is authored here."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/callers/additionalProperties/properties/scopes",
-      "purpose": "Narrows one caller to the explicitly reviewed service scopes available in this environment."
     },
     {
       "schema": "environment",
@@ -429,28 +353,8 @@
     },
     {
       "schema": "environment",
-      "pointer": "/properties/notary_relay/properties/base_url",
-      "purpose": "Binds Notary to the operator-reviewed Relay origin used for governed evidence consultations."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/notary_relay/properties/workload_client_id",
-      "purpose": "Identifies the Notary workload client authorized to request reviewed Relay consultations."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/notary_relay/properties/token_file",
-      "purpose": "Selects the operator-managed token-file binding for Notary-to-Relay authentication without exposing its contents."
-    },
-    {
-      "schema": "environment",
       "pointer": "/properties/relay_state/properties/postgresql/properties/root_certificate_path",
       "purpose": "Binds Relay state storage to an operator-managed PostgreSQL trust root at a deployment-local path."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/notary_state/properties/postgresql/properties/root_certificate_path",
-      "purpose": "Binds Notary state storage to an operator-managed PostgreSQL trust root at a deployment-local path."
     },
     {
       "schema": "integration",
@@ -506,11 +410,6 @@
       "schema": "fixture",
       "pointer": "/$defs/response/oneOf/0/properties/body",
       "purpose": "Defines the synthetic response body returned by the offline fixture harness to the integration."
-    },
-    {
-      "schema": "fixture",
-      "pointer": "/$defs/expectation/properties/claims",
-      "purpose": "States the synthetic Notary claim outcomes expected after the reviewed Relay consultation behavior."
     },
     {
       "schema": "entity",
@@ -789,11 +688,6 @@
     },
     {
       "schema": "project",
-      "pointer": "/$defs/disclosure/oneOf/1/properties/allowed",
-      "purpose": "Lists the disclosure modes that may be selected in addition to the policy's declared default."
-    },
-    {
-      "schema": "project",
       "pointer": "/$defs/recordsService/properties/kind",
       "purpose": "Identifies this service declaration as a Relay records API backed by an authored entity."
     },
@@ -819,83 +713,33 @@
     },
     {
       "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/kind",
-      "purpose": "Identifies this service declaration as a Notary evidence policy."
+      "pointer": "/$defs/consultationService/properties/kind",
+      "purpose": "Identifies this service declaration as a Relay consultation API backed by reviewed integrations."
     },
     {
       "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/version",
-      "purpose": "Assigns the positive authored version used to track this evidence-service policy contract."
+      "pointer": "/$defs/consultationService/properties/version",
+      "purpose": "Assigns the positive authored version used to track this Relay consultation service contract."
     },
     {
       "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/consent",
-      "purpose": "States whether evaluation of this evidence service requires consent."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/claims",
-      "purpose": "Maps evidence claim identifiers to an output or CEL expression, value contract, and disclosure policy."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/properties/output",
-      "purpose": "Selects the exact Relay consultation output that backs this evidence claim."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/claims/additionalProperties/properties/cel",
-      "purpose": "Provides the CEL expression used to derive a claim from declared Relay consultation outputs."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/credential_profiles/additionalProperties/properties/type",
-      "purpose": "Declares the credential type identifier emitted for this reviewed credential profile."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/credential_profiles/additionalProperties/properties/validity",
-      "purpose": "Bounds the lifetime of credentials issued from this profile using a positive duration."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/credential_profiles/additionalProperties/properties/claims",
-      "purpose": "Lists the registry-backed evidence claims selected into this credential profile."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/access/properties/scopes",
-      "purpose": "Lists the scopes a caller must hold to use the enclosing evidence service."
+      "pointer": "/$defs/consultationService/properties/consent",
+      "purpose": "States whether a caller must confirm consent before the Relay consultation is evaluated."
     },
     {
       "schema": "project",
       "pointer": "/$defs/variables/additionalProperties/properties/from",
-      "purpose": "Binds one evidence variable to its caller-supplied request variable path."
+      "purpose": "Binds one consultation variable to its caller-supplied request variable path."
     },
     {
       "schema": "project",
       "pointer": "/$defs/variables/additionalProperties/properties/type",
-      "purpose": "Declares the request variable as a date value for typed evidence evaluation."
+      "purpose": "Declares the request variable as a date value for typed consultation evaluation."
     },
     {
       "schema": "project",
       "pointer": "/$defs/consultations/additionalProperties/properties/input",
       "purpose": "Maps integration input names to reviewed target-request identifier or attribute bindings."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/claimValue/properties/type",
-      "purpose": "Declares the boolean, integer, string, or date type of a claim value."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/claimValue/properties/nullable",
-      "purpose": "States whether the claim value may be null."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/claimValue/properties/max_bytes",
-      "purpose": "Bounds the encoded size of a claim value."
     },
     {
       "schema": "project",
@@ -916,11 +760,6 @@
       "schema": "environment",
       "pointer": "/$defs/secret/properties/secret",
       "purpose": "Names the operator-managed environment secret reference without containing the secret value."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/$defs/oid4vci/properties/tx_code/properties/required",
-      "purpose": "States whether OID4VCI authorization requires a transaction code before credential issuance."
     },
     {
       "schema": "environment",
@@ -1064,16 +903,6 @@
     },
     {
       "schema": "environment",
-      "pointer": "/properties/notary_state/properties/postgresql",
-      "purpose": "Selects the PostgreSQL trust binding used by Notary state storage."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/properties/notary_cel/properties/worker_memory_bytes",
-      "purpose": "Caps the memory available to one isolated Notary CEL worker."
-    },
-    {
-      "schema": "environment",
       "pointer": "/properties/deployment/properties/profile",
       "purpose": "Selects the deployment assurance profile whose service and transport conditions the environment must satisfy."
     },
@@ -1085,61 +914,21 @@
     {
       "schema": "environment",
       "pointer": "/allOf/1/then/properties/deployment",
-      "purpose": "Requires both Relay and Notary deployment services when a Notary-to-Relay binding is present."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/2/then/properties/deployment",
       "purpose": "Requires the Relay deployment service when Relay state storage is configured."
     },
     {
       "schema": "environment",
-      "pointer": "/allOf/3/then/properties/deployment",
-      "purpose": "Requires the Notary deployment service when Notary state storage is configured."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/4/then/properties/deployment",
-      "purpose": "Requires the Notary deployment service when a Notary CEL worker memory bound is configured."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/5/else/properties/callers",
-      "purpose": "When callers are authored without OID4VCI, requires the caller map to contain at least one binding; cross-file validation separately requires callers for Notary environments and rejects them for Relay-only topology."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/5/then/properties/deployment",
-      "purpose": "Requires the Notary deployment service when OID4VCI issuance is configured."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/6/else/properties/relay",
+      "pointer": "/allOf/2/else/properties/relay",
       "purpose": "Applies non-local HTTPS constraints to the Relay origin, issuer, and key-set bindings."
     },
     {
       "schema": "environment",
-      "pointer": "/allOf/6/else/properties/oid4vci",
-      "purpose": "Applies non-local HTTPS constraints to public OID4VCI endpoints."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/6/else/properties/oid4vci/properties/representative_issuance",
-      "purpose": "Applies non-local HTTPS constraints to representative issuance."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/6/else/properties/oid4vci/properties/authorization_server",
-      "purpose": "Applies non-local HTTPS constraints to all configured OID4VCI authorization-server endpoints."
-    },
-    {
-      "schema": "environment",
-      "pointer": "/allOf/6/if/properties/deployment",
+      "pointer": "/allOf/2/if/properties/deployment",
       "purpose": "Matches the local deployment profile before relaxing public endpoint transport constraints."
     },
     {
       "schema": "environment",
-      "pointer": "/allOf/6/if/properties/deployment/properties/profile",
+      "pointer": "/allOf/2/if/properties/deployment/properties/profile",
       "purpose": "Selects the local-profile condition used by the environment transport-validation branch."
     },
     {

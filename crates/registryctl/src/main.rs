@@ -26,11 +26,6 @@ fn main() -> ExitCode {
     if registry_relay::rhai_worker::is_worker_invocation(std::env::args_os()) {
         return registry_relay::rhai_worker::run_worker_stdio();
     }
-    if is_exact_internal_mode("__registryctl-cel-worker-v1") {
-        registry_notary_server::cel_worker::run_stdio_worker();
-        return ExitCode::SUCCESS;
-    }
-
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -264,7 +259,7 @@ enum DeployCommand {
         after_help = "Governed handoff:\n  Input owner: approved-set owner and installed Registry Stack release\n  Output owner: deployment operator\n  Mutation: creates or safely regenerates only the selected managed package directory; does not activate it\n  Next command: registryctl deploy verify --package <directory>"
     )]
     Generate {
-        /// Verified three-lane approved baseline set.
+        /// Verified two-lane Relay approved baseline set.
         #[arg(long)]
         approved_set: PathBuf,
         /// Absent, empty, or verified managed package directory.
@@ -334,7 +329,7 @@ enum TrustCommand {
         #[command(subcommand)]
         command: TrustBundleCommand,
     },
-    /// Assemble the exact three independently verified product lanes.
+    /// Assemble the exact two independently verified Relay lanes.
     ApprovedSet {
         #[command(subcommand)]
         command: ApprovedSetCommand,
@@ -470,9 +465,6 @@ enum ApprovedSetCommand {
         /// Verified relay-consultation signed artifact directory.
         #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
         relay_consultation: Option<PathBuf>,
-        /// Verified notary signed artifact directory.
-        #[arg(long, value_name = "SIGNED_ARTIFACT_DIRECTORY")]
-        notary: Option<PathBuf>,
         /// New immutable approved baseline set file.
         #[arg(long, value_name = "FILE")]
         output_file: PathBuf,
@@ -563,7 +555,6 @@ enum XwFormat {
 enum Lane {
     RelayPublic,
     RelayConsultation,
-    Notary,
 }
 
 impl From<Lane> for registry_platform_config::ProductAcceptanceLaneV1 {
@@ -571,7 +562,6 @@ impl From<Lane> for registry_platform_config::ProductAcceptanceLaneV1 {
         match value {
             Lane::RelayPublic => Self::RelayPublic,
             Lane::RelayConsultation => Self::RelayConsultation,
-            Lane::Notary => Self::Notary,
         }
     }
 }
@@ -581,7 +571,6 @@ impl From<Lane> for ApprovedLaneV1 {
         match value {
             Lane::RelayPublic => Self::RelayPublic,
             Lane::RelayConsultation => Self::RelayConsultation,
-            Lane::Notary => Self::Notary,
         }
     }
 }
@@ -893,10 +882,6 @@ fn run_dev(
                 environment
             );
             println!("{}", dev_api_line("Relay API", &report.relay_api_url)?);
-            println!(
-                "{}",
-                dev_api_line("Evidence API", &report.evidence_api_url)?
-            );
             println!("Source mode: {}", json_enum(&report.source_mode)?);
             if let Some(command) = &report.records_denied_command {
                 println!("Records denied request: {command}");
@@ -904,7 +889,6 @@ fn run_dev(
             if let Some(command) = &report.records_request_command {
                 println!("Records request: {command}");
             }
-            println!("Evidence request: {}", report.evidence_request_command);
             println!("Smoke: {}", report.smoke_command);
             println!("Logs: {}", report.logs_command);
             println!("Down: {}", report.down_command);
@@ -930,17 +914,12 @@ fn run_dev(
                         );
                     }
                     println!("{}", dev_api_line("Relay API", &report.relay_api_url)?);
-                    println!(
-                        "{}",
-                        dev_api_line("Evidence API", &report.evidence_api_url)?
-                    );
                     if let Some(command) = &report.records_denied_command {
                         println!("Records denied request: {command}");
                     }
                     if let Some(command) = &report.records_request_command {
                         println!("Records request: {command}");
                     }
-                    println!("Evidence request: {}", report.evidence_request_command);
                 }
             }
         }
@@ -1228,18 +1207,14 @@ fn run_doctor(
     if let Some(lock) = release_lock.as_ref() {
         let images = lock.managed_images();
         let available = daemon_available
-            && [
-                images.relay(),
-                images.notary(),
-                images.postgresql_state_plane(),
-            ]
-            .into_iter()
-            .all(|image| {
-                Command::new("docker")
-                    .args(["image", "inspect", "--format", "{{.Id}}", image])
-                    .output()
-                    .is_ok_and(|output| output.status.success())
-            });
+            && [images.relay(), images.postgresql_state_plane()]
+                .into_iter()
+                .all(|image| {
+                    Command::new("docker")
+                        .args(["image", "inspect", "--format", "{{.Id}}", image])
+                        .output()
+                        .is_ok_and(|output| output.status.success())
+                });
         checks.push(if available {
             DoctorCheckV1::ready("locked_images")
         } else {
@@ -1656,7 +1631,6 @@ fn run_trust(project_dir: Option<&Path>, command: TrustCommand) -> CliResult {
                 preceding_set,
                 relay_public,
                 relay_consultation,
-                notary,
                 output_file,
                 format,
             } => {
@@ -1668,7 +1642,6 @@ fn run_trust(project_dir: Option<&Path>, command: TrustCommand) -> CliResult {
                     preceding_set,
                     relay_public,
                     relay_consultation,
-                    notary,
                     output_file,
                 })
                 .map_err(CliFailure::domain)?;
@@ -2028,7 +2001,6 @@ fn render_project_test_report(report: &registryctl::ProjectCommandReport, trace:
                 ("inputs", &fixture.inputs),
                 ("calls", &fixture.calls),
                 ("outputs", &fixture.outputs),
-                ("claims", &fixture.claims),
             ] {
                 if !values.is_empty() {
                     write!(output, "\n    {label}: {}", human_list(values))
@@ -2267,7 +2239,7 @@ fn render_acceptance_lane(lane: registry_platform_config::ProductAcceptanceLaneV
         registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
             "relay-consultation"
         }
-        registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+        _ => "unsupported",
     }
 }
 
@@ -2276,14 +2248,8 @@ fn render_acceptance_product(
 ) -> &'static str {
     match product {
         registry_platform_config::ProductAcceptanceProductV1::RegistryRelay => "registry-relay",
-        registry_platform_config::ProductAcceptanceProductV1::RegistryNotary => "registry-notary",
+        _ => "unsupported",
     }
-}
-
-fn is_exact_internal_mode(expected: &str) -> bool {
-    let mut args = std::env::args_os();
-    let _program = args.next();
-    args.next().as_deref() == Some(OsStr::new(expected)) && args.next().is_none()
 }
 
 #[cfg(test)]

@@ -9,11 +9,10 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::SigningKey;
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use registry_platform_config::ProductAcceptanceLaneV1;
 use registry_platform_crypto::PublicJwk;
@@ -22,14 +21,7 @@ use zeroize::Zeroizing;
 const DEV_SECRET_ROOT: &str = "/run/registry/dev-secrets";
 const DEV_PUBLIC_ROOT: &str = "/run/registry/dev-public";
 const SYNTHETIC_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
-const DEV_WORKLOAD_ISSUER: &str = "https://registryctl-local-notary.invalid";
-const DEV_WORKLOAD_KID: &str = "registryctl-local-workload";
-const DEV_NOTARY_RUNTIME_SIGNING_KID: &str = "registryctl-local-notary-runtime-issuer";
-const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
-const DEV_WORKLOAD_AUDIENCE: &str = "registry-relay";
-const DEV_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
 const DEV_SYNTHETIC_SOURCE_PRIVATE_CIDR: &str = "10.89.0.3/32";
-const DEV_RELAY_CONSULTATION_PRIVATE_CIDR: &str = "10.89.0.4/32";
 const DEV_SYNTHETIC_SOURCE_CA_PATH: &str = "/run/registry/dev-public/synthetic-source-tls.crt";
 
 const RELAY_PUBLIC_AUDIT_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
@@ -39,13 +31,6 @@ const RELAY_DATABASE_ENV: &str = "REGISTRY_RELAY_CONSULTATION_DATABASE_URL";
 const RELAY_MIGRATION_DATABASE_ENV: &str = "REGISTRY_RELAY_CONSULTATION_MIGRATION_DATABASE_URL";
 const RELAY_MAINTENANCE_DATABASE_ENV: &str = "REGISTRY_RELAY_CONSULTATION_MAINTENANCE_DATABASE_URL";
 const RELAY_READER_DATABASE_ENV: &str = "REGISTRY_RELAY_CONSULTATION_READER_DATABASE_URL";
-const NOTARY_AUDIT_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
-const NOTARY_MIGRATION_DATABASE_ENV: &str = "REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL";
-const NOTARY_DATABASE_ENV: &str = "REGISTRY_NOTARY_POSTGRES_RUNTIME_URL";
-const NOTARY_MAINTENANCE_DATABASE_ENV: &str = "REGISTRY_NOTARY_POSTGRES_MAINTENANCE_URL";
-const NOTARY_READER_DATABASE_ENV: &str = "REGISTRY_NOTARY_POSTGRES_READER_URL";
-const NOTARY_WORKLOAD_PUBLIC_JWK_ENV: &str = "REGISTRY_NOTARY_WORKLOAD_PUBLIC_JWK";
-
 const POSTGRES_HOST: &str = "registry-postgres";
 const POSTGRES_PORT: u16 = 5432;
 const POSTGRES_ADMIN_ROLE: &str = "registry_stack_bootstrap";
@@ -55,22 +40,10 @@ const RELAY_MIGRATOR_ROLE: &str = "registry_relay_migrator";
 const RELAY_RUNTIME_ROLE: &str = "registry_relay_runtime";
 const RELAY_MAINTENANCE_ROLE: &str = "registry_relay_maintenance";
 const RELAY_READER_ROLE: &str = "registry_relay_reader";
-const NOTARY_DATABASE: &str = "registry_notary";
-const NOTARY_OWNER_ROLE: &str = "registry_notary_owner";
-const NOTARY_MIGRATOR_ROLE: &str = "registry_notary_migrator";
-const NOTARY_RUNTIME_ROLE: &str = "registry_notary_runtime";
-const NOTARY_MAINTENANCE_ROLE: &str = "registry_notary_maintenance";
-const NOTARY_READER_ROLE: &str = "registry_notary_reader";
-
-const CALLER_TOKEN_FILE: &str = "caller-token";
 const RELAY_MATCH_TOKEN_FILE: &str = "relay-match-token";
 const RELAY_NO_MATCH_TOKEN_FILE: &str = "relay-no-match-token";
-const WORKLOAD_TOKEN_FILE: &str = "notary-relay-token";
-const WORKLOAD_PUBLIC_JWK_FILE: &str = "notary-workload-public.jwk";
-const WORKLOAD_JWKS_FILE: &str = "notary-workload-jwks.json";
 const POSTGRES_TLS_CERTIFICATE_FILE: &str = "postgres-tls.crt";
 const POSTGRES_TLS_PRIVATE_KEY_FILE: &str = "postgres-tls.key";
-const NOTARY_SIGNING_KEY_FILE: &str = "notary-signing-key.jwk";
 const POSTGRES_ADMIN_PASSWORD_FILE: &str = "postgres-admin-password";
 const SYNTHETIC_CONTROL_TOKEN_FILE: &str = "control-token";
 const SYNTHETIC_TLS_CERTIFICATE_FILE: &str = "tls.crt";
@@ -85,9 +58,6 @@ const RELAY_PUBLIC_SERVE_ENV_FILE: &str = "relay-public-serve.env";
 const RELAY_CONSULTATION_PREPARE_ENV_FILE: &str = "relay-consultation-prepare.env";
 const RELAY_CONSULTATION_INITIALIZE_ENV_FILE: &str = "relay-consultation-initialize.env";
 const RELAY_CONSULTATION_SERVE_ENV_FILE: &str = "relay-consultation-serve.env";
-const NOTARY_PREPARE_ENV_FILE: &str = "notary-prepare.env";
-const NOTARY_INITIALIZE_ENV_FILE: &str = "notary-initialize.env";
-const NOTARY_SERVE_ENV_FILE: &str = "notary-serve.env";
 const POSTGRES_BOOTSTRAP_ENV_FILE: &str = "postgres-bootstrap.env";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,22 +81,11 @@ pub(crate) enum DevSourceCredentialProfile {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub(crate) struct DevIssuanceCredentialRequirement {
-    pub(crate) issuer: String,
-    pub(crate) signing_kid: String,
-    pub(crate) private_jwk_env: String,
-}
-
-#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct DevCredentialRequirements {
     pub(crate) project_id: String,
     pub(crate) environment_id: String,
-    pub(crate) service_id: String,
-    pub(crate) caller_id: String,
-    pub(crate) caller_fingerprint_env: String,
     pub(crate) relay_api_keys: Option<DevRelayApiKeyRequirements>,
     pub(crate) source: DevSourceCredentialProfile,
-    pub(crate) issuance: Option<DevIssuanceCredentialRequirement>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -134,13 +93,6 @@ pub(crate) struct DevRelayApiKeyRequirements {
     pub(crate) match_principal: String,
     pub(crate) no_match_principal: String,
     pub(crate) scopes: Vec<String>,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct DevCallerCredentialProjection {
-    pub(crate) id: String,
-    pub(crate) fingerprint_env: String,
-    pub(crate) token_file: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -152,23 +104,6 @@ pub(crate) struct DevRelayApiKeyProjection {
     pub(crate) no_match_fingerprint_env: &'static str,
     pub(crate) match_token_file: String,
     pub(crate) no_match_token_file: String,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct DevRelayOidcProjection {
-    pub(crate) issuer: String,
-    pub(crate) jwks_file: String,
-    pub(crate) public_jwk: String,
-    pub(crate) audience: String,
-    pub(crate) client_id: String,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub(crate) struct DevNotaryRelayProjection {
-    pub(crate) base_url: String,
-    pub(crate) workload_client_id: String,
-    pub(crate) token_file: String,
-    pub(crate) allowed_private_cidr: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -186,19 +121,10 @@ pub(crate) struct DevDatabaseCredentialProjection {
     pub(crate) relay_runtime_role: &'static str,
     pub(crate) relay_maintenance_role: &'static str,
     pub(crate) relay_reader_role: &'static str,
-    pub(crate) notary_owner_role: &'static str,
-    pub(crate) notary_migrator_role: &'static str,
-    pub(crate) notary_runtime_role: &'static str,
-    pub(crate) notary_maintenance_role: &'static str,
-    pub(crate) notary_reader_role: &'static str,
     pub(crate) relay_database_env: &'static str,
     pub(crate) relay_migration_database_env: &'static str,
     pub(crate) relay_maintenance_database_env: &'static str,
     pub(crate) relay_reader_database_env: &'static str,
-    pub(crate) notary_database_env: &'static str,
-    pub(crate) notary_migration_database_env: &'static str,
-    pub(crate) notary_maintenance_database_env: &'static str,
-    pub(crate) notary_reader_database_env: &'static str,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -229,15 +155,6 @@ pub(crate) enum DevSourceCredentialProjection {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub(crate) struct DevIssuanceCredentialProjection {
-    pub(crate) issuer: String,
-    pub(crate) signing_kid: String,
-    pub(crate) private_jwk_env: String,
-    pub(crate) public_jwk: String,
-    pub(crate) public_jwk_file: String,
-}
-
-#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct DevLaneSignerProjection {
     pub(crate) lane: ProductAcceptanceLaneV1,
     pub(crate) signer_id: String,
@@ -259,42 +176,21 @@ pub(crate) struct DevActionCredentialProjection {
     pub(crate) relay_consultation_prepare: DevActionCredentialLocator,
     pub(crate) relay_consultation_initialize: DevActionCredentialLocator,
     pub(crate) relay_consultation_serve: DevActionCredentialLocator,
-    pub(crate) notary_prepare: DevActionCredentialLocator,
-    pub(crate) notary_initialize: DevActionCredentialLocator,
-    pub(crate) notary_serve: DevActionCredentialLocator,
     pub(crate) postgres_bootstrap: DevActionCredentialLocator,
 }
 
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct DevCredentialPublicProjection {
-    pub(crate) caller: DevCallerCredentialProjection,
     pub(crate) relay_api_keys: Option<DevRelayApiKeyProjection>,
-    pub(crate) relay_oidc: DevRelayOidcProjection,
-    pub(crate) notary_relay: DevNotaryRelayProjection,
     pub(crate) databases: DevDatabaseCredentialProjection,
     pub(crate) source: DevSourceCredentialProjection,
     pub(crate) synthetic_source_transport: Option<DevSyntheticSourceTransportProjection>,
-    pub(crate) issuance: Option<DevIssuanceCredentialProjection>,
-    pub(crate) lane_signers: [DevLaneSignerProjection; 3],
+    pub(crate) lane_signers: [DevLaneSignerProjection; 2],
     pub(crate) actions: DevActionCredentialProjection,
 }
 
 struct LaneSigningCredential {
     projection: DevLaneSignerProjection,
-    private_jwk: Zeroizing<String>,
-    public_jwk: String,
-}
-
-struct IssuanceCredential {
-    projection: DevIssuanceCredentialProjection,
-    private_jwk: Zeroizing<String>,
-    public_jwk: String,
-}
-
-/// Runtime-only fallback signing material for a Notary configuration that does
-/// not declare issuance. It exists for one disposable dev runtime and is never
-/// reused as product-lane trust material or exported as a public trust input.
-struct NotaryRuntimeSigningCredential {
     private_jwk: Zeroizing<String>,
     public_jwk: String,
 }
@@ -306,11 +202,6 @@ struct DatabaseCredentialSet {
     relay_runtime: Zeroizing<String>,
     relay_maintenance: Zeroizing<String>,
     relay_reader: Zeroizing<String>,
-    notary_owner: Zeroizing<String>,
-    notary_migrator: Zeroizing<String>,
-    notary_runtime: Zeroizing<String>,
-    notary_maintenance: Zeroizing<String>,
-    notary_reader: Zeroizing<String>,
 }
 
 struct TlsCredential {
@@ -344,23 +235,15 @@ enum SourceCredential {
 /// private material.
 pub(crate) struct PreparedDevCredentialClosure {
     projection: DevCredentialPublicProjection,
-    caller_token: Zeroizing<String>,
     relay_match_token: Option<Zeroizing<String>>,
     relay_no_match_token: Option<Zeroizing<String>>,
-    workload_private_jwk: Zeroizing<String>,
-    workload_public_jwk: String,
-    workload_jwks: String,
-    workload_token: Zeroizing<String>,
     relay_public_audit: Zeroizing<String>,
     relay_consultation_audit: Zeroizing<String>,
-    notary_audit: Zeroizing<String>,
     relay_pseudonym: Zeroizing<String>,
     databases: DatabaseCredentialSet,
     postgres_tls: TlsCredential,
     source: SourceCredential,
-    issuance: Option<IssuanceCredential>,
-    notary_runtime_signing: Option<NotaryRuntimeSigningCredential>,
-    lane_signers: [LaneSigningCredential; 3],
+    lane_signers: [LaneSigningCredential; 2],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -383,38 +266,25 @@ pub(crate) struct PreparedDevSourceCredentialFiles {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedDevCredentialFiles {
     pub(crate) root: PathBuf,
-    pub(crate) caller_token: PathBuf,
     pub(crate) relay_match_token: Option<PathBuf>,
     pub(crate) relay_no_match_token: Option<PathBuf>,
-    pub(crate) workload_token: PathBuf,
-    pub(crate) workload_public_jwk: PathBuf,
-    pub(crate) workload_jwks: PathBuf,
     pub(crate) relay_public_prepare: PreparedDevActionCredentialFile,
     pub(crate) relay_public_initialize: PreparedDevActionCredentialFile,
     pub(crate) relay_public_serve: PreparedDevActionCredentialFile,
     pub(crate) relay_consultation_prepare: PreparedDevActionCredentialFile,
     pub(crate) relay_consultation_initialize: PreparedDevActionCredentialFile,
     pub(crate) relay_consultation_serve: PreparedDevActionCredentialFile,
-    pub(crate) notary_prepare: PreparedDevActionCredentialFile,
-    pub(crate) notary_initialize: PreparedDevActionCredentialFile,
-    pub(crate) notary_serve: PreparedDevActionCredentialFile,
     pub(crate) postgres_bootstrap: PreparedDevActionCredentialFile,
     pub(crate) postgres_admin_password: PathBuf,
-    pub(crate) notary_signing_key: PathBuf,
     pub(crate) postgres_tls_certificate: PathBuf,
     pub(crate) postgres_tls_private_key: PathBuf,
     pub(crate) source: Option<PreparedDevSourceCredentialFiles>,
-    pub(crate) issuance_public_jwk: Option<PathBuf>,
-    pub(crate) lane_public_jwks: [PathBuf; 3],
+    pub(crate) lane_public_jwks: [PathBuf; 2],
 }
 
 impl PreparedDevCredentialClosure {
     pub(crate) fn generate(requirements: DevCredentialRequirements) -> Result<Self> {
         validate_requirements(&requirements)?;
-        let caller_token = secret_token(32)?;
-        validate_api_key_entropy(&caller_token)
-            .map_err(|_| anyhow!("generated development caller credential failed validation"))?;
-        let caller_fingerprint = fingerprint_api_key(&caller_token);
         let (relay_match_token, relay_no_match_token) = if requirements.relay_api_keys.is_some() {
             let match_token = secret_token(32)?;
             let no_match_token = secret_token(32)?;
@@ -429,13 +299,6 @@ impl PreparedDevCredentialClosure {
             (None, None)
         };
 
-        let (workload_private_jwk, workload_public_jwk) = generate_ed25519_jwk(DEV_WORKLOAD_KID)
-            .context("failed to generate the development workload identity")?;
-        let workload_jwks = workload_jwks_from_private(&workload_private_jwk)
-            .context("failed to project the development workload identity")?;
-        let workload_token =
-            sign_dev_workload_jwt(&workload_private_jwk, &requirements.service_id)?;
-
         let lane_signers = [
             generate_lane_signer(
                 ProductAcceptanceLaneV1::RelayPublic,
@@ -447,37 +310,16 @@ impl PreparedDevCredentialClosure {
                 &requirements.project_id,
                 &requirements.environment_id,
             )?,
-            generate_lane_signer(
-                ProductAcceptanceLaneV1::Notary,
-                &requirements.project_id,
-                &requirements.environment_id,
-            )?,
         ];
-        let issuance = requirements
-            .issuance
-            .as_ref()
-            .map(generate_issuance_credential)
-            .transpose()?;
-        let notary_runtime_signing = if issuance.is_none() {
-            Some(generate_notary_runtime_signing_credential()?)
-        } else {
-            None
-        };
         let source = generate_source_credential(&requirements.source)?;
         let postgres_tls = generate_tls_credential(POSTGRES_HOST)?;
         let databases = DatabaseCredentialSet::generate()?;
         let relay_public_audit = secret_token(48)?;
         let relay_consultation_audit = secret_token(48)?;
-        let notary_audit = secret_token(48)?;
         let relay_pseudonym = secret_token(48)?;
 
         let source_projection = source_projection(&requirements.source);
         let projection = DevCredentialPublicProjection {
-            caller: DevCallerCredentialProjection {
-                id: requirements.caller_id,
-                fingerprint_env: requirements.caller_fingerprint_env,
-                token_file: secret_container_path(CALLER_TOKEN_FILE),
-            },
             relay_api_keys: requirements
                 .relay_api_keys
                 .map(|keys| DevRelayApiKeyProjection {
@@ -490,19 +332,6 @@ impl PreparedDevCredentialClosure {
                     match_token_file: secret_container_path(RELAY_MATCH_TOKEN_FILE),
                     no_match_token_file: secret_container_path(RELAY_NO_MATCH_TOKEN_FILE),
                 }),
-            relay_oidc: DevRelayOidcProjection {
-                issuer: DEV_WORKLOAD_ISSUER.to_string(),
-                jwks_file: public_container_path(WORKLOAD_JWKS_FILE),
-                public_jwk: workload_public_jwk.clone(),
-                audience: DEV_WORKLOAD_AUDIENCE.to_string(),
-                client_id: DEV_WORKLOAD_CLIENT.to_string(),
-            },
-            notary_relay: DevNotaryRelayProjection {
-                base_url: "http://10.89.0.4:8080".to_string(),
-                workload_client_id: DEV_WORKLOAD_CLIENT.to_string(),
-                token_file: "/run/secrets/relay-workload-token".to_string(),
-                allowed_private_cidr: DEV_RELAY_CONSULTATION_PRIVATE_CIDR.to_string(),
-            },
             databases: DevDatabaseCredentialProjection {
                 root_certificate_path: "/run/secrets/postgresql-ca.pem".to_string(),
                 postgres_admin_role: POSTGRES_ADMIN_ROLE,
@@ -511,19 +340,10 @@ impl PreparedDevCredentialClosure {
                 relay_runtime_role: RELAY_RUNTIME_ROLE,
                 relay_maintenance_role: RELAY_MAINTENANCE_ROLE,
                 relay_reader_role: RELAY_READER_ROLE,
-                notary_owner_role: NOTARY_OWNER_ROLE,
-                notary_migrator_role: NOTARY_MIGRATOR_ROLE,
-                notary_runtime_role: NOTARY_RUNTIME_ROLE,
-                notary_maintenance_role: NOTARY_MAINTENANCE_ROLE,
-                notary_reader_role: NOTARY_READER_ROLE,
                 relay_database_env: RELAY_DATABASE_ENV,
                 relay_migration_database_env: RELAY_MIGRATION_DATABASE_ENV,
                 relay_maintenance_database_env: RELAY_MAINTENANCE_DATABASE_ENV,
                 relay_reader_database_env: RELAY_READER_DATABASE_ENV,
-                notary_database_env: NOTARY_DATABASE_ENV,
-                notary_migration_database_env: NOTARY_MIGRATION_DATABASE_ENV,
-                notary_maintenance_database_env: NOTARY_MAINTENANCE_DATABASE_ENV,
-                notary_reader_database_env: NOTARY_READER_DATABASE_ENV,
             },
             source: source_projection,
             synthetic_source_transport: (!matches!(
@@ -534,9 +354,6 @@ impl PreparedDevCredentialClosure {
                 root_certificate_path: DEV_SYNTHETIC_SOURCE_CA_PATH.to_string(),
                 allowed_private_cidr: DEV_SYNTHETIC_SOURCE_PRIVATE_CIDR.to_string(),
             }),
-            issuance: issuance
-                .as_ref()
-                .map(|credential| credential.projection.clone()),
             lane_signers: lane_signers
                 .each_ref()
                 .map(|credential| credential.projection.clone()),
@@ -544,26 +361,17 @@ impl PreparedDevCredentialClosure {
         };
         let closure = Self {
             projection,
-            caller_token,
             relay_match_token,
             relay_no_match_token,
-            workload_private_jwk: Zeroizing::new(workload_private_jwk),
-            workload_public_jwk,
-            workload_jwks,
-            workload_token: Zeroizing::new(workload_token),
             relay_public_audit,
             relay_consultation_audit,
-            notary_audit,
             relay_pseudonym,
             databases,
             postgres_tls,
             source,
-            issuance,
-            notary_runtime_signing,
             lane_signers,
         };
-        closure.validate_distinct_secrets(&caller_fingerprint)?;
-        closure.validate_notary_runtime_signing_separation()?;
+        closure.validate_distinct_secrets()?;
         Ok(closure)
     }
 
@@ -595,7 +403,6 @@ impl PreparedDevCredentialClosure {
 
     fn materialize_into(&self, root: &Path) -> Result<PreparedDevCredentialFiles> {
         let files = PreparedDevCredentialFiles::for_root(root, &self.projection);
-        write_new_owner_only(&files.caller_token, self.caller_token.as_bytes())?;
         if let (Some(path), Some(token)) = (&files.relay_match_token, &self.relay_match_token) {
             write_new_owner_only(path, token.as_bytes())?;
         }
@@ -603,13 +410,6 @@ impl PreparedDevCredentialClosure {
         {
             write_new_owner_only(path, token.as_bytes())?;
         }
-        write_new_owner_only(&files.workload_token, self.workload_token.as_bytes())?;
-        write_new_owner_only(
-            &files.workload_public_jwk,
-            self.workload_public_jwk.as_bytes(),
-        )?;
-        write_new_owner_only(&files.workload_jwks, self.workload_jwks.as_bytes())?;
-
         write_new_owner_only(
             &files.relay_public_prepare.host_path,
             env_file(&[(RELAY_PUBLIC_AUDIT_ENV, &self.relay_public_audit)]).as_bytes(),
@@ -707,71 +507,6 @@ impl PreparedDevCredentialClosure {
             env_file(&relay_serve).as_bytes(),
         )?;
 
-        let notary_migration_url = database_url(
-            NOTARY_MIGRATOR_ROLE,
-            &self.databases.notary_migrator,
-            NOTARY_DATABASE,
-        );
-        let notary_runtime_url = database_url(
-            NOTARY_RUNTIME_ROLE,
-            &self.databases.notary_runtime,
-            NOTARY_DATABASE,
-        );
-        let notary_maintenance_url = database_url(
-            NOTARY_MAINTENANCE_ROLE,
-            &self.databases.notary_maintenance,
-            NOTARY_DATABASE,
-        );
-        let notary_reader_url = database_url(
-            NOTARY_READER_ROLE,
-            &self.databases.notary_reader,
-            NOTARY_DATABASE,
-        );
-        write_new_owner_only(
-            &files.notary_prepare.host_path,
-            env_file(&[
-                (NOTARY_AUDIT_ENV, &self.notary_audit),
-                (NOTARY_MIGRATION_DATABASE_ENV, &notary_migration_url),
-            ])
-            .as_bytes(),
-        )?;
-        write_new_owner_only(
-            &files.notary_initialize.host_path,
-            env_file(&[
-                (NOTARY_AUDIT_ENV, &self.notary_audit),
-                (NOTARY_DATABASE_ENV, &notary_runtime_url),
-            ])
-            .as_bytes(),
-        )?;
-        let caller_fingerprint = fingerprint_api_key(&self.caller_token);
-        let mut notary_serve = vec![
-            (NOTARY_AUDIT_ENV, self.notary_audit.as_str()),
-            (NOTARY_DATABASE_ENV, notary_runtime_url.as_str()),
-            (
-                NOTARY_MAINTENANCE_DATABASE_ENV,
-                notary_maintenance_url.as_str(),
-            ),
-            (NOTARY_READER_DATABASE_ENV, notary_reader_url.as_str()),
-            (
-                NOTARY_WORKLOAD_PUBLIC_JWK_ENV,
-                self.workload_public_jwk.as_str(),
-            ),
-            (
-                self.projection.caller.fingerprint_env.as_str(),
-                caller_fingerprint.as_str(),
-            ),
-        ];
-        if let Some(issuance) = &self.issuance {
-            notary_serve.push((
-                issuance.projection.private_jwk_env.as_str(),
-                issuance.private_jwk.as_str(),
-            ));
-        }
-        write_new_owner_only(
-            &files.notary_serve.host_path,
-            env_file(&notary_serve).as_bytes(),
-        )?;
-
         let postgres_bootstrap = [
             (
                 "REGISTRY_RELAY_MIGRATOR_PASSWORD",
@@ -789,22 +524,6 @@ impl PreparedDevCredentialClosure {
                 "REGISTRY_RELAY_READER_PASSWORD",
                 self.databases.relay_reader.as_str(),
             ),
-            (
-                "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
-                self.databases.notary_migrator.as_str(),
-            ),
-            (
-                "REGISTRY_NOTARY_RUNTIME_PASSWORD",
-                self.databases.notary_runtime.as_str(),
-            ),
-            (
-                "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
-                self.databases.notary_maintenance.as_str(),
-            ),
-            (
-                "REGISTRY_NOTARY_READER_PASSWORD",
-                self.databases.notary_reader.as_str(),
-            ),
         ];
         write_new_owner_only(
             &files.postgres_bootstrap.host_path,
@@ -814,13 +533,6 @@ impl PreparedDevCredentialClosure {
             &files.postgres_admin_password,
             self.databases.postgres_admin.as_bytes(),
         )?;
-        let notary_signing_key = match (&self.issuance, &self.notary_runtime_signing) {
-            (Some(credential), None) => credential.private_jwk.as_str(),
-            (None, Some(credential)) => credential.private_jwk.as_str(),
-            _ => bail!("development Notary runtime signing authority is not closed"),
-        };
-        write_new_owner_only(&files.notary_signing_key, notary_signing_key.as_bytes())?;
-
         write_tls_files(
             &files.postgres_tls_certificate,
             &files.postgres_tls_private_key,
@@ -830,24 +542,17 @@ impl PreparedDevCredentialClosure {
         if let Some(source_files) = &files.source {
             materialize_source(source_files, &self.source)?;
         }
-        if let (Some(path), Some(issuance)) = (&files.issuance_public_jwk, &self.issuance) {
-            write_new_owner_only(path, issuance.public_jwk.as_bytes())?;
-        }
         for (path, signer) in files.lane_public_jwks.iter().zip(&self.lane_signers) {
             write_new_owner_only(path, signer.public_jwk.as_bytes())?;
         }
         Ok(files)
     }
 
-    fn validate_distinct_secrets(&self, caller_fingerprint: &str) -> Result<()> {
+    fn validate_distinct_secrets(&self) -> Result<()> {
         let mut values = Vec::new();
         values.extend([
-            self.caller_token.as_str(),
-            self.workload_private_jwk.as_str(),
-            self.workload_token.as_str(),
             self.relay_public_audit.as_str(),
             self.relay_consultation_audit.as_str(),
-            self.notary_audit.as_str(),
             self.relay_pseudonym.as_str(),
             self.postgres_tls.private_key.as_str(),
         ]);
@@ -859,12 +564,6 @@ impl PreparedDevCredentialClosure {
                 .iter()
                 .map(|credential| credential.private_jwk.as_str()),
         );
-        if let Some(issuance) = &self.issuance {
-            values.push(issuance.private_jwk.as_str());
-        }
-        if let Some(runtime) = &self.notary_runtime_signing {
-            values.push(runtime.private_jwk.as_str());
-        }
         match &self.source {
             SourceCredential::OperatorBound => {}
             SourceCredential::SyntheticUnauthenticated { control_token, tls } => {
@@ -892,7 +591,6 @@ impl PreparedDevCredentialClosure {
             ]),
         }
         if values.iter().any(|value| value.is_empty())
-            || values.contains(&caller_fingerprint)
             || self
                 .relay_match_token
                 .iter()
@@ -902,25 +600,6 @@ impl PreparedDevCredentialClosure {
             || values.iter().copied().collect::<BTreeSet<_>>().len() != values.len()
         {
             bail!("generated development credentials violated the closed separation invariant");
-        }
-        Ok(())
-    }
-
-    fn validate_notary_runtime_signing_separation(&self) -> Result<()> {
-        let Some(runtime) = &self.notary_runtime_signing else {
-            return Ok(());
-        };
-        let runtime_kid = PublicJwk::parse(&runtime.public_jwk)
-            .and_then(|jwk| jwk.jkt())
-            .context("failed to identify the development Notary runtime signing identity")?;
-        let lane_kids = self
-            .lane_signers
-            .iter()
-            .map(|lane| PublicJwk::parse(&lane.public_jwk).and_then(|jwk| jwk.jkt()))
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to identify the development lane signing identities")?;
-        if self.issuance.is_some() || lane_kids.contains(&runtime_kid) {
-            bail!("development Notary runtime signing identity is not isolated");
         }
         Ok(())
     }
@@ -935,15 +614,10 @@ impl DatabaseCredentialSet {
             relay_runtime: secret_token(32)?,
             relay_maintenance: secret_token(32)?,
             relay_reader: secret_token(32)?,
-            notary_owner: secret_token(32)?,
-            notary_migrator: secret_token(32)?,
-            notary_runtime: secret_token(32)?,
-            notary_maintenance: secret_token(32)?,
-            notary_reader: secret_token(32)?,
         })
     }
 
-    fn values(&self) -> [&str; 11] {
+    fn values(&self) -> [&str; 6] {
         [
             &self.postgres_admin,
             &self.relay_owner,
@@ -951,11 +625,6 @@ impl DatabaseCredentialSet {
             &self.relay_runtime,
             &self.relay_maintenance,
             &self.relay_reader,
-            &self.notary_owner,
-            &self.notary_migrator,
-            &self.notary_runtime,
-            &self.notary_maintenance,
-            &self.notary_reader,
         ]
     }
 }
@@ -994,7 +663,6 @@ impl PreparedDevCredentialFiles {
         });
         Self {
             root: root.to_path_buf(),
-            caller_token: root.join(CALLER_TOKEN_FILE),
             relay_match_token: projection
                 .relay_api_keys
                 .as_ref()
@@ -1003,9 +671,6 @@ impl PreparedDevCredentialFiles {
                 .relay_api_keys
                 .as_ref()
                 .map(|_| root.join(RELAY_NO_MATCH_TOKEN_FILE)),
-            workload_token: root.join(WORKLOAD_TOKEN_FILE),
-            workload_public_jwk: root.join(WORKLOAD_PUBLIC_JWK_FILE),
-            workload_jwks: root.join(WORKLOAD_JWKS_FILE),
             relay_public_prepare: action(
                 RELAY_PUBLIC_PREPARE_ENV_FILE,
                 &projection.actions.relay_public_prepare,
@@ -1030,29 +695,17 @@ impl PreparedDevCredentialFiles {
                 RELAY_CONSULTATION_SERVE_ENV_FILE,
                 &projection.actions.relay_consultation_serve,
             ),
-            notary_prepare: action(NOTARY_PREPARE_ENV_FILE, &projection.actions.notary_prepare),
-            notary_initialize: action(
-                NOTARY_INITIALIZE_ENV_FILE,
-                &projection.actions.notary_initialize,
-            ),
-            notary_serve: action(NOTARY_SERVE_ENV_FILE, &projection.actions.notary_serve),
             postgres_bootstrap: action(
                 POSTGRES_BOOTSTRAP_ENV_FILE,
                 &projection.actions.postgres_bootstrap,
             ),
             postgres_admin_password: root.join(POSTGRES_ADMIN_PASSWORD_FILE),
-            notary_signing_key: root.join(NOTARY_SIGNING_KEY_FILE),
             postgres_tls_certificate: root.join(POSTGRES_TLS_CERTIFICATE_FILE),
             postgres_tls_private_key: root.join(POSTGRES_TLS_PRIVATE_KEY_FILE),
             source,
-            issuance_public_jwk: projection
-                .issuance
-                .as_ref()
-                .map(|_| root.join("issuance-public.jwk")),
             lane_public_jwks: [
                 root.join("relay-public-signing-public.jwk"),
                 root.join("relay-consultation-signing-public.jwk"),
-                root.join("notary-signing-public.jwk"),
             ],
         }
     }
@@ -1062,8 +715,6 @@ fn validate_requirements(requirements: &DevCredentialRequirements) -> Result<()>
     for (name, value) in [
         ("project id", requirements.project_id.as_str()),
         ("environment id", requirements.environment_id.as_str()),
-        ("service id", requirements.service_id.as_str()),
-        ("caller id", requirements.caller_id.as_str()),
     ] {
         if value.is_empty()
             || value.len() > 128
@@ -1074,7 +725,6 @@ fn validate_requirements(requirements: &DevCredentialRequirements) -> Result<()>
             bail!("development credential {name} is outside the closed identifier grammar");
         }
     }
-    validate_env_name(&requirements.caller_fingerprint_env)?;
     if let Some(keys) = &requirements.relay_api_keys {
         for (name, value) in [
             ("Relay match principal", keys.match_principal.as_str()),
@@ -1111,18 +761,6 @@ fn validate_requirements(requirements: &DevCredentialRequirements) -> Result<()>
             }
         }
     }
-    if let Some(issuance) = &requirements.issuance {
-        validate_env_name(&issuance.private_jwk_env)?;
-        if issuance.issuer.is_empty()
-            || issuance.issuer.len() > 2048
-            || issuance.issuer.chars().any(char::is_control)
-        {
-            bail!("development issuance issuer is outside the closed locator grammar");
-        }
-        if issuance.signing_kid.is_empty() || issuance.signing_kid.len() > 128 {
-            bail!("development issuance signing kid is outside the closed identifier grammar");
-        }
-    }
     Ok(())
 }
 
@@ -1144,7 +782,7 @@ fn generate_lane_signer(
     project: &str,
     environment: &str,
 ) -> Result<LaneSigningCredential> {
-    let lane_name = lane_name(lane);
+    let lane_name = lane_name(lane)?;
     let kid = format!("registryctl-dev-{project}-{environment}-{lane_name}");
     let (private_jwk, public_jwk) = generate_ed25519_jwk(&kid)
         .context("failed to generate a disposable development lane signer")?;
@@ -1162,36 +800,9 @@ fn generate_lane_signer(
                 ProductAcceptanceLaneV1::RelayConsultation => {
                     "relay-consultation-signing-public.jwk"
                 }
-                ProductAcceptanceLaneV1::Notary => "notary-signing-public.jwk",
+                _ => bail!("development signing lane is not in the Relay lane set"),
             }),
         },
-        private_jwk: Zeroizing::new(private_jwk),
-        public_jwk,
-    })
-}
-
-fn generate_issuance_credential(
-    requirement: &DevIssuanceCredentialRequirement,
-) -> Result<IssuanceCredential> {
-    let (private_jwk, public_jwk) = generate_ed25519_jwk(&requirement.signing_kid)
-        .context("failed to generate disposable development issuance material")?;
-    Ok(IssuanceCredential {
-        projection: DevIssuanceCredentialProjection {
-            issuer: requirement.issuer.clone(),
-            signing_kid: requirement.signing_kid.clone(),
-            private_jwk_env: requirement.private_jwk_env.clone(),
-            public_jwk: public_jwk.clone(),
-            public_jwk_file: public_container_path("issuance-public.jwk"),
-        },
-        private_jwk: Zeroizing::new(private_jwk),
-        public_jwk,
-    })
-}
-
-fn generate_notary_runtime_signing_credential() -> Result<NotaryRuntimeSigningCredential> {
-    let (private_jwk, public_jwk) = generate_ed25519_jwk(DEV_NOTARY_RUNTIME_SIGNING_KID)
-        .context("failed to generate a disposable development Notary runtime signing identity")?;
-    Ok(NotaryRuntimeSigningCredential {
         private_jwk: Zeroizing::new(private_jwk),
         public_jwk,
     })
@@ -1355,9 +966,6 @@ fn action_projection() -> DevActionCredentialProjection {
         relay_consultation_prepare: locator(RELAY_CONSULTATION_PREPARE_ENV_FILE),
         relay_consultation_initialize: locator(RELAY_CONSULTATION_INITIALIZE_ENV_FILE),
         relay_consultation_serve: locator(RELAY_CONSULTATION_SERVE_ENV_FILE),
-        notary_prepare: locator(NOTARY_PREPARE_ENV_FILE),
-        notary_initialize: locator(NOTARY_INITIALIZE_ENV_FILE),
-        notary_serve: locator(NOTARY_SERVE_ENV_FILE),
         postgres_bootstrap: locator(POSTGRES_BOOTSTRAP_ENV_FILE),
     }
 }
@@ -1402,58 +1010,6 @@ fn generate_ed25519_jwk(kid: &str) -> Result<(String, String)> {
     ))
 }
 
-fn workload_jwks_from_private(private_jwk: &str) -> Result<String> {
-    let private: serde_json::Value =
-        serde_json::from_str(private_jwk).context("failed to parse workload private JWK")?;
-    let x = private["x"]
-        .as_str()
-        .ok_or_else(|| anyhow!("workload private JWK is missing its public member"))?;
-    serde_json::to_string_pretty(&serde_json::json!({
-        "keys": [{
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": x,
-            "alg": "EdDSA",
-            "kid": DEV_WORKLOAD_KID,
-            "use": "sig",
-        }]
-    }))
-    .context("failed to render workload JWKS")
-}
-
-fn sign_ed25519_compact_jwt(
-    private_jwk: &str,
-    header: &serde_json::Value,
-    claims: &serde_json::Value,
-) -> Result<String> {
-    let private: serde_json::Value =
-        serde_json::from_str(private_jwk).context("failed to parse private signing JWK")?;
-    let encoded_secret = private["d"]
-        .as_str()
-        .ok_or_else(|| anyhow!("private signing JWK is missing its private member"))?;
-    let secret = Zeroizing::new(
-        URL_SAFE_NO_PAD
-            .decode(encoded_secret)
-            .context("private signing JWK contains an invalid private member")?,
-    );
-    let secret: [u8; 32] = secret
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow!("private signing JWK has the wrong private member length"))?;
-    let secret = Zeroizing::new(secret);
-    let signing_key = SigningKey::from_bytes(&secret);
-    let header =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(header).context("failed to render JWT header")?);
-    let claims =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).context("failed to render JWT claims")?);
-    let signing_input = format!("{header}.{claims}");
-    let signature = signing_key.sign(signing_input.as_bytes());
-    Ok(format!(
-        "{signing_input}.{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    ))
-}
-
 fn generate_self_signed_tls_identity(subject_alt_names: Vec<String>) -> Result<(String, String)> {
     let rcgen::CertifiedKey { cert, key_pair } =
         rcgen::generate_simple_self_signed(subject_alt_names)
@@ -1475,33 +1031,6 @@ fn pem_block(label: &str, der: &[u8]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
-}
-
-fn sign_dev_workload_jwt(private_jwk: &str, service_id: &str) -> Result<String> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| anyhow!("system clock cannot issue a development workload credential"))?
-        .as_secs();
-    let header = serde_json::json!({
-        "alg": "EdDSA",
-        "kid": DEV_WORKLOAD_KID,
-        "typ": "at+jwt",
-    });
-    let scope = format!("registry:consult:{service_id}");
-    let claims = serde_json::json!({
-        "iss": DEV_WORKLOAD_ISSUER,
-        "sub": DEV_WORKLOAD_CLIENT,
-        "aud": DEV_WORKLOAD_AUDIENCE,
-        "client_id": DEV_WORKLOAD_CLIENT,
-        "azp": DEV_WORKLOAD_CLIENT,
-        "scope": scope,
-        "iat": now,
-        "nbf": now.saturating_sub(1),
-        "exp": now + DEV_WORKLOAD_LIFETIME_SECONDS,
-        "jti": secret_token(16)?.as_str(),
-    });
-    sign_ed25519_compact_jwt(private_jwk, &header, &claims)
-        .context("failed to issue the development workload credential")
 }
 
 fn generate_tls_credential(service_name: &str) -> Result<TlsCredential> {
@@ -1608,11 +1137,11 @@ fn synthetic_container_path(file: &str) -> String {
     format!("{SYNTHETIC_SECRET_ROOT}/{file}")
 }
 
-fn lane_name(lane: ProductAcceptanceLaneV1) -> &'static str {
+fn lane_name(lane: ProductAcceptanceLaneV1) -> Result<&'static str> {
     match lane {
-        ProductAcceptanceLaneV1::RelayPublic => "relay-public",
-        ProductAcceptanceLaneV1::RelayConsultation => "relay-consultation",
-        ProductAcceptanceLaneV1::Notary => "notary",
+        ProductAcceptanceLaneV1::RelayPublic => Ok("relay-public"),
+        ProductAcceptanceLaneV1::RelayConsultation => Ok("relay-consultation"),
+        _ => bail!("development signing lane is not in the Relay lane set"),
     }
 }
 
@@ -1620,11 +1149,7 @@ fn lane_name(lane: ProductAcceptanceLaneV1) -> &'static str {
 mod tests {
     use std::collections::BTreeMap;
 
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine as _;
-    use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
     use registry_platform_crypto::{PrivateJwk, PublicJwk};
-    use serde_json::Value;
     use tempfile::tempdir;
 
     use super::*;
@@ -1633,16 +1158,8 @@ mod tests {
         DevCredentialRequirements {
             project_id: "example-project".to_string(),
             environment_id: "local".to_string(),
-            service_id: "example-service".to_string(),
-            caller_id: "local-developer".to_string(),
-            caller_fingerprint_env: "REGISTRY_DEV_CALLER_FINGERPRINT".to_string(),
             relay_api_keys: None,
             source,
-            issuance: Some(DevIssuanceCredentialRequirement {
-                issuer: "http://127.0.0.1:4243".to_string(),
-                signing_kid: "registry-dev-issuer".to_string(),
-                private_jwk_env: "REGISTRY_NOTARY_ISSUER_JWK".to_string(),
-            }),
         }
     }
 
@@ -1684,28 +1201,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            projection.caller.token_file,
-            secret_container_path(files.caller_token.file_name().unwrap().to_str().unwrap())
-        );
-        assert_eq!(
-            projection.relay_oidc.jwks_file,
-            public_container_path(files.workload_jwks.file_name().unwrap().to_str().unwrap())
-        );
-        assert_eq!(
-            projection.relay_oidc.issuer,
-            "https://registryctl-local-notary.invalid"
-        );
-        assert_eq!(
-            projection.relay_oidc.jwks_file,
-            "/run/registry/dev-public/notary-workload-jwks.json"
-        );
-        assert_eq!(
-            projection.notary_relay.token_file,
-            "/run/secrets/relay-workload-token"
-        );
-        assert_eq!(projection.notary_relay.base_url, "http://10.89.0.4:8080");
-        assert_eq!(projection.notary_relay.allowed_private_cidr, "10.89.0.4/32");
         let source_transport = projection.synthetic_source_transport.as_ref().unwrap();
         assert_eq!(
             source_transport.root_certificate_path,
@@ -1726,9 +1221,6 @@ mod tests {
             &projection.actions.relay_consultation_prepare,
             &projection.actions.relay_consultation_initialize,
             &projection.actions.relay_consultation_serve,
-            &projection.actions.notary_prepare,
-            &projection.actions.notary_initialize,
-            &projection.actions.notary_serve,
             &projection.actions.postgres_bootstrap,
         ];
         let prepared_actions = [
@@ -1738,9 +1230,6 @@ mod tests {
             &files.relay_consultation_prepare,
             &files.relay_consultation_initialize,
             &files.relay_consultation_serve,
-            &files.notary_prepare,
-            &files.notary_initialize,
-            &files.notary_serve,
             &files.postgres_bootstrap,
         ];
         for (projected, prepared) in projected_actions.into_iter().zip(prepared_actions) {
@@ -1760,19 +1249,6 @@ mod tests {
                 public_container_path(prepared.file_name().unwrap().to_str().unwrap())
             );
         }
-        assert_eq!(
-            projection.issuance.as_ref().unwrap().public_jwk_file,
-            public_container_path(
-                files
-                    .issuance_public_jwk
-                    .as_ref()
-                    .unwrap()
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-            )
-        );
         let DevSourceCredentialProjection::SyntheticOAuthClientCredentials {
             source_client_id_file,
             source_client_secret_file,
@@ -1879,54 +1355,6 @@ mod tests {
                 .is_err());
             assert!(fs::read_dir(nested_target).unwrap().next().is_none());
         }
-    }
-
-    #[test]
-    fn caller_workload_and_jwks_are_internally_consistent() {
-        let closure = PreparedDevCredentialClosure::generate(requirements(
-            DevSourceCredentialProfile::SyntheticUnauthenticated,
-        ))
-        .unwrap();
-        let parent = tempdir().unwrap();
-        let files = closure
-            .materialize_owner_only(&parent.path().join("credentials"))
-            .unwrap();
-        let serve_env = fs::read_to_string(files.notary_serve.host_path).unwrap();
-        assert!(serve_env.contains(&format!(
-            "{}={}",
-            closure.projection.caller.fingerprint_env,
-            fingerprint_api_key(&closure.caller_token)
-        )));
-        let public: Value = serde_json::from_str(&closure.workload_public_jwk).unwrap();
-        let jwks: Value = serde_json::from_str(&closure.workload_jwks).unwrap();
-        assert_eq!(jwks["keys"][0], public);
-
-        let segments = closure.workload_token.split('.').collect::<Vec<_>>();
-        assert_eq!(segments.len(), 3);
-        let header: Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
-        let claims: Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
-        assert_eq!(header["kid"], DEV_WORKLOAD_KID);
-        assert_eq!(claims["iss"], closure.projection.relay_oidc.issuer);
-        assert_eq!(claims["aud"], closure.projection.relay_oidc.audience);
-        assert_eq!(claims["azp"], closure.projection.relay_oidc.client_id);
-        assert_eq!(claims["scope"], "registry:consult:example-service");
-
-        let x: [u8; 32] = URL_SAFE_NO_PAD
-            .decode(public["x"].as_str().unwrap())
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let signature =
-            Signature::from_slice(&URL_SAFE_NO_PAD.decode(segments[2]).unwrap()).unwrap();
-        VerifyingKey::from_bytes(&x)
-            .unwrap()
-            .verify(
-                format!("{}.{}", segments[0], segments[1]).as_bytes(),
-                &signature,
-            )
-            .unwrap();
     }
 
     #[test]
@@ -2047,29 +1475,6 @@ mod tests {
             ])
         );
 
-        let notary_prepare = parse(&files.notary_prepare.host_path);
-        let notary_initialize = parse(&files.notary_initialize.host_path);
-        let notary_serve = parse(&files.notary_serve.host_path);
-        assert_eq!(
-            keys(&notary_prepare),
-            expected(&[NOTARY_AUDIT_ENV, NOTARY_MIGRATION_DATABASE_ENV])
-        );
-        assert_eq!(
-            keys(&notary_initialize),
-            expected(&[NOTARY_AUDIT_ENV, NOTARY_DATABASE_ENV])
-        );
-        assert_eq!(
-            keys(&notary_serve),
-            expected(&[
-                NOTARY_AUDIT_ENV,
-                NOTARY_DATABASE_ENV,
-                NOTARY_MAINTENANCE_DATABASE_ENV,
-                NOTARY_READER_DATABASE_ENV,
-                NOTARY_WORKLOAD_PUBLIC_JWK_ENV,
-                "REGISTRY_DEV_CALLER_FINGERPRINT",
-                "REGISTRY_NOTARY_ISSUER_JWK",
-            ])
-        );
         assert_eq!(
             keys(&parse(&files.postgres_bootstrap.host_path)),
             expected(&[
@@ -2077,10 +1482,6 @@ mod tests {
                 "REGISTRY_RELAY_RUNTIME_PASSWORD",
                 "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
                 "REGISTRY_RELAY_READER_PASSWORD",
-                "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
-                "REGISTRY_NOTARY_RUNTIME_PASSWORD",
-                "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
-                "REGISTRY_NOTARY_READER_PASSWORD",
             ])
         );
     }
@@ -2102,17 +1503,12 @@ mod tests {
         let no_match_path = files.relay_no_match_token.unwrap();
         let match_token = fs::read_to_string(&match_path).unwrap();
         let no_match_token = fs::read_to_string(&no_match_path).unwrap();
-        let caller_token = fs::read_to_string(&files.caller_token).unwrap();
         assert_eq!(
-            [
-                match_token.as_str(),
-                no_match_token.as_str(),
-                caller_token.as_str()
-            ]
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-            .len(),
-            3
+            [match_token.as_str(), no_match_token.as_str()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2
         );
         let serve_env = fs::read_to_string(&files.relay_public_serve.host_path).unwrap();
         assert!(serve_env.contains(&format!(
@@ -2125,7 +1521,7 @@ mod tests {
             crate::project_authoring::LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
             fingerprint_api_key(&no_match_token)
         )));
-        for raw in [&match_token, &no_match_token, &caller_token] {
+        for raw in [&match_token, &no_match_token] {
             assert!(!serve_env.contains(raw));
         }
 
@@ -2152,7 +1548,6 @@ mod tests {
         for lane in [
             ProductAcceptanceLaneV1::RelayPublic,
             ProductAcceptanceLaneV1::RelayConsultation,
-            ProductAcceptanceLaneV1::Notary,
         ] {
             closure
                 .with_lane_private_jwk(lane, |text| {
@@ -2164,8 +1559,8 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert_eq!(private_values.len(), 3);
-        assert_eq!(public_thumbprints.len(), 3);
+        assert_eq!(private_values.len(), 2);
+        assert_eq!(public_thumbprints.len(), 2);
         assert_eq!(
             closure
                 .projection
@@ -2174,7 +1569,7 @@ mod tests {
                 .map(|signer| signer.kid.as_str())
                 .collect::<BTreeSet<_>>()
                 .len(),
-            3
+            2
         );
         for signer in &closure.projection.lane_signers {
             assert_eq!(
@@ -2185,86 +1580,12 @@ mod tests {
     }
 
     #[test]
-    fn absent_issuance_gets_an_isolated_runtime_signer_for_one_credential_closure() {
-        let mut first_requirements = requirements(DevSourceCredentialProfile::OperatorBound);
-        first_requirements.issuance = None;
-        let closure = PreparedDevCredentialClosure::generate(first_requirements).unwrap();
-        assert!(closure.issuance.is_none());
-        let runtime = closure.notary_runtime_signing.as_ref().unwrap();
-        let runtime_private: Value = serde_json::from_str(&runtime.private_jwk).unwrap();
-        assert_eq!(runtime_private["kid"], DEV_NOTARY_RUNTIME_SIGNING_KID);
-        let runtime_kid = PublicJwk::parse(&runtime.public_jwk)
-            .unwrap()
-            .jkt()
-            .unwrap();
-        let mut lane_private_values = BTreeSet::new();
-        let mut lane_kids = BTreeSet::new();
-        for lane in [
-            ProductAcceptanceLaneV1::RelayPublic,
-            ProductAcceptanceLaneV1::RelayConsultation,
-            ProductAcceptanceLaneV1::Notary,
-        ] {
-            closure
-                .with_lane_private_jwk(lane, |text| {
-                    let private = PrivateJwk::parse(text)?;
-                    lane_private_values.insert(text.to_string());
-                    lane_kids.insert(private.public().jkt()?);
-                    Ok(())
-                })
-                .unwrap();
-        }
-        assert!(!lane_private_values.contains(runtime.private_jwk.as_str()));
-        assert!(!lane_kids.contains(&runtime_kid));
-
-        let mut second_requirements = requirements(DevSourceCredentialProfile::OperatorBound);
-        second_requirements.issuance = None;
-        let second = PreparedDevCredentialClosure::generate(second_requirements).unwrap();
-        let second_runtime = second.notary_runtime_signing.as_ref().unwrap();
-        assert_ne!(
-            runtime_kid,
-            PublicJwk::parse(&second_runtime.public_jwk)
-                .unwrap()
-                .jkt()
-                .unwrap()
-        );
-
-        let parent = tempdir().unwrap();
-        let files = closure
-            .materialize_owner_only(&parent.path().join("credentials"))
-            .unwrap();
-        assert!(files.issuance_public_jwk.is_none());
-        assert!(
-            fs::read_to_string(&files.notary_signing_key).unwrap() == runtime.private_jwk.as_str()
-        );
-        let runtime_private_member = runtime_private["d"].as_str().unwrap();
-        for path in files
-            .lane_public_jwks
-            .iter()
-            .chain([&files.workload_public_jwk])
-        {
-            let text = fs::read_to_string(path).unwrap();
-            assert!(!text.contains(runtime_private_member));
-            assert_ne!(PublicJwk::parse(&text).unwrap().jkt().unwrap(), runtime_kid);
-        }
-        assert_eq!(
-            fs::read_dir(&files.root)
-                .unwrap()
-                .filter_map(|entry| entry.ok())
-                .filter_map(|entry| fs::read_to_string(entry.path()).ok())
-                .filter(|text| text.contains(runtime_private_member))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
     fn all_generated_secret_values_are_distinct() {
         let closure = PreparedDevCredentialClosure::generate(requirements(oauth_profile(
             DevOAuthCredentialProfile::Oauth2Bearer,
         )))
         .unwrap();
-        let fingerprint = fingerprint_api_key(&closure.caller_token);
-        closure.validate_distinct_secrets(&fingerprint).unwrap();
+        closure.validate_distinct_secrets().unwrap();
     }
 
     #[test]
@@ -2276,7 +1597,7 @@ mod tests {
             },
         ))
         .unwrap();
-        let sentinel = closure.caller_token.to_string();
+        let sentinel = closure.relay_public_audit.to_string();
         let files = closure
             .materialize_owner_only(&parent.path().join("credentials"))
             .unwrap();
@@ -2299,12 +1620,7 @@ mod tests {
         let files = closure
             .materialize_owner_only(&parent.path().join("credentials"))
             .unwrap();
-        for path in files
-            .lane_public_jwks
-            .iter()
-            .chain(files.issuance_public_jwk.iter())
-            .chain([&files.workload_public_jwk])
-        {
+        for path in &files.lane_public_jwks {
             PublicJwk::parse(&fs::read_to_string(path).unwrap()).unwrap();
             assert!(!fs::read_to_string(path).unwrap().contains("\"d\""));
         }

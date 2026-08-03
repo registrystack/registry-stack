@@ -82,7 +82,7 @@ fn compile_project_for_environment(
 
     let mut profiles = Vec::new();
     for (service_id, service) in &loaded.project.services {
-        if service.kind != ServiceKind::Evidence {
+        if service.kind != ServiceKind::ConsultationApi {
             continue;
         }
         for (consultation_name, consultation) in &service.consultations {
@@ -155,10 +155,7 @@ fn compile_project_for_environment(
                 .into_bytes()
                 .into_boxed_slice(),
         );
-        if environment.notary_relay.is_some() {
-            if profiles.is_empty() {
-                relay_consultation_private.clear();
-            }
+        if !profiles.is_empty() {
             let consultation_relay_config = generated_relay_config(
                 loaded,
                 environment_name,
@@ -212,36 +209,6 @@ fn compile_project_for_environment(
     } else {
         relay_consultation_private.clear();
     }
-    let mut notary_private = BTreeMap::new();
-    if let Some(notary_service) = &environment.deployment.notary {
-        let notary_config =
-            generated_notary_config(loaded, environment_name, environment, &profiles)?;
-        notary_private.insert(
-            PathBuf::from("config/notary.yaml"),
-            serde_norway::to_string(&notary_config)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
-        notary_private.insert(
-            PathBuf::from("descriptors/operations.json"),
-            canonical_json_line(&operational_descriptor(
-                "registry-notary",
-                &notary_service.service,
-                environment.deployment.profile,
-                profiles.len(),
-            ))?
-            .into_boxed_slice(),
-        );
-        notary_private.insert(
-            PathBuf::from("descriptors/secret-consumers.json"),
-            canonical_json_line(&secret_consumer_descriptor(
-                "registry-notary",
-                &notary_config,
-            ))?
-            .into_boxed_slice(),
-        );
-    }
-
     let reviewable_digest = closure_digest(&reviewable)?;
     let relay_digest = (!relay_private.is_empty())
         .then(|| closure_digest(&relay_private))
@@ -249,31 +216,20 @@ fn compile_project_for_environment(
     let relay_consultation_digest = (!relay_consultation_private.is_empty())
         .then(|| closure_digest(&relay_consultation_private))
         .transpose()?;
-    let notary_digest = (!notary_private.is_empty())
-        .then(|| closure_digest(&notary_private))
-        .transpose()?;
     let closure_digests = json!({
         "reviewable": reviewable_digest,
         "relay": relay_digest,
         "relay_consultation": relay_consultation_digest,
-        "notary": notary_digest,
     });
-    let disclosure_profiles = disclosure_review_profiles(&loaded.project);
-    let disclosure_digest = digest_json(
-        &serde_json::to_value(&disclosure_profiles)
-            .context("failed to serialize disclosure review profiles")?,
-    )?;
     let baseline_state = baseline.map(|baseline| &baseline.approval_state);
-    let semantic_changes = semantic_change_records(loaded, baseline_state, &disclosure_digest);
-    let semantic_impact =
-        project_semantic_impact_report(loaded, baseline_state, &disclosure_digest);
+    let semantic_changes = semantic_change_records(loaded, baseline_state);
+    let semantic_impact = project_semantic_impact_report(loaded, baseline_state);
     let entity_materializations = generated_entity_materialization_review(loaded, environment)?;
     let review = json!({
         "schema": REVIEW_SCHEMA,
         "registry": loaded.project.registry.id,
         "compiler_version": env!("CARGO_PKG_VERSION"),
         "baseline": if baseline.is_some() { "verified_signed_bundle" } else { "initial_without_baseline" },
-        "disclosure_profiles": disclosure_profiles,
         "semantic_changes": semantic_changes,
         "environment": environment_name,
         "entity_materializations": entity_materializations,
@@ -294,7 +250,6 @@ fn compile_project_for_environment(
         "report_digest": sha256_uri(&canonical_json_line(&review)?),
         "authored_input_digest": loaded.authored_hash,
         "semantic_digests": loaded.semantic_digests,
-        "disclosure_digest": disclosure_digest,
         "promotion_projection": project_promotion_projection(loaded, environment)?,
         "generated_closure_digests": closure_digests,
         "baseline": baselines.filter(|baselines| !baselines.is_empty()).map(|baselines| json!({
@@ -306,8 +261,6 @@ fn compile_project_for_environment(
     let fixture_profiles = profiles
         .iter()
         .map(|profile| FixtureProfile {
-            service_id: profile.service_id.clone(),
-            consultation_id: profile.consultation_name.clone(),
             integration_alias: profile.integration_alias.clone(),
             id: profile.id.clone(),
             version: profile.version.clone(),
@@ -321,7 +274,6 @@ fn compile_project_for_environment(
         reviewable,
         relay_private,
         relay_consultation_private,
-        notary_private,
         review,
         approval_state,
         explanation,
@@ -339,7 +291,6 @@ fn operational_descriptor(
 ) -> Value {
     let config = match product {
         "registry-relay" => "config/relay.yaml",
-        "registry-notary" => "config/notary.yaml",
         _ => "config.yaml",
     };
     json!({
@@ -2461,10 +2412,10 @@ fn consultation_contract_document(
         "output": pack_spec.get("output"),
         "authorization": {
             "workload": environment
-                .notary_relay
+                .relay
                 .as_ref()
-                .ok_or_else(|| anyhow!("Notary-to-Relay workload binding is absent"))?
-                .workload_client_id,
+                .and_then(|relay| relay.allowed_clients.first())
+                .ok_or_else(|| anyhow!("Relay consultation client is absent"))?,
             "required_scope": bounded_scope(&["registry", "consult", service_id])?,
             "purposes": [service.purpose.as_str()],
             "legal_basis": service.legal_basis,

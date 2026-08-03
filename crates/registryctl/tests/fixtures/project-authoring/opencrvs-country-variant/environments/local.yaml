@@ -15,28 +15,14 @@ integrations:
         origin: https://trust.provincial-civil-registry.invalid
         path: /.well-known/jwks.json
         generation: 1
-issuance:
-  issuer: did:web:provincial-civil-notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-callers:
-  provincial-verifier:
-    api_key_fingerprint: { secret: PROVINCIAL_VERIFIER_TOKEN_HASH }
-    scopes: ["evidence:provincial-birth:read"]
 relay:
   origin: https://provincial-relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [provincial-civil-relay-client]
-
-notary_relay:
-  base_url: http://127.0.0.1:8080
-  workload_client_id: provincial-civil-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: provincial-civil-consultation-client, principal_id: provincial-civil-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: provincial-civil-relay }
-  notary: { service: provincial-civil-notary }

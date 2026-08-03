@@ -1,13 +1,5 @@
 name: snapshot-match
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: population_person_id, value: PER-00000001 }]
-  claims: [population-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: benefits-eligibility
 input: { person_id: PER-00000001 }
 interactions:
   - expect: { method: GET, path: /snapshot }
@@ -15,9 +7,3 @@ interactions:
 expect:
   outcome: match
   outputs: { registration_status: active, residency_confirmed: true }
-  claims:
-    population-record-exists: true
-    population-registration-status: active
-    residency-confirmed: true
-    emergency-record-exists: true
-    emergency-status: redacted

@@ -38,12 +38,11 @@
         "schema": "project",
         "semantic_owner": "authoring_contract",
         "human_owner": "registry_maintainers",
-        "products": ["registryctl", "relay", "notary", "editor", "docs"],
+        "products": ["registryctl", "relay", "editor", "docs"],
         "migration": "rebuild_project",
         "consumers": [
           "registryctl_authoring",
           "registry_relay",
-          "registry_notary",
           "editor_tooling",
           "docs_generator"
         ],
@@ -51,7 +50,6 @@
           "editor_schemas",
           "project_build",
           "relay_config",
-          "notary_config",
           "field_reference"
         ],
         "review_classes": [
@@ -59,7 +57,6 @@
           "security",
           "privacy",
           "relay",
-          "notary",
           "compatibility",
           "documentation"
         ]
@@ -68,12 +65,11 @@
         "schema": "environment",
         "semantic_owner": "deployment_security",
         "human_owner": "security_maintainers",
-        "products": ["registryctl", "relay", "notary", "editor", "docs"],
+        "products": ["registryctl", "relay", "editor", "docs"],
         "migration": "coordinate_deployment",
         "consumers": [
           "registryctl_authoring",
           "registry_relay",
-          "registry_notary",
           "editor_tooling",
           "docs_generator"
         ],
@@ -81,7 +77,6 @@
           "editor_schemas",
           "project_build",
           "relay_config",
-          "notary_config",
           "field_reference"
         ],
         "review_classes": [
@@ -89,7 +84,6 @@
           "security",
           "privacy",
           "relay",
-          "notary",
           "compatibility",
           "documentation"
         ]
@@ -98,12 +92,11 @@
         "schema": "integration",
         "semantic_owner": "integration_contract",
         "human_owner": "integration_maintainers",
-        "products": ["registryctl", "relay", "notary", "editor", "docs"],
+        "products": ["registryctl", "relay", "editor", "docs"],
         "migration": "rebuild_project",
         "consumers": [
           "registryctl_authoring",
           "registry_relay",
-          "registry_notary",
           "editor_tooling",
           "docs_generator"
         ],
@@ -111,7 +104,6 @@
           "editor_schemas",
           "project_build",
           "relay_config",
-          "notary_config",
           "fixture_report",
           "field_reference"
         ],
@@ -120,7 +112,6 @@
           "security",
           "privacy",
           "relay",
-          "notary",
           "compatibility",
           "documentation",
           "testing"
@@ -311,12 +302,6 @@
     },
     {
       "schema": "environment",
-      "pointer": "/properties/callers",
-      "kind": "typed_map",
-      "rationale": "Caller identifiers are deployment-defined and every value uses a closed caller binding."
-    },
-    {
-      "schema": "environment",
       "pointer": "/$defs/entity/properties/columns",
       "kind": "typed_map",
       "rationale": "Authored entity fields map to bounded provider column identifiers."
@@ -332,18 +317,6 @@
       "pointer": "/properties/variables",
       "kind": "typed_map",
       "rationale": "Fixture variable names are authored and values are date strings."
-    },
-    {
-      "schema": "fixture",
-      "pointer": "/$defs/governedRequest/properties/variables",
-      "kind": "typed_map",
-      "rationale": "Governed request variable names are project-defined and values use the closed bounded string contract."
-    },
-    {
-      "schema": "fixture",
-      "pointer": "/$defs/governedTarget/properties/attributes",
-      "kind": "typed_map",
-      "rationale": "Governed target attribute names are project-defined and values use the closed bounded scalar contract."
     },
     {
       "schema": "fixture",
@@ -368,12 +341,6 @@
       "pointer": "/$defs/expectation/properties/outputs",
       "kind": "extension_map",
       "rationale": "Expected adapter outputs are integration-defined JSON values checked against the integration contract at runtime."
-    },
-    {
-      "schema": "fixture",
-      "pointer": "/$defs/expectation/properties/claims",
-      "kind": "extension_map",
-      "rationale": "Expected claims are service-defined JSON values checked against the project claim contract at runtime."
     },
     {
       "schema": "fixture",
@@ -482,18 +449,6 @@
       "pointer": "/$defs/recordAggregate/properties/allowed_filters",
       "kind": "typed_map",
       "rationale": "Aggregate filter field names map to bounded filter operator lists."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/claims",
-      "kind": "typed_map",
-      "rationale": "Claim identifiers are authored and every value uses a closed claim declaration."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/evidenceService/properties/credential_profiles",
-      "kind": "typed_map",
-      "rationale": "Credential profile identifiers are authored and every value uses a closed profile declaration."
     },
     {
       "schema": "project",
@@ -719,16 +674,16 @@
       }
     },
     {
-      "id": "environment-empty-caller-scopes",
+      "id": "environment-empty-consultation-client",
       "dimension": "boundary",
-      "expected_failing_keywords": ["minItems"],
+      "expected_failing_keywords": ["minLength", "pattern"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
       "mutation": {
         "operation": "set",
-        "pointer": "/callers/benefits-service/scopes",
-        "value": []
+        "pointer": "/relay/consultation/client_id",
+        "value": ""
       }
     },
     {

@@ -10,4 +10,4 @@ interactions:
         fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
         includeDeleted: true
     respond: { status: 500, body: {} }
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }

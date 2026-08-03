@@ -147,7 +147,6 @@ enum ApprovedSemanticValue {
     Capability,
     Count,
     DeclarationClass,
-    DisclosureClass,
     HumanIntent,
     Limit,
     Policy,
@@ -402,12 +401,7 @@ fn generated_explanation(
                 &environment_document,
                 ExplanationSource::EnvironmentBound,
             )?;
-            add_environment_effective_fields(
-                &mut builder,
-                environment_name,
-                environment,
-                &environment_document,
-            )?;
+            add_environment_effective_fields(&mut builder, environment_name, environment)?;
         }
     }
 
@@ -531,12 +525,10 @@ fn add_project_topology_fields(
     loaded: &LoadedRegistryProject,
 ) -> Result<()> {
     let scope = ExplanationAddressScope::Project;
-    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
-    let topology = match (requires_relay, requires_notary) {
-        (true, false) => "relay_only",
-        (false, true) => "notary_only",
-        (true, true) => "combined",
-        (false, false) => "none",
+    let requires_relay = project_has_relay_topology(&loaded.project);
+    let topology = match requires_relay {
+        true => "relay_only",
+        false => "none",
     };
     add_derived_scalar(
         builder,
@@ -574,16 +566,6 @@ fn add_project_topology_fields(
                 .filter(|service| service.kind == ServiceKind::RecordsApi)
                 .count(),
         ),
-        (
-            "/topology/evidence_service_count",
-            "/properties/services",
-            loaded
-                .project
-                .services
-                .values()
-                .filter(|service| service.kind == ServiceKind::Evidence)
-                .count(),
-        ),
     ] {
         add_derived_scalar(
             builder,
@@ -597,49 +579,19 @@ fn add_project_topology_fields(
         )?;
     }
     for (service_id, service) in &loaded.project.services {
-        for (name, count) in [
-            ("consultation_count", service.consultations.len()),
-            ("claim_count", service.claims.len()),
-            (
-                "credential_profile_count",
-                service.credential_profiles.len(),
+        add_derived_scalar(
+            builder,
+            &scope,
+            &format!(
+                "/services/{}/consultation_count",
+                escape_explanation_pointer_segment(service_id)
             ),
-        ] {
-            add_derived_scalar(
-                builder,
-                &scope,
-                &format!(
-                    "/services/{}/{name}",
-                    escape_explanation_pointer_segment(service_id)
-                ),
-                knowledge::SchemaKind::Project,
-                "/properties/services",
-                ExplanationScalar::Unsigned(count as u64),
-                ApprovedSemanticValue::Count,
-                "compiler.service_contract_count",
-            )?;
-        }
-        for (claim_id, claim) in &service.claims {
-            // This is the compiler's authored dependency classification. It
-            // does not assert live Relay activation or interoperability.
-            let evidence = match inferred_claim_evidence(service, claim)? {
-                ClaimEvidence::RegistryBacked => "registry_backed",
-            };
-            add_derived_scalar(
-                builder,
-                &scope,
-                &format!(
-                    "/services/{}/claims/{}/evidence",
-                    escape_explanation_pointer_segment(service_id),
-                    escape_explanation_pointer_segment(claim_id)
-                ),
-                knowledge::SchemaKind::Project,
-                "/$defs/evidenceService/properties/claims",
-                ExplanationScalar::Text(evidence.to_owned()),
-                ApprovedSemanticValue::DeclarationClass,
-                "compiler.claim_evidence_dependency",
-            )?;
-        }
+            knowledge::SchemaKind::Project,
+            "/properties/services",
+            ExplanationScalar::Unsigned(service.consultations.len() as u64),
+            ApprovedSemanticValue::Count,
+            "compiler.service_contract_count",
+        )?;
     }
     Ok(())
 }
@@ -864,30 +816,18 @@ fn add_environment_effective_fields(
     builder: &mut ExplanationBuilder<'_>,
     environment_name: &str,
     environment: &EnvironmentDocument,
-    authored: &Value,
 ) -> Result<()> {
     let scope = ExplanationAddressScope::Environment(environment_name.to_owned());
-    for (path, present) in [
-        (
-            "/topology/relay_bound",
-            environment.deployment.relay.is_some(),
-        ),
-        (
-            "/topology/notary_bound",
-            environment.deployment.notary.is_some(),
-        ),
-    ] {
-        add_derived_scalar(
-            builder,
-            &scope,
-            path,
-            knowledge::SchemaKind::Environment,
-            "/properties/deployment",
-            ExplanationScalar::Boolean(present),
-            ApprovedSemanticValue::ProductTopology,
-            "compiler.environment_product_binding",
-        )?;
-    }
+    add_derived_scalar(
+        builder,
+        &scope,
+        "/topology/relay_bound",
+        knowledge::SchemaKind::Environment,
+        "/properties/deployment",
+        ExplanationScalar::Boolean(environment.deployment.relay.is_some()),
+        ApprovedSemanticValue::ProductTopology,
+        "compiler.environment_product_binding",
+    )?;
     for (integration_id, integration) in &environment.integrations {
         add_derived_scalar(
             builder,
@@ -915,58 +855,7 @@ fn add_environment_effective_fields(
             "compiler.credential_class",
         )?;
     }
-    if let Some(issuance) = &environment.issuance {
-        add_effective_environment_default(
-            builder,
-            &scope,
-            "/issuance/algorithm",
-            "/properties/issuance/properties/algorithm",
-            ExplanationScalar::Text(issuance.algorithm.as_str().to_owned()),
-            ExplanationScalar::Text("EdDSA".to_owned()),
-            authored.pointer("/issuance/algorithm").is_some(),
-            ApprovedSemanticValue::DeclarationClass,
-        )?;
-    }
-    if let Some(oid4vci) = &environment.oid4vci {
-        add_effective_environment_default(
-            builder,
-            &scope,
-            "/oid4vci/tx_code/required",
-            "/$defs/oid4vci/properties/tx_code/properties/required",
-            ExplanationScalar::Boolean(oid4vci.tx_code.required),
-            ExplanationScalar::Boolean(true),
-            authored.pointer("/oid4vci/tx_code/required").is_some(),
-            ApprovedSemanticValue::Policy,
-        )?;
-    }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_effective_environment_default(
-    builder: &mut ExplanationBuilder<'_>,
-    scope: &ExplanationAddressScope,
-    data_path: &str,
-    schema_path: &str,
-    value: ExplanationScalar,
-    default: ExplanationScalar,
-    authored: bool,
-    approval: ApprovedSemanticValue,
-) -> Result<()> {
-    builder.add(PendingExplanationField {
-        scope: scope.clone(),
-        data_path: data_path.to_owned(),
-        schema_kind: knowledge::SchemaKind::Environment,
-        schema_path: schema_path.to_owned(),
-        source: if authored {
-            ExplanationSource::EnvironmentBound
-        } else {
-            ExplanationSource::Defaulted
-        },
-        value: Some(value),
-        approval: Some(approval),
-        default: Some((FieldDefaultSource::AuthoringSchema, !authored, default)),
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1410,12 +1299,6 @@ fn approved_authored_semantic_value(
                 || schema_path.ends_with("/properties/value/properties/type")
             {
                 Some(ApprovedSemanticValue::DeclarationClass)
-            } else if schema_path.ends_with("/properties/disclosure")
-                || schema_path.ends_with("/properties/default")
-                || (schema_path.ends_with("/properties/allowed/items")
-                    && schema_path.contains("disclosure"))
-            {
-                Some(ApprovedSemanticValue::DisclosureClass)
             } else if schema_path.ends_with("/properties/version")
                 && !matches!(value, ExplanationScalar::Text(_))
             {
@@ -1639,27 +1522,6 @@ mod explanation_tests {
             .expect("integration explanation field exists")
     }
 
-    fn project_public_text<'a>(report: &'a ProjectExplanationReportV1, path: &str) -> &'a str {
-        let field = report
-            .fields
-            .iter()
-            .find(|field| {
-                matches!(
-                    &field.address,
-                    ProjectFieldAddress::Project { path: actual_path }
-                        if actual_path.as_str() == path
-                )
-            })
-            .expect("project explanation field exists");
-        let ClassifierSafeReportedValue::Public { value } = &field.reported_value else {
-            panic!("classifier-approved project classification is public");
-        };
-        value
-            .as_value()
-            .as_str()
-            .expect("project classification is text")
-    }
-
     #[test]
     fn trusted_local_terminal_rendering_fails_closed_for_prohibited_internal_states() {
         const SENTINEL: &str = "TRUSTED_LOCAL_PROHIBITED_SENTINEL";
@@ -1690,8 +1552,11 @@ mod explanation_tests {
         };
         let parser = ProjectTrustedLocalAuthoredValue {
             address: ProjectFieldAddress::Project {
-                path: JsonPointer::new("/services/example/claims/example/cel".to_owned())
-                    .expect("pointer is valid"),
+                path: JsonPointer::new(
+                    "/services/example/api/attribute_release_profiles/example/release_conditions/expression/cel"
+                        .to_owned(),
+                )
+                .expect("pointer is valid"),
             },
             source: FieldSourceKind::Authored,
             sensitivity: FieldSensitivity::Internal,
@@ -1753,10 +1618,6 @@ mod explanation_tests {
             .knowledge
             .generated_artifacts
             .contains(&FieldGeneratedArtifact::RelayConfig));
-        assert!(request_bytes
-            .knowledge
-            .generated_artifacts
-            .contains(&FieldGeneratedArtifact::NotaryConfig));
 
         let calls = integration_field(&report, "person-record", "/limits/calls");
         assert_eq!(calls.source.kind, FieldSourceKind::Derived);
@@ -1800,7 +1661,7 @@ mod explanation_tests {
         assert!(purpose
             .knowledge
             .consumers
-            .contains(&FieldKnowledgeConsumer::RegistryNotary));
+            .contains(&FieldKnowledgeConsumer::RegistryRelay));
         let ClassifierSafeReportedValue::Public { value } = &purpose.reported_value else {
             panic!("classifier-approved human intent is public");
         };
@@ -1808,37 +1669,6 @@ mod explanation_tests {
             value.as_value(),
             &json!("public-service-person-verification")
         );
-        assert_eq!(
-            project_public_text(
-                &report,
-                "/services/person-verification/claims/person-active/evidence"
-            ),
-            "registry_backed"
-        );
-        assert_eq!(
-            project_public_text(
-                &report,
-                "/services/person-verification/claims/person-record-exists/evidence"
-            ),
-            "registry_backed"
-        );
-        let issuance_algorithm = report
-            .fields
-            .iter()
-            .find(|field| {
-                matches!(
-                    &field.address,
-                    ProjectFieldAddress::Environment { path, .. }
-                        if path.as_str() == "/issuance/algorithm"
-                )
-            })
-            .expect("effective issuance algorithm exists");
-        assert_eq!(issuance_algorithm.source.kind, FieldSourceKind::Defaulted);
-        assert!(issuance_algorithm
-            .default
-            .as_ref()
-            .is_some_and(|default| default.applied));
-
         let serialized_once = serde_json::to_vec(&report).expect("report serializes");
         let serialized_twice = serde_json::to_vec(
             &generated_explanation(&loaded, "local")
@@ -1869,29 +1699,22 @@ integrations:
       credential:
         token: { secret: SECRET_REFERENCE_SENTINEL }
         generation: 77
-issuance:
-  issuer: did:web:ISSUER_SENTINEL.invalid
-  signing_kid: SIGNING_ID_SENTINEL
-  signing_key: { secret: SIGNING_SECRET_SENTINEL }
-  generation: 88
-callers:
-  evidence-client:
-    api_key_fingerprint: { secret: CALLER_SECRET_SENTINEL }
-    scopes: ["evidence:person:read"]
+      mtls:
+        certificate_file: /etc/registry/SOURCE_CERTIFICATE_SENTINEL.pem
+        private_key: { secret: SOURCE_PRIVATE_KEY_SENTINEL }
+        generation: 78
 relay:
   origin: https://RELAY_ORIGIN_SENTINEL.invalid
   issuer: https://ENDPOINT_SENTINEL.invalid
   jwks_url: https://ENDPOINT_SENTINEL.invalid/JWKS_PATH_SENTINEL
   audience: CLIENT_ID_SENTINEL
   allowed_clients: [CLIENT_ID_SENTINEL]
-notary_relay:
-  base_url: http://127.0.0.1:8080
-  workload_client_id: CLIENT_ID_SENTINEL
-  token_file: /ABSOLUTE/RUNTIME/FILE/PATH_SENTINEL
+  consultation:
+    client_id: CONSULTATION_CLIENT_ID_SENTINEL
+    principal_id: PRINCIPAL_ID_SENTINEL
 deployment:
   profile: local
   relay: { service: fictional-registry-relay }
-  notary: { service: fictional-registry-notary }
 "#,
         )
         .expect("sentinel environment writes");
@@ -1952,21 +1775,9 @@ interactions:
 expect:
   outcome: match
   outputs: { active: true }
-  claims: { person-record-exists: true, person-active: true }
 "#,
         )
         .expect("sentinel fixture writes");
-        let project_path = temporary.path().join(PROJECT_FILE);
-        let project = fs::read_to_string(&project_path).expect("project reads");
-        fs::write(
-            &project_path,
-            project.replace(
-                "cel: person_record.matched",
-                "cel: 'person_record.matched && \"CEL_SENTINEL\" == \"CEL_SENTINEL\"'",
-            ),
-        )
-        .expect("sentinel project writes");
-
         let loaded =
             load_registry_project(temporary.path(), Some("local")).expect("sentinel project loads");
         let report =
@@ -1976,13 +1787,13 @@ expect:
             "ORIGIN_SENTINEL",
             "10.77.0.0/16",
             "SECRET_REFERENCE_SENTINEL",
-            "SIGNING_SECRET_SENTINEL",
-            "CALLER_SECRET_SENTINEL",
-            "SIGNING_ID_SENTINEL",
+            "SOURCE_CERTIFICATE_SENTINEL",
+            "SOURCE_PRIVATE_KEY_SENTINEL",
             "ENDPOINT_SENTINEL",
             "JWKS_PATH_SENTINEL",
             "CLIENT_ID_SENTINEL",
-            "/ABSOLUTE/RUNTIME/FILE/PATH_SENTINEL",
+            "CONSULTATION_CLIENT_ID_SENTINEL",
+            "PRINCIPAL_ID_SENTINEL",
             "REQUEST/PATH/SENTINEL",
             "QUERY_SENTINEL",
             "QUERY_VALUE_SENTINEL",
@@ -1992,7 +1803,6 @@ expect:
             "SOURCE_VALUE_SENTINEL",
             "FIXTURE_INPUT_SENTINEL",
             "FIXTURE_BODY_SENTINEL",
-            "CEL_SENTINEL",
         ] {
             assert!(
                 !serialized.contains(sentinel),
@@ -2037,7 +1847,7 @@ expect:
             .map(|field| serde_json::to_string(&field.value).expect("scalar serializes"))
             .collect::<Vec<_>>()
             .join("\n");
-        for visible in ["ORIGIN_SENTINEL", "ISSUER_SENTINEL"] {
+        for visible in ["ORIGIN_SENTINEL", "SOURCE_CERTIFICATE_SENTINEL"] {
             assert!(
                 trusted_values.contains(visible),
                 "trusted-local review should expose authored non-secret metadata {visible}"
@@ -2045,14 +1855,11 @@ expect:
         }
         for hidden in [
             "SECRET_REFERENCE_SENTINEL",
-            "SIGNING_SECRET_SENTINEL",
-            "CALLER_SECRET_SENTINEL",
+            "SOURCE_PRIVATE_KEY_SENTINEL",
             "FIXTURE_INPUT_SENTINEL",
             "FIXTURE_BODY_SENTINEL",
-            "/ABSOLUTE/RUNTIME/FILE/PATH_SENTINEL",
             "REQUEST_PAYLOAD_SENTINEL",
             "SOURCE_VALUE_SENTINEL",
-            "CEL_SENTINEL",
         ] {
             assert!(
                 !trusted_values.contains(hidden),

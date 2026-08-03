@@ -38,8 +38,8 @@ pub use approved_set::{
     assemble_approved_set, load_approved_baseline_set, ApprovedAnchorTransitionLinkV1,
     ApprovedBaselineLanesV1, ApprovedBaselineSetV1, ApprovedLaneEntryV1, ApprovedLaneLocatorsV1,
     ApprovedLaneV1, ApprovedSetAssembleOptions, ApprovedSetAssemblyReportV1,
-    CrossLaneInterfaceDigestsV1, PortableArtifactLocator, ReviewedBuildUpdateV1,
-    ReviewedLaneBindingV1, APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
+    PortableArtifactLocator, ReviewedBuildUpdateV1, ReviewedLaneBindingV1,
+    APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 
 mod deployment;
@@ -114,21 +114,20 @@ pub use project_authoring::{
     FixtureCoverageRequirementState, FixtureCoverageReviewedNotApplicable,
     FixtureCoverageSemanticComparison, FixtureCoverageSummary, FixtureCoverageTarget,
     FixtureCoverageTargetComparisonInput, FixtureCoverageTargetContract,
-    FixtureCoverageTargetIdentity, FixtureCoverageTargetSetState, FixtureDisclosureMode,
-    FixtureEvidenceScope, FixtureLimit, FixtureMutationTargetClass, FixturePassState,
-    FixtureProtocolHelper, FixtureRequestBindingCoverage, FixtureRequestBindingState,
+    FixtureCoverageTargetIdentity, FixtureCoverageTargetSetState, FixtureEvidenceScope,
+    FixtureLimit, FixtureMutationTargetClass, FixturePassState, FixtureProtocolHelper,
     FixtureRequirementCoverage, FixtureSafeCode, FixtureSemanticExpectation,
     FixtureSemanticOutcome, FixtureSetState, FixtureStatusMapping, FixtureStatusOutcome,
     GeneratedFixtureCoverage, GeneratedNotApplicableReason, GeneratedRecipeApplicability,
     GeneratedSourceFixture, GeneratorRecipe, GeneratorRecipeId, GeneratorRecipeVersion,
-    GovernedRequestEvidence, HumanIntentSource, InactiveOrUnusedDeclaration,
-    InactiveOrUnusedReason, InstalledCapabilityEvidence, InstalledCapabilityState,
-    LiveCompatibilityEvaluation, MissingSupport, NullBehavior, PlatformCoverageComponent,
-    PlatformGeneratedCaseId, PlatformGeneratedFixtureCoverage, PreflightAttemptState,
-    PreflightCheckState, PreflightContact, PreflightDiagnostic, PreflightDiagnosticCode,
-    PreflightDiagnosticMessage, PreflightExecutionBoundary, PreflightFieldAddress,
-    PreflightGenerationState, PreflightJsonPointer, PreflightMode, PreflightPermissionInvariant,
-    PreflightPhase, PreflightProduct, PreflightProductCapability, PreflightProductValidatorCheck,
+    HumanIntentSource, InactiveOrUnusedDeclaration, InactiveOrUnusedReason,
+    InstalledCapabilityEvidence, InstalledCapabilityState, LiveCompatibilityEvaluation,
+    MissingSupport, NullBehavior, PlatformCoverageComponent, PlatformGeneratedCaseId,
+    PlatformGeneratedFixtureCoverage, PreflightAttemptState, PreflightCheckState, PreflightContact,
+    PreflightDiagnostic, PreflightDiagnosticCode, PreflightDiagnosticMessage,
+    PreflightExecutionBoundary, PreflightFieldAddress, PreflightGenerationState,
+    PreflightJsonPointer, PreflightMode, PreflightPermissionInvariant, PreflightPhase,
+    PreflightProduct, PreflightProductCapability, PreflightProductValidatorCheck,
     PreflightProjectRelativeFile, PreflightRemediation, PreflightReportLimits, PreflightRuleId,
     PreflightRuntimeBoundary, PreflightRuntimeFileCheck, PreflightRuntimeFileKind,
     PreflightRuntimeScope, PreflightSecretCheck, PreflightSecretConsumer, PreflightSeverity,
@@ -148,15 +147,15 @@ pub use project_authoring::{
     RequiredFixtureCoverageRequirement, RequiredProductAction, Requiredness, ReviewCompareOptions,
     ReviewComparisonReportV1, ReviewedBuildRecordV1, ReviewedProjectBuildOptions,
     ReviewedProjectBuildReportV1, RuntimeActivationEvaluation, SchemaConstraint, SemanticChange,
-    Sha256Digest, SourceAccessAssertion, SourceCallExpectation, StructuralIntent,
-    SupportAssessment, SupportComponent, SupportEvidence, SupportKind, SupportState,
-    SupportedCapabilityVersion, ValidationStage, VersionChange, VersionHistoryEntry,
-    CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID, CONFIGURATION_REFERENCE_FORMAT_VERSION,
-    CONFIGURATION_REFERENCE_SCHEMA_ID, PROJECT_ARTIFACT_MANIFEST_FORMAT_VERSION_V1,
-    PROJECT_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1, PROJECT_CAPABILITY_INVENTORY_SCHEMA_VERSION_V1,
-    PROJECT_COMMAND_REPORT_SCHEMA_VERSION_V1, PROJECT_EXPLANATION_SCHEMA_VERSION_V1,
-    PROJECT_FIXTURE_COVERAGE_SCHEMA_VERSION_V1, PROJECT_PREFLIGHT_SCHEMA_VERSION_V1,
-    PROJECT_SEMANTIC_IMPACT_SCHEMA_VERSION_V1, REVIEWED_BUILD_RECORD_FILE,
+    Sha256Digest, StructuralIntent, SupportAssessment, SupportComponent, SupportEvidence,
+    SupportKind, SupportState, SupportedCapabilityVersion, ValidationStage, VersionChange,
+    VersionHistoryEntry, CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID,
+    CONFIGURATION_REFERENCE_FORMAT_VERSION, CONFIGURATION_REFERENCE_SCHEMA_ID,
+    PROJECT_ARTIFACT_MANIFEST_FORMAT_VERSION_V1, PROJECT_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1,
+    PROJECT_CAPABILITY_INVENTORY_SCHEMA_VERSION_V1, PROJECT_COMMAND_REPORT_SCHEMA_VERSION_V1,
+    PROJECT_EXPLANATION_SCHEMA_VERSION_V1, PROJECT_FIXTURE_COVERAGE_SCHEMA_VERSION_V1,
+    PROJECT_PREFLIGHT_SCHEMA_VERSION_V1, PROJECT_SEMANTIC_IMPACT_SCHEMA_VERSION_V1,
+    REVIEWED_BUILD_RECORD_FILE,
 };
 pub use project_authoring::{build_reviewed_project, compare_reviewed_project};
 
@@ -278,6 +277,7 @@ pub fn inspect_config_bundle(artifact_root: &Path) -> Result<BundleInspectReport
     manifest
         .validate()
         .with_context(|| format!("invalid config bundle manifest {}", manifest_path.display()))?;
+    validate_relay_acceptance_identity(&manifest.acceptance_identity)?;
 
     let envelope = read_signature_envelope_if_present(&signature_path)?;
     let signature_kids: Vec<String> = envelope
@@ -309,6 +309,7 @@ pub fn verify_config_bundle_cli(
             artifact_root.display()
         )
     })?;
+    validate_relay_acceptance_identity(&verified.manifest.acceptance_identity)?;
     let config_path = verified
         .config_path
         .strip_prefix(&bundle_dir)
@@ -623,7 +624,6 @@ fn bundle_relative_path(root: &Path, path: &Path) -> Result<String> {
 
 fn primary_config_path(product: &str, files: &[BundleInputFile]) -> Result<String> {
     let expected = match product {
-        "registry-notary" => Some("config/notary.yaml"),
         "registry-relay" => Some("config/relay.yaml"),
         _ => None,
     };
@@ -864,10 +864,6 @@ fn legacy_product_acceptance_identity(
             };
             (ProductAcceptanceProductV1::RegistryRelay, lane)
         }
-        "registry-notary" => (
-            ProductAcceptanceProductV1::RegistryNotary,
-            ProductAcceptanceLaneV1::Notary,
-        ),
         _ => bail!("unsupported config bundle product"),
     };
     let identity = ProductAcceptanceIdentityV1 {
@@ -888,8 +884,20 @@ fn legacy_product_acceptance_identity(
 fn product_acceptance_product_name(product: ProductAcceptanceProductV1) -> &'static str {
     match product {
         ProductAcceptanceProductV1::RegistryRelay => "registry-relay",
-        ProductAcceptanceProductV1::RegistryNotary => "registry-notary",
+        _ => "unsupported",
     }
+}
+
+fn validate_relay_acceptance_identity(identity: &ProductAcceptanceIdentityV1) -> Result<()> {
+    if identity.product != ProductAcceptanceProductV1::RegistryRelay
+        || !matches!(
+            identity.lane,
+            ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation
+        )
+    {
+        bail!("registryctl trust supports only Registry Relay acceptance lanes");
+    }
+    Ok(())
 }
 
 fn signing_algorithm_label(algorithm: SigningAlgorithm) -> &'static str {

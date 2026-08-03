@@ -37,8 +37,6 @@ const TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const ANCHOR_TRANSITION_SCHEMA: &str = "registry.platform.anchor_transition@1.0";
 const RELAY_CONFIG_SCHEMA: &str =
     "https://id.registrystack.org/schemas/registry-relay/registry-relay.config.schema.json";
-const NOTARY_CONFIG_SCHEMA: &str =
-    "https://id.registrystack.org/schemas/registry-notary/registry-notary.config.schema.json";
 const PRODUCT_BUNDLE_TARGET: &str = "/run/registry/bundle";
 const PRODUCT_ANCHOR_TARGET: &str = "/run/registry/anchor";
 const PRODUCT_STATE_TARGET: &str = "/var/lib/registry/state";
@@ -49,16 +47,12 @@ const POSTGRESQL_DATA_TARGET: &str = "/var/lib/postgresql/data";
 // authorize the exact reviewed script, not a shell command that contains a
 // few expected fragments.
 const POSTGRESQL_BOOTSTRAP_SCRIPT_SHA256: &str =
-    "cbad443afb9700702df52be6513cf8afd95b97747d75a0a417df4fd079a2e79c";
-const POSTGRESQL_BOOTSTRAP_KEYS: [&str; 8] = [
+    "02515ab47034a241554bc13f616de00c14b42a36139d6d07a1a53e52c6c28f0e";
+const POSTGRESQL_BOOTSTRAP_KEYS: [&str; 4] = [
     "REGISTRY_RELAY_MIGRATOR_PASSWORD",
     "REGISTRY_RELAY_RUNTIME_PASSWORD",
     "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
     "REGISTRY_RELAY_READER_PASSWORD",
-    "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
-    "REGISTRY_NOTARY_RUNTIME_PASSWORD",
-    "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
-    "REGISTRY_NOTARY_READER_PASSWORD",
 ];
 
 /// The strict, self-contained wire envelope shipped as
@@ -163,7 +157,6 @@ pub struct LockedOciImageV1 {
 #[serde(deny_unknown_fields)]
 pub struct LockedManagedImagesV1 {
     pub relay: LockedOciImageV1,
-    pub notary: LockedOciImageV1,
     pub postgresql_state_plane: LockedOciImageV1,
 }
 
@@ -225,8 +218,6 @@ pub enum LockedOperatorFileFormatV1 {
     Dotenv,
     PemCertificate,
     PemPrivateKey,
-    JsonWebKey,
-    CompactJwt,
     Opaque,
 }
 
@@ -265,7 +256,6 @@ pub struct LockedPostgresqlRecipeV1 {
 pub struct LockedRuntimeRecipesV1 {
     pub relay_public: LockedProductRecipeV1,
     pub relay_consultation: LockedProductRecipeV1,
-    pub notary: LockedProductRecipeV1,
     pub postgresql_state_plane: LockedPostgresqlRecipeV1,
     pub operator_files: Vec<LockedOperatorFileV1>,
 }
@@ -278,7 +268,6 @@ pub struct SupportedContractsV1 {
     pub trust_anchor_schema: String,
     pub anchor_transition_schema: String,
     pub relay_config_schema: String,
-    pub notary_config_schema: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -317,8 +306,6 @@ impl RetainedVerifiedEnvelope {
 pub struct VerifiedManagedImagesV1 {
     relay: String,
     relay_platform: OciPlatformV1,
-    notary: String,
-    notary_platform: OciPlatformV1,
     postgresql_state_plane: String,
     postgresql_state_plane_platform: OciPlatformV1,
 }
@@ -330,14 +317,6 @@ impl VerifiedManagedImagesV1 {
 
     pub fn relay_platform(&self) -> OciPlatformV1 {
         self.relay_platform
-    }
-
-    pub fn notary(&self) -> &str {
-        &self.notary
-    }
-
-    pub fn notary_platform(&self) -> OciPlatformV1 {
-        self.notary_platform
     }
 
     pub fn postgresql_state_plane(&self) -> &str {
@@ -468,7 +447,6 @@ impl VerifiedPostgresqlRuntimeV1 {
 pub struct VerifiedRuntimeMappingV1 {
     relay_public: VerifiedProductRuntimeV1,
     relay_consultation: VerifiedProductRuntimeV1,
-    notary: VerifiedProductRuntimeV1,
     postgresql_state_plane: VerifiedPostgresqlRuntimeV1,
     operator_files: Vec<LockedOperatorFileV1>,
 }
@@ -480,10 +458,6 @@ impl VerifiedRuntimeMappingV1 {
 
     pub fn relay_consultation(&self) -> &VerifiedProductRuntimeV1 {
         &self.relay_consultation
-    }
-
-    pub fn notary(&self) -> &VerifiedProductRuntimeV1 {
-        &self.notary
     }
 
     pub fn postgresql_state_plane(&self) -> &VerifiedPostgresqlRuntimeV1 {
@@ -554,8 +528,6 @@ impl VerifiedReleaseLockV1 {
         VerifiedManagedImagesV1 {
             relay: self.lock.images.relay.identity.clone(),
             relay_platform: self.lock.images.relay.platforms[0].platform,
-            notary: self.lock.images.notary.identity.clone(),
-            notary_platform: self.lock.images.notary.platforms[0].platform,
             postgresql_state_plane: self.lock.images.postgresql_state_plane.identity.clone(),
             postgresql_state_plane_platform: self.lock.images.postgresql_state_plane.platforms[0]
                 .platform,
@@ -566,7 +538,6 @@ impl VerifiedReleaseLockV1 {
         VerifiedRuntimeMappingV1 {
             relay_public: self.lock.runtime.relay_public.clone().into(),
             relay_consultation: self.lock.runtime.relay_consultation.clone().into(),
-            notary: self.lock.runtime.notary.clone().into(),
             postgresql_state_plane: self.lock.runtime.postgresql_state_plane.clone().into(),
             operator_files: self.lock.runtime.operator_files.clone(),
         }
@@ -602,9 +573,10 @@ impl From<LockedProductRecipeV1> for VerifiedProductRuntimeV1 {
     }
 }
 
-/// Verify a package lock without network access or adopter-supplied trust
-/// material. A newer Registryctl 1.x may inspect and deploy an older signed 1.x
-/// package, so this boundary intentionally does not bind the running binary.
+/// Verify a Relay-only package lock without network access or adopter-supplied
+/// trust material. This boundary intentionally does not bind the running
+/// binary, but retired Notary-bearing payloads are outside the closed schema
+/// and must be rebuilt before deployment.
 pub fn verify_release_lock_for_package(bytes: &[u8]) -> Result<VerifiedReleaseLockV1> {
     let verified = verify_release_lock_material(bytes)?;
     if release_major(verified.product_version())? != 1 {
@@ -856,7 +828,6 @@ impl LockedReleaseIdentityV1 {
 impl LockedManagedImagesV1 {
     fn validate(&self) -> Result<()> {
         self.relay.validate("Relay")?;
-        self.notary.validate("Notary")?;
         self.postgresql_state_plane
             .validate("PostgreSQL state plane")
     }
@@ -894,7 +865,6 @@ impl LockedRuntimeRecipesV1 {
     fn validate(&self) -> Result<()> {
         self.relay_public.validate("Relay public")?;
         self.relay_consultation.validate("Relay consultation")?;
-        self.notary.validate("Notary")?;
         self.postgresql_state_plane
             .validate("PostgreSQL state plane")?;
         validate_operator_files(self)?;
@@ -1041,7 +1011,6 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
     let id = match label {
         "Relay public" => "relay-public",
         "Relay consultation" => "relay-consultation",
-        "Notary" => "notary",
         _ => bail!("product runtime recipe label is unsupported"),
     };
     let environment = format!("{id}-environment");
@@ -1087,11 +1056,6 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
     let serve_secrets: &[&str] = match id {
         "relay-public" => &[],
         "relay-consultation" => &["postgresql-tls-certificate"],
-        "notary" => &[
-            "postgresql-tls-certificate",
-            "notary-relay-workload-credential",
-            "notary-signing-key",
-        ],
         _ => unreachable!(),
     };
     validate_action_shape(
@@ -1234,10 +1198,9 @@ fn validate_mount_access(
 }
 
 fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str) -> Result<()> {
-    let (product, lane) = match label {
-        "Relay public" => ("registry-relay", Some("relay-public")),
-        "Relay consultation" => ("registry-relay", Some("relay-consultation")),
-        "Notary" => ("registry-notary", None),
+    let lane = match label {
+        "Relay public" => "relay-public",
+        "Relay consultation" => "relay-consultation",
         _ => bail!("product runtime recipe label is unsupported"),
     };
     for (name, action) in [
@@ -1248,11 +1211,7 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
         ("accept_state", &recipe.accept_state),
         ("verify_state", &recipe.verify_state),
     ] {
-        let expected = if let Some(lane) = lane {
-            vec!["product-action", lane, name]
-        } else {
-            vec!["product-action", name]
-        };
+        let expected = ["product-action", lane, name];
         validate_exact_command(
             &action.command,
             &expected,
@@ -1267,31 +1226,21 @@ fn validate_product_recipe_commands(recipe: &LockedProductRecipeV1, label: &str)
         ("initialize_state", &recipe.development_initialize_state),
         ("serve", &recipe.development_serve),
     ] {
-        let expected = if let Some(lane) = lane {
-            vec!["development-action", lane, name]
-        } else {
-            vec!["development-action", name]
-        };
+        let expected = ["development-action", lane, name];
         validate_exact_command(
             &action.command,
             &expected,
             &format!("{label} development {name} command"),
         )?;
     }
-    let health_binary = format!("/usr/local/bin/{product}");
-    let health_url = if product == "registry-notary" {
-        "http://127.0.0.1:8081/ready"
-    } else {
-        "http://127.0.0.1:8080/ready"
-    };
     validate_exact_command(
         &recipe.health_probe,
         &[
             "CMD",
-            health_binary.as_str(),
+            "/usr/local/bin/registry-relay",
             "healthcheck",
             "--url",
-            health_url,
+            "http://127.0.0.1:8080/ready",
         ],
         &format!("{label} health probe"),
     )
@@ -1415,11 +1364,7 @@ fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
                 .map(|projection| projection.file_id.clone()),
         );
     };
-    for product in [
-        &runtime.relay_public,
-        &runtime.relay_consultation,
-        &runtime.notary,
-    ] {
+    for product in [&runtime.relay_public, &runtime.relay_consultation] {
         collect(&product.prepare_state_store);
         collect(&product.initialize_state);
         collect(&product.preview_state);
@@ -1441,20 +1386,8 @@ fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
 fn validate_operator_file_contract(file: &LockedOperatorFileV1) -> Result<()> {
     let (format, allowed_owners, required_keys): (LockedOperatorFileFormatV1, &[&str], &[&str]) =
         match file.id.as_str() {
-            "relay-public-environment"
-            | "relay-consultation-environment"
-            | "notary-environment" => (
+            "relay-public-environment" | "relay-consultation-environment" => (
                 LockedOperatorFileFormatV1::Dotenv,
-                &["root:root", "65532:65532"],
-                &[],
-            ),
-            "notary-signing-key" => (
-                LockedOperatorFileFormatV1::JsonWebKey,
-                &["root:root", "65532:65532"],
-                &[],
-            ),
-            "notary-relay-workload-credential" => (
-                LockedOperatorFileFormatV1::CompactJwt,
                 &["root:root", "65532:65532"],
                 &[],
             ),
@@ -1528,7 +1461,6 @@ impl SupportedContractsV1 {
             self.trust_anchor_schema.as_str(),
             self.anchor_transition_schema.as_str(),
             self.relay_config_schema.as_str(),
-            self.notary_config_schema.as_str(),
         ];
         let expected = [
             CONFIG_BUNDLE_SCHEMA,
@@ -1536,7 +1468,6 @@ impl SupportedContractsV1 {
             TRUST_ANCHOR_SCHEMA,
             ANCHOR_TRANSITION_SCHEMA,
             RELAY_CONFIG_SCHEMA,
-            NOTARY_CONFIG_SCHEMA,
         ];
         if actual != expected {
             bail!("release lock supported-contract roster is unsupported");
@@ -1712,11 +1643,6 @@ mod tests {
     }
 
     fn command_recipe(product: &str, lane: Option<&str>) -> LockedProductRecipeV1 {
-        let health_url = if product == "registry-notary" {
-            "http://127.0.0.1:8081/ready"
-        } else {
-            "http://127.0.0.1:8080/ready"
-        };
         let action = |name: &str| {
             let mut command = vec!["product-action"];
             if let Some(lane) = lane {
@@ -1748,7 +1674,7 @@ mod tests {
                 format!("/usr/local/bin/{product}"),
                 "healthcheck".to_string(),
                 "--url".to_string(),
-                health_url.to_string(),
+                "http://127.0.0.1:8080/ready".to_string(),
             ],
         }
     }
@@ -1762,7 +1688,6 @@ mod tests {
                 "registry-relay",
                 Some("relay-consultation"),
             ),
-            ("Notary", "registry-notary", None),
         ] {
             let recipe = command_recipe(product, lane);
             assert_eq!(
@@ -1772,11 +1697,7 @@ mod tests {
                     format!("/usr/local/bin/{product}"),
                     "healthcheck".to_string(),
                     "--url".to_string(),
-                    if product == "registry-notary" {
-                        "http://127.0.0.1:8081/ready".to_string()
-                    } else {
-                        "http://127.0.0.1:8080/ready".to_string()
-                    },
+                    "http://127.0.0.1:8080/ready".to_string(),
                 ]
             );
             validate_product_recipe_commands(&recipe, label)
@@ -1932,22 +1853,8 @@ mod tests {
         environment.required_keys.push("DATABASE_URL".to_string());
         assert!(validate_operator_file_contract(&environment).is_err());
 
-        let mut notary_signing_key = LockedOperatorFileV1 {
-            id: "notary-signing-key".to_string(),
-            format: LockedOperatorFileFormatV1::JsonWebKey,
-            mode: "0600".to_string(),
-            allowed_owners: vec!["root:root".to_string(), "65532:65532".to_string()],
-            required_keys: Vec::new(),
-        };
-        validate_operator_file_contract(&notary_signing_key)
-            .expect("the Notary-only signing-key projection is accepted");
-        notary_signing_key
-            .allowed_owners
-            .push("999:999".to_string());
-        assert!(validate_operator_file_contract(&notary_signing_key).is_err());
-
         let listener_certificate = LockedOperatorFileV1 {
-            id: "notary-tls-certificate".to_string(),
+            id: "unsupported-tls-certificate".to_string(),
             format: LockedOperatorFileFormatV1::PemCertificate,
             mode: "0600".to_string(),
             allowed_owners: vec!["root:root".to_string(), "65532:65532".to_string()],

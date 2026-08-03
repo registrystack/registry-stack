@@ -52,4 +52,3 @@ interactions:
 expect:
   outcome: match
   outputs: { coverage_status: active, insurer_name: Synthetic Health Fund }
-  claims: { patient-record-exists: true, coverage-active: true, insurer-name: Synthetic Health Fund }

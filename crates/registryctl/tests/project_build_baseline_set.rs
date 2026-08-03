@@ -62,7 +62,6 @@ fn sign_product_baseline(
     let lane = match product_directory {
         "relay-public" => ProductAcceptanceLaneV1::RelayPublic,
         "relay-consultation" => ProductAcceptanceLaneV1::RelayConsultation,
-        "notary" => ProductAcceptanceLaneV1::Notary,
         _ => panic!("unexpected product signing-input directory"),
     };
     assert_eq!(
@@ -70,7 +69,7 @@ fn sign_product_baseline(
         match lane {
             ProductAcceptanceLaneV1::RelayPublic | ProductAcceptanceLaneV1::RelayConsultation =>
                 "registry-relay",
-            ProductAcceptanceLaneV1::Notary => "registry-notary",
+            _ => unreachable!("test signing inputs use Relay lanes only"),
         }
     );
     let private_key = temporary.join(format!("{suffix}-private.jwk"));
@@ -176,21 +175,11 @@ fn sign_common_set(
         "local",
         &format!("{suffix}-relay-consultation"),
     );
-    let notary = sign_product_baseline(
-        output,
-        temporary,
-        "registry-notary",
-        "notary",
-        "local",
-        &format!("{suffix}-notary"),
-    );
     ProjectBuildBaselineSetOptions {
         relay_against: Some(relay.bundle),
         relay_anchor: Some(relay.anchor),
         relay_consultation_against: Some(relay_consultation.bundle),
         relay_consultation_anchor: Some(relay_consultation.anchor),
-        notary_against: Some(notary.bundle),
-        notary_anchor: Some(notary.anchor),
     }
 }
 
@@ -234,7 +223,7 @@ fn assert_value_free_rejection(
 }
 
 #[test]
-fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_product_labelled() {
+fn initial_and_two_lane_relay_baseline_builds_are_distinct_and_lineage_is_lane_labelled() {
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = initialize_project(temporary.path());
     let output = initial_build(&project);
@@ -244,10 +233,7 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let relay_consultation_initial =
         std::fs::read(output.join("private/relay-consultation/approval/project-state.json"))
             .expect("initial consultation Relay approval state reads");
-    let notary_initial = std::fs::read(output.join("private/notary/approval/project-state.json"))
-        .expect("initial Notary approval state reads");
     assert_eq!(relay_initial, relay_consultation_initial);
-    assert_eq!(relay_initial, notary_initial);
     let initial_state: serde_json::Value =
         serde_json::from_slice(&relay_initial).expect("initial approval state parses");
     assert_eq!(
@@ -265,27 +251,11 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
         .relay_consultation_against
         .as_deref()
         .expect("consultation Relay baseline exists");
-    let notary_baseline = baselines
-        .notary_against
-        .as_deref()
-        .expect("Notary baseline exists");
-    assert_eq!(
-        std::fs::read(relay_baseline.join("approval/project-state.json"))
-            .expect("signed Relay approval state reads"),
-        std::fs::read(notary_baseline.join("approval/project-state.json"))
-            .expect("signed Notary approval state reads")
-    );
     assert_eq!(
         std::fs::read(relay_baseline.join("approval/project-state.json"))
             .expect("signed Relay approval state reads"),
         std::fs::read(relay_consultation_baseline.join("approval/project-state.json"))
             .expect("signed consultation Relay approval state reads")
-    );
-    assert_eq!(
-        std::fs::read(relay_baseline.join("approval/review.json"))
-            .expect("signed Relay review reads"),
-        std::fs::read(notary_baseline.join("approval/review.json"))
-            .expect("signed Notary review reads")
     );
     assert_eq!(
         std::fs::read(relay_baseline.join("approval/review.json"))
@@ -308,19 +278,12 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let relay_consultation_next =
         std::fs::read(next_output.join("private/relay-consultation/approval/project-state.json"))
             .expect("next consultation Relay approval state reads");
-    let notary_next = std::fs::read(next_output.join("private/notary/approval/project-state.json"))
-        .expect("next Notary approval state reads");
     assert_eq!(relay_next, relay_consultation_next);
-    assert_eq!(relay_next, notary_next);
     let state: serde_json::Value =
         serde_json::from_slice(&relay_next).expect("next approval state parses");
     assert_eq!(
         state["baseline"]["verified_manifests"]["relay"]["acceptance_identity"]["product"],
         "registry-relay"
-    );
-    assert_eq!(
-        state["baseline"]["verified_manifests"]["notary"]["acceptance_identity"]["product"],
-        "registry-notary"
     );
     assert_eq!(
         state["baseline"]["verified_manifests"]["relay_consultation"]["acceptance_identity"]
@@ -334,9 +297,6 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
         state["baseline"]["verified_manifests"]["relay_consultation"]["bundle_id"]
             .as_str()
             .expect("consultation Relay closure digest"),
-        state["baseline"]["verified_manifests"]["notary"]["bundle_id"]
-            .as_str()
-            .expect("Notary closure digest"),
     ];
     assert!(bundle_ids
         .iter()
@@ -346,8 +306,8 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
-        3,
-        "each product lane binds its distinct complete signing-input closure"
+        2,
+        "each Relay lane binds its distinct complete signing-input closure"
     );
 }
 
@@ -374,12 +334,10 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     );
 
     let swapped = ProjectBuildBaselineSetOptions {
-        relay_against: baselines.notary_against.clone(),
-        relay_anchor: baselines.notary_anchor.clone(),
-        relay_consultation_against: baselines.relay_consultation_against.clone(),
-        relay_consultation_anchor: baselines.relay_consultation_anchor.clone(),
-        notary_against: baselines.relay_against.clone(),
-        notary_anchor: baselines.relay_anchor.clone(),
+        relay_against: baselines.relay_consultation_against.clone(),
+        relay_anchor: baselines.relay_consultation_anchor.clone(),
+        relay_consultation_against: baselines.relay_against.clone(),
+        relay_consultation_anchor: baselines.relay_anchor.clone(),
     };
     assert_value_free_rejection(&project, &swapped, temporary.path());
 
@@ -457,14 +415,12 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
         relay_anchor: Some(wrong_environment.anchor),
         relay_consultation_against: baselines.relay_consultation_against,
         relay_consultation_anchor: baselines.relay_consultation_anchor,
-        notary_against: baselines.notary_against,
-        notary_anchor: baselines.notary_anchor,
     };
     assert_value_free_rejection(&project, &wrong_environment, temporary.path());
 }
 
 #[test]
-fn independently_valid_but_divergent_product_approval_states_are_rejected() {
+fn independently_valid_but_divergent_relay_lane_approval_states_are_rejected() {
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = initialize_project(temporary.path());
     let first_output = initial_build(&project);
@@ -476,15 +432,6 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
         "local",
         "divergent-relay",
     );
-    let relay_consultation = sign_product_baseline(
-        &first_output,
-        temporary.path(),
-        "registry-relay",
-        "relay-consultation",
-        "local",
-        "divergent-relay-consultation",
-    );
-
     let environment_path = project.join("environments/local.yaml");
     let original_environment =
         std::fs::read_to_string(&environment_path).expect("environment reads");
@@ -495,13 +442,13 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
     assert_ne!(changed_environment, original_environment);
     std::fs::write(&environment_path, changed_environment).expect("environment changes");
     let second_output = initial_build(&project);
-    let notary = sign_product_baseline(
+    let relay_consultation = sign_product_baseline(
         &second_output,
         temporary.path(),
-        "registry-notary",
-        "notary",
+        "registry-relay",
+        "relay-consultation",
         "local",
-        "divergent-notary",
+        "divergent-relay-consultation",
     );
     std::fs::write(&environment_path, original_environment).expect("environment restores");
 
@@ -510,8 +457,6 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
         relay_anchor: Some(relay.anchor),
         relay_consultation_against: Some(relay_consultation.bundle),
         relay_consultation_anchor: Some(relay_consultation.anchor),
-        notary_against: Some(notary.bundle),
-        notary_anchor: Some(notary.anchor),
     };
     assert_value_free_rejection(&project, &divergent, temporary.path());
 }
@@ -531,7 +476,7 @@ fn pre_1_approval_state_baselines_are_rejected_at_ingress() {
     state["schema"] = serde_json::json!("registry.project.approval-state.v3");
     let mut state_bytes = serde_json::to_vec_pretty(&state).expect("pre-1.0 state serializes");
     state_bytes.push(b'\n');
-    for product_directory in ["relay-public", "relay-consultation", "notary"] {
+    for product_directory in ["relay-public", "relay-consultation"] {
         std::fs::write(
             pre_1_output
                 .join("signing-inputs")
@@ -558,21 +503,11 @@ fn pre_1_approval_state_baselines_are_rejected_at_ingress() {
         "local",
         "pre-1-relay-consultation",
     );
-    let notary = sign_product_baseline(
-        &pre_1_output,
-        temporary.path(),
-        "registry-notary",
-        "notary",
-        "local",
-        "pre-1-notary",
-    );
     let pre_1 = ProjectBuildBaselineSetOptions {
         relay_against: Some(relay.bundle),
         relay_anchor: Some(relay.anchor),
         relay_consultation_against: Some(relay_consultation.bundle),
         relay_consultation_anchor: Some(relay_consultation.anchor),
-        notary_against: Some(notary.bundle),
-        notary_anchor: Some(notary.anchor),
     };
 
     assert_value_free_rejection(&project, &pre_1, temporary.path());

@@ -11,4 +11,4 @@ interactions:
       status: 302
       headers: { Location: https://redirect.opencrvs.invalid/oauth/token }
       body: {}
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }

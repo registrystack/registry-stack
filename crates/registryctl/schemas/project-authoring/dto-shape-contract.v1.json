@@ -11,81 +11,6 @@
       "rust_type": "RegistryProject",
       "schema": {
         "$defs": {
-          "AccessDeclaration": {
-            "additionalProperties": false,
-            "properties": {
-              "scopes": {
-                "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            },
-            "type": "object"
-          },
-          "ClaimDeclaration": {
-            "additionalProperties": false,
-            "properties": {
-              "cel": {
-                "default": null,
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "disclosure": {
-                "$ref": "#/$defs/DisclosureDeclaration"
-              },
-              "output": {
-                "default": null,
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ClaimValueDeclaration"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
-              }
-            },
-            "required": [
-              "disclosure"
-            ],
-            "type": "object"
-          },
-          "ClaimValueDeclaration": {
-            "additionalProperties": false,
-            "properties": {
-              "max_bytes": {
-                "default": null,
-                "format": "uint32",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "nullable": {
-                "default": false,
-                "type": "boolean"
-              },
-              "type": {
-                "$ref": "#/$defs/OutputType"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "type": "object"
-          },
           "ConsentDeclaration": {
             "enum": [
               "not_required",
@@ -112,66 +37,6 @@
             ],
             "type": "object"
           },
-          "CredentialProfileDeclaration": {
-            "additionalProperties": false,
-            "properties": {
-              "claims": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "format": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string"
-              },
-              "validity": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "format",
-              "type",
-              "validity",
-              "claims"
-            ],
-            "type": "object"
-          },
-          "DisclosureDeclaration": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/DisclosureMode"
-              },
-              {
-                "properties": {
-                  "allowed": {
-                    "items": {
-                      "$ref": "#/$defs/DisclosureMode"
-                    },
-                    "type": "array"
-                  },
-                  "default": {
-                    "$ref": "#/$defs/DisclosureMode"
-                  }
-                },
-                "required": [
-                  "default",
-                  "allowed"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          "DisclosureMode": {
-            "enum": [
-              "value",
-              "predicate",
-              "redacted"
-            ],
-            "type": "string"
-          },
           "EntityReference": {
             "additionalProperties": false,
             "properties": {
@@ -183,13 +48,6 @@
               "file"
             ],
             "type": "object"
-          },
-          "EvidenceSubjectType": {
-            "enum": [
-              "person",
-              "project"
-            ],
-            "type": "string"
           },
           "IntegrationReference": {
             "additionalProperties": false,
@@ -1169,12 +1027,6 @@
           "ServiceDeclaration": {
             "additionalProperties": false,
             "properties": {
-              "access": {
-                "$ref": "#/$defs/AccessDeclaration",
-                "default": {
-                  "scopes": []
-                }
-              },
               "access_rights": {
                 "anyOf": [
                   {
@@ -1197,13 +1049,6 @@
                 ],
                 "default": null
               },
-              "claims": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/ClaimDeclaration"
-                },
-                "default": {},
-                "type": "object"
-              },
               "conforms_to": {
                 "default": [],
                 "items": {
@@ -1218,13 +1063,6 @@
               "consultations": {
                 "additionalProperties": {
                   "$ref": "#/$defs/ConsultationDeclaration"
-                },
-                "default": {},
-                "type": "object"
-              },
-              "credential_profiles": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/CredentialProfileDeclaration"
                 },
                 "default": {},
                 "type": "object"
@@ -1272,17 +1110,6 @@
                 ],
                 "default": null
               },
-              "subject_type": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/EvidenceSubjectType"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "Subject category evaluated by an evidence service. Omission is\nnormalized to `person` without erasing whether the field was authored,\nso records services cannot silently accept it."
-              },
               "title": {
                 "default": null,
                 "type": [
@@ -1322,7 +1149,7 @@
           },
           "ServiceKind": {
             "enum": [
-              "evidence",
+              "consultation_api",
               "records_api"
             ],
             "type": "string"
@@ -1406,25 +1233,6 @@
       "rust_type": "EnvironmentDocument",
       "schema": {
         "$defs": {
-          "CallerBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "api_key_fingerprint": {
-                "$ref": "#/$defs/SecretReference"
-              },
-              "scopes": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "api_key_fingerprint",
-              "scopes"
-            ],
-            "type": "object"
-          },
           "CertificateAuthorityBinding": {
             "additionalProperties": false,
             "properties": {
@@ -1446,17 +1254,6 @@
           "DeploymentBinding": {
             "additionalProperties": false,
             "properties": {
-              "notary": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ServiceBinding"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
-              },
               "profile": {
                 "$ref": "#/$defs/DeploymentProfile"
               },
@@ -1481,8 +1278,7 @@
             "enum": [
               "local",
               "hosted_lab",
-              "production",
-              "evidence_grade"
+              "production"
             ],
             "type": "string"
           },
@@ -1494,16 +1290,6 @@
               },
               "default_integration": {
                 "type": "string"
-              },
-              "notary_port": {
-                "default": null,
-                "format": "uint16",
-                "maximum": 65535,
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
               },
               "relay_port": {
                 "default": null,
@@ -1755,43 +1541,6 @@
             ],
             "type": "object"
           },
-          "IssuanceBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "algorithm": {
-                "$ref": "#/$defs/IssuanceSigningAlgorithm",
-                "default": "EdDSA"
-              },
-              "generation": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "issuer": {
-                "type": "string"
-              },
-              "signing_key": {
-                "$ref": "#/$defs/SecretReference"
-              },
-              "signing_kid": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "issuer",
-              "signing_key",
-              "signing_kid",
-              "generation"
-            ],
-            "type": "object"
-          },
-          "IssuanceSigningAlgorithm": {
-            "enum": [
-              "EdDSA",
-              "ES256"
-            ],
-            "type": "string"
-          },
           "MutualTlsBinding": {
             "additionalProperties": false,
             "properties": {
@@ -1812,267 +1561,6 @@
               "private_key",
               "generation"
             ],
-            "type": "object"
-          },
-          "NotaryCelBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "worker_memory_bytes": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "worker_memory_bytes"
-            ],
-            "type": "object"
-          },
-          "NotaryPostgresqlBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "root_certificate_path": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "root_certificate_path"
-            ],
-            "type": "object"
-          },
-          "NotaryRelayBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "base_url": {
-                "type": "string"
-              },
-              "token_file": {
-                "type": "string"
-              },
-              "workload_client_id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "base_url",
-              "workload_client_id",
-              "token_file"
-            ],
-            "type": "object"
-          },
-          "NotaryStateBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "postgresql": {
-                "$ref": "#/$defs/NotaryPostgresqlBinding"
-              }
-            },
-            "required": [
-              "postgresql"
-            ],
-            "type": "object"
-          },
-          "Oid4vciAuthorizationServerBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "authorize_url": {
-                "type": "string"
-              },
-              "issuer": {
-                "type": "string"
-              },
-              "jwks_url": {
-                "type": "string"
-              },
-              "token_url": {
-                "type": "string"
-              },
-              "userinfo_url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "issuer",
-              "jwks_url",
-              "userinfo_url",
-              "authorize_url",
-              "token_url"
-            ],
-            "type": "object"
-          },
-          "Oid4vciBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "access_token": {
-                "$ref": "#/$defs/Oid4vciSigningKeyBinding"
-              },
-              "allowed_wallet_origins": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "authorization_server": {
-                "$ref": "#/$defs/Oid4vciAuthorizationServerBinding"
-              },
-              "client": {
-                "$ref": "#/$defs/Oid4vciClientBinding"
-              },
-              "credential": {
-                "$ref": "#/$defs/Oid4vciCredentialBinding"
-              },
-              "public_base_url": {
-                "type": "string"
-              },
-              "redirect_uri": {
-                "type": "string"
-              },
-              "registrar_clients": {
-                "default": [],
-                "description": "Machine OIDC clients admitted to create registrar-initiated offers.\n\nThese clients use the pinned authorization server and the Notary public\nbase URL as their resource audience. They are deliberately separate\nfrom the citizen client so generated subject-access classification\nremains closed.",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "representative_issuance": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/Oid4vciRepresentativeIssuanceBinding"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "sensitive_state_key": {
-                "$ref": "#/$defs/SecretReference"
-              },
-              "subject": {
-                "$ref": "#/$defs/Oid4vciSubjectBinding"
-              },
-              "tx_code": {
-                "$ref": "#/$defs/Oid4vciTxCodeBinding",
-                "default": {
-                  "required": true
-                }
-              }
-            },
-            "required": [
-              "public_base_url",
-              "credential",
-              "authorization_server",
-              "client",
-              "access_token",
-              "sensitive_state_key",
-              "subject",
-              "redirect_uri",
-              "allowed_wallet_origins"
-            ],
-            "type": "object"
-          },
-          "Oid4vciClientBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "signing_key": {
-                "$ref": "#/$defs/SecretReference"
-              },
-              "signing_kid": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "signing_key",
-              "signing_kid"
-            ],
-            "type": "object"
-          },
-          "Oid4vciCredentialBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "profile": {
-                "type": "string"
-              },
-              "service": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "service",
-              "profile"
-            ],
-            "type": "object"
-          },
-          "Oid4vciRepresentativeIssuanceBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "max_proof_age_seconds": {
-                "default": 300,
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "proof_claim": {
-                "type": "string"
-              },
-              "relationship": {
-                "type": "string"
-              },
-              "target_id_type": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "relationship",
-              "proof_claim",
-              "target_id_type"
-            ],
-            "type": "object"
-          },
-          "Oid4vciSigningKeyBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "signing_key": {
-                "$ref": "#/$defs/SecretReference"
-              },
-              "signing_kid": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "signing_key",
-              "signing_kid"
-            ],
-            "type": "object"
-          },
-          "Oid4vciSubjectBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "id_type": {
-                "type": "string"
-              },
-              "token_claim": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "token_claim",
-              "id_type"
-            ],
-            "type": "object"
-          },
-          "Oid4vciTxCodeBinding": {
-            "additionalProperties": false,
-            "properties": {
-              "required": {
-                "default": true,
-                "type": "boolean"
-              }
-            },
             "type": "object"
           },
           "PrivateEndpointBinding": {
@@ -2271,6 +1759,17 @@
               "audience": {
                 "type": "string"
               },
+              "consultation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RelayConsultationBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "issuer": {
                 "type": "string"
               },
@@ -2298,6 +1797,22 @@
               "jwks_url",
               "audience",
               "allowed_clients"
+            ],
+            "type": "object"
+          },
+          "RelayConsultationBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "client_id": {
+                "type": "string"
+              },
+              "principal_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "client_id",
+              "principal_id"
             ],
             "type": "object"
           },
@@ -2397,13 +1912,6 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
-          "callers": {
-            "additionalProperties": {
-              "$ref": "#/$defs/CallerBinding"
-            },
-            "default": {},
-            "type": "object"
-          },
           "deployment": {
             "$ref": "#/$defs/DeploymentBinding"
           },
@@ -2431,61 +1939,6 @@
             },
             "default": {},
             "type": "object"
-          },
-          "issuance": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/IssuanceBinding"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "notary_cel": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/NotaryCelBinding"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "notary_relay": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/NotaryRelayBinding"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "notary_state": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/NotaryStateBinding"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "oid4vci": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Oid4vciBinding"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           },
           "relay": {
             "anyOf": [
@@ -3787,36 +3240,9 @@
             ],
             "type": "object"
           },
-          "ClaimRef": {
-            "$ref": "#/$defs/WireClaimRef"
-          },
-          "ClaimRefObject": {
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "version": {
-                "default": null,
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "id"
-            ],
-            "type": "object"
-          },
           "FixtureExpectation": {
             "additionalProperties": false,
             "properties": {
-              "claims": {
-                "additionalProperties": true,
-                "default": {},
-                "type": "object"
-              },
               "error": {
                 "default": null,
                 "type": [
@@ -3839,118 +3265,12 @@
             },
             "type": "object"
           },
-          "GovernedFixtureIdentifier": {
-            "additionalProperties": false,
-            "properties": {
-              "scheme": {
-                "type": "string"
-              },
-              "value": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "scheme",
-              "value"
-            ],
-            "type": "object"
-          },
-          "GovernedFixtureRequest": {
-            "additionalProperties": false,
-            "description": "The closed governed request accepted by an independently authored synthetic\nfixture witness.",
-            "properties": {
-              "claims": {
-                "items": {
-                  "$ref": "#/$defs/ClaimRef"
-                },
-                "type": "array"
-              },
-              "disclosure": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "format": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "purpose": {
-                "type": "string"
-              },
-              "requester": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GovernedFixtureTarget"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "target": {
-                "$ref": "#/$defs/GovernedFixtureTarget"
-              },
-              "variables": {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "type": "object"
-              }
-            },
-            "required": [
-              "target",
-              "claims",
-              "purpose"
-            ],
-            "type": "object"
-          },
-          "GovernedFixtureTarget": {
-            "additionalProperties": false,
-            "properties": {
-              "attributes": {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "identifiers": {
-                "items": {
-                  "$ref": "#/$defs/GovernedFixtureIdentifier"
-                },
-                "type": "array"
-              },
-              "type": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "type": "object"
-          },
           "ReadMethod": {
             "enum": [
               "GET",
               "POST"
             ],
             "type": "string"
-          },
-          "WireClaimRef": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/$defs/ClaimRefObject"
-              }
-            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3975,17 +3295,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "request": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GovernedFixtureRequest"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           },
           "variables": {
             "additionalProperties": true,

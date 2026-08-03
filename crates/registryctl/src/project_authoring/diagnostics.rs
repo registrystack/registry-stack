@@ -442,10 +442,6 @@ fn collect_project_authoring_diagnostics(
             &project,
             &integrations,
         ));
-        diagnostics.extend(claim_integration_link_diagnostics(
-            &project,
-            &integrations,
-        ));
         if validate_project_entity_links(&project, &integrations, &entities).is_err() {
             if let Some(collision) = project_records_scope_collision(&project, &entities) {
                 let (field, cause, remediation) = match collision.kind {
@@ -528,7 +524,7 @@ fn project_declaration_semantic_diagnostics(
     for (service_id, service) in project
         .services
         .iter()
-        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
+        .filter(|(_, service)| service.kind == ServiceKind::ConsultationApi)
     {
         for (consultation_id, consultation) in &service.consultations {
             if !project.integrations.contains_key(&consultation.integration) {
@@ -579,115 +575,6 @@ fn project_declaration_semantic_diagnostics(
             }
         }
 
-        for (claim_id, claim) in &service.claims {
-            if let Some(output) = claim.output.as_deref() {
-                let consultation = output.split_once('.').map(|(name, _)| name);
-                if consultation.is_none()
-                    || consultation.is_some_and(|name| !service.consultations.contains_key(name))
-                {
-                    diagnostics.push(cross_file_diagnostic(
-                        "registryctl.authoring.project.invalid",
-                        PROJECT_FILE,
-                        Some("services.claims.output"),
-                        "A direct claim output does not name a declared consultation.",
-                        "Use <consultation>.<output> with a consultation declared by this service.",
-                        Some(PROJECT_SCHEMA_HINT),
-                        vec![
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &["services", service_id, "claims", claim_id, "output"],
-                            ),
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &["services", service_id, "consultations"],
-                            ),
-                        ],
-                    ));
-                }
-            } else if let Some(expression) = claim.cel.as_deref() {
-                let roots = cel_member_roots(expression);
-                if roots.as_ref().is_err()
-                    || roots.is_ok_and(|roots| {
-                        !service
-                            .consultations
-                            .keys()
-                            .any(|name| roots.contains(name.as_str()))
-                    })
-                {
-                    diagnostics.push(cross_file_diagnostic(
-                        "registryctl.authoring.project.invalid",
-                        PROJECT_FILE,
-                        Some("services.claims.cel"),
-                        "A claim evaluation does not resolve to a declared consultation.",
-                        "Reference one declared Relay consultation.",
-                        Some(PROJECT_SCHEMA_HINT),
-                        vec![
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &["services", service_id, "claims", claim_id, "cel"],
-                            ),
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &["services", service_id, "consultations"],
-                            ),
-                        ],
-                    ));
-                }
-            }
-        }
-
-        for (profile_id, profile) in &service.credential_profiles {
-            for (index, claim_id) in profile.claims.iter().enumerate() {
-                if !service.claims.contains_key(claim_id) {
-                    let index = index.to_string();
-                    diagnostics.push(cross_file_diagnostic(
-                        "registryctl.authoring.project.invalid",
-                        PROJECT_FILE,
-                        Some("services.credential_profiles.claims"),
-                        "A credential profile references an unknown claim.",
-                        "Reference only claims declared by this service.",
-                        Some(PROJECT_SCHEMA_HINT),
-                        vec![
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &[
-                                    "services",
-                                    service_id,
-                                    "credential_profiles",
-                                    profile_id,
-                                    "claims",
-                                    &index,
-                                ],
-                            ),
-                            diagnostic_address(
-                                PROJECT_FILE,
-                                &["services", service_id, "claims"],
-                            ),
-                        ],
-                    ));
-                }
-            }
-            if parse_validity_seconds(&profile.validity).is_err() {
-                diagnostics.push(cross_file_diagnostic(
-                    "registryctl.authoring.project.invalid",
-                    PROJECT_FILE,
-                    Some("services.credential_profiles.validity"),
-                    "A credential profile validity is invalid.",
-                    "Use a positive bounded validity in seconds, minutes, or hours.",
-                    Some(PROJECT_SCHEMA_HINT),
-                    vec![diagnostic_address(
-                        PROJECT_FILE,
-                        &[
-                            "services",
-                            service_id,
-                            "credential_profiles",
-                            profile_id,
-                            "validity",
-                        ],
-                    )],
-                ));
-            }
-        }
     }
     diagnostics
 }
@@ -932,7 +819,7 @@ fn service_integration_link_diagnostics(
     for (service_id, service) in project
         .services
         .iter()
-        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
+        .filter(|(_, service)| service.kind == ServiceKind::ConsultationApi)
     {
         for (consultation_id, consultation) in &service.consultations {
             let Some(integration) = integrations.get(&consultation.integration) else {
@@ -1015,56 +902,6 @@ fn service_integration_link_diagnostics(
                     ],
                 ));
             }
-        }
-    }
-    diagnostics
-}
-
-fn claim_integration_link_diagnostics(
-    project: &RegistryProject,
-    integrations: &BTreeMap<String, LoadedIntegration>,
-) -> Vec<ProjectAuthoringDiagnostic> {
-    let mut diagnostics = Vec::new();
-    for (service_id, service) in project
-        .services
-        .iter()
-        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
-    {
-        for (claim_id, claim) in &service.claims {
-            let Some((consultation_id, output_id)) =
-                claim.output.as_deref().and_then(|output| output.split_once('.'))
-            else {
-                continue;
-            };
-            let Some(consultation) = service.consultations.get(consultation_id) else {
-                continue;
-            };
-            let Some(integration) = integrations.get(&consultation.integration) else {
-                continue;
-            };
-            if integration.document.outputs.contains_key(output_id) {
-                continue;
-            }
-            let Some(reference) = project.integrations.get(&consultation.integration) else {
-                continue;
-            };
-            let integration_file =
-                relative_path_string(&reference.file).unwrap_or_else(|| PROJECT_FILE.to_string());
-            diagnostics.push(cross_file_diagnostic(
-                "registryctl.authoring.project.invalid",
-                PROJECT_FILE,
-                Some("services.claims.output"),
-                "A direct claim references an unknown integration output.",
-                "Reference an output declared by the selected consultation's integration.",
-                Some(PROJECT_SCHEMA_HINT),
-                vec![
-                    diagnostic_address(
-                        PROJECT_FILE,
-                        &["services", service_id, "claims", claim_id, "output"],
-                    ),
-                    diagnostic_address(&integration_file, &["outputs"]),
-                ],
-            ));
         }
     }
     diagnostics
@@ -1660,23 +1497,6 @@ fn collect_environment_semantics(
             ));
         }
     }
-    if let Some(issuance) = &environment.issuance {
-        if issuance.generation == 0
-            || validate_secret_reference(&issuance.signing_key).is_err()
-            || validate_token(&issuance.issuer, "issuance issuer", 2048).is_err()
-            || validate_token(&issuance.signing_kid, "issuance signing kid", 2048).is_err()
-        {
-            diagnostics.push(environment_invalid(
-                &file,
-                "issuance",
-                "The issuance binding is invalid.",
-                "Use bounded issuer metadata, a safe secret reference, and a positive generation.",
-            ));
-        }
-    }
-    if let Some(diagnostic) = representative_issuance_diagnostic(project, environment, &file) {
-        diagnostics.push(diagnostic);
-    }
     if environment
         .relay
         .as_ref()
@@ -1686,7 +1506,7 @@ fn collect_environment_semantics(
             &file,
             "relay.allowed_clients",
             "The public Relay has no admitted OpenID Connect client.",
-            "Add at least one intended public Relay client id. Keep the private Notary workload client only in notary_relay.",
+            "Add at least one intended Relay client id.",
         ));
     }
     if diagnostics.len() == before
@@ -1700,245 +1520,6 @@ fn collect_environment_semantics(
             &file,
         ));
     }
-}
-
-fn representative_issuance_diagnostic(
-    project: &RegistryProject,
-    environment: &EnvironmentDocument,
-    file: &str,
-) -> Option<ProjectAuthoringDiagnostic> {
-    let binding = environment.oid4vci.as_ref()?;
-    let representative = binding.representative_issuance.as_ref()?;
-    if !binding.registrar_clients.is_empty() {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance"),
-            "Representative issuance and registrar-created offers select incompatible authorities in Registryctl's single-credential binding.",
-            "Remove registrar_clients, or use a separate environment and Notary deployment for the registrar-created credential.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                diagnostic_address(file, &["oid4vci", "registrar_clients"]),
-                diagnostic_address(file, &["oid4vci", "representative_issuance"]),
-            ],
-        ));
-    }
-    let service = project.services.get(&binding.credential.service)?;
-    let credential = service
-        .credential_profiles
-        .get(&binding.credential.profile)?;
-    let credential_claim = credential.claims.first()?;
-    let environment_proof = diagnostic_address(
-        file,
-        &["oid4vci", "representative_issuance", "proof_claim"],
-    );
-    if let Some((shared_profile, _)) =
-        service
-            .credential_profiles
-            .iter()
-            .find(|(profile_id, profile)| {
-                *profile_id != &binding.credential.profile
-                    && profile
-                        .claims
-                        .iter()
-                        .any(|claim_id| claim_id == credential_claim)
-            })
-    {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.credential.profile"),
-            "The representative credential claim is shared by another credential profile.",
-            "Use a credential claim root that is exclusive to the representative profile, or create a separate representative-specific claim.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                diagnostic_address(file, &["oid4vci", "credential", "profile"]),
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "credential_profiles",
-                        &binding.credential.profile,
-                        "claims",
-                    ],
-                ),
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "credential_profiles",
-                        shared_profile,
-                        "claims",
-                    ],
-                ),
-            ],
-        ));
-    }
-
-    let Some(proof) = service.claims.get(&representative.proof_claim) else {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.proof_claim"),
-            "The representative proof claim does not exist in the selected credential service.",
-            "Set proof_claim to a registry-backed claim in the same service as the credential profile.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                environment_proof,
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &["services", &binding.credential.service, "claims"],
-                ),
-            ],
-        ));
-    };
-    if representative.proof_claim == *credential_claim {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.proof_claim"),
-            "The representative proof claim is also the credential claim.",
-            "Use a separate registry-backed claim that proves the relationship; Registryctl will add it as a dependency of the credential claim.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                environment_proof,
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "credential_profiles",
-                        &binding.credential.profile,
-                        "claims",
-                    ],
-                ),
-            ],
-        ));
-    }
-    if inferred_claim_evidence(service, proof).ok()? != ClaimEvidence::RegistryBacked {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.proof_claim"),
-            "The representative proof claim is not backed by a registry consultation.",
-            "Bind proof_claim to a Relay consultation that verifies the relationship in an authoritative source.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                environment_proof,
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "claims",
-                        &representative.proof_claim,
-                    ],
-                ),
-            ],
-        ));
-    }
-    let consultation_name = claim_consultation_name(service, proof).ok()?;
-    let consultation = service.consultations.get(consultation_name)?;
-    let requester_mapping = format!(
-        "request.requester.identifiers.{}",
-        binding.subject.id_type
-    );
-    if !consultation
-        .input
-        .values()
-        .any(|mapping| mapping == &requester_mapping)
-    {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.proof_claim"),
-            "The relationship-proof consultation does not bind the authenticated representative.",
-            "Map one proof-claim consultation input from request.requester.identifiers.<oid4vci subject id_type>.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                environment_proof,
-                diagnostic_address(
-                    file,
-                    &["oid4vci", "subject", "id_type"],
-                ),
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "consultations",
-                        consultation_name,
-                        "input",
-                    ],
-                ),
-            ],
-        ));
-    }
-    let target_mapping = format!(
-        "request.target.identifiers.{}",
-        representative.target_id_type
-    );
-    if !consultation
-        .input
-        .values()
-        .any(|mapping| mapping == &target_mapping)
-    {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.target_id_type"),
-            "The relationship-proof consultation does not bind the represented subject.",
-            "Map one proof-claim consultation input from request.target.identifiers.<representative_issuance target_id_type>.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                diagnostic_address(
-                    file,
-                    &["oid4vci", "representative_issuance", "target_id_type"],
-                ),
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "consultations",
-                        consultation_name,
-                        "input",
-                    ],
-                ),
-            ],
-        ));
-    }
-    if let Some((input_name, _)) = consultation
-        .input
-        .iter()
-        .find(|(_, mapping)| *mapping != &requester_mapping && *mapping != &target_mapping)
-    {
-        return Some(cross_file_diagnostic(
-            "registryctl.authoring.environment.invalid",
-            file,
-            Some("oid4vci.representative_issuance.proof_claim"),
-            "The relationship-proof consultation requires an input that the target-selection ceremony cannot supply.",
-            "Keep exactly two proof-claim inputs: the authenticated requester identifier and the selected target identifier.",
-            Some(ENVIRONMENT_SCHEMA_HINT),
-            vec![
-                environment_proof,
-                diagnostic_address(
-                    PROJECT_FILE,
-                    &[
-                        "services",
-                        &binding.credential.service,
-                        "consultations",
-                        consultation_name,
-                        "input",
-                        input_name,
-                    ],
-                ),
-            ],
-        ));
-    }
-    None
 }
 
 fn environment_relationship_diagnostic(

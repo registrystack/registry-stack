@@ -15,4 +15,4 @@ interactions:
         entry:
           - { search: { mode: match }, resource: { resourceType: Patient, id: patient-1 } }
           - { search: { mode: match }, resource: { resourceType: Patient, id: patient-2 } }
-expect: { outcome: ambiguous, outputs: {}, claims: {} }
+expect: { outcome: ambiguous, outputs: {} }

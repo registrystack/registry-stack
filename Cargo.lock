@@ -6097,8 +6097,6 @@ dependencies = [
  "regex",
  "registry-config-report",
  "registry-language-server",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-crypto",

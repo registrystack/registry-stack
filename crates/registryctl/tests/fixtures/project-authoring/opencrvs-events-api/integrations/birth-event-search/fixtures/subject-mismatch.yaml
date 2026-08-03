@@ -31,4 +31,4 @@ interactions:
             type: birth
             status: REGISTERED
             trackingId: TRK-SYNTH999999
-expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }
+expect: { error: failure.subject_mismatch, outputs: {} }

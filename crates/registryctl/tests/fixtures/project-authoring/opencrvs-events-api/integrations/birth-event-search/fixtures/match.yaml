@@ -1,14 +1,5 @@
 name: birth-event-match
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers:
-      - { scheme: opencrvs_tracking_id, value: TRK-SYNTH000001 }
-  claims: [birth-event-found, birth-event-registered]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: birth-event-registration-verification
 input: { tracking_id: TRK-SYNTH000001 }
 interactions:
   - expect:
@@ -51,6 +42,3 @@ expect:
   outputs:
     event_type: birth
     registered: true
-  claims:
-    birth-event-found: true
-    birth-event-registered: true

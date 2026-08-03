@@ -737,8 +737,6 @@ jobs:
                 "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
               --relay-image-index \
                 "${RUNNER_TEMP}/registry-relay.index.json" \
-              --notary-image-index \
-                "${RUNNER_TEMP}/registry-notary.index.json" \
               --postgresql-image-index \
                 "${RUNNER_TEMP}/postgresql.index.json" \
               --output "${RUNNER_TEMP}/registry-release-lock.payload.json"

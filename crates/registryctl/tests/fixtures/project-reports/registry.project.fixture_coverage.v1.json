@@ -5,7 +5,6 @@
   "evidence_scope": "offline_synthetic",
   "compatibility_claim": "none",
   "live_compatibility": "not_evaluated",
-  "governed_request_evidence": "per_consultation_authored_request_witness_evaluation",
   "targets": [
     {
       "identity": {
@@ -16,29 +15,23 @@
         "source_operation_count": 1,
         "reviewed_not_applicable": [
           "subject_mismatch"
-        ],
-        "registry_backed_consultations": [
-          {
-            "service_id": "person-verification",
-            "consultation_id": "person_record"
-          }
         ]
       },
       "fixture_set_state": "fixture_bearing",
       "compiled_contract": {
         "kind": "compiled_contract",
         "id": "target/person-record/compiled-contract/v1",
-        "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+        "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
       },
       "fixture_inventory": [
         {
           "evidence": {
             "kind": "authored_fixture",
             "id": "target/person-record/fixture/active-person",
-            "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "fixture_id": "active-person",
-          "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
+          "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7",
           "expectation": {
             "kind": "outcome",
             "outcome": "match"
@@ -51,24 +44,9 @@
           "output_ids": [
             "active"
           ],
-          "claim_ids": [
-            "person-active",
-            "person-record-exists"
-          ],
           "exercised_status_mappings": [],
           "classification": "synthetic",
-          "pass_state": "passed",
-          "request_to_consultation_binding": {
-            "state": "passed",
-            "consultations": [
-              {
-                "service_id": "person-verification",
-                "consultation_id": "person_record"
-              }
-            ],
-            "actual_relay_consultations": 1,
-            "safe_error_code": null
-          }
+          "pass_state": "passed"
         },
         {
           "evidence": {
@@ -88,7 +66,6 @@
             "person_id"
           ],
           "output_ids": [],
-          "claim_ids": [],
           "exercised_status_mappings": [
             {
               "outcome": "ambiguous",
@@ -98,36 +75,26 @@
             }
           ],
           "classification": "synthetic",
-          "pass_state": "passed",
-          "request_to_consultation_binding": {
-            "state": "not_authored",
-            "consultations": [],
-            "actual_relay_consultations": null,
-            "safe_error_code": null
-          }
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "authored_fixture",
             "id": "target/person-record/fixture/no-person",
-            "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "fixture_id": "no-person",
-          "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
+          "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
           "expectation": {
             "kind": "outcome",
             "outcome": "no_match"
           },
-          "semantic_null": true,
+          "semantic_null": false,
           "interaction_count": 1,
           "input_ids": [
             "person_id"
           ],
           "output_ids": [],
-          "claim_ids": [
-            "person-active",
-            "person-record-exists"
-          ],
           "exercised_status_mappings": [
             {
               "outcome": "no_match",
@@ -137,13 +104,7 @@
             }
           ],
           "classification": "synthetic",
-          "pass_state": "passed",
-          "request_to_consultation_binding": {
-            "state": "not_authored",
-            "consultations": [],
-            "actual_relay_consultations": null,
-            "safe_error_code": null
-          }
+          "pass_state": "passed"
         }
       ],
       "generated_cases": [
@@ -151,7 +112,7 @@
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/request_authority/v1",
-            "digest": "sha256:691232c9fff919e9dd9f361be7b141a07cd9fc56a0864d40a9c5decf6719ed85"
+            "digest": "sha256:8c44e8e564c6cebafcf72f7c61e076d399592c64ee65c4ce0a95fe8eaeda08f4"
           },
           "recipe": {
             "id": "request_authority",
@@ -159,7 +120,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -167,14 +128,13 @@
           "mutation_target_class": "request_path_authority",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": "fixture.request_mismatch",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/request_order/v1",
-            "digest": "sha256:1b714bff4811578892f09bd3fe3fe79c634b2fed0c470984f25d373d679cce8c"
+            "digest": "sha256:012fee1fcd5caae106e4848043828ed670ffb03413b994fd94d6dcbe0bd5c8ab"
           },
           "recipe": {
             "id": "request_order",
@@ -182,7 +142,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "not_applicable",
@@ -192,14 +152,13 @@
           "mutation_target_class": "request_interaction_order",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/status_rejection/v1",
-            "digest": "sha256:365e50a447ad14ef0ad14689f569acc4f8c935e03fa85a6fe18f07f64666c451"
+            "digest": "sha256:83893efd85d32733666d7140c6ebc9cac40bb61890b14540c312338b0e9dcf13"
           },
           "recipe": {
             "id": "status_rejection",
@@ -207,7 +166,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -215,14 +174,13 @@
           "mutation_target_class": "source_status",
           "expected_safe_code": "source.status_rejected",
           "actual_safe_code": "source.status_rejected",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/malformed_decode/v1",
-            "digest": "sha256:00a9b0010878b27345c9ce26b7d2089c21312749ccedfaa98849d97ced748765"
+            "digest": "sha256:53963adf443166b4fd580d1b6020f98ebd3383a21f682d75c695ce4df82d3a5d"
           },
           "recipe": {
             "id": "malformed_decode",
@@ -230,7 +188,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -238,14 +196,13 @@
           "mutation_target_class": "response_body_decoding",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": "source.response_malformed",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/byte_ceiling/v1",
-            "digest": "sha256:1111c0c5d0542692d8c3efe821e719ee1235654102af5a399ee1da2b4167691e"
+            "digest": "sha256:d93707b5e8aaea86d7e9fc014b649fdc1702f4281a36b6de15544827f4ed5448"
           },
           "recipe": {
             "id": "byte_ceiling",
@@ -253,7 +210,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -261,14 +218,13 @@
           "mutation_target_class": "declared_response_byte_count",
           "expected_safe_code": "source.response_too_large",
           "actual_safe_code": "source.response_too_large",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/timeout/v1",
-            "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+            "digest": "sha256:74babb893caf18e9adb01c49998839f64f1388fc8f984b6836985c7380bcd307"
           },
           "recipe": {
             "id": "timeout",
@@ -276,7 +232,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -284,14 +240,13 @@
           "mutation_target_class": "source_deadline",
           "expected_safe_code": "source.deadline_exceeded",
           "actual_safe_code": "source.deadline_exceeded",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/protocol_verification/v1",
-            "digest": "sha256:891f622340293bffcd8ef3b6f46e45657b194b5b3be228f37054f57655f38b0c"
+            "digest": "sha256:9a6d0a087c11819145848b435aaa1e1c1304d23be9c97f1ea137824956d82a41"
           },
           "recipe": {
             "id": "protocol_verification",
@@ -299,7 +254,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "not_applicable",
@@ -309,41 +264,13 @@
           "mutation_target_class": "protocol_response_envelope",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
-        },
-        {
-          "evidence": {
-            "kind": "generated_case",
-            "id": "target/person-record/fixture/active-person/generated/authorization_before_source/v1",
-            "digest": "sha256:2d5485575a39c37edec432a39f1d2ba08be39c45cc38e55c1dd1e4a75dccb74a"
-          },
-          "recipe": {
-            "id": "authorization_before_source",
-            "version": "v1"
-          },
-          "source_fixture": {
-            "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
-          },
-          "applicability": {
-            "state": "applicable"
-          },
-          "mutation_target_class": "authorization_gate",
-          "expected_safe_code": "authorization.denied",
-          "actual_safe_code": "authorization.denied",
-          "pass_state": "passed",
-          "source_access_assertion": {
-            "expected_source_calls": "zero",
-            "actual_source_calls": 0,
-            "passed": true
-          }
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/active-person/generated/output_minimization/v1",
-            "digest": "sha256:dc7c3bbc4489276a37f90f03591ce9cd3e568ad11d2244e1fcb2b3381463c8f0"
+            "digest": "sha256:d0d93d063b0f678c8e2047228ec2b279aa9cf34cc25b6c8f8efb96b2d03614e7"
           },
           "recipe": {
             "id": "output_minimization",
@@ -351,7 +278,7 @@
           },
           "source_fixture": {
             "fixture_id": "active-person",
-            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            "fixture_digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
           },
           "applicability": {
             "state": "applicable"
@@ -359,14 +286,13 @@
           "mutation_target_class": "unselected_response_member",
           "expected_safe_code": null,
           "actual_safe_code": null,
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/request_authority/v1",
-            "digest": "sha256:37104336a5fc0b48e66157167df95bd3be54a5c83ecb7a2fce1c4a62223974a7"
+            "digest": "sha256:6e5061bf9d74c931f852610aaf782a0f46f2d3d1c56a961c3d189f1aed6899dc"
           },
           "recipe": {
             "id": "request_authority",
@@ -382,14 +308,13 @@
           "mutation_target_class": "request_path_authority",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": "fixture.request_mismatch",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/request_order/v1",
-            "digest": "sha256:db7f52d696a31e99b6fb7770b67af97658e13d433e8be67a4e17a7a803b8ae00"
+            "digest": "sha256:7888258af86a191e16be021b1187140bd98b377dc31b491c424990a662028376"
           },
           "recipe": {
             "id": "request_order",
@@ -407,14 +332,13 @@
           "mutation_target_class": "request_interaction_order",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/status_rejection/v1",
-            "digest": "sha256:17c91679f0bcafb1d73a632361167111fe3adc821d7362b5f73d57cc8e646aec"
+            "digest": "sha256:ae9bfc729a67431d7c745cc48557dd2cebe20ac7107c36ffa6478cc05d1ca173"
           },
           "recipe": {
             "id": "status_rejection",
@@ -430,14 +354,13 @@
           "mutation_target_class": "source_status",
           "expected_safe_code": "source.status_rejected",
           "actual_safe_code": "source.status_rejected",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/malformed_decode/v1",
-            "digest": "sha256:16358fa165c4d86fb69c57c9fbb1d47db083b933ac7c449a47ac03a2b3a722a1"
+            "digest": "sha256:4cdd8cd238507c7fb322242bec787887814bcfe9d8313002fd86deae7d1d5331"
           },
           "recipe": {
             "id": "malformed_decode",
@@ -453,14 +376,13 @@
           "mutation_target_class": "response_body_decoding",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": "source.response_malformed",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/byte_ceiling/v1",
-            "digest": "sha256:cdfe77bfe9fa27c36bc01f6e9635a1dd593990153c8010657f87fbf8760a36f2"
+            "digest": "sha256:19730f51c1b5e8fe1c23d3622e978eef5eaaf73f7f706a68d588ffcc1375142a"
           },
           "recipe": {
             "id": "byte_ceiling",
@@ -476,14 +398,13 @@
           "mutation_target_class": "declared_response_byte_count",
           "expected_safe_code": "source.response_too_large",
           "actual_safe_code": "source.response_too_large",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
-            "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+            "digest": "sha256:b695dd1f303ef4d1190a1b4b2d90fe818d2f54100b0df8a0674173e1ab725ae3"
           },
           "recipe": {
             "id": "timeout",
@@ -499,14 +420,13 @@
           "mutation_target_class": "source_deadline",
           "expected_safe_code": "source.deadline_exceeded",
           "actual_safe_code": "source.deadline_exceeded",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/protocol_verification/v1",
-            "digest": "sha256:5a891e5db4eaa349bc1f03f1548fa6759078b953629eea15e2821350d26cf945"
+            "digest": "sha256:28dc026d68b0c00774970c32ec8e9eddf7ec61f50fdd7e4c5d785d56a479df7c"
           },
           "recipe": {
             "id": "protocol_verification",
@@ -524,41 +444,13 @@
           "mutation_target_class": "protocol_response_envelope",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
-        },
-        {
-          "evidence": {
-            "kind": "generated_case",
-            "id": "target/person-record/fixture/ambiguous-person/generated/authorization_before_source/v1",
-            "digest": "sha256:9c96a3b1b8bb205e135572dee4d2f82d689482ef642eb83f498d8e14c115ad4f"
-          },
-          "recipe": {
-            "id": "authorization_before_source",
-            "version": "v1"
-          },
-          "source_fixture": {
-            "fixture_id": "ambiguous-person",
-            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
-          },
-          "applicability": {
-            "state": "applicable"
-          },
-          "mutation_target_class": "authorization_gate",
-          "expected_safe_code": "authorization.denied",
-          "actual_safe_code": "authorization.denied",
-          "pass_state": "passed",
-          "source_access_assertion": {
-            "expected_source_calls": "zero",
-            "actual_source_calls": 0,
-            "passed": true
-          }
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/ambiguous-person/generated/output_minimization/v1",
-            "digest": "sha256:2b5e0499735227031d349d9c8ba7b2ccf070228e2ecbdfc97f1632b2352eb7c2"
+            "digest": "sha256:9f9aae65b7c31c99e000362684f513d66aeaa116a82fdab1ac8d2645c22a2086"
           },
           "recipe": {
             "id": "output_minimization",
@@ -574,14 +466,13 @@
           "mutation_target_class": "unselected_response_member",
           "expected_safe_code": null,
           "actual_safe_code": null,
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/request_authority/v1",
-            "digest": "sha256:e7ae1794d2cca59818de6b3baf66439dca503d79b6f3196e887956f552ee4881"
+            "digest": "sha256:ba58ab903af746603b9550de6b854b9b87db6c6fc2d80a0cf15e71f1850429ab"
           },
           "recipe": {
             "id": "request_authority",
@@ -589,7 +480,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -597,14 +488,13 @@
           "mutation_target_class": "request_path_authority",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": "fixture.request_mismatch",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/request_order/v1",
-            "digest": "sha256:547b5db1d96930b17a4d855f9c699cddac23120d9c44c86b9ea9d829f91fd315"
+            "digest": "sha256:26a118a2fbb97e5df78f16cc96e2389c4a75754f2fe5d47f3cd0745e055c16a8"
           },
           "recipe": {
             "id": "request_order",
@@ -612,7 +502,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "not_applicable",
@@ -622,14 +512,13 @@
           "mutation_target_class": "request_interaction_order",
           "expected_safe_code": "fixture.request_mismatch",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/status_rejection/v1",
-            "digest": "sha256:8bd1e632702cdf10d2841bce8527e2593858cdc0e46611a86f2199737e9829ae"
+            "digest": "sha256:4bb8bc4b23e22f4f95ae88dbb093181b1313deac6d6fab40fac4203035e8c200"
           },
           "recipe": {
             "id": "status_rejection",
@@ -637,7 +526,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -645,14 +534,13 @@
           "mutation_target_class": "source_status",
           "expected_safe_code": "source.status_rejected",
           "actual_safe_code": "source.status_rejected",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/malformed_decode/v1",
-            "digest": "sha256:560c723752d29a94f56203a1593bad292684cc7bde7420185da4191c0a400c26"
+            "digest": "sha256:f665f20904c17eec0b90a5064b2422c9ddc714ec19751c712bb5977711ca3a64"
           },
           "recipe": {
             "id": "malformed_decode",
@@ -660,7 +548,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -668,14 +556,13 @@
           "mutation_target_class": "response_body_decoding",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": "source.response_malformed",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/byte_ceiling/v1",
-            "digest": "sha256:9413c3591793f33e81592d852cea1e4e5b52407457d642f95b6b8d9366ac7510"
+            "digest": "sha256:eaceee28ed492dc7126feccac3e726e59bd4035391081b610c21cf69f39859a1"
           },
           "recipe": {
             "id": "byte_ceiling",
@@ -683,7 +570,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -691,14 +578,13 @@
           "mutation_target_class": "declared_response_byte_count",
           "expected_safe_code": "source.response_too_large",
           "actual_safe_code": "source.response_too_large",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/timeout/v1",
-            "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+            "digest": "sha256:6461781fc86e21b82b1c31db604038b1740e7069be14b2bc9d1bd32c778c503e"
           },
           "recipe": {
             "id": "timeout",
@@ -706,7 +592,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -714,14 +600,13 @@
           "mutation_target_class": "source_deadline",
           "expected_safe_code": "source.deadline_exceeded",
           "actual_safe_code": "source.deadline_exceeded",
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/protocol_verification/v1",
-            "digest": "sha256:023a5c16d404902ae161f2d76688c74841afc120790831ccb6f6ec2e9c6f0a13"
+            "digest": "sha256:630e9188053f6cd0a735effd8e93088bf3614486c2cf5656bce8a40de3d3f875"
           },
           "recipe": {
             "id": "protocol_verification",
@@ -729,7 +614,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "not_applicable",
@@ -739,41 +624,13 @@
           "mutation_target_class": "protocol_response_envelope",
           "expected_safe_code": "source.response_malformed",
           "actual_safe_code": null,
-          "pass_state": "not_executed",
-          "source_access_assertion": null
-        },
-        {
-          "evidence": {
-            "kind": "generated_case",
-            "id": "target/person-record/fixture/no-person/generated/authorization_before_source/v1",
-            "digest": "sha256:32f15ede7285f1271d842c7d9a1cd1e9e5906fb0c5a16d1173a49849b117737e"
-          },
-          "recipe": {
-            "id": "authorization_before_source",
-            "version": "v1"
-          },
-          "source_fixture": {
-            "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
-          },
-          "applicability": {
-            "state": "applicable"
-          },
-          "mutation_target_class": "authorization_gate",
-          "expected_safe_code": "authorization.denied",
-          "actual_safe_code": "authorization.denied",
-          "pass_state": "passed",
-          "source_access_assertion": {
-            "expected_source_calls": "zero",
-            "actual_source_calls": 0,
-            "passed": true
-          }
+          "pass_state": "not_executed"
         },
         {
           "evidence": {
             "kind": "generated_case",
             "id": "target/person-record/fixture/no-person/generated/output_minimization/v1",
-            "digest": "sha256:ba70efd09852298f5635cf140ecc7ea8ea077b54c83620a57d486ab2f0b2a19f"
+            "digest": "sha256:72b3b2e274b054ede9e4432b49c84b595f107bdce1b323d678956574e39ddd52"
           },
           "recipe": {
             "id": "output_minimization",
@@ -781,7 +638,7 @@
           },
           "source_fixture": {
             "fixture_id": "no-person",
-            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            "fixture_digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
           },
           "applicability": {
             "state": "applicable"
@@ -789,8 +646,7 @@
           "mutation_target_class": "unselected_response_member",
           "expected_safe_code": null,
           "actual_safe_code": null,
-          "pass_state": "passed",
-          "source_access_assertion": null
+          "pass_state": "passed"
         }
       ],
       "platform_cases": [],
@@ -800,14 +656,6 @@
         ],
         "output_ids": [
           "active"
-        ],
-        "claim_ids": [
-          "person-active",
-          "person-record-exists"
-        ],
-        "disclosure_modes": [
-          "predicate",
-          "value"
         ],
         "status_mappings": [
           {
@@ -841,11 +689,6 @@
         "output_ids": [
           "active"
         ],
-        "claim_ids": [
-          "person-active",
-          "person-record-exists"
-        ],
-        "disclosure_modes": [],
         "status_mappings": [
           {
             "outcome": "ambiguous",
@@ -876,7 +719,7 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/active-person",
-              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+              "digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
             }
           ]
         },
@@ -887,7 +730,7 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/no-person",
-              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+              "digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
             }
           ]
         },
@@ -910,24 +753,13 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
-            }
-          ]
-        },
-        {
-          "state": "covered",
-          "requirement": "semantic_null",
-          "evidence": [
-            {
-              "kind": "authored_fixture",
-              "id": "target/person-record/fixture/no-person",
-              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
         {
           "state": "missing",
-          "requirement": "authorization_denial",
+          "requirement": "semantic_null",
           "reason": "required_evidence_missing",
           "evidence": []
         },
@@ -944,28 +776,17 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/request_authority/v1",
-              "digest": "sha256:691232c9fff919e9dd9f361be7b141a07cd9fc56a0864d40a9c5decf6719ed85"
+              "digest": "sha256:8c44e8e564c6cebafcf72f7c61e076d399592c64ee65c4ce0a95fe8eaeda08f4"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/request_authority/v1",
-              "digest": "sha256:37104336a5fc0b48e66157167df95bd3be54a5c83ecb7a2fce1c4a62223974a7"
+              "digest": "sha256:6e5061bf9d74c931f852610aaf782a0f46f2d3d1c56a961c3d189f1aed6899dc"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/request_authority/v1",
-              "digest": "sha256:e7ae1794d2cca59818de6b3baf66439dca503d79b6f3196e887956f552ee4881"
-            }
-          ]
-        },
-        {
-          "state": "covered",
-          "requirement": "request_to_consultation_binding",
-          "evidence": [
-            {
-              "kind": "authored_fixture",
-              "id": "target/person-record/fixture/active-person",
-              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+              "digest": "sha256:ba58ab903af746603b9550de6b854b9b87db6c6fc2d80a0cf15e71f1850429ab"
             }
           ]
         },
@@ -976,7 +797,7 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/active-person",
-              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+              "digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
             },
             {
               "kind": "authored_fixture",
@@ -986,7 +807,7 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/no-person",
-              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+              "digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
             }
           ]
         },
@@ -998,7 +819,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1009,42 +830,9 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/active-person",
-              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+              "digest": "sha256:df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7"
             }
           ]
-        },
-        {
-          "state": "covered",
-          "requirement": "claims",
-          "evidence": [
-            {
-              "kind": "authored_fixture",
-              "id": "target/person-record/fixture/active-person",
-              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
-            },
-            {
-              "kind": "authored_fixture",
-              "id": "target/person-record/fixture/no-person",
-              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
-            }
-          ]
-        },
-        {
-          "state": "covered",
-          "requirement": "declared_disclosure_modes",
-          "evidence": [
-            {
-              "kind": "compiled_contract",
-              "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
-            }
-          ]
-        },
-        {
-          "state": "missing",
-          "requirement": "exercised_disclosure_modes",
-          "reason": "runtime_dimension_not_observed",
-          "evidence": []
         },
         {
           "state": "not_applicable",
@@ -1054,7 +842,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1066,7 +854,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1082,7 +870,7 @@
             {
               "kind": "authored_fixture",
               "id": "target/person-record/fixture/no-person",
-              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+              "digest": "sha256:415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e"
             }
           ]
         },
@@ -1094,7 +882,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1106,28 +894,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
-            }
-          ]
-        },
-        {
-          "state": "covered",
-          "requirement": "authorization_before_source",
-          "evidence": [
-            {
-              "kind": "generated_case",
-              "id": "target/person-record/fixture/active-person/generated/authorization_before_source/v1",
-              "digest": "sha256:2d5485575a39c37edec432a39f1d2ba08be39c45cc38e55c1dd1e4a75dccb74a"
-            },
-            {
-              "kind": "generated_case",
-              "id": "target/person-record/fixture/ambiguous-person/generated/authorization_before_source/v1",
-              "digest": "sha256:9c96a3b1b8bb205e135572dee4d2f82d689482ef642eb83f498d8e14c115ad4f"
-            },
-            {
-              "kind": "generated_case",
-              "id": "target/person-record/fixture/no-person/generated/authorization_before_source/v1",
-              "digest": "sha256:32f15ede7285f1271d842c7d9a1cd1e9e5906fb0c5a16d1173a49849b117737e"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1138,17 +905,17 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/malformed_decode/v1",
-              "digest": "sha256:00a9b0010878b27345c9ce26b7d2089c21312749ccedfaa98849d97ced748765"
+              "digest": "sha256:53963adf443166b4fd580d1b6020f98ebd3383a21f682d75c695ce4df82d3a5d"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/malformed_decode/v1",
-              "digest": "sha256:16358fa165c4d86fb69c57c9fbb1d47db083b933ac7c449a47ac03a2b3a722a1"
+              "digest": "sha256:4cdd8cd238507c7fb322242bec787887814bcfe9d8313002fd86deae7d1d5331"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/malformed_decode/v1",
-              "digest": "sha256:560c723752d29a94f56203a1593bad292684cc7bde7420185da4191c0a400c26"
+              "digest": "sha256:f665f20904c17eec0b90a5064b2422c9ddc714ec19751c712bb5977711ca3a64"
             }
           ]
         },
@@ -1159,7 +926,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1171,7 +938,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1182,17 +949,17 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/byte_ceiling/v1",
-              "digest": "sha256:1111c0c5d0542692d8c3efe821e719ee1235654102af5a399ee1da2b4167691e"
+              "digest": "sha256:d93707b5e8aaea86d7e9fc014b649fdc1702f4281a36b6de15544827f4ed5448"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/byte_ceiling/v1",
-              "digest": "sha256:cdfe77bfe9fa27c36bc01f6e9635a1dd593990153c8010657f87fbf8760a36f2"
+              "digest": "sha256:19730f51c1b5e8fe1c23d3622e978eef5eaaf73f7f706a68d588ffcc1375142a"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/byte_ceiling/v1",
-              "digest": "sha256:9413c3591793f33e81592d852cea1e4e5b52407457d642f95b6b8d9366ac7510"
+              "digest": "sha256:eaceee28ed492dc7126feccac3e726e59bd4035391081b610c21cf69f39859a1"
             }
           ]
         },
@@ -1204,7 +971,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1216,7 +983,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1228,7 +995,7 @@
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1239,17 +1006,17 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/timeout/v1",
-              "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+              "digest": "sha256:74babb893caf18e9adb01c49998839f64f1388fc8f984b6836985c7380bcd307"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
-              "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+              "digest": "sha256:b695dd1f303ef4d1190a1b4b2d90fe818d2f54100b0df8a0674173e1ab725ae3"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/timeout/v1",
-              "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+              "digest": "sha256:6461781fc86e21b82b1c31db604038b1740e7069be14b2bc9d1bd32c778c503e"
             }
           ]
         },
@@ -1261,22 +1028,22 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/timeout/v1",
-              "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+              "digest": "sha256:74babb893caf18e9adb01c49998839f64f1388fc8f984b6836985c7380bcd307"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
-              "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+              "digest": "sha256:b695dd1f303ef4d1190a1b4b2d90fe818d2f54100b0df8a0674173e1ab725ae3"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/timeout/v1",
-              "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+              "digest": "sha256:6461781fc86e21b82b1c31db604038b1740e7069be14b2bc9d1bd32c778c503e"
             },
             {
               "kind": "compiled_contract",
               "id": "target/person-record/compiled-contract/v1",
-              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+              "digest": "sha256:9a0c69f212881f7793f7cac6aef779f2504c7b8d4e54a478b8139b73aa8c77f6"
             }
           ]
         },
@@ -1287,17 +1054,17 @@
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/active-person/generated/output_minimization/v1",
-              "digest": "sha256:dc7c3bbc4489276a37f90f03591ce9cd3e568ad11d2244e1fcb2b3381463c8f0"
+              "digest": "sha256:d0d93d063b0f678c8e2047228ec2b279aa9cf34cc25b6c8f8efb96b2d03614e7"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/ambiguous-person/generated/output_minimization/v1",
-              "digest": "sha256:2b5e0499735227031d349d9c8ba7b2ccf070228e2ecbdfc97f1632b2352eb7c2"
+              "digest": "sha256:9f9aae65b7c31c99e000362684f513d66aeaa116a82fdab1ac8d2645c22a2086"
             },
             {
               "kind": "generated_case",
               "id": "target/person-record/fixture/no-person/generated/output_minimization/v1",
-              "digest": "sha256:ba70efd09852298f5635cf140ecc7ea8ea077b54c83620a57d486ab2f0b2a19f"
+              "digest": "sha256:72b3b2e274b054ede9e4432b49c84b595f107bdce1b323d678956574e39ddd52"
             }
           ]
         },
@@ -1310,12 +1077,6 @@
         {
           "state": "not_evaluated",
           "requirement": "changed_output_affected_fixtures",
-          "reason": "comparison_input_absent",
-          "evidence": []
-        },
-        {
-          "state": "not_evaluated",
-          "requirement": "changed_claim_affected_fixtures",
           "reason": "comparison_input_absent",
           "evidence": []
         },
@@ -1334,11 +1095,11 @@
     "fixture_bearing_target_count": 1,
     "fixtureless_target_count": 0,
     "requirements": {
-      "covered": 17,
-      "missing": 7,
+      "covered": 12,
+      "missing": 6,
       "not_applicable": 7,
-      "not_evaluated": 4,
-      "total": 35
+      "not_evaluated": 3,
+      "total": 28
     }
   }
 }
