@@ -242,11 +242,6 @@ impl AuditChainProfile {
         Self::production_from_env(env_var_name)
     }
 
-    /// Registry Notary production audit-chain profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
     /// Explicit test and local-development profile.
     #[must_use]
     pub fn dev_unkeyed() -> Self {
@@ -293,11 +288,6 @@ impl AuditProfile {
 
     /// Registry Relay production audit profile.
     pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
-    /// Registry Notary production audit profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Self::production_from_env(env_var_name)
     }
 
@@ -3870,7 +3860,7 @@ mod tests {
     async fn audit_profile_uses_one_secret_for_chain_and_identifier_hashing() {
         let name = "REGISTRY_PLATFORM_AUDIT_PROFILE_TEST_SECRET";
         env::set_var(name, "0123456789abcdef0123456789abcdef");
-        let profile = AuditProfile::registry_notary_from_env(name).expect("profile");
+        let profile = AuditProfile::production_from_env(name).expect("profile");
         env::remove_var(name);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");

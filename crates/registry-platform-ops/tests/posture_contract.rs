@@ -67,7 +67,6 @@ fn posture_examples_and_redaction_fixtures_validate() {
     let validator = posture_validator();
     for fixture in [
         registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
-        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
         registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1,
         registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1,
         registry_platform_ops::RELAY_RESTRICTED_POSTURE_FIXTURE_V1,
@@ -105,24 +104,19 @@ fn relay_refresh_health_is_restricted_and_schema_valid() {
 #[test]
 fn posture_audit_shipping_state_fields_round_trip() {
     let validator = posture_validator();
-    for fixture in [
-        registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
-        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
-    ] {
-        let posture = parse(fixture);
-        assert_valid(&validator, &posture);
-        let audit = &posture["posture"]["audit"];
-        assert!(audit["shipping_target_configured"].is_boolean());
-        assert!(audit["shipping_target"].is_string());
+    let posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    assert_valid(&validator, &posture);
+    let audit = &posture["posture"]["audit"];
+    assert!(audit["shipping_target_configured"].is_boolean());
+    assert!(audit["shipping_target"].is_string());
 
-        let rendered = serde_json::to_string(&posture).expect("posture renders");
-        let reparsed: serde_json::Value =
-            serde_json::from_str(&rendered).expect("rendered posture parses");
-        assert_eq!(
-            reparsed["posture"]["audit"], posture["posture"]["audit"],
-            "shipping-state posture fields must round-trip unchanged"
-        );
-    }
+    let rendered = serde_json::to_string(&posture).expect("posture renders");
+    let reparsed: serde_json::Value =
+        serde_json::from_str(&rendered).expect("rendered posture parses");
+    assert_eq!(
+        reparsed["posture"]["audit"], posture["posture"]["audit"],
+        "shipping-state posture fields must round-trip unchanged"
+    );
 
     let mut missing_shipping_state = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
     missing_shipping_state["posture"]["audit"]
@@ -139,7 +133,6 @@ fn posture_audit_shipping_health_fields_are_required_and_enumerated() {
     // Canonical examples and fixtures carry the observed shipping-health fields.
     for fixture in [
         registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
-        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
         registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1,
         registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1,
     ] {
@@ -340,7 +333,7 @@ fn default_filter_preserves_emergency_configuration_block() {
 }
 
 #[test]
-fn default_examples_are_allowlist_projections() {
+fn default_example_is_an_allowlist_projection() {
     let allowlist = parse(registry_platform_ops::DEFAULT_POSTURE_ALLOWLIST_FIXTURE_V1);
     let allowed = allowlist["allowed_json_pointers"]
         .as_array()
@@ -349,18 +342,13 @@ fn default_examples_are_allowlist_projections() {
         .map(|value| value.as_str().expect("pointer is string"))
         .collect::<Vec<_>>();
 
-    for example in [
-        registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
-        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
-    ] {
-        let posture = parse(example);
-        assert_eq!(posture["tier"], "default");
-        for pointer in collect_leaf_pointers(&posture) {
-            assert!(
-                pointer_is_allowed(&pointer, &allowed),
-                "default example contains a leaf outside the default allowlist: {pointer}"
-            );
-        }
+    let posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    assert_eq!(posture["tier"], "default");
+    for pointer in collect_leaf_pointers(&posture) {
+        assert!(
+            pointer_is_allowed(&pointer, &allowed),
+            "default example contains a leaf outside the default allowlist: {pointer}"
+        );
     }
 }
 

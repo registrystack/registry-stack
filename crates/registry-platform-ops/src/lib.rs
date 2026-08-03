@@ -88,9 +88,6 @@ pub const CONFIG_APPLY_REPORT_SCHEMA_V1: &str =
 pub const RELAY_POSTURE_EXAMPLE_V1: &str =
     include_str!("../examples/registry-relay.posture.valid.json");
 
-pub const NOTARY_POSTURE_EXAMPLE_V1: &str =
-    include_str!("../examples/registry-notary.posture.valid.json");
-
 pub const DEFAULT_POSTURE_ALLOWLIST_FIXTURE_V1: &str =
     include_str!("../fixtures/posture/default-allowlist.json");
 

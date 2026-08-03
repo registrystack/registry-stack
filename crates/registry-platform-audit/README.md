@@ -34,7 +34,7 @@ use serde_json::json;
 
 async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
     let sink = JsonlFileSink::new("audit.jsonl");
-    let profile = AuditProfile::registry_notary_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
+    let profile = AuditProfile::registry_relay_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
     let chain = profile.bootstrap_or_start_empty(&sink).await?;
 
     let envelope = chain
@@ -239,8 +239,8 @@ production use.
 - `DurableAuditOperationId` validates canonical ULID syntax only. The consumer
   must enforce that the id is server-minted and is not derived from a subject
   selector, token, source identifier, or other sensitive input.
-- Use `AuditProfile::registry_relay_from_env` or
-  `AuditProfile::registry_notary_from_env` in production. `unkeyed_dev_only` is
+- Use `AuditProfile::production_from_env` or
+  `AuditProfile::registry_relay_from_env` in production. `unkeyed_dev_only` is
   for tests and local development.
 - Use `AuditKeyHasher::audit_reference_hash` for durable audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service

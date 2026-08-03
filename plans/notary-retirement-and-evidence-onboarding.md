@@ -815,3 +815,22 @@ is parallel; B has no upstream dependencies and is the standing priority
   shape did. The other constants in `deployment.rs`, `trust.rs`, and
   `project_authoring` are unaffected: their documents are generated fresh or
   their shapes did not change in the retirement.
+
+- 2026-08-03: Applied decision 9 to the platform crates. Deleted eight
+  callerless public items: both `registry_notary_from_env` constructors
+  (platform-audit), `registry_notary_access_profile`,
+  `registry_notary_federation_request_profile` and the `typed_request_profile`
+  helper it was the only caller of (platform-oidc), `NOTARY_POSTURE_EXAMPLE_V1`
+  (platform-ops), and the two Notary diagnostic fixture constants
+  (config-report). The two config-report fixture JSON files went with them, but
+  their deletion landed early in `1fc9a943` because a concurrent agent staged
+  them; the source removals are here. `examples/registry-notary.posture.valid.json`
+  is deliberately kept: `docs/site/scripts/ops-posture-spec.test.mjs` reads it
+  by path and asserts the retired component still validates against the frozen
+  `registry.ops.posture.v1`, which is decision 9's read-an-old-document case.
+  The `registry-notary` component values in the ops posture and config-report
+  schemas stay for the same reason; whether a future `registry.ops.posture.v2`
+  drops them is a separate contract decision. Gates: `cargo fmt --check` clean,
+  `cargo clippy` on the four crates with `-D warnings` clean,
+  `cargo check --locked --workspace --all-targets` clean, and the four crates'
+  suites green (16 targets, 0 failures).

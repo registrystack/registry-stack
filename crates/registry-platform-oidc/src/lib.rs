@@ -786,9 +786,9 @@ impl TokenVerifierConfig {
     ///
     /// Access tokens must carry one of `allowed_typ`; an empty `allowed_typ`
     /// list fails closed. Related ID tokens and UserInfo JWTs use the project
-    /// defaults accepted by Relay and Notary:
-    /// ID token `typ` values `JWT` and `id_token`, UserInfo JWT `typ` value
-    /// `JWT`, and required UserInfo expiration by default.
+    /// defaults accepted by Relay: ID token `typ` values `JWT` and `id_token`,
+    /// UserInfo JWT `typ` value `JWT`, and required UserInfo expiration by
+    /// default.
     pub fn access_token_profile(
         issuer: impl Into<String>,
         audiences: Vec<String>,
@@ -811,22 +811,6 @@ impl TokenVerifierConfig {
         }
     }
 
-    /// Build a profile for project-specific typed request JWTs such as Notary
-    /// federation requests.
-    pub fn typed_request_profile(
-        issuer: impl Into<String>,
-        audience: impl Into<String>,
-        allowed_algorithms: Vec<Algorithm>,
-        typ: impl Into<String>,
-    ) -> Self {
-        Self::access_token_profile(
-            issuer,
-            vec![audience.into()],
-            allowed_algorithms,
-            vec![typ.into()],
-        )
-    }
-
     /// Registry Relay access-token verifier profile.
     pub fn registry_relay_access_profile(
         issuer: impl Into<String>,
@@ -835,26 +819,6 @@ impl TokenVerifierConfig {
         allowed_typ: Vec<String>,
     ) -> Self {
         Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
-    }
-
-    /// Registry Notary subject-access token verifier profile.
-    pub fn registry_notary_access_profile(
-        issuer: impl Into<String>,
-        audiences: Vec<String>,
-        allowed_algorithms: Vec<Algorithm>,
-        allowed_typ: Vec<String>,
-    ) -> Self {
-        Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
-    }
-
-    /// Registry Notary federation request JWT verifier profile.
-    pub fn registry_notary_federation_request_profile(
-        issuer: impl Into<String>,
-        audience: impl Into<String>,
-        allowed_algorithms: Vec<Algorithm>,
-        typ: impl Into<String>,
-    ) -> Self {
-        Self::typed_request_profile(issuer, audience, allowed_algorithms, typ)
     }
 
     #[must_use]
@@ -1560,22 +1524,6 @@ mod tests {
         assert_eq!(config.scope_separator, ',');
         assert_eq!(config.allowed_clients, vec!["client-a"]);
         assert_eq!(config.leeway, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn federation_request_profile_binds_single_audience_and_type() {
-        let config = TokenVerifierConfig::registry_notary_federation_request_profile(
-            "https://peer.example",
-            "did:web:agency-a.example.gov",
-            vec![Algorithm::EdDSA],
-            "registry-notary-federation+jwt",
-        );
-
-        assert_eq!(config.audiences, vec!["did:web:agency-a.example.gov"]);
-        assert_eq!(config.allowed_typ, vec!["registry-notary-federation+jwt"]);
-        assert_eq!(config.allowed_id_typ, vec!["JWT", "id_token"]);
-        assert_eq!(config.allowed_userinfo_typ, vec!["JWT"]);
-        assert!(config.userinfo_requires_exp);
     }
 
     fn rsa_jwk_with_modulus_bytes(kid: &str, modulus_bytes: usize) -> Jwk {
