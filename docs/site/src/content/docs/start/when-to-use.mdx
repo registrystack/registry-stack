@@ -4,9 +4,8 @@ description: Decide whether Registry Stack matches the access problem your insti
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
-  - registry-notary
-last_reviewed: "2026-06-20"
+  - registry-stack
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -31,13 +30,18 @@ system that owns the data.
 
 | Caller needs | Use | Result |
 | --- | --- | --- |
-| Selected records or fields | Registry Relay | A protected, read-only API response |
-| A signed minimum-disclosure answer about one subject | Evidence | A signed assertion carrying the answer, not the source record |
-| A bounded answer or status | Registry Notary | A claim result without the source record |
+| To read specific data | Registry Relay | A protected, read-only API response |
+| To learn only a fact | Evidence | A signed assertion carrying the answer, not the source record |
 
-Registry Relay and Registry Notary can work together: Registry Relay obtains a
-limited source result, and Registry Notary evaluates a reviewed claim over
-that result.
+Registry Notary is being retired and is no longer a recommended starting
+point.
+
+Registry Relay and Evidence can work together: an institution publishes
+records through Registry Relay, and Evidence answers a bounded question over
+those same records by treating the Relay API as a fixed HTTP source. Registry
+Mint issues the short-lived access tokens either service needs when a
+deployment has no identity provider; see the
+[Registry Mint reference](../../reference/mint/).
 
 ### Who does what
 
@@ -78,5 +82,6 @@ approval.
 
 - [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
 - [Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+- [Get a first Evidence assertion](../../tutorials/first-evidence-assertion/)
 - [Read the architecture overview](../../explanation/architecture/)
 - [Review the security boundaries](../../security/)

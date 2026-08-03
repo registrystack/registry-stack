@@ -441,3 +441,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   keep and which E2 replaces with a fresh scaffold anyway; it now asks for
   any scaffolded project, which is what its placeholder commands actually
   need.
+- 2026-08-03: B8's two-door step is now actually done, and B8 stays open.
+  An earlier status line claimed `start/when-to-use` already presented two
+  doors; it did not. That session added the Evidence row but left the Notary
+  row beside it, so the page still offered three doors and asked a newcomer
+  to tell a bounded answer from a minimum-disclosure answer before they knew
+  what either meant. The decision table is now two rows phrased as reader
+  intent: read specific data goes to Registry Relay, learn only a fact goes
+  to Evidence. Notary keeps one sentence saying it is being retired and is no
+  longer a recommended starting point, with no link, because publishing the
+  retirement page is C7's. The old Relay-plus-Notary composition paragraph
+  became the Evidence-over-Relay pattern that A2 and A3 proved, and Registry
+  Mint gets one sentence as the token issuer for deployments with no identity
+  provider. B8's glossary step was already in place. B8's third step, the
+  quickstart flip, is still blocked: `start/quickstart` routes the reader
+  through registryctl and Notary end to end, and ending it in an Evidence
+  assertion over a Relay-protected API needs the runnable composed path,
+  which is D.
