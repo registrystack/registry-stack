@@ -54,7 +54,7 @@ gates for its area (see Verification), and committed.
       target, or whether IdP-less deployments need Mint to issue for Relay
       (a security-sensitive Relay change requiring review). Record the
       outcome in the status log below.
-- [ ] A2. An ordinary sanitized Relay-shaped mock test in
+- [x] A2. An ordinary sanitized Relay-shaped mock test in
       `crates/registry-evidence` proves a full signed assertion over an
       OAuth client-credentials source, with zero production-code changes.
 - [ ] A3. A reference deployment-project example for the Relay-backed
@@ -307,3 +307,17 @@ is parallel; B has no upstream dependencies and is the standing priority
   branch is not triggered. Open question for A2 and D: whether Mint's
   Evidence-shaped claim set satisfies Relay's authorization model, or
   whether Mint (not Relay, not Evidence) needs a claim addition.
+- 2026-08-03: A2 done, zero production-code changes needed. The new
+  crates/registry-evidence/tests/relay_shaped_source.rs mirrors the
+  Relay OpenAPI's household-record read (path, bearer, Data-Purpose,
+  entity response shape) by hand in a wiremock, drives OAuth client
+  credentials through the frozen runtime's public API to a signed
+  flattened JWS, verifies it against the deployment JWKS under the full
+  relying policy, and proves minimum disclosure with canaries: the raw
+  record id, the untouched field, and even the raw region code never
+  appear in the assertion payload. Composition components all existed
+  in the frozen V1 runtime. Next in A: A3, the Relay-backed reference
+  deployment project. E2's open design question for Jeremi: what tool
+  tutorial readers use to build the RFC 7523 client assertion for Mint
+  (the demo uses a Python walkthrough; an evidencectl helper would be
+  new CLI surface outside the frozen runtime contract).
