@@ -14,13 +14,13 @@ from pathlib import Path
 
 expected = {
   ".gitignore": "84a80d00398b512ef755f17c1764c15b491058265d06d2cea71af37641324b83",
-  "environments/local.yaml": "0ae0ce73cd6a775e188aaa0caed37cccce378c392aa021544872b16d6f0047a6",
-  "integrations/person-record/fixtures/active.yaml": "4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
+  "environments/local.yaml": "3af49441f405f725b25c9b1075c408fcd4b768b2b0bbd70a59b04c878ae8df45",
+  "integrations/person-record/fixtures/active.yaml": "df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7",
   "integrations/person-record/fixtures/ambiguous.yaml": "6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
-  "integrations/person-record/fixtures/no-match.yaml": "f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
+  "integrations/person-record/fixtures/no-match.yaml": "415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "d6315b173ee04818bc8e420d3a922944386be54a06e2d9c6c20cdb7d0f1c0c27"
+  "registry-stack.yaml": "3e22300d40d72e7dd17cf51ff90967e654cca3fd520e51f5e32496870431385b"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"jsonplaceholder-todo-live-overlay-v1.sh", "jsonplaceholder-todo-live-overlay-v1.sh.sha256"}

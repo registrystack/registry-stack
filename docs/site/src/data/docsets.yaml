@@ -16,9 +16,6 @@ docsets:
       registry-relay:
         version: main source (unreleased)
         ref: HEAD
-      registry-notary:
-        version: main source (unreleased)
-        ref: HEAD
       registry-manifest:
         version: main source (unreleased)
         ref: HEAD

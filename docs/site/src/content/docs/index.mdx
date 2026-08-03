@@ -6,7 +6,6 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
 last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
@@ -37,29 +36,14 @@ that run from there to production signing.
 
 Use the maintained spreadsheet path when the institution has a workbook or
 can prepare a reviewed workbook derivative.
-The first run starts Registry Relay and Registry Notary over the shipped
-synthetic workbook. It records a live authorization denial and a minimized
-evidence result; the offline derived fixture supplies the zero-source-access
-evidence that a local file cannot count itself.
+The first run starts Registry Relay over the shipped synthetic workbook. It
+records a live authorization denial and a selected-field response; the offline
+derived fixture supplies the zero-source-access evidence that a local file
+cannot count itself.
 
 [Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
 takes about 20 minutes and uses released artifacts without a source checkout.
 After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
-
-## Expose Notary evidence claims
-
-Registry Notary is being retired and is no longer a recommended starting
-point. Evidence is the supported way to answer a bounded question.
-This path remains documented for deployments that already run it.
-
-The spreadsheet starter already includes one evidence service.
-Registry Relay performs the exact source lookup and sends only the field needed
-by the rule to Registry Notary.
-Notary returns predicate claims rather than the workbook row.
-
-[Expose evidence from a spreadsheet registry](tutorials/verify-claim-registry-api/)
-shows how to change that rule while preserving authorization, source, and
-disclosure boundaries.
 
 ## Connect an existing registry
 
@@ -78,7 +62,6 @@ the source requires authentication or response normalization.
 Registry Relay owns source access and protected record surfaces.
 Evidence owns bounded question answering, signing, and minimum disclosure, and
 runs independently of Relay; it can read a Relay API as one fixed HTTP source.
-Registry Notary owns evidence evaluation and disclosure on the retiring path.
 The caller receives only the output authorized for that service.
 
 Both registryctl paths, spreadsheet and HTTP, use the same authoring, offline

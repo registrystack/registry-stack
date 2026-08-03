@@ -16,12 +16,6 @@ async function readYaml(relative) {
   return YAML.parse(await readRepo(relative));
 }
 
-const currentActivationPages = [
-  'products/notary/docs/configuration-trust-and-integrity.md',
-  'products/notary/docs/operator-config-reference.md',
-  'products/notary/docs/deployment-hardening-runbook.md',
-];
-
 test('current docs stay under /dev/ while v0.15.2 is the released archive', async () => {
   const [docsets, repoDocs, generatedDocsets, readme] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
@@ -124,37 +118,6 @@ test('current deployment recovery pages do not present draft procedures as suppo
     const source = await readRepo(path);
     assert.match(source, /^status: current$/m, path);
     assert.doesNotMatch(source, /This page is draft\./, path);
-  }
-});
-
-test('current combined-topology pages require separate product bundles and compatible staged admission', async () => {
-  const pages = await Promise.all(
-    currentActivationPages.map(async (path) => [path, await readRepo(path)]),
-  );
-
-  for (const [path, source] of pages) {
-    assert.match(
-      source,
-      /(?:separate product bundles|product bundles separately|separately[\s\S]{0,100}product bundles)/i,
-      path,
-    );
-    assert.match(source, /anti-rollback/i, path);
-    assert.match(source, /not atomic project activation/i, path);
-    assert.match(source, /Relay[\s\S]{0,160}without admitting\s+caller traffic/i, path);
-    assert.match(source, /health[\s\S]{0,120}readiness[\s\S]{0,120}audit[\s\S]{0,120}posture/i, path);
-    assert.match(source, /Notary[\s\S]{0,180}(?:Relay|consultation) contract/i, path);
-    assert.match(source, /admit caller traffic only (?:after|when) both products are ready/i, path);
-    assert.match(source, /contract mismatch[\s\S]{0,100}before source access/i, path);
-
-    for (const staleClaim of [
-      /combined generation must activate[\s\S]*atomically/i,
-      /activate Relay and Notary as one compatible project generation/i,
-      /stage a complete Relay and Notary generation/i,
-      /activate one complete generation/i,
-      /root manifest binds compatible Relay and Notary/i,
-    ]) {
-      assert.doesNotMatch(source, staleClaim, `${path} reintroduced ${staleClaim}`);
-    }
   }
 });
 

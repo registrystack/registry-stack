@@ -13,7 +13,7 @@ const publicTemplates = [
   {
     id: 'spreadsheet',
     label: 'Spreadsheet',
-    summary: 'A protected records API and bounded evidence service over a contained workbook.',
+    summary: 'A protected records API over a contained workbook.',
     source: 'crates/registryctl/assets/project-starters/spreadsheet',
     project_dir: 'spreadsheet-project',
     focused_fixture_file: 'match.yaml',
@@ -69,10 +69,7 @@ function deriveTopology(project, source) {
     Object.keys(project.integrations ?? {}).length > 0 ||
     Object.keys(project.entities ?? {}).length > 0 ||
     services.some((service) => service.kind === 'records_api');
-  const hasNotary = services.some((service) => service.kind === 'evidence');
-  if (hasRelay && hasNotary) return 'combined';
   if (hasRelay) return 'relay-only';
-  if (hasNotary) return 'notary-only';
   throw new Error(`${source} does not select a Registry Stack product`);
 }
 

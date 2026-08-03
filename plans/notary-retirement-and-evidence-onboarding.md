@@ -110,7 +110,7 @@ gates for its area (see Verification), and committed.
       validates; the source-model proof passes; the OpenID conformance
       runner's fate decided and recorded (retire if it was OID4VCI-only).
       Old manifests untouched.
-- [ ] C7. Docs surface removal: authored Notary pages and the mirrored
+- [x] C7. Docs surface removal: authored Notary pages and the mirrored
       `products/registry-notary` docset removed along with their
       `repo-docs.yaml`, `docsets.yaml`, and `openapi-sources.yaml` config;
       every removed URL redirects to its Evidence equivalent or the
@@ -581,6 +581,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   tests, cargo-deny, Evidence contracts and neutrality, platform hygiene and
   config audits, fuzz compilation, CI classifier/inventory tests, and the
   explicit package-absence proof passed. Next in C: C7 docs surface removal.
+- 2026-08-03: C7 done. Six authored Notary pages, four Notary-only diagrams,
+  the current mirrored product docset, generated API, navigation, project,
+  contract, and source aggregation are removed. The retirement decision is
+  published, the site presents Relay and Evidence as the maintained runtime
+  products, and the Relay-only registryctl tutorial and generated diagnostic
+  closures no longer depend on retired Notary artifacts. Historical docset
+  pins remain intact. Every retired authored, mirrored-product, project, and
+  generated API URL, including all 27 operation routes plus Markdown twins
+  for former content pages, redirects through the current-docset resolver to
+  an Evidence replacement or the retirement decision, so archive builds never
+  target absent pages. The retirement redirect tests, 285-test docs suite,
+  generation, content/style/OpenAPI/tutorial/SVG checks, Astro typecheck and
+  build, accessibility and machine-readable output checks, SEO, and 31,725
+  internal links and assets passed. All C work is complete.
 - 2026-08-03: D1 done in solmara-lab. `just up-evidence` runs a second CRA
   Relay serving the civil register as a governed records API, Registry Mint
   issuing the caller token, and Registry Evidence answering adult status over

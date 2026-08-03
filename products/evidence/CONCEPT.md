@@ -1658,5 +1658,5 @@ semantics:
 - OpenCRVS, [Authenticate a client](https://documentation.opencrvs.org/technology/interoperability/authenticate-a-client).
 - UK Government, [How to check someone's identity, GPG 45 version 1.0](https://www.gov.uk/government/publications/how-to-check-someones-identity-1-0).
 - UK Government, [Data taxonomy, data model and data dictionary for GPG 45](https://www.gov.uk/government/publications/uk-digital-verification-services-trust-framework-data-schema-1-0/data-taxonomy-data-model-and-data-dictionary-for-gpg-45).
-- Registry Notary, [Consultation identity and outcomes](../../products/notary/docs/identity-and-record-matching.md).
+- Registry Notary, [Consultation identity and outcomes](https://github.com/registrystack/registry-stack/blob/v0.16.3/products/notary/docs/identity-and-record-matching.md).
 - Internal design input, `jurisdiction-neutral-evidence-packs-gap-spec-2026-06-19.md`, reviewed 2026-08-02.

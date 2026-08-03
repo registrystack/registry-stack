@@ -22,11 +22,6 @@ const productReleaseNotes = [
     changelog: 'products/manifest/CHANGELOG.md',
     releaseNotes: 'products/manifest/docs/release-notes.md',
   },
-  {
-    name: 'Registry Notary',
-    changelog: 'products/notary/CHANGELOG.md',
-    releaseNotes: 'products/notary/docs/release-notes.md',
-  },
 ];
 
 function readRepoFile(path) {

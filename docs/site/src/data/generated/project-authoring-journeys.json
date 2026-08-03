@@ -5,7 +5,7 @@
     "summary": "One fixed bounded HTTP request with a closed response projection.",
     "source": "crates/registryctl/assets/project-starters/bounded-http",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "starter": "http",
     "project_dir": "http-project",
     "capabilities": [
@@ -41,10 +41,10 @@
   {
     "id": "custom-system",
     "label": "Custom HTTP conformance workspace",
-    "summary": "Combined HTTP acquisition and registry-backed evidence coverage.",
+    "summary": "Bounded HTTP acquisition and registry-backed consultation coverage.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
     "capabilities": [
       "trace",
@@ -69,7 +69,7 @@
     "summary": "Conformance coverage for the bounded Script adapter surface.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
     "classification": "conformance-only",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
     "capabilities": [
       "test",
@@ -85,10 +85,10 @@
   {
     "id": "dhis2-tracker",
     "label": "DHIS2 Tracker",
-    "summary": "Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for consumer-owned decisions.",
+    "summary": "Bounded DHIS2 Tracker acquisition normalized into reusable consultation outputs for consumer-owned decisions.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
     "capabilities": [
       "editor",
@@ -117,7 +117,7 @@
     "summary": "A product-neutral script adapter with bounded FHIR R4 search-set parsing.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
     "capabilities": [
       "editor",
@@ -150,10 +150,12 @@
     "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
     "capabilities": [
-      "check"
+      "check",
+      "build"
     ],
     "commands": [
-      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release check --environment local --explain"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release build --environment local"
     ]
   },
   {
@@ -162,7 +164,7 @@
     "summary": "A product-neutral script adapter with the signed DCI search verification profile.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
     "capabilities": [
       "editor",
@@ -191,7 +193,7 @@
     "summary": "A maintained synthetic case study for a bounded Events API-shaped search using generic OAuth client credentials and Rhai.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api",
     "capabilities": [
       "trace",
@@ -216,7 +218,7 @@
     "summary": "Country-owned DCI mapping coverage for match, no-match, and ambiguity.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
     "capabilities": [
       "trace",
@@ -241,7 +243,7 @@
     "summary": "Offline fixture, configuration validation, and build coverage for a synthetic OpenSPP exact lookup.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "evidence": "offline-fixture-validation",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
     "capabilities": [
@@ -271,28 +273,32 @@
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization",
     "capabilities": [
       "test",
-      "check"
+      "check",
+      "build"
     ],
     "commands": [
       "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization test",
-      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization check --environment local --explain"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization build --environment local"
     ]
   },
   {
     "id": "relay-only-records",
     "label": "Relay-only records API",
-    "summary": "Fixtureless Relay records configuration with no Notary inputs.",
+    "summary": "Fixtureless Relay records configuration with no consultation inputs.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/relay-only-records",
     "classification": "maintained",
     "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-records",
     "capabilities": [
       "test",
-      "check"
+      "check",
+      "build"
     ],
     "commands": [
       "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records test",
-      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records check --environment local --explain"
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records check --environment local --explain",
+      "registryctl -C crates/registryctl/tests/fixtures/project-authoring/relay-only-records build --environment local"
     ]
   },
   {
@@ -301,7 +307,7 @@
     "summary": "An exact lookup over one immutable local materialization.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
     "capabilities": [
       "editor",
@@ -327,10 +333,10 @@
   {
     "id": "snapshot-with-records",
     "label": "Snapshot with records API",
-    "summary": "Match and no-match evidence sharing one authorized Relay materialization with records.",
+    "summary": "Match and no-match consultations sharing one authorized Relay materialization with records.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
     "capabilities": [
       "trace",
@@ -352,12 +358,12 @@
   {
     "id": "spreadsheet",
     "label": "Spreadsheet",
-    "summary": "A protected records API and bounded evidence service over a contained workbook.",
+    "summary": "A protected records API over a contained workbook.",
     "source": "crates/registryctl/assets/project-starters/spreadsheet",
     "project_dir": "spreadsheet-project",
     "focused_fixture_file": "match.yaml",
     "classification": "maintained",
-    "topology": "combined",
+    "topology": "relay-only",
     "starter": "spreadsheet",
     "environment": "local",
     "check_explain": true,

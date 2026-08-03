@@ -33,7 +33,7 @@
     "check:markdown": "markdownlint-cli2",
     "check:style": "node scripts/run-vale.mjs src/content/docs README.md",
     "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
-    "check:openapi": "redocly lint registry-relay registry-notary registry-evidence",
+    "check:openapi": "redocly lint registry-relay registry-evidence",
     "check:config-vocabulary": "scripts/check-stale-config-vocabulary.sh",
     "check:tutorial": "scripts/check-tutorial.sh",
     "check:tutorial:dry-run": "scripts/check-tutorial.sh --dry-run",

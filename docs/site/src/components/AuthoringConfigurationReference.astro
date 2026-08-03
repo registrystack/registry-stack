@@ -2,7 +2,7 @@
 import reference from '../data/generated/configuration-reference.json';
 import coverage from '../data/generated/configuration-reference-coverage.json';
 
-const schemaOrder = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay', 'notary'];
+const schemaOrder = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay'];
 const schemaLabels: Record<string, string> = {
   project: 'Project configuration',
   environment: 'Environment configuration',
@@ -10,7 +10,6 @@ const schemaLabels: Record<string, string> = {
   fixture: 'Fixture configuration',
   entity: 'Entity configuration',
   relay: 'Relay runtime configuration',
-  notary: 'Notary runtime configuration',
 };
 const schemaFiles: Record<string, string> = {
   project: 'registry-stack.yaml',
@@ -19,7 +18,6 @@ const schemaFiles: Record<string, string> = {
   fixture: 'integrations/*/fixtures/*.yaml',
   entity: 'entities/*.yaml',
   relay: 'registry-relay runtime configuration',
-  notary: 'registry-notary runtime configuration',
 };
 type ReferenceField = (typeof reference.fields)[number] & {
   address: (typeof reference.fields)[number]['address'] & {
@@ -149,7 +147,7 @@ const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.re
 
 <p>
   Project, environment, integration, fixture, and entity sections describe human-authored country
-  files. Relay and Notary sections describe generated product runtime contracts. The reviewed intent
+  files. The Relay section describes the generated product runtime contract. The reviewed intent
   sidecars are documentation knowledge only and are not runtime configuration.
 </p>
 <p>

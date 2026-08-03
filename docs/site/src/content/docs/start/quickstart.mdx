@@ -6,7 +6,6 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
 last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
@@ -34,25 +33,13 @@ rehearsed key rotation.
 ## Start from a spreadsheet
 
 [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
-creates the released `spreadsheet` project, checks its evidence rules offline,
-and runs Relay and Notary locally over maintained synthetic records.
+creates the released `spreadsheet` project, checks its source behavior offline,
+and runs Relay locally over maintained synthetic records.
 
 Take this path when the institution has a workbook, or can prepare a reviewed
 workbook derivative.
 Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
 after the sample works.
-
-## Expose Notary evidence claims
-
-Registry Notary is being retired and is no longer a recommended starting
-point. Evidence is the supported way to answer a bounded question.
-This path remains documented for deployments that already run it.
-
-The starter already exposes selected records and evaluates two predicate
-claims.
-[Change one spreadsheet-backed evidence rule](../../tutorials/verify-claim-registry-api/)
-to learn which decisions belong to Relay, Notary, fixtures, and the operator
-handoff.
 
 ## Connect an existing registry
 
