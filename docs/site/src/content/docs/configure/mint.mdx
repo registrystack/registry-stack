@@ -27,6 +27,10 @@ client registry binds a client id to that client's own public keys and to the au
 Mint will assert for it, and the token endpoint verifies an incoming request against the keys of
 the client it claims to be, then writes the authority from the registry, never from the request.
 
+For the whole round trip in one picture, from a client holding only its own private key to a
+signed assertion, see
+[how a client, Registry Mint, and Evidence interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-interact).
+
 ## When not to use Registry Mint
 
 Skip Registry Mint when an identity provider already issues client-credentials tokens for the

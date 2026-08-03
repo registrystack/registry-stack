@@ -186,6 +186,54 @@ Every response body is `{"error": "<code>"}`, from
 | `GET /health` | Liveness. |
 | `GET /ready` | Readiness. Returns `503` while no client is registered. |
 
+## How a client, Registry Mint, and Evidence interact
+
+One round trip, from a client that holds only its own private key to a signed assertion. Every
+label in this diagram is stated in the prose and tables on this page; the diagram is a summary of
+those contracts, not a second source for them.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Registered client
+    participant M as Registry Mint
+    participant E as Evidence
+    participant S as Source
+
+    Note over C,E: Set up once, before any request: the client's public JWK<br/>sits in Mint's client registry, and Evidence's<br/>authentication block names Mint's issuer and key set.
+
+    C->>C: Sign an assertion with<br/>the client's own private key
+    C->>M: POST /token<br/>client_credentials + assertion
+    M->>M: Verify against that client's<br/>registered keys, refuse a used jti
+    M-->>C: Access token, authority written<br/>from the registry
+
+    C->>E: POST /v1/evidence<br/>Bearer access token
+    E->>M: GET the published key set
+    M-->>E: Public keys, held<br/>between requests
+    E->>E: Verify the token, read authority<br/>by the configured claim names
+    E->>S: Read what the<br/>definition needs
+    S-->>E: Source response
+    E-->>C: Signed assertion
+```
+
+Steps 1 to 4 are the whole of Registry Mint's job. It never sees the source, the acceptance
+definition, or the assertion. Steps 5 to 11 are Evidence's, and Evidence's only knowledge of
+Registry Mint is a URL and a key set: it reads the token by the claim names in its own
+configuration, so any issuer writing those claims would serve equally well.
+
+The exact wire shapes the diagram abbreviates are given in full below:
+[Token endpoint contract](#token-endpoint-contract) for the assertion and token at steps 2 and 4,
+[Other endpoints](#other-endpoints) for the key set path at step 6, and
+[How Evidence verifies these tokens](#how-evidence-verifies-these-tokens) for the claim names at
+step 8.
+
+Two failures collapse deliberately and are worth reading beside the diagram. A failure at step 3
+returns `401 invalid_client` whatever went wrong, so the token endpoint cannot be used to probe
+which client ids are registered. A failure at step 6 never opens step 8: with no key set ever
+retrieved, every request is rejected until one can be, and with a key set already held, that
+held set keeps being accepted only until its allowance runs out. Evidence names the outage in
+either case rather than failing silently.
+
 ## How Evidence verifies these tokens
 
 Evidence's own `authentication` configuration block, defined in
