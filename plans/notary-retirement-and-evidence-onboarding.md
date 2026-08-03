@@ -62,14 +62,14 @@ gates for its area (see Verification), and committed.
 
 ### B. Evidence onboarding (docs site, evidencectl, CI)
 
-- [ ] B1. Site plumbing: `openapi-sources.yaml` entry for the generated
+- [x] B1. Site plumbing: `openapi-sources.yaml` entry for the generated
       Evidence OpenAPI with a Redoc reference page; contracts wired into the
       data-driven reference; Operate content from `OPERATOR-CONTRACT.md`;
       Security content from the invariant matrix and test traceability;
       a "Registry Evidence" Configure group.
 - [x] B2. The Evidence OpenAPI is drift-checked in root CI (confirm an
       existing gate or add one).
-- [ ] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
+- [x] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
       tightly linked to the frozen contracts so it cannot drift.
 - [ ] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
       that runs each Evidence tutorial from a clean container with only the
@@ -84,7 +84,7 @@ gates for its area (see Verification), and committed.
       installed via F1 (the released-binary form of this gate needs F3).
 - [ ] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
-- [ ] B7. Mint has real docs presence: a Configure page and a reference page.
+- [x] B7. Mint has real docs presence: a Configure page and a reference page.
 - [ ] B8. Onboarding spine: glossary disambiguates Evidence (product) from
       the retired Notary evidence credentials; `start/when-to-use` presents
       the two doors; the quickstart ends in an Evidence assertion over the
@@ -170,9 +170,9 @@ channel; it does not get a parallel one.
 - [ ] F5. Personas named on the docs site (assertion provider, data
       publisher, consumer/verifier, operator) and every tutorial labeled
       with whose it is.
-- [ ] F6. An Evidence errors and problems reference page exists for
+- [x] F6. An Evidence errors and problems reference page exists for
       adopters: what each public problem means and what to do about it.
-- [ ] F7. An evaluate-stage page exists: what Evidence costs to run
+- [x] F7. An evaluate-stage page exists: what Evidence costs to run
       (footprint, dependencies, operational burden, support window).
 
 ### Global gates (checked at the end, not per item)
@@ -251,3 +251,31 @@ is parallel; B has no upstream dependencies and is the standing priority
   build-platforms matrix, which now also builds evidence, evidencectl,
   and mint. The assemble step and the F2 inventory already accept the
   per-platform names generically.
+- 2026-08-03: Docs wave landed. B1 done: repo-docs mirrors seven Evidence
+  product pages, the latest docset registers the product, the generated
+  OpenAPI flows through fetch-openapi into a Redoc operations section
+  plus a narrative API page, security content comes from the invariant
+  matrix and test traceability (security/evidence.mdx), Operate content
+  is the mirrored operator contract, and the sidebar gains an "Answer
+  with Evidence" flow (the plan's "Registry Evidence Configure group"
+  exists as that flow plus the Registry Evidence product group; rename
+  if the exact label matters). B3 done: RS-PR-EVIDENCE with 56
+  requirements, every one citing its frozen contract file. B7 done:
+  Mint configure and reference pages, config fields cited to source
+  lines. F6 done: all nine public problem types documented from the
+  problem contract. F7 done: evaluate-stage page; writing it surfaced
+  stale PERFORMANCE.md group-commit claims, reconciled in their own
+  commit. B8 partial: two-door when-to-use, personas (F5 partial), and
+  glossary disambiguation are in; the quickstart flip still waits on A
+  and D. E1 (first-assertion tutorial) is published with commands
+  verified against the built binaries, but B5 stays open: E2-E5 and the
+  B4 gate are not built. Archived-docset design decision: a product
+  absent from an archived docset is filtered before docset pinning and
+  its OpenAPI rides the current shell; the Evidence product group
+  splices optionally (v0.15.2 verified past the Evidence throw; its
+  remaining sync failure is a pre-existing Notary allowlist gap on
+  main, flagged separately, as is the stale rust-result shard test).
+  Site suite 267 tests green. Full `npm run check` still pending.
+- 2026-08-03: Session-limit note: three authoring subagents died mid
+  wave (configure page recovered by hand, E1 rewritten by hand, E6 not
+  written). Next unblocked items: B4 gate, E6, then E2-E5.
