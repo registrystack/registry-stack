@@ -232,7 +232,8 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
 
 /// Resolve the `evidence` binary: an explicit `--evidence-bin`, else
 /// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
-fn resolve_evidence_binary(explicit: Option<&Path>) -> Result<PathBuf> {
+/// Crate-visible so `suggest::emit` resolves the runtime binary the same way.
+pub(crate) fn resolve_evidence_binary(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         if !path.is_file() {
             bail!("evidence binary not found at {}", path.display());
