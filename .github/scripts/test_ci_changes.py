@@ -14,6 +14,7 @@ from pathlib import Path
 from ci_changes import (
     AUTHORING_REFERENCE_CONTRACT_SOURCES,
     AUTHORING_REFERENCE_INPUTS,
+    EVIDENCE_TUTORIAL_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
     Workspace,
@@ -57,6 +58,28 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["release_source_proof"])
         self.assertTrue(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
+
+    def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials exist.
+        # A tutorial missing here would not trigger the job that replays it, so
+        # it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-evidence-tutorials.sh"
+        )
+        registry = re.search(
+            r"^EVIDENCE_TUTORIALS=\((.*?)^\)", gate.read_text(), re.DOTALL | re.MULTILINE
+        )
+        if registry is None:
+            self.fail("the gate must declare EVIDENCE_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                self.assertIn(
+                    f"docs/site/src/content/docs/tutorials/{slug}.mdx",
+                    EVIDENCE_TUTORIAL_INPUTS,
+                )
 
     def test_evidence_tutorial_routing(self) -> None:
         infrastructure = (

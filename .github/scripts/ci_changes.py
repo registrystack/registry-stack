@@ -61,6 +61,23 @@ TUTORIAL_PACKAGES = frozenset(
     for package in SHARDS[shard]
 ) | {"registry-config-report"}
 
+# Every input the Evidence tutorial gate replays or is built from. The tutorial
+# pages here must stay in step with the gate's own registry, which
+# test_ci_changes.py enforces: a tutorial CI does not watch is a tutorial that
+# rots silently.
+EVIDENCE_TUTORIAL_INPUTS = frozenset(
+    {
+        "Cargo.lock",
+        "Cargo.toml",
+        "docs/site/package-lock.json",
+        "docs/site/package.json",
+        "docs/site/scripts/check-evidence-tutorials.sh",
+        "docs/site/scripts/check-evidence-tutorials.test.mjs",
+        "docs/site/scripts/registryctl-tutorial.mjs",
+        "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+    }
+)
+
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
     "Cargo.toml",
@@ -510,19 +527,7 @@ def classify(
 
     evidence_tutorial = (
         complete
-        or any(
-            path
-            in {
-                "Cargo.lock",
-                "Cargo.toml",
-                "docs/site/package-lock.json",
-                "docs/site/package.json",
-                "docs/site/scripts/check-evidence-tutorials.sh",
-                "docs/site/scripts/check-evidence-tutorials.test.mjs",
-                "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-            }
-            for path in paths
-        )
+        or any(path in EVIDENCE_TUTORIAL_INPUTS for path in paths)
         or bool(affected & EVIDENCE_PACKAGES)
     )
 
