@@ -458,7 +458,7 @@ fn a_large_sample_array_is_clamped_to_the_subset_ceiling() {
 }
 
 #[test]
-fn a_spec_max_items_outside_the_subset_is_clamped_and_still_reported() {
+fn a_spec_max_items_outside_the_subset_is_clamped_and_credited_to_the_ceiling() {
     let input = root(
         json!({
             "records": {
@@ -477,8 +477,10 @@ fn a_spec_max_items_outside_the_subset_is_clamped_and_still_reported() {
         needs[0].suggestion.clone().expect("suggestion"),
         SuggestedBound {
             values: BoundValues::MaxItems(256),
-            provenance: Provenance::Spec,
-        }
+            provenance: Provenance::SubsetCeiling,
+        },
+        "5000 is not the number the draft ends up stating, so the document does not \
+         get the credit for the 256 that replaces it"
     );
 
     let outcome = apply(&input, &["/records/*"], &[]);

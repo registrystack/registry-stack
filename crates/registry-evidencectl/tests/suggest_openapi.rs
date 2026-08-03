@@ -7,6 +7,11 @@
 //! here, mirroring their nesting under `src/suggest/`, so the `super::types`
 //! imports inside `openapi.rs` and `flatten.rs` resolve unchanged.
 
+// `openapi.rs` dispatches a file path or a URL through `fetch`; this binary
+// only ever opens files, so the fetching half of that module is unused here.
+#[allow(dead_code)]
+#[path = "../src/suggest/fetch.rs"]
+mod fetch;
 #[path = "../src/suggest/flatten.rs"]
 mod flatten;
 #[path = "../src/suggest/openapi.rs"]
@@ -21,12 +26,18 @@ mod types;
 
 use std::path::{Path, PathBuf};
 
-use types::{OperationKey, ResolvedSchema};
+use types::{OperationKey, ResolvedSchema, SpecSource};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/openapi")
         .join(name)
+}
+
+/// Opens a fixture through the same entry point the CLI uses, naming it as a
+/// local file. Fetching over HTTP is covered in `suggest_fetch.rs`.
+fn load(path: &Path) -> anyhow::Result<openapi::Spec> {
+    openapi::Spec::open(&SpecSource::File(path.to_path_buf()))
 }
 
 fn operation(method: &str, path: &str) -> OperationKey {
@@ -36,23 +47,23 @@ fn operation(method: &str, path: &str) -> OperationKey {
     }
 }
 
-// --- Spec::load ------------------------------------------------------------
+// --- Spec::open -----------------------------------------------------------
 
 #[test]
 fn load_accepts_openapi_3_0_yaml() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     assert!(!spec.operations().is_empty());
 }
 
 #[test]
 fn load_accepts_openapi_3_1_json() {
-    let spec = openapi::Spec::load(&fixture("records-3.1.json")).expect("loads");
+    let spec = load(&fixture("records-3.1.json")).expect("loads");
     assert!(!spec.operations().is_empty());
 }
 
 #[test]
 fn load_rejects_unsupported_openapi_version() {
-    let error = openapi::Spec::load(&fixture("unsupported-version.yaml")).unwrap_err();
+    let error = load(&fixture("unsupported-version.yaml")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("3.0") || message.contains("3.1"),
@@ -62,7 +73,7 @@ fn load_rejects_unsupported_openapi_version() {
 
 #[test]
 fn load_rejects_missing_file() {
-    let error = openapi::Spec::load(&fixture("does-not-exist.yaml")).unwrap_err();
+    let error = load(&fixture("does-not-exist.yaml")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("does-not-exist.yaml"),
@@ -77,7 +88,7 @@ fn load_rejects_missing_file() {
 /// /records` carries a JSON response and is still absent from the listing.
 #[test]
 fn operations_lists_only_the_methods_the_runtime_admits() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let mut keys: Vec<OperationKey> = spec
         .operations()
         .into_iter()
@@ -92,7 +103,7 @@ fn operations_lists_only_the_methods_the_runtime_admits() {
 
 #[test]
 fn operations_reports_summary_and_json_responses() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let get_records = spec
         .operations()
         .into_iter()
@@ -107,7 +118,7 @@ fn operations_reports_summary_and_json_responses() {
 
 #[test]
 fn operations_collects_every_json_response_status() {
-    let spec = openapi::Spec::load(&fixture("records-3.1.json")).expect("loads");
+    let spec = load(&fixture("records-3.1.json")).expect("loads");
     let get_record = spec
         .operations()
         .into_iter()
@@ -128,12 +139,12 @@ fn operations_collects_every_json_response_status() {
 
 #[test]
 fn response_schema_inlines_local_refs_and_normalizes_nullable() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
 
-    let rendered = resolved.0.to_string();
+    let rendered = resolved.schema.0.to_string();
     assert!(
         !rendered.contains("$ref"),
         "refs should be fully inlined: {rendered}"
@@ -141,16 +152,16 @@ fn response_schema_inlines_local_refs_and_normalizes_nullable() {
 
     // Top-level `nullable: true` string becomes the 3.1 type pair.
     assert_eq!(
-        resolved.0["properties"]["recordedOn"]["type"],
+        resolved.schema.0["properties"]["recordedOn"]["type"],
         serde_json::json!(["string", "null"])
     );
-    assert!(resolved.0["properties"]["recordedOn"]
+    assert!(resolved.schema.0["properties"]["recordedOn"]
         .get("nullable")
         .is_none());
 
     // The $ref'd array item schema (Record) is inlined in place, and its own
     // nested `nullable: true` (notes) is normalized too.
-    let record_item = &resolved.0["properties"]["results"]["items"];
+    let record_item = &resolved.schema.0["properties"]["results"]["items"];
     assert_eq!(
         record_item["properties"]["trackingId"]["type"],
         serde_json::json!("string")
@@ -163,7 +174,7 @@ fn response_schema_inlines_local_refs_and_normalizes_nullable() {
 
 #[test]
 fn response_schema_passes_through_3_1_type_arrays_unchanged() {
-    let spec = openapi::Spec::load(&fixture("records-3.1.json")).expect("loads");
+    let spec = load(&fixture("records-3.1.json")).expect("loads");
     let resolved = spec
         .response_schema(
             &operation("GET", "/records/{id}"),
@@ -172,14 +183,14 @@ fn response_schema_passes_through_3_1_type_arrays_unchanged() {
         )
         .expect("resolves");
     assert_eq!(
-        resolved.0["properties"]["status"]["type"],
+        resolved.schema.0["properties"]["status"]["type"],
         serde_json::json!(["string", "null"])
     );
 }
 
 #[test]
 fn response_schema_rejects_external_ref() {
-    let spec = openapi::Spec::load(&fixture("external-ref.yaml")).expect("loads");
+    let spec = load(&fixture("external-ref.yaml")).expect("loads");
     let error = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .unwrap_err();
@@ -190,19 +201,196 @@ fn response_schema_rejects_external_ref() {
     );
 }
 
+/// A recursive `$ref` bounds how deep the response can be described, not
+/// whether the operation can be drafted from at all. The repeat is cut and
+/// named, and everything beside it stays selectable.
 #[test]
-fn response_schema_rejects_ref_cycle() {
-    let spec = openapi::Spec::load(&fixture("ref-cycle.yaml")).expect("loads");
-    let error = spec
+fn response_schema_cuts_a_ref_cycle_and_notes_it() {
+    let spec = load(&fixture("ref-cycle.yaml")).expect("loads");
+    let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
-        .unwrap_err();
-    let message = format!("{error:#}");
-    assert!(message.contains("cycle"), "message was: {message}");
+        .expect("resolves");
+    assert!(
+        resolved
+            .notes
+            .iter()
+            .any(|note| note.contains("cycle") && note.contains("#/components/schemas/A")),
+        "notes were: {:#?}",
+        resolved.notes
+    );
+
+    let (_, warnings) = flatten::candidate_leaves(&resolved.schema);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("/child/parent")
+                && warning.contains("#/components/schemas/A")),
+        "warnings were: {warnings:#?}"
+    );
+}
+
+#[test]
+fn a_recursive_schema_still_offers_its_non_recursive_leaves() {
+    let spec = load(&fixture("recursive-tree.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/nodes"), "200", "application/json")
+        .expect("resolves");
+    let (leaves, _) = flatten::candidate_leaves(&resolved.schema);
+
+    // The repeat is cut where it first repeats, so the recursive branch offers
+    // nothing and the record's own scalars stay selectable.
+    let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
+    pointers.sort();
+    assert_eq!(pointers, vec!["/id", "/label"]);
+}
+
+// --- dialect normalization ---------------------------------------------------
+
+/// A two-member `anyOf`/`oneOf` against `null` is how several generators spell
+/// the 3.1 nullable type pair. It states nothing the closed subset cannot
+/// already express, so it is rewritten into the pair rather than skipped as an
+/// unsupported union.
+#[test]
+fn a_two_member_union_against_null_becomes_the_nullable_type_pair() {
+    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/records"), "200", "application/json")
+        .expect("resolves");
+    let properties = &resolved.schema.0["properties"];
+
+    assert_eq!(
+        properties["note"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    // The collapsed member's own bounds survive the rewrite.
+    assert_eq!(properties["note"]["maxLength"], serde_json::json!(64));
+    assert!(properties["note"].get("anyOf").is_none());
+
+    assert_eq!(
+        properties["count"]["type"],
+        serde_json::json!(["integer", "null"])
+    );
+    assert_eq!(properties["count"]["maximum"], serde_json::json!(99));
+    // A keyword on the union node itself is not lost when the union collapses.
+    assert_eq!(
+        properties["count"]["description"],
+        serde_json::json!("how many were seen")
+    );
+
+    // A nullable object keeps its members addressable.
+    assert_eq!(
+        properties["parent"]["type"],
+        serde_json::json!(["object", "null"])
+    );
+    assert_eq!(
+        properties["parent"]["properties"]["id"]["maxLength"],
+        serde_json::json!(36)
+    );
+}
+
+/// The subset admits the pair in one order only, so a document writing it the
+/// other way round describes something the subset can express and must not be
+/// refused over the spelling.
+#[test]
+fn a_null_first_type_pair_is_reordered() {
+    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/records"), "200", "application/json")
+        .expect("resolves");
+    assert_eq!(
+        resolved.schema.0["properties"]["reversedPair"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+}
+
+#[test]
+fn a_union_of_two_real_types_is_left_for_the_flattener_to_skip() {
+    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/records"), "200", "application/json")
+        .expect("resolves");
+    assert!(resolved.schema.0["properties"]["either"]
+        .get("anyOf")
+        .is_some());
+
+    let (leaves, warnings) = flatten::candidate_leaves(&resolved.schema);
+    let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
+    pointers.sort();
+    assert_eq!(
+        pointers,
+        vec!["/count", "/note", "/parent/id", "/reversedPair"]
+    );
+    assert!(
+        warnings.iter().any(|warning| warning.contains("/either")),
+        "warnings were: {warnings:#?}"
+    );
+}
+
+/// `properties` and `items` are meaningless on anything but an object and an
+/// array, so a node carrying one and no `type` is not ambiguous. Reading it is
+/// what lets the tool draft from the collection wrappers large registry APIs
+/// actually publish; the reading is announced rather than made silently.
+#[test]
+fn a_structural_keyword_without_a_type_is_read_as_that_type_and_noted() {
+    let spec = load(&fixture("implicit-types.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/records"), "200", "application/json")
+        .expect("resolves");
+
+    assert_eq!(resolved.schema.0["type"], serde_json::json!("object"));
+    assert_eq!(
+        resolved.schema.0["properties"]["records"]["type"],
+        serde_json::json!("array")
+    );
+    assert_eq!(
+        resolved.schema.0["properties"]["records"]["items"]["type"],
+        serde_json::json!("object")
+    );
+    assert!(
+        resolved
+            .notes
+            .iter()
+            .any(|note| note.contains("(root)") && note.contains("object")),
+        "notes were: {:#?}",
+        resolved.notes
+    );
+    assert!(
+        resolved
+            .notes
+            .iter()
+            .any(|note| note.contains("/records") && note.contains("array")),
+        "notes were: {:#?}",
+        resolved.notes
+    );
+
+    let (leaves, _) = flatten::candidate_leaves(&resolved.schema);
+    let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
+    pointers.sort();
+    assert_eq!(pointers, vec!["/pager/page", "/records/*/id"]);
+}
+
+#[test]
+fn a_node_with_neither_a_type_nor_a_structural_keyword_stays_untyped() {
+    let spec = load(&fixture("implicit-types.yaml")).expect("loads");
+    let resolved = spec
+        .response_schema(&operation("GET", "/opaque"), "200", "application/json")
+        .expect("resolves");
+    assert!(resolved.schema.0["properties"]["anything"]
+        .get("type")
+        .is_none());
+
+    let (leaves, warnings) = flatten::candidate_leaves(&resolved.schema);
+    let pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
+    assert_eq!(pointers, vec!["/known"]);
+    assert!(
+        warnings.iter().any(|warning| warning.contains("/anything")),
+        "warnings were: {warnings:#?}"
+    );
 }
 
 #[test]
 fn response_schema_rejects_unknown_status() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let error = spec
         .response_schema(&operation("GET", "/records"), "500", "application/json")
         .unwrap_err();
@@ -214,7 +402,7 @@ fn response_schema_rejects_unknown_status() {
 
 #[test]
 fn servers_lists_declared_base_urls_in_order() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     assert_eq!(
         spec.servers(),
         vec!["https://records.example.test/api".to_string()]
@@ -223,13 +411,13 @@ fn servers_lists_declared_base_urls_in_order() {
 
 #[test]
 fn servers_is_empty_when_undeclared() {
-    let spec = openapi::Spec::load(&fixture("records-3.1.json")).expect("loads");
+    let spec = load(&fixture("records-3.1.json")).expect("loads");
     assert!(spec.servers().is_empty());
 }
 
 #[test]
 fn page_size_maximums_reads_matching_query_parameters() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records"))
         .expect("no ref errors");
@@ -238,7 +426,7 @@ fn page_size_maximums_reads_matching_query_parameters() {
 
 #[test]
 fn page_size_maximums_is_empty_without_matching_parameters() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("POST", "/records"))
         .expect("no ref errors");
@@ -247,7 +435,7 @@ fn page_size_maximums_is_empty_without_matching_parameters() {
 
 #[test]
 fn page_size_maximums_matches_limit_named_parameters() {
-    let spec = openapi::Spec::load(&fixture("records-3.1.json")).expect("loads");
+    let spec = load(&fixture("records-3.1.json")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records/{id}"))
         .expect("no ref errors");
@@ -256,7 +444,7 @@ fn page_size_maximums_matches_limit_named_parameters() {
 
 #[test]
 fn page_size_maximums_ignores_a_page_index_beside_a_page_size() {
-    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records"))
         .expect("no ref errors");
@@ -267,7 +455,7 @@ fn page_size_maximums_ignores_a_page_index_beside_a_page_size() {
 
 #[test]
 fn page_size_maximums_reads_every_genuine_size_parameter() {
-    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
     let mut maximums = spec
         .page_size_maximums(&operation("GET", "/events"))
         .expect("no ref errors");
@@ -277,7 +465,7 @@ fn page_size_maximums_reads_every_genuine_size_parameter() {
 
 #[test]
 fn page_size_maximums_ignores_names_that_only_contain_a_matching_word() {
-    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/reports"))
         .expect("no ref errors");
@@ -291,11 +479,11 @@ fn page_size_maximums_ignores_names_that_only_contain_a_matching_word() {
 
 #[test]
 fn candidate_leaves_flattens_arrays_and_nullable_records() {
-    let spec = openapi::Spec::load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
-    let (leaves, warnings) = flatten::candidate_leaves(&resolved);
+    let (leaves, warnings) = flatten::candidate_leaves(&resolved.schema);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
@@ -334,11 +522,11 @@ fn candidate_leaves_flattens_arrays_and_nullable_records() {
 
 #[test]
 fn candidate_leaves_escapes_member_names_per_rfc_6901() {
-    let spec = openapi::Spec::load(&fixture("escaping.yaml")).expect("loads");
+    let spec = load(&fixture("escaping.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
-    let (leaves, warnings) = flatten::candidate_leaves(&resolved);
+    let (leaves, warnings) = flatten::candidate_leaves(&resolved.schema);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
@@ -348,11 +536,11 @@ fn candidate_leaves_escapes_member_names_per_rfc_6901() {
 
 #[test]
 fn candidate_leaves_skips_and_warns_on_unsupported_constructs() {
-    let spec = openapi::Spec::load(&fixture("unsupported-constructs.yaml")).expect("loads");
+    let spec = load(&fixture("unsupported-constructs.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
-    let (leaves, warnings) = flatten::candidate_leaves(&resolved);
+    let (leaves, warnings) = flatten::candidate_leaves(&resolved.schema);
 
     let mut pointers: Vec<&str> = leaves.iter().map(|leaf| leaf.pointer.as_str()).collect();
     pointers.sort();
@@ -430,7 +618,7 @@ fn an_oversized_document_is_refused_before_it_is_read() {
     file.set_len(17 * 1024 * 1024).expect("set_len");
     drop(file);
 
-    let error = openapi::Spec::load(&path).unwrap_err();
+    let error = load(&path).unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("exceeding the"), "message was: {message}");
 }

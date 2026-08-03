@@ -6,13 +6,14 @@
 //! reserved segment `*` for "every array element". Constructs the closed
 //! schema subset cannot express as a selectable leaf (a real union via
 //! `oneOf`/`anyOf`, an `allOf` merging more than one schema, an
-//! `additionalProperties` schema, an untyped node, a pointer past the depth
-//! limit) are skipped with a warning rather than failing the whole spec: one
-//! exotic node should not block drafting from the rest of the operation.
+//! `additionalProperties` schema, an untyped node, a cut `$ref` cycle, a
+//! pointer past the depth limit) are skipped with a warning rather than
+//! failing the whole spec: one exotic node should not block drafting from the
+//! rest of the operation.
 
 use serde_json::Value;
 
-use super::types::{CandidateLeaf, ResolvedSchema};
+use super::types::{CandidateLeaf, ResolvedSchema, RECURSIVE_REF_KEY};
 
 /// The extended-pointer form shares `get_path`'s 16-segment ceiling (see
 /// `primitive-library.yaml`), so a projection pointer this stage produces
@@ -44,6 +45,15 @@ fn walk(
         ));
         return;
     };
+
+    if let Some(reference) = object.get(RECURSIVE_REF_KEY).and_then(Value::as_str) {
+        warnings.push(format!(
+            "`{}` repeats the $ref cycle `{reference}`; a schema with no end cannot be \
+             projected, so the repeat is skipped",
+            display_pointer(&pointer)
+        ));
+        return;
+    }
 
     if object.contains_key("oneOf") || object.contains_key("anyOf") {
         warnings.push(format!(

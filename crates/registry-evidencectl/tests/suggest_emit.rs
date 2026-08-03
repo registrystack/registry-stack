@@ -24,7 +24,8 @@ use serde_json::json;
 
 use emit::{CheckClassification, EmitInputs};
 use types::{
-    BoundKind, BoundNeed, BoundValues, NarrowOutcome, OperationKey, Provenance, SuggestedBound,
+    BoundKind, BoundNeed, BoundValues, NarrowOutcome, OperationKey, Provenance, SpecSource,
+    SuggestedBound,
 };
 
 /// A schema exercising every case the response-schema renderer must handle:
@@ -126,7 +127,7 @@ fn base_inputs() -> EmitInputs {
         ],
         narrowed: narrow_outcome_fixture(),
         needs: needs_fixture(),
-        openapi_path: PathBuf::from("tests/fixtures/openapi/example.yaml"),
+        openapi: SpecSource::File(PathBuf::from("tests/fixtures/openapi/example.yaml")),
         sample_path: None,
         project: None,
     }
@@ -820,7 +821,7 @@ fn equivalent_command_is_deterministic_with_the_documented_flag_order() {
 fn the_reproduce_command_quotes_every_value_a_shell_would_rewrite() {
     let mut inputs = base_inputs();
     inputs.selection = vec!["/results/*/status".to_owned(), "/a?b".to_owned()];
-    inputs.openapi_path = PathBuf::from("/tmp/spec (copy).yaml");
+    inputs.openapi = SpecSource::File(PathBuf::from("/tmp/spec (copy).yaml"));
 
     let command = emit::draft(&inputs).expect("draft").equivalent_command;
     assert!(
@@ -911,7 +912,7 @@ fn verify_classifies_a_runtime_initialization_message_as_secrets_unprovisioned()
 #[test]
 fn the_reproduce_line_quotes_shell_expansion_characters() {
     let mut inputs = base_inputs();
-    inputs.openapi_path = PathBuf::from("/srv/specs/$HOME/records`id`.yaml");
+    inputs.openapi = SpecSource::File(PathBuf::from("/srv/specs/$HOME/records`id`.yaml"));
     let artifacts = emit::draft(&inputs).expect("draft");
 
     assert!(

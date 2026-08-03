@@ -1,0 +1,33 @@
+openapi: 3.1.0
+info:
+  title: Recursive Tree
+  version: "1.0.0"
+paths:
+  /nodes:
+    get:
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+components:
+  schemas:
+    Node:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 36
+        label:
+          type: string
+          minLength: 1
+          maxLength: 64
+        children:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/Node'

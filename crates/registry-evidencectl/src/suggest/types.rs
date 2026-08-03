@@ -7,7 +7,31 @@
 //! through the types here so the interactive front-end and the flag-driven
 //! front-end share one deterministic core.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
+
+/// Where the OpenAPI document is read from.
+///
+/// The two cases stay distinguishable all the way to the reproduce line, so
+/// the command printed at the end of a run names the same document the run
+/// actually read. Deciding which case a `--openapi` argument is happens once,
+/// before anything is read, so an unusable URL fails before the operator is
+/// asked a single question.
+#[derive(Debug, Clone)]
+pub enum SpecSource {
+    File(PathBuf),
+    Url(url::Url),
+}
+
+impl SpecSource {
+    /// The document as it should be named in a message or echoed back in the
+    /// reproduce command.
+    pub fn display(&self) -> String {
+        match self {
+            SpecSource::File(path) => path.to_string_lossy().into_owned(),
+            SpecSource::Url(url) => url.to_string(),
+        }
+    }
+}
 
 /// One operation in the OpenAPI document: an uppercase HTTP method and the
 /// literal path template, e.g. `GET` and `/records/{id}`.
@@ -31,6 +55,25 @@ pub struct OperationSummary {
 /// pair `[T, "null"]`, so downstream stages handle one form.
 #[derive(Debug, Clone)]
 pub struct ResolvedSchema(pub serde_json::Value);
+
+/// The marker left in place of a schema node that repeats a `$ref` already on
+/// the resolution stack. Cutting the repeat bounds an otherwise infinite
+/// expansion without discarding the rest of the operation; the marker declares
+/// no type, so no stage can mistake it for something projectable, and the
+/// flattener names the recursion it stands for.
+pub const RECURSIVE_REF_KEY: &str = "x-evidencectl-recursive-ref";
+
+/// A resolved response schema with the readings the resolver made on the way.
+///
+/// A note records where the document was ambiguous or unrepresentable and what
+/// was done about it: a cut recursion, or a type read from a structural
+/// keyword. Every note is reported to the operator, because a reading the tool
+/// made on their behalf is one they may need to disagree with.
+#[derive(Debug, Clone)]
+pub struct ResolvedResponse {
+    pub schema: ResolvedSchema,
+    pub notes: Vec<String>,
+}
 
 /// One selectable leaf of the resolved schema, presented to the user and
 /// mapped one-to-one onto a projection allowlist entry.
@@ -76,6 +119,12 @@ pub enum Provenance {
     Sample,
     /// Derived from a page-size parameter in the spec.
     PageSize,
+    /// The closed subset's own ceiling, used because the document states a
+    /// bound above it. This is deliberately not [`Provenance::Spec`]: the
+    /// number in the draft is not the number the document states, and
+    /// crediting the document for it would tell a reviewer the source promised
+    /// something it never promised.
+    SubsetCeiling,
     /// Chosen by the operator at the prompt, either where nothing could be
     /// derived or in place of a suggestion they edited. Nothing the tool
     /// derived carries this: it is the one provenance that is not a

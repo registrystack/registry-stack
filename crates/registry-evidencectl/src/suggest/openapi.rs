@@ -1,20 +1,34 @@
-//! Loads a local OpenAPI 3.0.x or 3.1.x document and resolves the pieces the
-//! `source suggest` pipeline needs: operation listings and one operation's
-//! response schema with every local `$ref` inlined.
+//! Loads an OpenAPI 3.0.x or 3.1.x document, from a file or from a URL (see
+//! [`super::fetch`]), and resolves the pieces the `source suggest` pipeline
+//! needs: operation listings and one operation's response schema with every
+//! local `$ref` inlined.
 //!
-//! Only local files are read and only local `#/components/...` refs are
-//! followed. An external or remote `$ref` (anything not starting with `#/`)
-//! and a `$ref` cycle are both rejected with a clear error rather than
-//! silently truncated or ignored, because a partially-resolved schema would
-//! let the closed-subset narrowing stage draft against data the runtime
-//! cannot actually see.
+//! Only local `#/components/...` refs are followed, whichever way the
+//! document arrived: one document is fetched, never a graph of them. An
+//! external or remote `$ref` (anything not starting with `#/`)
+//! is rejected with a clear error rather than silently truncated or ignored,
+//! because a partially-resolved schema would let the closed-subset narrowing
+//! stage draft against data the runtime cannot actually see. A `$ref` cycle
+//! is different in kind: it is not missing information but an expansion with
+//! no end, so the repeat is cut in place, marked, and reported, and the rest
+//! of the operation stays draftable.
+//!
+//! Resolution also canonicalizes the two dialect spellings that describe
+//! something the closed subset already admits: a two-member union against
+//! `null` becomes the type pair `[T, "null"]`, and a node declaring
+//! `properties` or `items` and no `type` is read as the type that keyword
+//! belongs to. Neither adds a constraint the document does not state; each is
+//! reported as a note so the reading stays the operator's to reject.
 
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-use super::types::{OperationKey, OperationSummary, ResolvedSchema};
+use super::fetch;
+use super::types::{
+    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, SpecSource, RECURSIVE_REF_KEY,
+};
 
 /// Path Item Object keys this pipeline can draft a source from.
 ///
@@ -74,39 +88,31 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// Reads and parses the OpenAPI document at `path`. Accepts YAML or
-    /// JSON (YAML is a superset for this purpose, so both are parsed the
-    /// same way) and requires a top-level `openapi: 3.0.x` or `3.1.x`
-    /// version string. No network access is performed; `path` must name a
-    /// local file.
-    pub fn load(path: &Path) -> Result<Spec> {
-        let metadata = std::fs::metadata(path)
-            .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
-        if metadata.len() > MAX_DOCUMENT_BYTES {
-            bail!(
-                "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
-                path.display(),
-                metadata.len(),
-                MAX_DOCUMENT_BYTES
-            );
-        }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading OpenAPI document at {}", path.display()))?;
-        let document: Value = serde_norway::from_str(&text)
-            .with_context(|| format!("parsing {} as YAML or JSON", path.display()))?;
+    /// Reads and parses the OpenAPI document `source` names, from disk or
+    /// from the network. Accepts YAML or JSON (YAML is a superset for this
+    /// purpose, so both are parsed the same way) and requires a top-level
+    /// `openapi: 3.0.x` or `3.1.x` version string.
+    pub fn open(source: &SpecSource) -> Result<Spec> {
+        let text = match source {
+            SpecSource::File(path) => read_local(path)?,
+            SpecSource::Url(url) => fetch::get(url, MAX_DOCUMENT_BYTES)?,
+        };
+        Spec::parse(&text, &source.display())
+    }
+
+    /// Parses one already-read document, naming it `origin` in any error so
+    /// the message points at the file path or URL the operator passed rather
+    /// than at a buffer.
+    fn parse(text: &str, origin: &str) -> Result<Spec> {
+        let document: Value = serde_norway::from_str(text)
+            .with_context(|| format!("parsing {origin} as YAML or JSON"))?;
         let version = document
             .get("openapi")
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow!(
-                    "{} has no top-level `openapi` version string",
-                    path.display()
-                )
-            })?;
+            .ok_or_else(|| anyhow!("{origin} has no top-level `openapi` version string"))?;
         if !(version.starts_with("3.0.") || version.starts_with("3.1.")) {
             bail!(
-                "{} declares `openapi: {version}`; only OpenAPI 3.0.x and 3.1.x are supported",
-                path.display()
+                "{origin} declares `openapi: {version}`; only OpenAPI 3.0.x and 3.1.x are supported"
             );
         }
         Ok(Spec { document })
@@ -179,14 +185,14 @@ impl Spec {
     }
 
     /// The response schema for `key`'s `status`/`media_type` response, with
-    /// every local `$ref` inlined and OpenAPI 3.0 `nullable: true` rewritten
-    /// to the 3.1 type pair `[T, "null"]`.
+    /// every local `$ref` inlined, the dialect normalized, and a note for each
+    /// reading the normalization had to make.
     pub fn response_schema(
         &self,
         key: &OperationKey,
         status: &str,
         media_type: &str,
-    ) -> Result<ResolvedSchema> {
+    ) -> Result<ResolvedResponse> {
         let operation = self.find_operation(key)?;
         let responses = operation
             .get("responses")
@@ -227,15 +233,19 @@ impl Spec {
                 key.path
             )
         })?;
+        let mut notes = Vec::new();
         let resolved = self
-            .inline_schema(schema, &mut Vec::new())
+            .inline_schema(schema, "", &mut Vec::new(), &mut notes)
             .with_context(|| {
                 format!(
                     "resolving the `{status}` `{media_type}` response schema of {} {}",
                     key.method, key.path
                 )
             })?;
-        Ok(ResolvedSchema(resolved))
+        Ok(ResolvedResponse {
+            schema: ResolvedSchema(resolved),
+            notes,
+        })
     }
 
     /// Base URLs from the document's top-level `servers` array, in document
@@ -306,7 +316,7 @@ impl Spec {
                 continue;
             };
             let resolved = self
-                .inline_schema(schema, &mut Vec::new())
+                .inline_schema(schema, "", &mut Vec::new(), &mut Vec::new())
                 .with_context(|| format!("resolving the schema of query parameter `{name}`"))?;
             if let Some(maximum) = resolved.get("maximum").and_then(Value::as_i64) {
                 out.push(maximum);
@@ -361,24 +371,42 @@ impl Spec {
     }
 
     /// Recursively inlines every local `$ref` inside a Schema Object and
-    /// normalizes OpenAPI 3.0 `nullable: true` to the 3.1 type pair. Per
-    /// OpenAPI 3.0 semantics, a schema node carrying `$ref` has any sibling
-    /// keywords ignored; this function does the same, uniformly, for
-    /// simplicity.
-    fn inline_schema(&self, node: &Value, stack: &mut Vec<String>) -> Result<Value> {
+    /// normalizes the dialect. Per OpenAPI 3.0 semantics, a schema node
+    /// carrying `$ref` has any sibling keywords ignored; this function does the
+    /// same, uniformly, for simplicity.
+    ///
+    /// `pointer` locates `node` inside the response schema so a note can name
+    /// where it applies; it is the same extended projection form the flattener
+    /// produces, so the two read alike.
+    fn inline_schema(
+        &self,
+        node: &Value,
+        pointer: &str,
+        stack: &mut Vec<String>,
+        notes: &mut Vec<String>,
+    ) -> Result<Value> {
         let Value::Object(object) = node else {
             return Ok(node.clone());
         };
         if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-            let pointer = local_ref_pointer(reference)?;
+            let target_pointer = local_ref_pointer(reference)?;
             if stack.iter().any(|seen| seen == reference) {
-                bail!("$ref cycle detected at `{reference}`");
+                notes.push(format!(
+                    "`{}` repeats the $ref cycle `{reference}`; the repeat is cut there, so \
+                     nothing below it can be projected",
+                    display_pointer(pointer)
+                ));
+                return Ok(Value::Object(
+                    [(RECURSIVE_REF_KEY.to_owned(), Value::from(reference))]
+                        .into_iter()
+                        .collect(),
+                ));
             }
-            let target = resolve_pointer(&self.document, pointer)
+            let target = resolve_pointer(&self.document, target_pointer)
                 .with_context(|| format!("resolving $ref `{reference}`"))?
                 .clone();
             stack.push(reference.to_string());
-            let inlined = self.inline_schema(&target, stack);
+            let inlined = self.inline_schema(&target, pointer, stack, notes);
             stack.pop();
             return inlined;
         }
@@ -390,23 +418,29 @@ impl Spec {
                     Some(members) => {
                         let mut properties = serde_json::Map::with_capacity(members.len());
                         for (member_name, member_schema) in members {
+                            let member_pointer =
+                                format!("{pointer}/{}", escape_pointer_segment(member_name));
                             properties.insert(
                                 member_name.clone(),
-                                self.inline_schema(member_schema, stack)?,
+                                self.inline_schema(member_schema, &member_pointer, stack, notes)?,
                             );
                         }
                         Value::Object(properties)
                     }
                     None => value.clone(),
                 },
-                "items" | "not" | "additionalProperties" if value.is_object() => {
-                    self.inline_schema(value, stack)?
+                "items" if value.is_object() => {
+                    self.inline_schema(value, &format!("{pointer}/*"), stack, notes)?
+                }
+                "not" | "additionalProperties" if value.is_object() => {
+                    self.inline_schema(value, pointer, stack, notes)?
                 }
                 "allOf" | "oneOf" | "anyOf" => {
                     if let Some(members) = value.as_array() {
                         let mut inlined_members = Vec::with_capacity(members.len());
                         for member in members {
-                            inlined_members.push(self.inline_schema(member, stack)?);
+                            inlined_members
+                                .push(self.inline_schema(member, pointer, stack, notes)?);
                         }
                         Value::Array(inlined_members)
                     } else {
@@ -418,6 +452,9 @@ impl Spec {
             result.insert(key.clone(), inlined_value);
         }
         normalize_nullable(&mut result);
+        collapse_null_union(&mut result);
+        order_nullable_pair(&mut result);
+        infer_structural_type(&mut result, pointer, notes);
         Ok(Value::Object(result))
     }
 }
@@ -448,6 +485,168 @@ fn normalize_nullable(object: &mut serde_json::Map<String, Value>) {
             type_names.push(Value::String("null".to_string()));
         }
         _ => {}
+    }
+}
+
+/// Rewrites a two-member `anyOf`/`oneOf` whose members are one typed schema
+/// and the schema `{"type": "null"}` into that typed schema carrying the pair
+/// `[T, "null"]`.
+///
+/// This is the shape generators emit for an optional field, and it states
+/// exactly what the closed subset's one admitted union states. Rewriting it
+/// adds no constraint: the members are kept as they stand, and a keyword on
+/// the union node itself (a `description`, say) is carried over only where the
+/// kept member does not already state one, so nothing the document said is
+/// overwritten. Any other union, including one against `null` whose other
+/// member declares no type to pair against, is left for the flattening stage
+/// to skip and warn about.
+fn collapse_null_union(object: &mut serde_json::Map<String, Value>) {
+    let keyword = ["anyOf", "oneOf"]
+        .into_iter()
+        .find(|keyword| object.contains_key(*keyword));
+    let Some(keyword) = keyword else {
+        return;
+    };
+    let Some(members) = object.get(keyword).and_then(Value::as_array) else {
+        return;
+    };
+    let [first, second] = members.as_slice() else {
+        return;
+    };
+    let kept = match (is_null_schema(first), is_null_schema(second)) {
+        (true, false) => second,
+        (false, true) => first,
+        _ => return,
+    };
+    let Some(kept) = kept.as_object() else {
+        return;
+    };
+    let Some(paired) = nullable_type(kept.get("type")) else {
+        return;
+    };
+
+    let mut collapsed = kept.clone();
+    collapsed.insert("type".to_owned(), paired);
+    for (key, value) in object.iter() {
+        if key == keyword || collapsed.contains_key(key) {
+            continue;
+        }
+        collapsed.insert(key.clone(), value.clone());
+    }
+    *object = collapsed;
+}
+
+/// Whether `node` is the schema that admits only `null`.
+fn is_null_schema(node: &Value) -> bool {
+    node.get("type").and_then(Value::as_str) == Some("null")
+}
+
+/// The `[T, "null"]` pair for an existing `type` keyword, or `None` when there
+/// is no single non-`null` type to pair.
+fn nullable_type(declared: Option<&Value>) -> Option<Value> {
+    let null = Value::from("null");
+    match declared? {
+        Value::String(name) if name != "null" => {
+            Some(Value::Array(vec![Value::String(name.clone()), null]))
+        }
+        Value::Array(names) => {
+            let mut non_null = names
+                .iter()
+                .filter(|name| name.as_str() != Some("null"))
+                .cloned();
+            let single = non_null.next()?;
+            non_null
+                .next()
+                .is_none()
+                .then(|| Value::Array(vec![single, null]))
+        }
+        _ => None,
+    }
+}
+
+/// Writes a nullable type pair in the one order the closed subset admits.
+/// A document spelling it `["null", T]` describes the same node, and the
+/// spelling is not a reason to refuse it later.
+fn order_nullable_pair(object: &mut serde_json::Map<String, Value>) {
+    let Some(Value::Array(names)) = object.get("type") else {
+        return;
+    };
+    let [first, second] = names.as_slice() else {
+        return;
+    };
+    if first.as_str() == Some("null") && second.as_str().is_some_and(|name| name != "null") {
+        let reordered = Value::Array(vec![second.clone(), first.clone()]);
+        object.insert("type".to_owned(), reordered);
+    }
+}
+
+/// Reads the type of a node that declares a structural keyword and no `type`.
+///
+/// `properties` describes members of an object and `items` describes elements
+/// of an array; neither means anything on any other type, so the node is not
+/// ambiguous and reading it costs nothing the document did not already say.
+/// Several large registry APIs publish their collection wrappers exactly this
+/// way, and refusing them yields no draft at all rather than a narrower one.
+///
+/// The reading stops there. A node carrying no structural keyword is left
+/// untyped for the flattening stage to skip: there would be nothing to read it
+/// from, and guessing a scalar type is the kind of invention this tool does
+/// not do. A node already carrying `type`, a bounded `const`/`enum`, or a
+/// union keyword states its own shape and is left alone.
+fn infer_structural_type(
+    object: &mut serde_json::Map<String, Value>,
+    pointer: &str,
+    notes: &mut Vec<String>,
+) {
+    let stated = ["type", "const", "enum", "allOf", "oneOf", "anyOf"]
+        .into_iter()
+        .any(|keyword| object.contains_key(keyword));
+    if stated || object.contains_key(RECURSIVE_REF_KEY) {
+        return;
+    }
+    let (keyword, inferred) = if object.contains_key("properties") {
+        ("properties", "object")
+    } else if object.contains_key("items") {
+        ("items", "array")
+    } else {
+        return;
+    };
+    object.insert("type".to_owned(), Value::from(inferred));
+    notes.push(format!(
+        "`{}` declares no `type` but does declare `{keyword}`, so it is read as `{inferred}`",
+        display_pointer(pointer)
+    ));
+}
+
+/// Reads a local document, refusing one past the size ceiling before any of
+/// it is read into memory.
+fn read_local(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
+    if metadata.len() > MAX_DOCUMENT_BYTES {
+        bail!(
+            "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
+            path.display(),
+            metadata.len(),
+            MAX_DOCUMENT_BYTES
+        );
+    }
+    std::fs::read_to_string(path)
+        .with_context(|| format!("reading OpenAPI document at {}", path.display()))
+}
+
+/// Escapes an object member name into one RFC 6901 pointer segment, matching
+/// the flattening stage so a note and a candidate leaf name the same node the
+/// same way.
+fn escape_pointer_segment(name: &str) -> String {
+    name.replace('~', "~0").replace('/', "~1")
+}
+
+fn display_pointer(pointer: &str) -> &str {
+    if pointer.is_empty() {
+        "(root)"
+    } else {
+        pointer
     }
 }
 

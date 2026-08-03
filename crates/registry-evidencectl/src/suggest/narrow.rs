@@ -31,7 +31,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use super::types::{
     BoundKind, BoundNeed, BoundValues, NarrowOutcome, Observations, Observed, Provenance,
-    ResolvedSchema, SuggestedBound,
+    ResolvedSchema, SuggestedBound, RECURSIVE_REF_KEY,
 };
 
 /// The largest `maxItems` the closed subset admits.
@@ -534,6 +534,16 @@ impl Narrowing<'_> {
                 display_pointer(pointer)
             )
         })?;
+        // Reachable only by selecting a whole subtree that contains a cut
+        // recursion: the flattener never offers the cut node itself as a leaf.
+        if let Some(reference) = node.get(RECURSIVE_REF_KEY).and_then(Value::as_str) {
+            bail!(
+                "the node at `{}` repeats the $ref cycle `{reference}`; a schema with no end \
+                 cannot be projected, so select the members you need rather than the subtree \
+                 above it",
+                display_pointer(pointer)
+            );
+        }
         let Some((base, nullable)) = node_type(node, pointer)? else {
             // A node with no type but a bounded const is admitted as it is.
             reject_descent(selected, pointer)?;
@@ -726,6 +736,11 @@ impl Narrowing<'_> {
 
     /// The best `maxItems` the inputs support: a stated bound clamped into the
     /// subset, else a widened sample observation, else nothing.
+    ///
+    /// A stated bound above the ceiling is reported as the ceiling's, not the
+    /// document's. A specification writing `maxItems: 2147483647` is declining
+    /// to bound the array; carrying its name onto the 256 the draft ends up
+    /// with would read as a promise the source never made.
     fn array_suggestion(
         &self,
         pointer: &str,
@@ -734,9 +749,14 @@ impl Narrowing<'_> {
     ) -> Option<SuggestedBound> {
         let floor = spec_minimum.unwrap_or(0).clamp(1, MAX_ITEMS_CEILING);
         if let Some(stated) = spec_maximum {
+            let clamped = stated.clamp(floor, MAX_ITEMS_CEILING);
             return Some(SuggestedBound {
-                values: BoundValues::MaxItems(stated.clamp(floor, MAX_ITEMS_CEILING)),
-                provenance: Provenance::Spec,
+                values: BoundValues::MaxItems(clamped),
+                provenance: if clamped == stated {
+                    Provenance::Spec
+                } else {
+                    Provenance::SubsetCeiling
+                },
             });
         }
         let observed = self.observed(pointer)?.max_array_items?;
@@ -802,7 +822,9 @@ impl Narrowing<'_> {
 
     /// The best string length the inputs support: a stated bound clamped into
     /// the subset, else the fixed length a `uuid` format implies, else a
-    /// widened sample observation, else nothing.
+    /// widened sample observation, else nothing. A stated bound above the
+    /// ceiling is attributed to the ceiling, for the reason
+    /// [`Self::array_suggestion`] gives.
     fn string_suggestion(
         &self,
         pointer: &str,
@@ -817,7 +839,7 @@ impl Narrowing<'_> {
                     min_length: minimum.min(MAX_LENGTH_CEILING),
                     max_length: MAX_LENGTH_CEILING,
                 },
-                provenance: Provenance::Spec,
+                provenance: Provenance::SubsetCeiling,
             });
         }
         if format == Some("uuid") {
