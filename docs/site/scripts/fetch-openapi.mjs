@@ -23,6 +23,7 @@ import { promisify } from 'node:util';
 import YAML from 'yaml';
 import {
   applyDocsetRefs,
+  filterRepoDocsForDocset,
   getDocset,
   loadDocsets,
   selectedDocsetId,
@@ -41,6 +42,7 @@ const cacheRoot = resolve(root, '.repo-docs-cache');
 const SPEC_SOURCES = {
   'registry-relay': 'openapi/registry-relay.openapi.json',
   'registry-notary': 'openapi/registry-notary.openapi.json',
+  'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
 };
 
 function fail(message) {
@@ -102,6 +104,11 @@ async function main() {
   }
   const docsets = await loadDocsets({ dataDir });
   const docset = getDocset(docsets, selectedDocsetId(docsets));
+  // Filter before applying docset refs, as sync-repo-docs.mjs does: a repo
+  // whose docs are all excluded from this docset must not count as an active
+  // repo the docset is required to pin. Such a repo keeps its repo-docs ref,
+  // so its spec rides the current shell the way hand-authored pages do.
+  filterRepoDocsForDocset(manifest, docset);
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for OpenAPI refs.`);

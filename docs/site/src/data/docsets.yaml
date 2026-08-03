@@ -22,6 +22,9 @@ docsets:
       registry-manifest:
         version: main source (unreleased)
         ref: HEAD
+      registry-evidence:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.16.3
     label: v0.16.3
     path: /v/0.16.3/

@@ -529,12 +529,16 @@ async function main() {
   const docsets = await loadDocsets({ dataDir });
   validateRepoDocsMetadata(manifest, knownStandards, docsets);
   const docset = getDocset(docsets, selectedDocsetId(docsets));
+  // Filter before applying docset refs: a repo whose docs are all excluded
+  // from this docset (a product newer than the docset, like registry-evidence
+  // in pre-Evidence archives) must not count as an active repo the docset is
+  // required to pin.
+  filterRepoDocsForDocset(manifest, docset);
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for product docs.`);
   }
   applyDocsetMetadataOverrides(manifest, docset);
-  filterRepoDocsForDocset(manifest, docset);
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.
   await rm(outputRoot, { recursive: true, force: true });
