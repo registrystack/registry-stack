@@ -71,7 +71,7 @@ gates for its area (see Verification), and committed.
       existing gate or add one).
 - [x] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
       tightly linked to the frozen contracts so it cannot drift.
-- [ ] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
+- [x] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
       that runs each Evidence tutorial from a clean container with only the
       prerequisites the tutorial itself documents; Evidence tutorials must
       pass it to merge.
@@ -82,7 +82,7 @@ gates for its area (see Verification), and committed.
       verify an assertion as a consumer. Adopter outcome for E1: a fresh
       machine completes it in 15 minutes or less using released binaries
       installed via F1 (the released-binary form of this gate needs F3).
-- [ ] B6. Tutorial E6 (move Evidence to production signing) published,
+- [x] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
 - [x] B7. Mint has real docs presence: a Configure page and a reference page.
 - [ ] B8. Onboarding spine: glossary disambiguates Evidence (product) from
@@ -279,3 +279,18 @@ is parallel; B has no upstream dependencies and is the standing priority
 - 2026-08-03: Session-limit note: three authoring subagents died mid
   wave (configure page recovered by hand, E1 rewritten by hand, E6 not
   written). Next unblocked items: B4 gate, E6, then E2-E5.
+- 2026-08-03: B4 done. check-evidence-tutorials.sh drift-checks and
+  replays the first-assertion tutorial's fences verbatim (executed
+  green locally end to end); its dry-run joins npm run check; a
+  path-gated evidence-tutorials CI job builds the toolset and executes
+  the tutorial inside the repo's pinned builder-image digest with the
+  repo mounted read-only, counted by the required-results job. Caveat
+  recorded: that image is a full builder userland reused for its pinned
+  digest; a slimmer pinned base can replace it later. The
+  release-download fences stay unexecuted until F3. B6 done: the
+  production-signing tutorial restates OPERATOR-CONTRACT.md (key
+  generation, JWKS retention window, offline validation, readiness,
+  rotation, signature limits). Extending the executable gate to E6 and
+  the future E2-E5 belongs to B5. Full npm run check passed after the
+  docs wave; one Vale error it surfaced (typographic quotes in the
+  operator contract lead) fixed at the source.
