@@ -1,0 +1,433 @@
+---
+title: Verify an assertion as a consumer
+description: Re-verify one stored Evidence response offline against a pinned key set and a verification policy built from your own retained state, then make each check fail to prove it was doing work.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: tutorial
+persona:
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+[Serve assertions over HTTP](../serve-assertions-over-http/) ends with a signed assertion in a file
+and one sentence: verifying it is a consumer's job. This is that job. You take one stored response,
+a key set you pinned, and a policy written from what your own service kept, and you answer two
+questions that a relying service has to be able to answer months later: was this authentic, and was
+it current when you acted on it.
+
+<QuickstartMeta
+  outcome="One stored Evidence response re-verified offline against a pinned key set and a policy built from retained state, plus five refusals that prove the checks are real."
+  time="About 20 minutes"
+  level="Offline re-verification of one retained response, with no deployment and no network"
+  prerequisites={['The evidence binary on PATH', 'A shell with sed and grep', 'No deployment, no source, no credentials, and no network access']}
+/>
+
+Every value below is synthetic: a scaffolded deployment's abstract acceptance definition, an
+invented record, and an assertion that expired long before you read this.
+
+## One command, and nothing else running
+
+The previous tutorial needed four processes. This one needs none.
+
+`evidence verify` opens no socket, resolves no metadata, and fetches no key. Everything it trusts
+arrives as a file you named on the command line, which is what makes verification something a
+consumer can do on its own schedule: on receipt, again at the moment of a decision, and again years
+later when someone asks what you checked. It is the same `evidence` binary an assertion provider
+runs, used here from the other side of the boundary. Nothing about the subcommand needs a
+deployment, a bundle, or a runtime file.
+
+It takes three inputs, and where each comes from matters more than its format:
+
+- **The stored response.** The bytes you received and kept. You were given these.
+- **The pinned key set.** A file, not a URL. You were given these too, out of band, once.
+- **The verification policy.** A document you write from your own records. Nobody hands you this,
+  and that is the point of the page.
+
+## Start from the response you kept
+
+Make a working directory and write the stored response into it:
+
+```sh
+mkdir verify-evidence
+cd verify-evidence
+cat >stored-response.json <<'JSON'
+{
+  "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6InNjYWZmb2xkLXNpZ25pbmcta2V5LTEiLCJ0eXAiOiJldmlkZW5jZStqd3MiLCJjdHkiOiJhcHBsaWNhdGlvbi9ldmlkZW5jZStqc29uIn0",
+  "payload": "eyJzY2hlbWEiOiJyZWdpc3RyeS5hc3NlcnRpb24tZXZpZGVuY2UvdjEiLCJyZXF1ZXN0Tm9uY2UiOiJoTkNfcmlZamhnMi0wQmtMM2hUUHZ1MzJKLVAyRnhVMjlYUHdLYUFGOVljIiwiaWQiOiJ1cm46dWxpZDowMUtaMzNaTVFOVFBFU0dRQkNTSzdRNFM2QyIsInR5cGUiOiJFdmlkZW5jZSIsInN1cHBvcnRzUmVxdWlyZW1lbnQiOiJ1cm46ZXhhbXBsZTpzY2FmZm9sZDpyZXF1aXJlbWVudDpleGFtcGxlLWZsYWc6djEiLCJpc0NvbmZvcm1hbnRUbyI6InVybjpleGFtcGxlOnNjYWZmb2xkOmV2aWRlbmNlLXR5cGU6ZXhhbXBsZS1mbGFnOnYxIiwiaXNzdWVkQnkiOiJ1cm46ZXhhbXBsZTpzY2FmZm9sZDppc3N1ZXIiLCJwcm92aWRlZEJ5IjoidXJuOmV4YW1wbGU6c2NhZmZvbGQ6cHJvdmlkZXIiLCJpc3N1ZWRBdCI6IjIwMjYtMDgtMDNUMDY6MTE6MzlaIiwib2JzZXJ2ZWRBdCI6IjIwMjYtMDgtMDNUMDY6MTE6MzlaIiwidmFsaWRVbnRpbCI6IjIwMjYtMDgtMDRUMDY6MTE6MzlaIiwicHVycG9zZSI6InNjYWZmb2xkLWVsaWdpYmlsaXR5IiwiYXVkaWVuY2UiOiJodHRwczovL3JlcXVlc3Rlci5pbnZhbGlkIiwiY29uZmlndXJhdGlvblJldmlzaW9uIjoic2hhMjU2OmRiMzdmM2E1Mzg1OWQ4ZTYxMGYxZjVhNzFiN2MzNGQ5ZTI4MTVjNTcyMWM2MzBhZmQyZjM0MTRlNzU3YjdmMGEiLCJzdWJqZWN0cyI6W3sicm9sZSI6InN1YmplY3QiLCJiaW5kaW5nIjoidXJuOmV2aWRlbmNlOnN1YmplY3Q6djFfS3hIY2Y0Vm5CbGRZWl9GcUxoTGI3Z2VyWFFWZk84bThDWW1XTDdwaVg4MCJ9XSwic3VwcG9ydGVkVmFsdWVzIjpbeyJwcm92aWRlc1ZhbHVlRm9yIjoidXJuOmV4YW1wbGU6c2NhZmZvbGQ6Y29uY2VwdDpleGFtcGxlLWZsYWciLCJ2YWx1ZSI6dHJ1ZX1dfQ",
+  "signature": "DHWXiymM6op0UuGlHNQE9XJbzN_-xtzXLhtFSG2HvoGcVxtf1He-gi_jQoXho5Sdtj19bPIPIvxYkbPTWNIdBA"
+}
+JSON
+```
+
+This is a real flattened JWS produced by the deployment the previous tutorial builds, kept exactly
+as it arrived except for the line breaks, which are there so you can read it. JSON whitespace is
+not part of what was signed: the signature covers the two base64url members and the dot between
+them, so reformatting the envelope changes nothing and editing either member changes everything.
+
+You cannot regenerate this file, and you are not meant to. A consumer receives assertions; it does
+not produce them. To make your own, run
+[Serve assertions over HTTP](../serve-assertions-over-http/) and keep its `out/response.json`.
+
+Nothing in the payload identifies a person. It carries one boolean, an opaque subject binding, and
+the identifiers of the requirement it answers, which is what
+[minimum disclosure](../../security/evidence/) means in practice.
+
+## Pin the key set
+
+```sh
+cat >issuer-keys.json <<'JSON'
+{
+  "keys": [
+    {
+      "alg": "EdDSA",
+      "crv": "Ed25519",
+      "kid": "scaffold-signing-key-1",
+      "kty": "OKP",
+      "x": "i59VIrRPzX4GF7BirBAw6d1-CYy5bN8py7nynjx7CZU"
+    }
+  ]
+}
+JSON
+```
+
+A deployment publishes its current key set at `GET /.well-known/evidence/jwks.json`, and that URL
+is where this file came from. It is not where verification goes to look. `evidence verify --jwks`
+takes a file, and that file is the complete trust set for the run: if the response names a key that
+is not in it, verification fails rather than going to find the key.
+
+That is a deliberate constraint on you, not a limitation of the tool. A verifier that fetches the
+issuer's current key set at verification time will accept anything the issuer signs, including
+anything signed by a key an attacker persuaded the issuer to publish. Pinning turns key rotation
+into something your service notices and approves, at the cost of having to notice it.
+
+## Write the policy from your own records
+
+The policy document is the part nobody gives you. Every value in it comes from state your service
+retained when it made the original request and accepted the answer:
+
+```sh
+cat >policy.yaml <<'YAML'
+# What was asked, from the request record.
+issuedBy: urn:example:scaffold:issuer
+providedBy: urn:example:scaffold:provider
+requirement: urn:example:scaffold:requirement:example-flag:v1
+evidenceType: urn:example:scaffold:evidence-type:example-flag:v1
+purpose: scaffold-eligibility
+# The audience this assertion was minted for: your service, not another.
+audience: https://requester.invalid
+# The exact deployment configuration you reviewed and accepted answers from.
+configurationRevision: sha256:db37f3a53859d8e610f1f5a71b7c34d9e2815c5721c630afd2f3414e757b7f0a
+# The nonce your service generated for this one request and kept.
+requestNonce: hNC_riYjhg2-0BkL3hTPvu32J-P2FxU29XPwKaAF9Yc
+# The binding recorded against this subject in your own files.
+expectedSubjects:
+  - role: subject
+    binding: urn:evidence:subject:v1_KxHcf4VnBldYZ_FqLhLb7gerXQVfO8m8CYmWL7piX80
+# The shape of answer your procedure knows how to act on.
+expectedOutputs:
+  - concept: urn:example:scaffold:concept:example-flag
+    form: boolean
+# Your ceiling on how long an assertion may claim to be good for.
+maximumAssertionLifetimeSeconds: 86400
+YAML
+```
+
+In this tutorial the values are printed above, because you did not make the request that produced
+the response. In your service they come from the transaction record, and the difference is the
+whole subject of the page. Reading an expectation out of the document you are about to verify and
+then comparing it against that same document proves nothing. The policy is a separate file for
+exactly that reason.
+
+Four of those entries carry most of the weight:
+
+- **`requestNonce`** is the value your service generated for one request and has kept ever since.
+  It comes back inside the signed payload, so an assertion that answers a different request, or the
+  same request replayed at you later, does not match.
+- **`expectedSubjects`** is the opaque binding your records hold for this subject. The deployment
+  derives it from the subject, the trust domain, your audience, and the purpose, so it is stable
+  for you across requests and meaningless to anyone else. Pinning it is how you check that the
+  answer is about the person you asked about.
+- **`configurationRevision`** names the exact reviewed bundle that produced the answer: the sources
+  read, the fields projected, and the derivation applied. A deployment that changed any of that
+  produces evidence your policy no longer accepts, which turns a silent configuration change into
+  a visible refusal.
+- **`audience`** is your own identifier. An assertion minted for another relying party is not
+  evidence for you, however authentic it is.
+
+`maximumAssertionLifetimeSeconds` is your ceiling, not the issuer's. The issuer chose `validUntil`;
+you decide how long a claimed validity window you are willing to act on. Here the assertion claims
+24 hours and the policy allows 86400 seconds, so it fits. An assertion claiming longer than your
+ceiling is refused outright rather than treated as merely stale.
+
+`clockSkewSeconds` is the one optional field, and leaving it out means zero tolerance. Everything
+else is required, and the document rejects fields it does not know.
+
+## Verify as of the moment you accepted it
+
+Your service accepted this response at `2026-08-03T06:12:00Z`. Ask whether it was good then:
+
+```sh
+evidence verify \
+  --jws stored-response.json \
+  --jwks issuer-keys.json \
+  --policy policy.yaml \
+  --at 2026-08-03T06:12:00Z
+```
+
+Expected output:
+
+```text
+verified-at: 2026-08-03T06:12:00Z
+authentic: yes
+currently-valid: yes
+{
+  "schema": "registry.assertion-evidence/v1",
+  "requestNonce": "hNC_riYjhg2-0BkL3hTPvu32J-P2FxU29XPwKaAF9Yc",
+  "id": "urn:ulid:01KZ33ZMQNTPESGQBCSK7Q4S6C",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:scaffold:requirement:example-flag:v1",
+  "isConformantTo": "urn:example:scaffold:evidence-type:example-flag:v1",
+  "issuedBy": "urn:example:scaffold:issuer",
+  "providedBy": "urn:example:scaffold:provider",
+  "issuedAt": "2026-08-03T06:11:39Z",
+  "observedAt": "2026-08-03T06:11:39Z",
+  "validUntil": "2026-08-04T06:11:39Z",
+  "purpose": "scaffold-eligibility",
+  "audience": "https://requester.invalid",
+  "configurationRevision": "sha256:db37f3a53859d8e610f1f5a71b7c34d9e2815c5721c630afd2f3414e757b7f0a",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_KxHcf4VnBldYZ_FqLhLb7gerXQVfO8m8CYmWL7piX80"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:scaffold:concept:example-flag",
+      "value": true
+    }
+  ]
+}
+```
+
+Three lines, then the payload. `verified-at` repeats the instant you chose, so a transcript records
+which clock the answer was given against. `authentic: yes` means the pinned key signed these exact
+bytes and every expectation in your policy held. `currently-valid: yes` means the assertion was
+inside its own validity window at that instant. The payload is printed last, and only on full
+success, as inspection output for someone who already holds the file.
+
+`--at` is strict RFC 3339 at zero offset. A timestamp carrying a local offset is refused rather
+than converted, so an operator cannot re-verify against a local wall clock and read the result as
+UTC. Omit `--at` and the command uses system time, which is what a service does on receipt; an
+audit six months later wants the instant of the decision instead, which is why the flag exists.
+
+## Ask the second question
+
+Six months later an auditor asks whether that same file is still evidence today. Same response,
+same key set, same policy, later instant:
+
+```sh
+evidence verify \
+  --jws stored-response.json \
+  --jwks issuer-keys.json \
+  --policy policy.yaml \
+  --at 2027-02-03T00:00:00Z ||
+  printf 'exit %d\n' "$?"
+```
+
+Expected output:
+
+```text
+verified-at: 2027-02-03T00:00:00Z
+authentic: yes
+currently-valid: no
+exit 3
+```
+
+Authenticity and current usability are separate answers, and this is why. The signature is as good
+as it ever was, and the assertion is still exactly what the deployment said in August; it is no
+longer a statement about now. An expired assertion is not a forgery, and treating the two the
+same way would either make you throw away sound audit evidence or make you act on stale facts.
+
+Exit code 3 is reserved for this one outcome so a script can tell it apart without parsing text.
+Code 0 is authentic and current; code 1 is everything else, including a policy mismatch, an
+unusable file, and a file that will not open.
+
+The payload is not printed here. Inspection output is for a response that passed every check, so
+there is nothing to read out of a result you should not be acting on.
+
+## Make the policy fail
+
+A run that succeeds proves less than it looks like until you have watched one fail. Build two
+broken policies, each differing from the good one in a single line, and run both:
+
+```sh
+sed 's|^requestNonce: .*|requestNonce: 7qq2MluGfZayLGZt9XkI28fBefooo-KlowQtHJciBbU|' \
+  policy.yaml >replayed-request.yaml
+sed 's|^    binding: .*|    binding: urn:evidence:subject:v1_rkaZy8vYfsrK9m0tmuLejkLiQ1P0dGk81mTQgrZ0nj0|' \
+  policy.yaml >other-subject.yaml
+
+evidence verify --jws stored-response.json --jwks issuer-keys.json \
+  --policy replayed-request.yaml --at 2026-08-03T06:12:00Z ||
+  printf 'exit %d\n' "$?"
+evidence verify --jws stored-response.json --jwks issuer-keys.json \
+  --policy other-subject.yaml --at 2026-08-03T06:12:00Z ||
+  printf 'exit %d\n' "$?"
+```
+
+Expected output:
+
+```text
+verified-at: 2026-08-03T06:12:00Z
+authentic: no
+evidence: stored response verification failed (policy)
+exit 1
+verified-at: 2026-08-03T06:12:00Z
+authentic: no
+evidence: stored response verification failed (policy)
+exit 1
+```
+
+The first is the replay check working: a response that answers some other request is refused even
+though it is perfectly authentic. The second is the subject check working: an assertion about
+someone else is refused for the same reason.
+
+Now read the two results again. They are identical. One says the nonce did not match and the other
+says the subject did not, and the output does not distinguish them, because a refusal that named
+the failing comparison would be a probing tool. Anyone who could feed a document and a policy to
+this command could then vary one expectation at a time and read the answers back, and the
+expectations are the retained state the check exists to protect: the nonce, the subject binding,
+the audience, the accepted configuration. A single closed class for every mismatch costs you a
+little debugging convenience and denies that oracle entirely.
+
+The classes are still real, and there are eight of them: `malformed`, `protected-header`, `key`,
+`signature`, `payload`, `policy`, `time`, and `disclosure`. They tell you which stage refused,
+never which value inside it.
+
+## A policy with a hole is refused, not skipped
+
+The document is closed and, apart from `clockSkewSeconds`, complete. Take one required expectation
+out and see what happens:
+
+```sh
+grep -v '^audience:' policy.yaml >incomplete.yaml
+evidence verify --jws stored-response.json --jwks issuer-keys.json \
+  --policy incomplete.yaml --at 2026-08-03T06:12:00Z ||
+  printf 'exit %d\n' "$?"
+```
+
+Expected output:
+
+```text
+verified-at: 2026-08-03T06:12:00Z
+evidence: stored response verification failed (malformed)
+exit 1
+```
+
+There is no `authentic:` line at all, and that absence is the design. A policy missing a field is
+not a verification that passed with one fewer comparison; it is a document the command declines to
+verify against, so it reports no authenticity answer to be misread. The alternative, a policy where
+omitting `audience` silently means any audience, is how a relying procedure ends up believing it
+checked something it never checked. Adding a field the schema does not define is refused the same
+way, which keeps a typo from quietly becoming a comment.
+
+## Make the signature and the key set fail
+
+Two more refusals, both about the parts you were given rather than the part you wrote. Change one
+character of the payload, and pin a key set that does not contain the signing key:
+
+```sh
+sed 's|"payload": "eyJ|"payload": "eyI|' \
+  stored-response.json >tampered-response.json
+cat >rotated-keys.json <<'JSON'
+{
+  "keys": [
+    {
+      "alg": "EdDSA",
+      "crv": "Ed25519",
+      "kid": "scaffold-signing-key-2",
+      "kty": "OKP",
+      "x": "R9EYatKzbJTKlO22XTDbVN1wocaP-EDN9tsbLCDVkDA"
+    }
+  ]
+}
+JSON
+
+evidence verify --jws tampered-response.json --jwks issuer-keys.json \
+  --policy policy.yaml --at 2026-08-03T06:12:00Z ||
+  printf 'exit %d\n' "$?"
+evidence verify --jws stored-response.json --jwks rotated-keys.json \
+  --policy policy.yaml --at 2026-08-03T06:12:00Z ||
+  printf 'exit %d\n' "$?"
+```
+
+Expected output:
+
+```text
+verified-at: 2026-08-03T06:12:00Z
+authentic: no
+evidence: stored response verification failed (signature)
+exit 1
+verified-at: 2026-08-03T06:12:00Z
+authentic: no
+evidence: stored response verification failed (key)
+exit 1
+```
+
+The first refusal is one base64url character: `eyJ` to `eyI` at the start of the payload. It is
+reported as a signature failure rather than a payload failure because nothing parses the payload
+until the signature over it has verified, so a tampered document never reaches the code that reads
+its fields.
+
+The second is the pinning constraint from earlier, seen from the other side, and it stops a stage
+earlier still. That key set is well formed and its key is a real Ed25519 public key, but it does
+not contain the `kid` the response names, so there is no key to check the signature with and the
+class is `key` rather than `signature`. Verification does not fetch the key named in the header,
+does not consult the issuer's published key set, and does not fall back to trying every key it has.
+If your service has rotated its pinned key set, old stored responses stop verifying against it, so
+keep the retired public key alongside the current one for as long as you need to re-verify what you
+accepted under it.
+
+## What this did not need
+
+No deployment, no source, no access token, no certificate, and no network. Nothing you ran here
+could have reached the issuer even if the issuer were still running, which is the property that
+makes verification something you can repeat in an audit years after the deployment that signed the
+response was decommissioned.
+
+The same policy document governs the other response format. A deployment asked for
+`application/dc+sd-jwt` returns an SD-JWT VC carrying the same Evidence payload, and
+`evidence verify --sd-jwt-vc <file>` checks it against a policy identical to the one you wrote.
+That path is the only one that can refuse with `disclosure`, the one class of the eight a
+flattened JWS can never reach, for a document whose disclosures do not reconstruct the payload
+the signature covers. Exactly one of `--jws` and `--sd-jwt-vc` is required, and naming the file
+states its format: nothing is inferred from the bytes, so a stored response can never be
+re-verified under the other format's rules.
+
+## Cleanup
+
+```sh
+cd ..
+rm -rf verify-evidence
+```
+
+Nothing here is secret, and nothing needs to be shredded: a public key set, an expired assertion,
+and a policy describing a synthetic transaction. In your own service the policy is the file to
+think about, because it is a description of what your procedure promised to check.
+
+## Next
+
+- [Evidence security model](../../security/evidence/) states the verification invariant behind the
+  single policy class, and the disclosure and binding invariants the payload you read relies on.
+- [Registry Evidence API](../../reference/apis/registry-evidence/) documents the request and
+  response formats, including the media types that select between them.
+- [Configure Evidence](../../configure/evidence/) covers building a pinned key set from published
+  public keys with `evidencectl jwks`, and the key rotation that makes you rebuild it.
+- [Serve assertions over HTTP](../serve-assertions-over-http/) is the other side of this exchange,
+  if you also run a deployment.

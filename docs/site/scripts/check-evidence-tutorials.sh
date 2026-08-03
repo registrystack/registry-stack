@@ -51,6 +51,7 @@ EVIDENCE_TUTORIALS=(
 	author-an-acceptance-definition
 	connect-an-institution-source
 	serve-assertions-over-http
+	verify-an-assertion-as-a-consumer
 )
 
 load_spec() {
@@ -176,6 +177,48 @@ load_spec() {
 			# only that a request succeeded, never that a token is checked.
 			'HTTP 401'
 			'the access-token issuer key set could not be retrieved'
+		)
+		;;
+	verify-an-assertion-as-a-consumer)
+		SPEC_FENCES=9
+		# The only tutorial with no deployment, no network, and no edits: a
+		# consumer re-verifies bytes it was handed. The stored response and
+		# key set are embedded because a consumer cannot mint either, and
+		# `evidence evaluate --fixture` signs with an ephemeral in-memory key
+		# and writes nothing. To regenerate them, replay
+		# serve-assertions-over-http through its request fence, then keep
+		# out/response.json and GET /.well-known/evidence/jwks.json; every
+		# pinned value in the page's policy and `--at` instants comes from
+		# that pair and must be refreshed together.
+		SPEC_STEPS=('run:1-9')
+		SPEC_LITERALS=(
+			'evidence verify --jws stored-response.json'
+			'--at 2027-02-03T00:00:00Z'
+			'--jwks issuer-keys.json'
+			'--policy policy.yaml'
+			'--at 2026-08-03T06:12:00Z'
+			'maximumAssertionLifetimeSeconds: 86400'
+			'--sd-jwt-vc <file>'
+		)
+		SPEC_OUTPUTS=(
+			'authentic: yes'
+			'currently-valid: yes'
+			'"providesValueFor": "urn:example:scaffold:concept:example-flag"'
+			# Authentic but out of its validity window is its own answer
+			# and its own exit code, not a signature failure.
+			'currently-valid: no'
+			'exit 3'
+			# The negative controls. Without them a passing run would prove
+			# only that one good response verifies, never that a replayed
+			# nonce, another subject, a tampered byte, an unpinned key, or
+			# an incomplete policy is refused. Both policy mismatches
+			# report this one class, which is the property the page
+			# teaches: the refusal is not an oracle.
+			'authentic: no'
+			'stored response verification failed (policy)'
+			'stored response verification failed (malformed)'
+			'stored response verification failed (signature)'
+			'stored response verification failed (key)'
 		)
 		;;
 	*)

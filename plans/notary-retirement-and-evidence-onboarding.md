@@ -75,7 +75,7 @@ gates for its area (see Verification), and committed.
       that runs each Evidence tutorial from a clean container with only the
       prerequisites the tutorial itself documents; Evidence tutorials must
       pass it to merge.
-- [ ] B5. Tutorials E1-E5 published and gated: first assertion via fixtures
+- [x] B5. Tutorials E1-E5 published and gated: first assertion via fixtures
       (keygen, scaffold, fixture run); serve assertions over HTTP with a
       Mint token; author an acceptance definition using the coequal neutral
       examples; connect an institution source via sanitized local mock;
@@ -402,3 +402,25 @@ is parallel; B has no upstream dependencies and is the standing priority
   open: E5 (verify an assertion as a consumer) is the last of the five, and
   it is also the page that will let a tutorial claim the consumer or verifier
   persona.
+- 2026-08-03: B5 done. E5 is published and gated, so all five Evidence
+  tutorials replay in CI and a tutorial now claims the consumer or verifier
+  persona. E5 is the only one with no deployment, no network, and no config
+  edits: `evidence verify` opens no socket, resolves no metadata, and fetches
+  no key, so the page hands the reader a stored response and a pinned key set
+  and has them write the verification policy from their own retained state.
+  Both inputs are embedded rather than generated, because `evaluate
+  --fixture` signs with an ephemeral in-memory key and writes nothing to
+  disk, so a consumer can mint neither; the gate carries the regeneration
+  recipe and the warning that the policy values and the `--at` instants must
+  be refreshed together. Five negative controls are pinned: a replayed nonce
+  and a different subject both refuse with the single `policy` class, because
+  a refusal naming the failing comparison would be an oracle over exactly the
+  retained state the check protects; an incomplete policy refuses as
+  `malformed` with no `authentic:` line at all; a tampered payload byte
+  refuses as `signature`; and an unpinned key set refuses as `key`, one stage
+  earlier. Authentic-but-expired stays a separate answer with exit code 3.
+  Review corrected one factual error before commit: the page called
+  `disclosure` a ninth class, but `VerificationError` has exactly eight
+  variants and `disclosure` is the eighth, reachable only on the SD-JWT VC
+  path. The released-binary form of the E1 adopter outcome still needs F3,
+  the same caveat B4 carries.

@@ -78,6 +78,7 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
         "docs/site/src/content/docs/tutorials/serve-assertions-over-http.mdx",
+        "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     }
 )
 
