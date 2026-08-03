@@ -107,6 +107,34 @@ wrote secrets/subject-binding-hmac-key
 
 Every file is owner-only, and private bytes are never printed.
 
+Three commands, three separate jobs. The bundle never names a path: it references each of these
+by a logical name that the runtime resolves under the secret root.
+
+| What you generated | Referenced by | What it is for |
+| --- | --- | --- |
+| `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json` | `signing.activeKeyRef` | The Ed25519 keypair that signs every assertion the deployment issues. The private half stays in the process; the public half is what you publish at `signing.jwksPath`, so a consumer can verify an assertion without asking you anything. |
+| `audit-hmac-key` | `audit.hashSecretRef` | 32 random bytes that key the audit log. |
+| `subject-binding-hmac-key` | `subjectBinding.secretRef` | 32 random bytes that derive the reference standing in for a subject. |
+
+The `--kid scaffold-signing-key-1` you passed is the key's public name. It must match
+`signing.activeKeyId` in `bundle/evidence.yaml`, which is what the scaffold already wrote there,
+and it travels in each assertion's header so a verifier knows which published key to check
+against.
+
+The other two are symmetric secrets rather than keypairs, so there is nothing to publish and
+nothing for a verifier to fetch. The audit key does two things: each record's hash is computed
+under it and chains onto the previous record's, so nobody without the key can remove or rewrite a
+record and re-chain what follows, and it derives the `hmac-sha256:v1:` pseudonyms that stand in
+for identifying values in the log, so the trail stays linkable inside the deployment without
+carrying the values themselves. The subject-binding key derives its reference over the whole
+selector bundle together with the trust domain, audience, purpose, role, and profile, which means
+the same person yields a different reference for a different audience, and two audiences holding
+assertions about that person cannot correlate them by comparing what they hold.
+
+Both are versioned in the bundle (`hashKeyVersion` and `keyVersion`, `1` here) because the version
+goes into the derivation: replacing either key means everything derived under it changes, and the
+version is what says which key produced a given value.
+
 ## Freeze the deployment input
 
 Evidence treats the bundle and runtime file as trusted, startup-only artifacts and refuses
