@@ -121,7 +121,7 @@ gates for its area (see Verification), and committed.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
 
-- [ ] D1. Compose runs Relay + Mint + Evidence: spreadsheet source through
+- [x] D1. Compose runs Relay + Mint + Evidence: spreadsheet source through
       Relay, Evidence assertion over Relay's API, smoke suite green.
 - [ ] D2. `tutorials/first-run-with-solmara-lab` rewritten against the
       rebuilt demo and passing its gate.
@@ -491,3 +491,19 @@ is parallel; B has no upstream dependencies and is the standing priority
   six per-tutorial times, the 23 and 12 fixture counts, and the five
   refusals cited on the overview were each read back out of the tutorial
   they describe rather than recalled.
+- 2026-08-03: D1 done in solmara-lab. `just up-evidence` runs a second CRA
+  Relay serving the civil register as a governed records API, Registry Mint
+  issuing the caller token, and Registry Evidence answering adult status over
+  that Relay under `adult-status-verification`. `just smoke-evidence` is green
+  on four cases: adult 200 true, minor 200 false, unresolved reference 422,
+  bad token 401, each signed answer verified against the published key set and
+  checked to carry neither the subject reference nor the date of birth the
+  Relay disclosed. Two things are honestly incomplete. A1's Mint-as-Relay-IdP
+  branch stays unexercised: the Relay still trusts its own co-located workload
+  identity agent, and only Evidence's caller goes through Mint. And no release
+  ships Evidence or Mint, so the overlay builds those two images from a named
+  Registry Stack checkout while every other image stays a pinned digest; F3
+  would let the lab consume them like the rest. Found on the way: the lab's
+  workload agent wrote a trailing newline into the token file, which Notary
+  trims and Evidence does not, since Evidence treats a file secret as opaque
+  bytes; it now publishes the token alone.
