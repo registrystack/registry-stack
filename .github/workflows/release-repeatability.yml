@@ -128,13 +128,39 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p proof
-          expected=(
-            "registry-manifest-${TAG}-linux-amd64"
-            "registry-notary-${TAG}-linux-amd64"
-            "registry-notary-cel-worker-${TAG}-linux-amd64"
-            "registry-relay-${TAG}-linux-amd64"
-            "registry-relay-rhai-worker-${TAG}-linux-amd64"
-            "registryctl-${TAG}-linux-amd64"
+          mapfile -t expected < <(
+            python3 - "source" "${TAG}" <<'PY'
+          import glob
+          import sys
+
+          import yaml
+
+          root, tag = sys.argv[1:]
+          version = tag.removeprefix("v")
+          matches = []
+          for path in glob.glob(f"{root}/release/manifests/registry-stack-*.yaml"):
+              with open(path, encoding="utf-8") as handle:
+                  data = yaml.safe_load(handle)
+              if str(data.get("stack", {}).get("version", "")) == version:
+                  matches.append(data)
+          if len(matches) != 1:
+              raise SystemExit(f"expected one release manifest for {version}")
+          artifacts = matches[0].get("artifacts", {})
+          binary_names = {
+              "evidence": "evidence",
+              "evidencectl": "evidencectl",
+              "mint": "mint",
+              "registry-manifest-cli": "registry-manifest",
+              "registry-notary": "registry-notary",
+              "registry-notary-cel-worker": "registry-notary-cel-worker",
+              "registry-relay": "registry-relay",
+              "registry-relay-rhai-worker": "registry-relay-rhai-worker",
+              "registryctl": "registryctl",
+          }
+          for artifact, asset in sorted(binary_names.items()):
+              if artifact in artifacts:
+                  print(f"{asset}-{tag}-linux-amd64")
+          PY
           )
           for asset in "${expected[@]}"; do
             test -s "published/${asset}"
@@ -177,7 +203,11 @@ jobs:
           set -euo pipefail
           image_lock="published/registryctl-${TAG}-image-lock.json"
           mkdir -p proof/image-layouts
-          for name in registry-notary registry-relay; do
+          mapfile -t product_images < <(
+            jq -er '.images | keys[] | select(startswith("registry-"))' \
+              "${image_lock}"
+          )
+          for name in "${product_images[@]}"; do
             published_ref="$(jq -er --arg name "${name}" '.images[$name]' "${image_lock}")"
             published_layout="proof/image-layouts/${name}-published"
             rebuilt_layout="${GITHUB_WORKSPACE}/proof/image-layouts/${name}-rebuilt"

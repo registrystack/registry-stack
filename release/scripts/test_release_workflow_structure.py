@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import tempfile
 import unittest
@@ -48,6 +49,39 @@ def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subproce
 
 
 class CandidateWorkflowStructureTest(unittest.TestCase):
+    def test_current_release_pipeline_has_no_retired_notary_surface(self) -> None:
+        paths = (
+            WORKFLOWS / "release-candidate.yml",
+            WORKFLOWS / "release.yml",
+            WORKFLOWS / "release-canary.yml",
+            ROOT / "release/scripts/build-release-binaries.sh",
+            ROOT / "release/scripts/build-release-image.sh",
+        )
+        for path in paths:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotIn(
+                    "registry-notary",
+                    path.read_text(encoding="utf-8").lower(),
+                )
+        self.assertFalse((ROOT / "release/docker/Dockerfile.registry-notary").exists())
+
+        repeatability = (WORKFLOWS / "release-repeatability.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('.images | keys[] | select(startswith("registry-"))', repeatability)
+        self.assertNotIn("for name in registry-notary registry-relay", repeatability)
+
+        module_path = ROOT / "release/scripts/release_candidate.py"
+        spec = importlib.util.spec_from_file_location("release_candidate", module_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual({"registry-relay"}, module.CURRENT_IMAGE_NAMES)
+        self.assertFalse(
+            any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
+        )
+
     def test_keeps_one_candidate_pipeline_with_narrow_permissions(self) -> None:
         _, document = workflow("release-candidate.yml")
         self.assertEqual(

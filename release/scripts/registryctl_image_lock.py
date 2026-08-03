@@ -13,8 +13,10 @@ ROOT = Path(__file__).resolve().parents[2]
 POSTGRESQL_IMAGE_REF_PATH = ROOT / "release" / "registryctl-postgresql-image.ref"
 SCHEMA_V1 = "registryctl.release_image_lock.v1"
 SCHEMA_V2 = "registryctl.release_image_lock.v2"
+SCHEMA_V3 = "registryctl.release_image_lock.v3"
 PLATFORM = "linux/amd64"
 V2_MINIMUM_VERSION = (0, 14, 0)
+V3_MINIMUM_VERSION = (0, 17, 0)
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 PRODUCT_IMAGE_REPOSITORIES = {
     "registry-relay": "ghcr.io/registrystack/registry-relay",
@@ -30,6 +32,8 @@ def schema_for_release_version(version: str) -> str:
             f"got {version!r}"
         )
     parsed = tuple(int(part) for part in version.split("."))
+    if parsed >= V3_MINIMUM_VERSION:
+        return SCHEMA_V3
     return SCHEMA_V2 if parsed >= V2_MINIMUM_VERSION else SCHEMA_V1
 
 
@@ -41,9 +45,14 @@ def repositories_for_schema(schema_version: str) -> dict[str, str]:
             **PRODUCT_IMAGE_REPOSITORIES,
             "postgresql": POSTGRESQL_IMAGE_REPOSITORY,
         }
+    if schema_version == SCHEMA_V3:
+        return {
+            "registry-relay": PRODUCT_IMAGE_REPOSITORIES["registry-relay"],
+            "postgresql": POSTGRESQL_IMAGE_REPOSITORY,
+        }
     raise ValueError(
         "registryctl release image lock schema_version must be "
-        f"{SCHEMA_V1!r} or {SCHEMA_V2!r}"
+        f"{SCHEMA_V1!r}, {SCHEMA_V2!r}, or {SCHEMA_V3!r}"
     )
 
 
@@ -123,7 +132,7 @@ def validate_images(schema_version: str, images: Any) -> dict[str, str]:
                 f"{repository}@sha256:<64 lowercase hex>"
             )
     if (
-        schema_version == SCHEMA_V2
+        schema_version in {SCHEMA_V2, SCHEMA_V3}
         and images["postgresql"] != reviewed_postgresql_image_ref()
     ):
         raise ValueError(

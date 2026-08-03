@@ -106,7 +106,7 @@ gates for its area (see Verification), and committed.
       `registry-platform-testing` usage.
 - [ ] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
       Evidence gates confirmed present.
-- [ ] C6. Release tooling: a new manifest without Notary components
+- [x] C6. Release tooling: a new manifest without Notary components
       validates; the source-model proof passes; the OpenID conformance
       runner's fate decided and recorded (retire if it was OID4VCI-only).
       Old manifests untouched.
@@ -513,3 +513,23 @@ is parallel; B has no upstream dependencies and is the standing priority
   original checkout and is outside C; the same workspace tests pass when the
   unrelated `registry-evidencectl` crate is excluded. Next in C: the mandatory
   C3 deletion approval stop, with C4 reverse-dependency evidence.
+- 2026-08-03: C6 done. `registry-stack-beta-27.yaml` defines the first
+  post-Notary release at v0.17.0, with Relay, the reviewed PostgreSQL runtime,
+  Manifest, registryctl, Evidence, evidencectl, Mint, docs, and installers but
+  no Notary artifact. Current release workflows, image locks, security
+  evidence, repeatability checks, stable-surface metrics, and source-model
+  proof follow that inventory; pre-0.17 candidate and image-lock validation
+  still requires the historical Notary closure, and every older manifest is
+  byte-untouched. The OpenID runner was retired because its plans and protocol
+  path were exclusively Notary OID4VCI; its initial report remains historical,
+  while the independent Relay OIDC smoke remains supported. The likewise
+  Notary-bound external-integration runner was retired rather than relabelled
+  as evidence for a topology it never exercised. Capsule backfill follows the
+  same v0.17 boundary, and upgrade-exercise v1 is explicitly frozen as a
+  historical pre-v0.17 contract instead of reading deleted paths for a current
+  target. The five required C6 commands passed, as did the consolidated
+  585-test release suite (2 skipped), release
+  workflow lint/structure checks, candidate compatibility tests, and the
+  current plus historical-base stable-surface checks. Evidence artifacts stay
+  optional until F3; C6 does not claim that separate workstream complete. Next
+  in C: C3 approval, then C5 can complete against the deleted workspace graph.

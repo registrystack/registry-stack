@@ -64,14 +64,14 @@ The raw suite export is not committed because future full-flow runs may contain
 bearer tokens, proof JWTs, issued credentials, transaction codes, or seeded
 civil identifiers.
 
-## Current reproduction path
+## Retirement note
 
-The release-owned runner, mapping, configuration template, and pinned Compose
-override are documented in [`README.md`](README.md). A current metadata run
-uses `REGISTRY_OPENID_CONFORMANCE_ISSUER_URL` and writes ignored artifacts under
-`target/openid-conformance/`.
+Registry Notary and its OID4VCI-only conformance runner were retired on
+2026-08-03. The operational runner, mapping, configuration template, and
+pinned Compose assets no longer form part of the current release surface.
+This report remains as historical evidence of the 2026-07-09 run; it is not a
+reproduction procedure for Registry Relay or Evidence.
 
-The next reviewed run must use a pinned release topology. The full OIDF issuer
-plan also remains blocked by a flow mismatch: the OIDF issuer tests wait for an
-issuer-initiated credential offer callback into the suite, while the available
-Registry Notary smoke flow pulls the offer endpoint directly.
+Registry Relay's supported OpenID check is the separate release-owned Relay
+OIDC smoke. Evidence authentication is covered by its frozen contracts and
+ordinary product tests, not by the retired OID4VCI issuer plan.

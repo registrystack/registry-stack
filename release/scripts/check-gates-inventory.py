@@ -238,12 +238,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",
     ),
     (
-        "External integration evidence runner tests",
+        "External integration retirement guard",
         "run: python3 -m unittest release/scripts/test_integration_e2_runner.py",
-    ),
-    (
-        "External integration evidence packet",
-        "run: python3 release/scripts/integration-e2-runner.py validate",
     ),
     (
         "Relay OIDC smoke tests",
