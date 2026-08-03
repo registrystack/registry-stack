@@ -1,0 +1,150 @@
+---
+title: Move Evidence to production signing
+description: Replace scaffold key material with production signing keys, publish the JWKS, validate the deployment offline, and rotate keys without breaking verifiers.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Take a working Evidence deployment project from scaffold key material to production signing:
+generate the production key, publish the JWKS verifiers read, prove the deployment offline, and
+rotate keys later without invalidating assertions that are still within their validity window.
+Every rule on this page restates `products/evidence/OPERATOR-CONTRACT.md`, which is the binding
+contract.
+
+<QuickstartMeta
+  outcome="A deployment signing with production key material, a published JWKS, and a rehearsed rotation procedure."
+  time="About 20 minutes"
+  level="Production preparation"
+  prerequisites={['A deployment project from the first-assertion tutorial', 'The Evidence toolset on PATH', 'A Unix host; Evidence Version 1 supports Unix targets only'] }
+/>
+
+Key generation here produces real private key material.
+Run these commands on the host that will hold the keys, not on a shared workstation.
+
+## Generate the production signing key
+
+Generate an Ed25519 signing keypair into the deployment's secret root as owner-only files:
+
+```sh
+evidencectl keygen signing --out-dir "<secret-root>" --kid "<production-kid>"
+```
+
+The private JWK lands in the secret directory (created `0700`, files `0600`) and the public JWK
+beside it; private bytes are never printed. The `kid` must exactly match `signing.activeKeyId`
+in `bundle/evidence.yaml`: either pass the identifier your bundle review assigned, or omit
+`--kid` and copy the printed RFC 7638 thumbprint into the bundle field. A mismatch is refused
+by `evidence check` before it can reach production.
+
+The operator contract's secret rules apply to everything under the secret root: files are owned
+by the service identity with mode `0600`, are regular non-symlink files, and never appear in
+YAML values, Rhai, command arguments, logs, audit records, or error messages. The audit and
+subject-binding secret files must each hold at least 32 independently generated raw bytes;
+`evidencectl keygen secret` produces exactly that.
+
+## Publish the JWKS
+
+Assemble the public JWKS document verifiers will read, from public JWK files only:
+
+```sh
+evidencectl jwks --out "<jwks-path>" "<public-jwk-file>"
+```
+
+Pass every key that must remain resolvable, active first, then each retired public key. Two
+contract rules shape this file:
+
+- Only the current public key and configured retired public keys appear at the JWKS endpoint.
+  A registration carrying private material is refused upstream; keep private JWKs out of every
+  argument here.
+- Each retired public key stays in the published JWKS for at least the maximum assertion
+  validity plus allowed clock skew, so an assertion signed just before a rotation still
+  verifies for its whole life.
+
+The JWKS is discovery, not a trust anchor. Verifiers obtain the provider identity and JWKS
+location through governed configuration, pin that trust, allowlist the expected algorithm, and
+resolve `kid` only within the trusted key set. Nothing in a message may point them at a remote
+key URL.
+
+## Validate before exposure
+
+Prove the deployment offline, exactly as startup would judge it:
+
+```sh
+evidence check
+evidence evaluate --fixture "<fixture-path>"
+```
+
+Both commands accept `--runtime <absolute-path>`, or the same path through
+`REGISTRY_EVIDENCE_RUNTIME`; the reference default is `/etc/registry-evidence/runtime.yaml`.
+`evidence check` compiles the complete bundle and resolves the mounted audit, subject-binding,
+and signing secret material exactly as startup does, without opening the audit chain: a signing
+key whose `kid` does not match `signing.activeKeyId` fails here. Source credentials are not
+resolved by check; readiness owns them. Fixture evaluation covers positive, negative, boundary,
+missing-data, source-failure, existence-disclosure, and anti-reconstruction behavior without a
+running source.
+
+The runtime file, bundle directory, and every captured artifact must be non-writable to the
+service process; a read-only mount is preferred. If you rehearsed this in the first-assertion
+tutorial, the same freeze applies in production.
+
+## Serve and confirm readiness
+
+Start the reviewed revision:
+
+```sh
+evidence serve
+```
+
+Startup confirms the immutable bundle compiled, ownership and path bindings validated, secret
+and signing material parsed, and the audit chain opened and verified. Then readiness rechecks
+the subject-binding key, the signing provider, the pinned audit sink, and every source
+credential; OAuth client-credentials sources perform their bounded token bootstrap against the
+configured token endpoint. Confirm `GET /ready` answers 200 before first use: `/health` is
+liveness only and answers 200 even when a source credential is missing. Neither startup nor
+readiness sends an evidence-data request or probes a source data endpoint.
+
+## Rotate a signing key
+
+Rotation is a configuration change, applied through the same startup-only path as everything
+else:
+
+1. Generate the replacement keypair with a new `kid`, using the key generation command from
+   this page.
+2. Reassemble the JWKS with the new public key and every retired public key that is still
+   within the maximum assertion validity plus allowed clock skew.
+3. Update `signing.activeKeyId` in the reviewed bundle to the new `kid`.
+4. Run `evidence check`, then restart the service and confirm readiness again.
+
+Missing or failed signing is fail-closed: the service never releases an unsigned success
+response, so a rotation mistake surfaces as refused requests, not as unsigned assertions.
+
+## What a signature proves
+
+A valid signature proves that the technical provider controlling the key signed the exact
+payload. It does not prove the source fact is true, confer legal notarization, create a
+qualified electronic signature, or create a holder credential. Governance establishes the
+provider's authority to act for the named legal issuer.
+
+## Troubleshooting
+
+| Symptom | Cause and action |
+|---|---|
+| `evidence check` rejects the signing key | The private JWK's `kid` does not equal `signing.activeKeyId`. Align the bundle field with the generated identifier. |
+| Check refuses secret material | A secret file is group- or world-accessible, a symlink, or shorter than 32 raw bytes. Regenerate with `evidencectl keygen` and keep mode `0600`. |
+| `deployment input is not immutable` | The bundle or runtime file is writable to the service process. Remove the write bits or mount read-only. |
+| `/ready` stays unready while `/health` is 200 | A source credential failed its readiness check. Readiness owns source credentials; check dropped none of them. |
+
+## Next
+
+- [Evidence security model](../../security/evidence/) traces these rules to the invariant
+  matrix and its tests.
+- [Configure Evidence](../../configure/evidence/) covers the rest of the deployment project.
+- [Evaluate Evidence](../../start/evaluate-evidence/) sizes the operational burden this page
+  is part of.
