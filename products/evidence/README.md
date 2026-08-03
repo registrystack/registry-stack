@@ -86,6 +86,16 @@ re-implements evaluation, signing, or verification. It must not depend on
 `registry-notary*`, and its source and scaffold templates are covered by the
 same source-product and domain neutrality checks as the runtime.
 
+`evidencectl source suggest` drafts one source from an OpenAPI description:
+it derives a closed response schema, an extraction script, and the facts schema
+from the chosen operation, the projection the operator selects, and an optional
+sample response, leaving an explicit `TODO` wherever a bound cannot be derived
+so `evidence check` rejects the draft until a human resolves it.
+
+```bash
+evidencectl source suggest --openapi ./api.yaml --project ./deployment-project
+```
+
 ## Installing the toolset
 
 Releases that include the Evidence toolset publish reproducible bare binaries

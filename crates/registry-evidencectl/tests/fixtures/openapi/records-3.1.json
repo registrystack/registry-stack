@@ -1,0 +1,42 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Example Records API", "version": "1.0.0" },
+  "paths": {
+    "/records/{id}": {
+      "get": {
+        "summary": "Get one record",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "maximum": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["trackingId", "status"],
+                  "properties": {
+                    "trackingId": { "type": "string" },
+                    "status": { "type": ["string", "null"] },
+                    "total": { "type": ["integer", "null"] }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": false, "properties": {} }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
