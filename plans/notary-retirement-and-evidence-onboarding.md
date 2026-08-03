@@ -48,7 +48,7 @@ gates for its area (see Verification), and committed.
 
 ### A. Composition proof (Evidence over Relay)
 
-- [ ] A1. Token topology verified and recorded: establish whether Relay
+- [x] A1. Token topology verified and recorded: establish whether Relay
       embeds a client-credentials token endpoint (`registry-platform-sts`)
       that Evidence's `SourceAuthentication::Oauth2ClientCredentials` can
       target, or whether IdP-less deployments need Mint to issue for Relay
@@ -294,3 +294,16 @@ is parallel; B has no upstream dependencies and is the standing priority
   the future E2-E5 belongs to B5. Full npm run check passed after the
   docs wave; one Vale error it surfaced (typographic quotes in the
   operator contract lead) fixed at the source.
+- 2026-08-03: A1 verified and recorded. Relay embeds no token issuance:
+  registry-platform-sts is Notary-bound token exchange with zero
+  consumers in the workspace (add it to the C4 orphan candidates).
+  Relay authenticates inbound callers through configured OIDC (issuer,
+  audiences, algorithm allowlist, JWKS cache in
+  crates/registry-relay/src/auth/oidc/, with EdDSA-verifying tests),
+  and Mint issues EdDSA tokens with configured audiences and serves a
+  JWKS. IdP-less Evidence-over-Relay therefore points Relay's verifier
+  configuration at Mint's issuer: deployment configuration, no
+  security-sensitive Relay change, so the reserved Mint-for-Relay code
+  branch is not triggered. Open question for A2 and D: whether Mint's
+  Evidence-shaped claim set satisfies Relay's authorization model, or
+  whether Mint (not Relay, not Evidence) needs a claim addition.
