@@ -75,6 +75,36 @@ auditing separately.
 
 ## Trust boundaries in detail
 
+{/* SVG diagram. Every boundary label is restated in the sections that follow. */}
+<figure>
+  <img src="../../images/registry-trust-boundaries.svg"
+       alt="The Registry Stack trust boundaries in one map. A request path runs downward from
+            Registry Mint, which issues a short-lived access token, to the Caller, to Evidence, to
+            a Registry Relay protected read API, to the registry sources Relay reads in place.
+            Dashed rules mark the service edge in front of Evidence and in front of Relay, where
+            every record- or assertion-bearing route is authenticated before responding: Evidence
+            runs one OIDC bearer profile with one trusted issuer, one principal claim, and no trust
+            in proxy identity headers. Caller to Evidence carries a bearer token, a declared
+            purpose, a named requirement revision, and selector values; the answer, not the record,
+            comes back, only predefined revisions are evaluable, one authorization decision binds
+            the whole tuple, and possession is never authority. Evidence to its fixed sources fixes
+            origin, method, path, headers, credential, TLS, projection, redirect and proxy denial,
+            and one request per evaluation by trusted configuration executed only by the core, with
+            lookup collapsing to match, no match, or ambiguous and raw responses never logged. The
+            Relay-protected source composition is two independent authorization decisions, neither
+            widening the other, with the Relay client credential custodied as key material and
+            Relay authenticating the workload rather than the caller. Registry Mint to Evidence
+            runs one way: Evidence verifies the token as an ordinary resource server that knows
+            Registry Mint only as an issuer URL and a key set, and a deployment with an identity
+            provider does not run Registry Mint at all. Relay to registry sources is fixed by a
+            compiled integration covering origin, credential interface, method and path authority,
+            and limits. A separate lane runs operator to key file to Evidence to public JWKS to
+            verifier, where private material reaches the process only by secret reference to an
+            owner-only file, signing is fail-closed, and the verifier pins the key set. Only
+            /health, /ready, /openapi.json, /.well-known/evidence/jwks.json, and
+            /.well-known/jwt-vc-issuer are unauthenticated at the Evidence edge." />
+</figure>
+
 **The service edge (authentication).** Authentication is the trust boundary at the service
 edge, and each service authenticates every record- or assertion-bearing route before
 responding. Registry Relay runs exactly one authentication mode, either static-credential

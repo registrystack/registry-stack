@@ -55,17 +55,29 @@ reviewed typed outputs, and Evidence returns only the values a reviewed requirem
 Consuming systems such as a social-protection management information system do not become
 raw-record readers.
 
+<figure>
+  <img src="../../images/registry-country-evidence-mesh.svg"
+       alt="Country evidence mesh: authorities each keep custody of their own data and expose
+            bounded outputs. Clinical health uses a reviewed FHIR integration, public health
+            (DHIS2) uses a reviewed Rhai script, and civil registration, social protection,
+            agriculture, and education keep their own authoritative stores. Two bounded surfaces
+            sit over them: Registry Relay keeps source credentials and returns only reviewed typed
+            outputs, and Evidence returns only the values a reviewed requirement declares. A
+            social-protection management information system and other consumers receive the
+            answers these surfaces return, and do not become raw-record readers." />
+</figure>
+
 Snapshot remains an authored integration capability, not a public template or
 separate runtime architecture.
 
-{/* TODO[evidence]: this section used to describe deployable product topology (Relay only,
-    Notary without claims, or both) and carried the country-mesh SVG. Registry Notary is
-    retired, but the authoring schema in registryctl still rejects an environment with no
-    deployment.notary path (crates/registryctl/tests/project_authoring.rs,
-    project_authoring_schemas_reject_incoherent_product_topologies), and
-    public/images/registry-country-evidence-mesh.svg is still drawn around that topology.
-    Restore a topology paragraph and a regenerated diagram once registryctl and the image
-    catch up. */}
+{/* TODO[evidence]: registryctl still binds an authored evidence service to a deployment.notary
+    path. Its environment schema has no deployment.evidence key
+    (crates/registryctl/schemas/project-authoring/environment.schema.json, checked by
+    crates/registryctl/tests/project_authoring.rs,
+    project_authoring_schemas_reject_incoherent_product_topologies), and a project with a
+    kind: evidence service is rejected unless its environment carries deployment.notary.
+    The product name is retired in the docs, so restore a topology paragraph here once
+    registryctl names the evidence deployment path after the product that is left. */}
 
 ## Evidence-to-action boundary
 
@@ -292,8 +304,14 @@ authoritative list of claim levels and per-project evidence.
 | Minimum-disclosure assertions (Evidence) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
 
 {/* TODO[evidence]: the standards register in src/data/standards.yaml has no registry-evidence
-    entries yet, so the Evidence row above is not backed by a per-project claim level there.
-    The cccev and sd-jwt-vc used_by lists still name the retired registry-notary. */}
+    entries, so the Evidence row above is not backed by a per-project claim level there, and the
+    cccev and sd-jwt-vc used_by lists still name registry-notary, which is retired. This is
+    blocked, not merely pending: every evidence_docs URL in that file is pinned to commit
+    d45761a0, which is reachable from origin/main, and neither crates/registry-evidence nor
+    crates/registry-mint exists at any commit on pushed main (git cat-file -e
+    origin/main:crates/registry-evidence fails). Repo policy forbids citing an unpushed session
+    commit in a durable artifact, so the Evidence entries can only be pinned once this work
+    reaches main. */}
 
 ## Next
 
