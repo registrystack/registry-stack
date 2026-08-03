@@ -46,6 +46,10 @@ pub enum ProductTrustDomainV1 {
     Development,
 }
 
+/// Registry Notary is retired and no maintained runtime signs its lane, but the
+/// variant stays parseable so a bundle issued before the retirement still
+/// decodes. A reader then reports that the lane belongs to a retired product
+/// instead of failing on an unknown variant it cannot explain.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ProductAcceptanceLaneV1 {
     #[serde(rename = "relay-public")]
@@ -56,6 +60,9 @@ pub enum ProductAcceptanceLaneV1 {
     Notary,
 }
 
+/// `RegistryNotary` is retained for the same reason as
+/// [`ProductAcceptanceLaneV1::Notary`]: it names a retired product in documents
+/// that already exist, not a product a maintained runtime can still emit.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ProductAcceptanceProductV1 {
     #[serde(rename = "registry-relay")]

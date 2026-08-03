@@ -48,9 +48,10 @@ The demo programme and stage UIDs in `adapter.rhai` are project-owned mappings.
 Replace and review them against the deployed DHIS2 metadata without changing
 the product-neutral Script runtime or broadening source access.
 
-Record any live compatibility result through the repository root's
-`release/conformance/integrations/` evidence flow. Never rewrite the
-deterministic offline fixtures to reflect a transient live server result.
+This repository has no source-read conformance evidence flow at present, so a
+live compatibility result stays with the deployment that produced it and is not
+release evidence here. Never rewrite the deterministic offline fixtures to
+reflect a transient live server result.
 
 The `include_inactive` boolean is a bounded, typed target attribute supplied by
 the consultation caller and forwarded through Relay. It is request
