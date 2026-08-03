@@ -1,0 +1,787 @@
+---
+title: Author an acceptance definition
+description: Add a second acceptance definition to a scaffolded Evidence project, disclosing a residence region as one coarse code mapped down from a register's own finer code, and prove it with synthetic fixture cases.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+The scaffolded project you get from `evidencectl new` answers one deliberately abstract question:
+whether a recorded event date is at least a reviewed number of years in the past. Here you add a
+second acceptance definition that is different in kind. It does not answer yes or no; it discloses
+one code from a closed list, and that code is coarser than the code the source register holds.
+
+Adding it walks the whole loop an author walks: a source, a request, a response schema, an extract
+script, a fact schema, a codelist, a derivation, a requirement with its concept and disclosure
+guard, an authority grant, and the synthetic cases that prove the definition before anything is
+served.
+
+<QuickstartMeta
+  outcome="A deployment project with two coequal acceptance definitions whose project check and 23 synthetic fixture cases pass offline."
+  time="About 30 minutes"
+  level="Local development with synthetic fixtures"
+  prerequisites={['The Evidence toolset on PATH, from the first tutorial', 'A shell']}
+/>
+
+Everything below is synthetic. Do not add production endpoints, source credentials, or personal
+data to this project.
+
+## Before you start
+
+[Get a first Evidence assertion](../first-evidence-assertion/) installs the toolset and explains
+what the scaffold contains. This tutorial assumes `evidence` and `evidencectl` already resolve on
+your `PATH`, and it starts from a fresh project rather than the one you built there.
+
+## Scaffold a project
+
+```sh
+evidencectl new region-evidence
+cd region-evidence
+```
+
+The scaffold prints where everything went and the exact commands that come next. Every command
+after this point runs from inside `region-evidence`.
+
+## Generate key material
+
+```sh
+evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1
+evidencectl keygen secret --out secrets/audit-hmac-key
+evidencectl keygen secret --out secrets/subject-binding-hmac-key
+```
+
+Expected output:
+
+```text
+wrote secrets/signing-ed25519-private-jwk
+wrote secrets/signing-ed25519-public.jwk.json
+kid: scaffold-signing-key-1
+wrote secrets/audit-hmac-key
+wrote secrets/subject-binding-hmac-key
+```
+
+## What you are adding
+
+Evidence Version 1 has four coequal acceptance definitions: adult status, residence region,
+professional licence status, and legal-parent relationship. None of them is privileged in the
+runtime. There is no residence type, no region route, and no special case in Rust. A region
+answer is built out of the same parts as any other answer, which is exactly why building one is a
+useful way to learn the parts.
+
+The definition you are about to add says: for this subject, which reviewed region do they reside
+in? The register that holds the answer records a finer area code than the answer discloses.
+Mapping the register's code down to a coarse region is the minimization, and it happens inside the
+bundle, in reviewed configuration, not in code.
+
+Do not freeze the bundle yet. Everything from here until the freeze step edits files under
+`bundle/`, and the runtime refuses a bundle that is not read-only at startup.
+
+## The vocabulary you will disclose
+
+Start at the end, with the closed set of codes that may ever leave the service.
+
+```sh
+mkdir -p bundle/codelists
+cat > bundle/codelists/residence-regions.yaml <<'YAML'
+# The disclosed region codes, and the register codes that map onto them.
+#
+# The mapping is the minimization. Several register codes collapse onto one
+# disclosed region, so the answer is coarser than the code the register holds,
+# and `allowed_outputs` is the closed set of codes that may ever leave the
+# service.
+id: urn:example:scaffold:codelist:residence-regions
+version: '2026-01'
+entries:
+  AREA-11: REGION-NORTH
+  AREA-12: REGION-NORTH
+  AREA-21: REGION-SOUTH
+  AREA-22: REGION-SOUTH
+allowed_outputs: [REGION-NORTH, REGION-SOUTH]
+YAML
+```
+
+A codelist comes in two forms. A plain one lists `codes` and nothing else, which is what a
+controlled category or a bucket scheme needs. This one is a mapping: `entries` translates a source
+code into a disclosed code, and `allowed_outputs` is the separate, closed list of what the output
+gate will accept. Two register codes behind one region is what makes the mapping a narrowing
+rather than a rename: an answer of `REGION-NORTH` cannot tell `AREA-11` and `AREA-12` apart.
+
+`bundle/codelists/` is one of the five path roots a bundle recognises, beside `adapters/`,
+`derivations/`, `schemas/` and `fixtures/`. Nothing else may appear under `bundle/`, and the
+codelist is handed to derivation scripts under its file stem, `residence-regions`.
+
+## Add a narrower selector profile
+
+A selector profile is the closed set of fields a requester may send to identify a subject. The
+residence register finds a record from its reference alone, so this definition should ask for less
+than the scaffold's does. Add a second profile beside the first.
+
+Find this in `bundle/evidence.yaml`:
+
+```yaml
+      registry_code:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+```
+
+Replace it with:
+
+```yaml
+      registry_code:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+
+  # The residence register finds a record from its reference alone, so this
+  # acceptance definition asks for less than the one above. A profile is the
+  # smallest identifying set an answer needs, not a shared address book.
+  residence-lookup-v1:
+    maximumAggregateBytes: 200
+    fields:
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 200
+```
+
+## Add the register as a second source
+
+The scaffold's `source-a` posts a lookup body and gets a record back. The residence register is a
+collection read: it returns a page of records and a flag saying whether further pages exist. That
+is a different contract, so it gets its own response schema and its own extract script rather than
+sharing `source-a`'s.
+
+Find this in `bundle/evidence.yaml`:
+
+```yaml
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/source-a-extract.rhai
+    factSchema: schemas/facts.schema.yaml
+```
+
+Replace it with:
+
+```yaml
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/source-a-extract.rhai
+    factSchema: schemas/facts.schema.yaml
+
+  # The second source. It is a collection read that returns a page of records
+  # and a further-pages flag, so it gets its own response schema and its own
+  # extract script rather than sharing source-a's.
+  residence-register:
+    transport: http-json
+    baseUrl: https://residence-register.invalid
+    posture: field-projected
+    authentication:
+      kind: static-bearer
+      tokenRef: secret:file/residence-register-bearer-token
+    request:
+      method: GET
+      path: /v1/residence-records
+      fixedHeaders:
+        - name: Accept
+          value: application/json
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - profile: residence-lookup-v1
+              fields: [record_reference]
+      prepareScript: adapters/residence-register-prepare.rhai
+      adapterParameters:
+        providerFields: id,area_code
+        resultLimit: "2"
+      adapterParametersSchema: schemas/residence-register-parameters.schema.yaml
+      preparationLimits:
+        query: required
+        jsonBody: forbidden
+        maximumQueryPairs: 8
+        maximumQueryNameBytes: 64
+        maximumQueryValueBytes: 1024
+        maximumNormalizedBytes: 4096
+      # Two record leaves and the further-pages flag. Everything else the source
+      # returns is discarded before any script runs.
+      projection:
+        - /records/*/id
+        - /records/*/area_code
+        - /pagination/has_more
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/residence-register-response.schema.yaml
+    extractScript: adapters/residence-register-extract.rhai
+    factSchema: schemas/residence-register-facts.schema.yaml
+```
+
+The bearer token is named, not stored. Offline fixture runs never open it, so you do not need to
+create `secrets/residence-register-bearer-token` for this tutorial; the first live request is where
+a missing one would be discovered. Against a real source that file holds that system's own token;
+`evidencectl keygen token --out secrets/residence-register-bearer-token` generates a stand-in.
+Not `keygen secret`, which makes HMAC key material whose raw bytes an HTTP header value rejects.
+
+## The request the source sees
+
+Reviewed constants come first, because they decide what the prepare script is even allowed to ask
+for.
+
+```sh
+cat > bundle/schemas/residence-register-parameters.schema.yaml <<'YAML'
+# Closed schema for the reviewed adapter parameters of residence-register.
+# Both values are pinned constants: the field list is the projection the source
+# is asked for, and the page size is the smallest one that can still tell a
+# unique record from an ambiguous lookup. Neither is an operator dial.
+type: object
+additionalProperties: false
+required: [providerFields, resultLimit]
+properties:
+  providerFields: {const: "id,area_code"}
+  resultLimit: {const: "2"}
+YAML
+```
+
+A page size of two is not an arbitrary bound. One is too few to notice that a second record
+existed, and anything larger buys nothing: the only question this lookup asks is whether the
+reference resolved to exactly one record.
+
+```sh
+cat > bundle/adapters/residence-register-prepare.rhai <<'RHAI'
+// Request preparation for the residence register. This source is a collection
+// read, so the request is a query string rather than a body: the subject's
+// reference, the projection this deployment is entitled to, and the page size.
+// Preparation invents nothing. Every value below is either a validated selector
+// value or a reviewed adapter parameter.
+fn prepare(selectors, parameters) {
+    let subject = selectors["subject"];
+    #{
+        query: [
+            #{name: "record_reference", value: subject["values"]["record_reference"]},
+            #{name: "fields", value: parameters["providerFields"]},
+            #{name: "limit", value: parameters["resultLimit"]}
+        ],
+        body: ()
+    }
+}
+RHAI
+```
+
+The source's `preparationLimits` declared `query: required` and `jsonBody: forbidden`, so a script
+that returned a body here would be refused rather than sent.
+
+## The response the source returns
+
+```sh
+cat > bundle/schemas/residence-register-response.schema.yaml <<'YAML'
+# Closed schema for the projected residence-register response, checked before
+# the extract script runs.
+#
+# The prepared request asks for a page of two, so a third record is a source
+# that ignored the bound rather than an ambiguous lookup. No record leaf can be
+# required: projection drops a leaf the source did not return, and a page is
+# judged ambiguous before any record is read. Whether the page and the
+# further-pages flag agree is a reading across fields, so it stays in the
+# script.
+type: object
+additionalProperties: false
+required: [records, pagination]
+properties:
+  records:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        area_code:
+          type: string
+          minLength: 1
+          maxLength: 32
+  pagination:
+    type: object
+    additionalProperties: false
+    required: [has_more]
+    properties:
+      has_more: {type: boolean}
+YAML
+```
+
+Note what is required and what is not. The envelope is required, including `has_more`, because
+this adapter cannot decide uniqueness without it. No leaf inside a record is required, because
+projection drops a leaf the source did not return, and because a page of two is judged ambiguous
+before any record is read. Marking a leaf required is a statement that a response without it is
+unusable, so only require the leaves the projection genuinely always yields.
+
+```sh
+cat > bundle/adapters/residence-register-extract.rhai <<'RHAI'
+// Fact extraction for the residence register. The source returns a page of
+// matching records and a flag saying whether further pages exist. It carries no
+// total, so uniqueness is decided from the page itself: how many records came
+// back, and whether the source claims more.
+//
+// The response schema has already rejected anything outside the declared shape,
+// so what is left here is the part a shape cannot state: how the fields relate,
+// and what an absent optional leaf means for this requirement.
+fn extract(source_response, parameters) {
+    let records = source_response["records"];
+    let has_more = source_response["pagination"]["has_more"];
+
+    if records.len == 0 {
+        // An empty page that still claims further pages contradicts itself.
+        // Reading it as no match would turn a broken source into a clean answer.
+        if has_more { throw("source_protocol_error"); }
+        return #{outcome: "no_match"};
+    }
+    if records.len > 1 || has_more {
+        return #{outcome: "ambiguous"};
+    }
+
+    let record = records[0];
+    // The shape cannot require a reference of every record, because an ambiguous
+    // page is judged before any record is read. A single matched record with no
+    // reference is a source this adapter does not understand.
+    if is_missing(record["id"]) { throw("source_protocol_error"); }
+
+    let facts = #{record_reference: record["id"]};
+    if !is_missing(record["area_code"]) {
+        facts["official_area_code"] = record["area_code"];
+    }
+    #{outcome: "match", facts: facts}
+}
+RHAI
+```
+
+An extract script returns one of three outcomes: `no_match`, `ambiguous`, or `match` with facts. A
+response it does not understand is a protocol error, never a quiet `no_match`, so a source that
+changes shape cannot be mistaken for an answer about a person.
+
+```sh
+cat > bundle/schemas/residence-register-facts.schema.yaml <<'YAML'
+# Closed schema for the facts extraction may hand to this derivation. Unlike
+# the response schema, every fact is required: a record that carries no area
+# code is a record this requirement cannot answer from, and rejecting it here
+# leaves the requirement unresolved instead of letting derivation invent a
+# region.
+type: object
+additionalProperties: false
+required: [record_reference, official_area_code]
+properties:
+  record_reference:
+    type: string
+    minLength: 1
+    maxLength: 200
+  official_area_code:
+    type: string
+    minLength: 1
+    maxLength: 32
+YAML
+```
+
+The fact schema is the opposite of the response schema. The response schema describes what a
+source may send; the fact schema states what this definition needs. Making `official_area_code`
+required is what turns a record with no area code into an unresolved requirement rather than a
+derivation guessing.
+
+## The derivation
+
+```sh
+cat > bundle/derivations/residence-region.rhai <<'RHAI'
+// Requirement derivation. The register's own area code enters here and never
+// leaves: only the coarse region code below reaches the signed assertion.
+fn derive(facts, selectors, evaluation_context) {
+    // The record that came back must be the record that was asked about.
+    if facts["record_reference"] !=
+       selectors["subject"]["values"]["record_reference"] {
+        throw("derivation_input_error");
+    }
+    // A register code with no reviewed mapping leaves the requirement
+    // unresolved. It is never passed through as itself.
+    let mapped = codelist_lookup(
+        evaluation_context["codelists"]["residence-regions"],
+        required(facts["official_area_code"], "required_fact_missing")
+    );
+    [#{
+        concept_id: "urn:example:scaffold:concept:residence-region",
+        value: required(mapped, "unknown_controlled_code")
+    }]
+}
+RHAI
+```
+
+`codelist_lookup` is the only way a script reaches a codelist, and the handle it takes comes from
+`evaluation_context["codelists"]` keyed by the codelist's file stem. A code with no entry returns
+nothing at all, and `required` turns that into an unresolved requirement. There is no branch here
+that could disclose `AREA-11`, which is the property the fixture cases will check.
+
+## Add the residence-region requirement
+
+The requirement is where the source, the derivation, the concept it discloses, and its fixtures
+become one reviewed unit.
+
+Find this in `bundle/evidence.yaml`:
+
+```yaml
+    disclosureGuard:
+      families: [urn:example:scaffold:disclosure-family:example-flag]
+    existenceDisclosure: collapse-unresolved
+```
+
+Replace it with:
+
+```yaml
+    disclosureGuard:
+      families: [urn:example:scaffold:disclosure-family:example-flag]
+    existenceDisclosure: collapse-unresolved
+
+  # The second acceptance definition. It answers a different question, from a
+  # different source, in a different form: not a boolean but one code from a
+  # closed list.
+  - id: urn:example:scaffold:requirement:residence-region:v1
+    kind: information-requirement
+    source: residence-register
+    purposes: [residence-verification]
+    subjectRoles:
+      - role: subject
+        cardinality: one
+        selectorProfiles: [residence-lookup-v1]
+    referenceFrameworks: [urn:example:scaffold:framework:residence-region:v1]
+    evidenceType: urn:example:scaffold:evidence-type:residence-region:v1
+    validitySeconds: 86400
+    derivation:
+      script: derivations/residence-region.rhai
+      # The derivation sees the subject reference as well as the facts, so it
+      # can check that the record it is reducing is the record that was asked
+      # about.
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - profile: residence-lookup-v1
+              fields: [record_reference]
+      parameters: {}
+    concepts:
+      - id: urn:example:scaffold:concept:residence-region
+        form: controlled-code
+        required: true
+        constraints:
+          codelist: codelists/residence-regions.yaml
+          codelistVersion: '2026-01'
+          maximumBytes: 32
+    fixtures: fixtures/residence-region-cases.yaml
+    # A different family from the requirement above, because the two answers
+    # cannot be combined into anything finer than either one discloses. Two
+    # requirements that could be combined must share a family, and a bundle that
+    # enables both is then refused at load.
+    disclosureGuard:
+      families: [urn:example:scaffold:disclosure-family:residence-region]
+    existenceDisclosure: collapse-unresolved
+```
+
+The disclosure guard is the part to be deliberate about. Requirements that share a family are
+refused at load, because answers in the same family can be combined into something finer than any
+one of them discloses. Here the two families genuinely differ: a boolean about how long ago an
+event happened and a coarse region code say nothing about each other, and no sequence of the two
+narrows either. If you later added a second region definition on overlapping boundaries, that one
+would share the region family, and the bundle would then be refused, which is the point.
+
+The concept's `form: controlled-code` is what binds it to the codelist. `codelistVersion` must
+match the codelist's own `version`, so a codelist revision cannot be swapped in under a
+requirement that was reviewed against a different one.
+
+## Grant the new requirement
+
+A requirement nobody may ask for is inert. Add a grant so an authenticated requester can reach it.
+
+Find this in `bundle/evidence.yaml`:
+
+```yaml
+        subjects:
+          - role: subject
+            selectorProfile: subject-lookup-v1
+            valueOrigin: request
+```
+
+Replace it with:
+
+```yaml
+        subjects:
+          - role: subject
+            selectorProfile: subject-lookup-v1
+            valueOrigin: request
+      # A second grant, its own purpose, its own narrower selector profile. The
+      # same requester may hold both because the two answers are not combinable;
+      # the disclosure guard below is what states that.
+      - requirement: urn:example:scaffold:requirement:residence-region:v1
+        purpose: residence-verification
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: residence-lookup-v1
+            valueOrigin: request
+```
+
+The grant's purpose must be one the requirement declares, and its selector profile must be one the
+requirement's subject role accepts. Both are checked when the bundle loads, so a grant cannot
+widen what a requirement agreed to.
+
+## The fixture cases
+
+Every requirement names a fixture file, and every fixture file must cover a fixed set of
+categories before the bundle will load at all.
+
+```sh
+cat > bundle/fixtures/residence-region-cases.yaml <<'YAML'
+# Synthetic acceptance cases for the residence-region requirement. Every case
+# replays offline through the reviewed adapter, derivation and output gate, so
+# no source and no network are involved.
+#
+# The bundle is rejected unless the case identifiers cover every required
+# category: `positive`, `no-match`, `source-failure`, `anti-reconstruction`,
+# and at least one identifier each starting with `negative`, `boundary`,
+# `missing` and `ambiguous`.
+fixture: registry.evidence.scaffold.residence-region/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  selectors:
+    subject:
+      profile: residence-lookup-v1
+      # Synthetic identifiers only. These are asserted to be absent from
+      # diagnostics at the end of this file, so keep them distinctive.
+      values:
+        record_reference: RCD-000123
+
+cases:
+  # One record, one mapped area code, one coarse region disclosed.
+  - id: positive
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-11
+      pagination:
+        has_more: false
+    expected_value: REGION-NORTH
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  # A second register code behind the same disclosed region. This is what makes
+  # the mapping a narrowing rather than a rename: the answer cannot tell the two
+  # register codes apart.
+  - id: boundary-second-code-same-region
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-12
+      pagination:
+        has_more: false
+    expected_value: REGION-NORTH
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  - id: boundary-other-region
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-21
+      pagination:
+        has_more: false
+    expected_value: REGION-SOUTH
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+
+  # A register code outside the reviewed mapping. The requirement is left
+  # unresolved rather than disclosing the register's own finer code. A value the
+  # derivation required and did not get collapses into the same unresolved
+  # outcome as a fact that never arrived, which is why this case declares
+  # `derivation_runs: false`: nothing the derivation could disclose survived.
+  - id: negative-unmapped-area-code
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-99
+      pagination:
+        has_more: false
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  # The output gate rejects a derived code outside the codelist's allowed
+  # outputs, so a script defect cannot become signed evidence.
+  - id: negative-code-outside-allowed-outputs
+    injected_derivation:
+      - concept_id: 'urn:example:scaffold:concept:residence-region'
+        value: 'REGION-EAST'
+    expected: output-gate-rejection
+
+  # One record resolved, but it carries no area code. The fact schema refuses
+  # the incomplete extraction before any derivation runs.
+  - id: missing-area-code
+    source:
+      records:
+        - id: RCD-000123
+      pagination:
+        has_more: false
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  - id: no-match
+    source:
+      records: []
+      pagination:
+        has_more: false
+    expected_lookup: no_match
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  - id: ambiguous-two-records
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-11
+        - id: RCD-000124
+          area_code: AREA-21
+      pagination:
+        has_more: false
+    expected_lookup: ambiguous
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  # One record on the page, but the source says more pages exist. A page that
+  # happens to hold one record is not a unique match.
+  - id: ambiguous-further-pages
+    source:
+      records:
+        - id: RCD-000123
+          area_code: AREA-11
+      pagination:
+        has_more: true
+    expected_lookup: ambiguous
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+
+  # A source that never answers is a dependency problem, never a region.
+  - id: source-failure
+    source_failure: timeout
+    expected_public_problem: dependency_unavailable
+    signed_success: false
+
+  # Two requirements that share a disclosure family could be combined into a
+  # finer location than either discloses, so such a bundle must not load.
+  - id: anti-reconstruction
+    companion_bundle: geographic-overlap
+    expected: bundle-rejection
+
+# What the signed assertion must and must not carry. The disclosed region codes
+# are required to be present; the register's own area codes are required to be
+# absent.
+privacy_expectation:
+  evidence_contains:
+    - 'urn:example:scaffold:concept:residence-region'
+    - REGION-NORTH
+    - REGION-SOUTH
+  evidence_excludes: [AREA-11, AREA-12, AREA-21, official_area_code, record_reference]
+  diagnostics_exclude: [RCD-000123, AREA-11]
+YAML
+```
+
+Three things in that file are worth reading twice.
+
+The case identifiers are policed, not decorative. A file needs a case named exactly `positive`, one
+named exactly `no-match`, one named exactly `source-failure`, one named exactly
+`anti-reconstruction`, and at least one identifier each beginning with `negative`, `boundary`,
+`missing` and `ambiguous`. The refusal names the file but not the category, so if you see
+`fixture category coverage is incomplete`, walk that list.
+
+The `anti-reconstruction` case is not a comment. It names a combination from the conformance
+matrix, `geographic-overlap`, and the run actually rebuilds this bundle with a second requirement
+in the same disclosure family and requires the result to be refused. It is proof that your
+disclosure guard is load-bearing.
+
+The `privacy_expectation` block is checked against the signed, verified assertions the successful
+cases produced. `REGION-NORTH` and `REGION-SOUTH` must appear in them; `AREA-11`, `AREA-12`,
+`AREA-21` and the fact name `official_area_code` must not. That is the minimization claim of this
+whole definition, written as an assertion rather than as prose.
+
+## Freeze and run
+
+Evidence treats the bundle and the runtime file as trusted, startup-only artifacts and refuses
+mutable deployment input, so make them read-only now that the editing is done:
+
+```sh
+chmod -R a-w bundle && chmod 444 runtime.yaml
+```
+
+```sh
+evidencectl fixtures run --project .
+```
+
+Expected output:
+
+```text
+PASS: check
+PASS: fixtures/cases.yaml (12 cases)
+PASS: fixtures/residence-region-cases.yaml (11 cases)
+3 passed, 0 failed (23 cases evaluated)
+```
+
+Three steps passed. `check` loaded and validated the whole project, including the parts that only
+exist because you added a second definition: the new source's selector bindings, the codelist
+identity and version behind the concept, the new grant, and the fact that the two requirements do
+not share a disclosure family. Then both fixture files replayed through the real evaluation
+pipeline, offline, with no source and no network.
+
+## When it does not pass
+
+To edit the bundle again after freezing it, run `chmod -R u+w bundle` first. Without that, the run
+fails with `deployment input is not immutable` before it looks at anything you changed.
+
+Four refusals account for most of what goes wrong here, and each of them is the runtime working as
+designed:
+
+- `enabled requirements share a disclosure family` means both requirements name the same family.
+  Give the new one its own, or, if the two answers really are combinable, do not enable both.
+- `fixture category coverage is incomplete` names the fixture file but not the missing category.
+  Check the eight identifiers listed above.
+- `bundle root contains a file other than the configuration` means a stray artifact is inside
+  `bundle/`. An editor backup such as `evidence.yaml.bak` will do it. The bundle is a closed set of
+  reviewed artifacts, so anything unrecognised is refused rather than ignored.
+- `fixture prohibited disclosure is present` means a string your `privacy_expectation` excludes
+  showed up in a signed assertion. Read it as a real finding before you read it as a fixture bug.
+
+## Cleanup
+
+```sh
+cd ..
+chmod -R u+w region-evidence
+rm -rf region-evidence
+```
+
+## Next
+
+- [Configure Evidence](../../configure/evidence/) documents every field you touched here.
+- [Evidence security model](../../security/evidence/) explains the disclosure guard, the existence
+  collapse, and the immutability refusal.
+- [Registry Evidence API](../../reference/apis/registry-evidence/) documents the HTTP surface a
+  served deployment exposes for the definitions you author.

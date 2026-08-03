@@ -48,6 +48,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
+	author-an-acceptance-definition
 )
 
 load_spec() {
@@ -76,6 +77,34 @@ load_spec() {
 			'PASS: check'
 			'PASS: fixtures/cases.yaml (12 cases)'
 			'2 passed, 0 failed (12 cases evaluated)'
+		)
+		;;
+	author-an-acceptance-definition)
+		SPEC_FENCES=13
+		# The reader already has the toolset from the first tutorial, so the
+		# whole page is executable. Each edit applies a documented before/after
+		# yaml pair under one heading: occurrence 1 is found, 2 replaces it.
+		SPEC_STEPS=(
+			'run:1-3'
+			'edit:Add a narrower selector profile|yaml|1|Add a narrower selector profile|yaml|2|bundle/evidence.yaml'
+			'edit:Add the register as a second source|yaml|1|Add the register as a second source|yaml|2|bundle/evidence.yaml'
+			'run:4-9'
+			'edit:Add the residence-region requirement|yaml|1|Add the residence-region requirement|yaml|2|bundle/evidence.yaml'
+			'edit:Grant the new requirement|yaml|1|Grant the new requirement|yaml|2|bundle/evidence.yaml'
+			'run:10-13'
+		)
+		SPEC_LITERALS=(
+			'evidencectl new region-evidence'
+			'mkdir -p bundle/codelists'
+			'chmod -R a-w bundle && chmod 444 runtime.yaml'
+			'evidencectl fixtures run --project .'
+			'3 passed, 0 failed (23 cases evaluated)'
+		)
+		SPEC_OUTPUTS=(
+			'PASS: check'
+			'PASS: fixtures/cases.yaml (12 cases)'
+			'PASS: fixtures/residence-region-cases.yaml (11 cases)'
+			'3 passed, 0 failed (23 cases evaluated)'
 		)
 		;;
 	*)
