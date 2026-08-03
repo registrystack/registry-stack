@@ -272,7 +272,10 @@ def parse_error_registry(text: str) -> dict[str, ErrorContract]:
         entries.setdefault(code, (meaning, set()))[1].add(product)
 
     if not entries:
-        raise ContractError("error reference contains no Registry Relay or Registry Notary codes")
+        raise ContractError(
+            "error reference contains no maintained Registry Relay codes "
+            "and no historical Registry Notary codes"
+        )
     current_entries: dict[str, ErrorContract] = {}
     for code, (meaning, products) in entries.items():
         maintained_products = products & MAINTAINED_RELEASE_PRODUCTS
