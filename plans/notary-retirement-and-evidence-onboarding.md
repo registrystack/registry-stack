@@ -772,3 +772,15 @@ is parallel; B has no upstream dependencies and is the standing priority
   unknown-variant error. The manifest layer's federation and PDP identifiers
   are the one case that is neither, because changing them is a published
   schema change; that is C10.
+
+- 2026-08-03: Documented the approved-set breaking change for adopters.
+  `operate/approve-initial-baseline.mdx` now states that assembly declares
+  schema version 2.0, that a pre-retirement set is refused whether it declares
+  1.0, carries a notary lane, or binds cross-lane interface digests, and that
+  editing the file is not a repair because the removed digests are no longer
+  verified. The changelog carries the same as an adopter-facing breaking
+  change under 2026-08-03. `advanced/compare-and-reapprove-source-change.mdx`
+  is deliberately untouched: it still shows a `--notary` flag the CLI no
+  longer has, so its whole flow needs E2's pass rather than one inserted
+  paragraph. Docs gates: `npm test` 294 passed, `npm run check` clean
+  including 31741 built links.

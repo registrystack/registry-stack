@@ -28,6 +28,17 @@ Product direction update:
 - Kept Evidence independent from the retired Notary product model, with
   Registry Mint limited to supporting token issuance.
 
+Adopter-facing breaking change:
+
+- Raised the registryctl approved-set schema to version `2.0` and made
+  registryctl refuse an approved set issued before the retirement, including a
+  version `1.0` document, a set carrying a `notary` lane, and a set binding
+  cross-lane interface digests.
+- Required affected deployments to re-approve their baseline from the current
+  lane bundles, because the removed cross-lane interface digests are no longer
+  verified and the old approval's integrity claim is no longer enforced. See
+  [Approve the initial product baseline](../operate/approve-initial-baseline/).
+
 ## 2026-08-01
 
 Stabilization updates for the v0.16.3 beta-26 release candidate:

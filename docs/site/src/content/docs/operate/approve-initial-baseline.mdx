@@ -220,6 +220,15 @@ registryctl trust approved-set assemble \
 Registryctl verifies the two lane bundles and writes one approved-set file.
 It reports the approved-set digest and the next `registryctl deploy generate` command.
 
+The assembled document declares approved-set schema version `2.0`.
+Current registryctl refuses an approved set issued before the Registry Notary retirement, whether
+it declares schema version `1.0`, carries a `notary` lane, or binds cross-lane interface digests.
+It reports that the document predates the retirement and names re-approval as the remedy.
+A refused set cannot be repaired by editing the file: the removed cross-lane interface digests are
+no longer verified, so honoring the old approval would keep a signed integrity claim that nothing
+enforces.
+Re-run this procedure from the current lane bundles to issue a schema version `2.0` set.
+
 ## Rotate an anchor after initial approval
 
 Do not create another version-1 anchor when an approved lane changes signer.
