@@ -556,8 +556,15 @@ fn provision_secrets(project: &Path) {
         private_jwk.as_bytes(),
     );
     for name in SECRET_FILES {
+        // Regenerate until no byte is zero: the runtime rejects secret
+        // material containing NUL bytes, exactly as `keygen secret` does.
         let mut material = [0_u8; 32];
-        getrandom::fill(&mut material).expect("random secret");
+        loop {
+            getrandom::fill(&mut material).expect("random secret");
+            if !material.contains(&0) {
+                break;
+            }
+        }
         write_secret(&secrets.join(name), &material);
     }
     assert_eq!(
