@@ -11,16 +11,6 @@ const defaultSiteRoot = resolve(import.meta.dirname, '..');
 const retirementFraming =
   /\bretir(?:e|ed|es|ing|ement)\b|\bno longer\b|\bremov(?:e|ed|es|al)\b|\bwas replaced\b|\bsuperseded\b/iu;
 
-// Pages the Notary deletion cascade removes outright rather than rewrites.
-// They keep describing Notary until then.
-const pendingRemoval = new Set([
-  'src/content/docs/explanation/evidence-issuance.mdx',
-  'src/content/docs/reference/apis/registry-notary.mdx',
-  'src/content/docs/spec/rs-dm-claim.mdx',
-  'src/content/docs/spec/rs-pr-notary.mdx',
-  'src/content/docs/tutorials/move-notary-to-production-signing.mdx',
-]);
-
 // Pages still awaiting the light-touch pass. Every entry is tracked debt: the
 // list shrinks to empty, and this file is how you tell how much is left.
 const pendingRewrite = new Set([
@@ -66,7 +56,6 @@ const pendingRewrite = new Set([
   'src/content/docs/tutorials/first-run-with-solmara-lab.mdx',
   'src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
   'src/content/docs/tutorials/use-your-spreadsheet.mdx',
-  'src/content/docs/tutorials/verify-claim-registry-api.mdx',
   'src/content/docs/tutorials/verify-opencrvs-claims.mdx',
   'src/content/docs/verify/index.mdx',
 ]);
@@ -148,7 +137,6 @@ export async function findUnframedNotaryMentions(siteRoot = defaultSiteRoot) {
       metadata.draft ||
       siteRelative.startsWith('src/content/docs/products/') ||
       isHistoryPage(siteRelative) ||
-      pendingRemoval.has(siteRelative) ||
       pendingRewrite.has(siteRelative)
     ) {
       continue;

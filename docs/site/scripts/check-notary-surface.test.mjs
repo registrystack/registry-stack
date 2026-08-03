@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -104,13 +105,18 @@ test('holds status: draft pages to the same rule, because they are still publish
   }
 });
 
-test('skips pages the deletion cascade removes and pages awaiting the light-touch pass', async () => {
+test('skips pages awaiting the light-touch pass but holds every other page', async () => {
   await withSite(async (root) => {
     const claim = 'Registry Notary issues credentials through OID4VCI.';
-    await writePage(root, 'spec/rs-pr-notary.mdx', 'status: current', claim);
     await writePage(root, 'operate/backup-and-restore.mdx', 'status: current', claim);
+    await writePage(root, 'operate/single-node-compose-behind-proxy.mdx', 'status: current', claim);
 
-    assert.deepEqual(await findUnframedNotaryMentions(root), []);
+    const findings = await findUnframedNotaryMentions(root);
+    assert.deepEqual(
+      findings.map(({ path }) => path),
+      ['src/content/docs/operate/single-node-compose-behind-proxy.mdx'],
+      'only the listed page is skipped',
+    );
   });
 });
 
@@ -122,4 +128,14 @@ test('names every page still owing a light-touch pass so the debt is countable',
     !pendingNotaryRewrites.has('src/content/docs/explanation/architecture.mdx'),
     'rewritten pages must leave the pending list',
   );
+});
+
+// A deleted page that stays listed silently inflates the reported debt and
+// waives a check for a path no reader can reach.
+test('lists only pages that still exist, so deletions leave the pending list', () => {
+  const siteRoot = resolve(import.meta.dirname, '..');
+  const missing = [...pendingNotaryRewrites].filter(
+    (path) => !existsSync(resolve(siteRoot, path)),
+  );
+  assert.deepEqual(missing, [], 'pending pages that no longer exist must be removed from the list');
 });

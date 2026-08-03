@@ -70,14 +70,14 @@ raw-record readers.
 Snapshot remains an authored integration capability, not a public template or
 separate runtime architecture.
 
-{/* TODO[evidence]: registryctl still binds an authored evidence service to a deployment.notary
-    path. Its environment schema has no deployment.evidence key
-    (crates/registryctl/schemas/project-authoring/environment.schema.json, checked by
-    crates/registryctl/tests/project_authoring.rs,
-    project_authoring_schemas_reject_incoherent_product_topologies), and a project with a
-    kind: evidence service is rejected unless its environment carries deployment.notary.
-    The product name is retired in the docs, so restore a topology paragraph here once
-    registryctl names the evidence deployment path after the product that is left. */}
+{/* TODO[evidence]: registryctl cannot express an Evidence deployment at all, so this page cannot
+    yet describe a selectable topology. An authored service is only consultation_api or records_api
+    (enum ServiceKind in crates/registryctl/src/project_authoring/model.rs), a kind: evidence
+    service is rejected as an unknown variant (test retired_evidence_service_kind_is_rejected in
+    the same file), and the environment deployment block is closed around profile and relay with no
+    evidence key (crates/registryctl/schemas/project-authoring/environment.schema.json). Every
+    compiled project is therefore relay-only. Restore a topology paragraph here once registryctl
+    gains an Evidence deployment path. */}
 
 ## Evidence-to-action boundary
 
@@ -304,8 +304,7 @@ authoritative list of claim levels and per-project evidence.
 | Minimum-disclosure assertions (Evidence) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
 
 {/* TODO[evidence]: the standards register in src/data/standards.yaml has no registry-evidence
-    entries, so the Evidence row above is not backed by a per-project claim level there, and the
-    cccev and sd-jwt-vc used_by lists still name registry-notary, which is retired. This is
+    entries, so the Evidence row above is not backed by a per-project claim level there. This is
     blocked, not merely pending: every evidence_docs URL in that file is pinned to commit
     d45761a0, which is reachable from origin/main, and neither crates/registry-evidence nor
     crates/registry-mint exists at any commit on pushed main (git cat-file -e

@@ -192,8 +192,7 @@
     "claim_level": "emits",
     "adoption_mode": "adopted",
     "used_by": [
-      "registry-relay",
-      "registry-notary"
+      "registry-relay"
     ],
     "surfaces": [
       "generated API reference",
@@ -218,7 +217,7 @@
       }
     ],
     "last_checked": "2026-07-19",
-    "notes": "Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts as native API reference pages."
+    "notes": "Relay generates OpenAPI, and its pinned generated document is cited directly. These docs publish that same pinned artifact as a native API reference page. The two Registry Notary links stay pinned as the record of a retired product, not as a surface an adopter can run."
   },
   {
     "id": "shacl",
@@ -329,8 +328,7 @@
     "adoption_mode": "adopted",
     "used_by": [
       "registry-relay",
-      "registry-manifest",
-      "registry-notary"
+      "registry-manifest"
     ],
     "surfaces": [
       "catalog JSON-LD",
@@ -365,7 +363,6 @@
     "claim_level": "emits",
     "adoption_mode": "profiled",
     "used_by": [
-      "registry-notary",
       "registry-platform"
     ],
     "surfaces": [
@@ -388,7 +385,7 @@
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Notary owns the claim-to-credential workflow and service routes that use them. The profile is constrained: `application/dc+sd-jwt` credentials, issuer signing with EdDSA over Ed25519 or ES256 over P-256, and EdDSA `did:jwk` holder binding. Pre-rename format aliases such as `application/vc+sd-jwt` are rejected in operator configuration. Full SD-JWT VC conformance is not claimed."
+    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Notary owned the claim-to-credential workflow and the service routes that used them, and is retired; its pinned conformance profile and format constants are kept as the record of that workflow. The helpers stay constrained: `application/dc+sd-jwt` credentials, issuer signing with EdDSA over Ed25519 or ES256 over P-256, and EdDSA `did:jwk` holder binding. The retired product also rejected pre-rename format aliases such as `application/vc+sd-jwt` in operator configuration. Full SD-JWT VC conformance is not claimed."
   },
   {
     "id": "verifiable-credentials",
@@ -399,9 +396,7 @@
     "status": "referenced",
     "claim_level": "aligns_with",
     "adoption_mode": "not adopted",
-    "used_by": [
-      "registry-notary"
-    ],
+    "used_by": [],
     "surfaces": [
       "credential issuance positioning",
       "SD-JWT VC credential issuance"
@@ -413,7 +408,7 @@
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "Registry Notary issues SD-JWT VC. Relay no longer emits or hosts VC artifacts."
+    "notes": "No Registry Stack service in this register emits or hosts VC artifacts. Registry Notary, which issued SD-JWT VC under this alignment, is retired, and Relay does not emit or host VC artifacts. The pinned README is the record of the retired claim."
   },
   {
     "id": "cccev",
@@ -425,8 +420,7 @@
     "claim_level": "emits",
     "adoption_mode": "profiled",
     "used_by": [
-      "registry-manifest",
-      "registry-notary"
+      "registry-manifest"
     ],
     "surfaces": [
       "requirement and information requirement metadata",
@@ -450,7 +444,7 @@
       }
     ],
     "last_checked": "2026-05-25",
-    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed."
+    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. The pinned Notary renderer and media type constants record the CCCEV-shaped claim results of a retired product. Profile conformance is not claimed."
   },
   {
     "id": "odrl",
@@ -534,9 +528,7 @@
     "status": "referenced",
     "claim_level": "inspired_by",
     "adoption_mode": "not adopted",
-    "used_by": [
-      "registry-notary"
-    ],
+    "used_by": [],
     "surfaces": [
       "provenance model discussion",
       "provenance-shaped claim fields"
@@ -548,7 +540,7 @@
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "The code uses provenance concepts, but current evidence does not show a PROV-O vocabulary emission surface. Keep this as design influence until PROV-O terms are emitted or mapped."
+    "notes": "The pinned claim model belongs to Registry Notary, which is retired. Provenance concepts shaped that model, but no PROV-O vocabulary emission surface was shown then and no service in this register claims one now. Keep this as design influence until PROV-O terms are emitted or mapped."
   },
   {
     "id": "fhir-r4",
@@ -615,8 +607,7 @@
     "adoption_mode": "not adopted",
     "used_by": [
       "registry-relay",
-      "registry-manifest",
-      "registry-notary"
+      "registry-manifest"
     ],
     "surfaces": [
       "Framework 2.0 principle and pathway comparison",
@@ -658,7 +649,7 @@
       }
     ],
     "last_checked": "2026-07-19",
-    "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. The adapter and standards-CEL mapping are experimental, feature-frozen, and outside the 1.0 compatibility promise. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Registry Notary consumes the consultation result and does not connect to DCI sources directly."
+    "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. The adapter and standards-CEL mapping are experimental, feature-frozen, and outside the 1.0 compatibility promise. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Relay is the only Registry Stack surface that connects to a DCI source; a consumer receives the consultation result instead."
   },
   {
     "id": "oid4vci",
@@ -669,10 +660,7 @@
     "status": "used",
     "claim_level": "emits",
     "adoption_mode": "profiled",
-    "used_by": [
-      "registry-notary",
-      "registry-platform"
-    ],
+    "used_by": [],
     "surfaces": [
       "issuer-initiated offer start and authenticated callback",
       "pre-authorized token endpoint with transaction-bound proof nonce",
@@ -696,7 +684,7 @@
       }
     ],
     "last_checked": "2026-07-19",
-    "notes": "Registry Notary exposes a registry-backed, issuer-initiated pre-authorized code flow. The identity provider's authorization code is an internal Notary input and not a wallet grant. Metadata advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Transaction code is required by default; an explicit no-PIN profile has a maximum 300-second bearer-offer window. Caller-provided or identity-token data cannot become claim evidence. The profile makes no claim for a public nonce endpoint, response next nonce, wallet-facing authorization code, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation. Source tests cover the full issuance and client-verification journey. External wallet, verifier, and OpenID conformance evidence remains candidate-only until captured from a frozen release artifact."
+    "notes": "No Registry Stack component issues credentials over OID4VCI. Registry Notary exposed the registry-backed, issuer-initiated pre-authorized code flow described here and is retired, and the shared `registry-platform-oid4vci` crate was removed with it, so the surfaces above and the pinned links are the record of a retired product. In that profile the identity provider's authorization code was an internal input and not a wallet grant; metadata advertised `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm; a transaction code was required by default, with an explicit no-PIN profile capped at a 300-second bearer-offer window; and caller-provided or identity-token data could not become claim evidence. The profile made no claim for a public nonce endpoint, response next nonce, wallet-facing authorization code, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation. External wallet, verifier, and OpenID conformance evidence remains candidate-only, and none of it was ever captured from a frozen release artifact."
   },
   {
     "id": "w3c-did",
@@ -708,7 +696,6 @@
     "claim_level": "emits",
     "adoption_mode": "profiled",
     "used_by": [
-      "registry-notary",
       "registry-platform"
     ],
     "surfaces": [
@@ -727,6 +714,6 @@
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Notary parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. Relay no longer hosts a did:web document. No DID resolver, DID URL dereferencing, or DID Core conformance class is implemented, so the claim stays at emits. The site does not claim conformance to the wider DID method registry beyond did:jwk."
+    "notes": "Platform owns shared DID and Ed25519 JWK helpers, including did:jwk parsing. The pinned route file records how the retired Registry Notary used them for credential subjects. Relay no longer hosts a did:web document. No DID resolver, DID URL dereferencing, or DID Core conformance class is implemented, so the claim stays at emits. The site does not claim conformance to the wider DID method registry beyond did:jwk."
   }
 ]

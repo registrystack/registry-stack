@@ -9,14 +9,14 @@
       "label": "Registry Platform crates",
       "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates"
     },
-    "consumer_note": "Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally."
+    "consumer_note": "Relay, Evidence, Registry Mint, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally."
   },
   {
     "id": "registry-platform.ops-posture-v1",
     "name": "Registry Ops Posture v1",
     "owner": "registry-platform",
     "status": "current-source",
-    "surface": "Versioned JSON Schema for protected Registry Relay and Registry Notary operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references.",
+    "surface": "Versioned JSON Schema for protected Registry Relay operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references. The frozen v1 shape still models the retired Registry Notary component so that a consumer can validate a document it already holds.",
     "source_of_truth": {
       "label": "Registry Ops Posture v1 JSON Schema",
       "url": "https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json"
