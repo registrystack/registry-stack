@@ -154,7 +154,7 @@ residue the workstream did not reach, not new scope.
       the manifest schema and renaming the identifiers. Either way it is a
       published schema change and needs a manifest version decision, which
       is why it is not folded into the mechanical deletions.
-- [ ] C11. The remaining registryctl schema versions are reconciled with the
+- [x] C11. The remaining registryctl schema versions are reconciled with the
       shapes the retirement changed. Decision 10 fixed the approved baseline
       set. The same mismatch is still present in
       `crates/registryctl/src/deployment.rs` and
@@ -175,6 +175,14 @@ residue the workstream did not reach, not new scope.
       This touches release provenance and deployment defaults, so it needs a
       review note and Jeremi's call on whether the release lock bumps with
       the rest or stays pinned to the published release train.
+      Resolved 2026-08-03: Jeremi confirmed no adopter has used the stack, so
+      there is no published train to keep compatible and no pre-retirement
+      document in the wild. The release lock bumps with the rest, and the
+      decision-10 refusal machinery is deliberately not repeated: with no
+      document to explain to anyone, serde's `unknown field notary` and
+      `require_schema`'s `unsupported portable document schema` are enough.
+      The deployment manifest, ownership report, and operator-files documents
+      stay at `1.0` because their required shapes did not change.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
 
@@ -851,3 +859,31 @@ is parallel; B has no upstream dependencies and is the standing priority
   OID4VCI entry may claim external evidence outright, satisfied by an entry
   marked candidate-only or by no entry at all. Gates: `npm test` 294 passed, 0
   failed; `npm run check` clean, including 31741 built links.
+
+- 2026-08-03: Closed C11. Bumped the deployment plan, deployment binding, and
+  release lock to schema version `2.0`, the three documents whose required
+  shape the retirement changed and which registryctl reads back from disk under
+  `deny_unknown_fields`. The plan lost the `Notary` product lane and five
+  initialization actions, the binding lost `ports.notary` and three
+  `secret_files` ids, and the signed release-lock payload lost its Notary image,
+  runtime recipe, and config schema. The release lock is one contract in three
+  places, so `RELEASE_LOCK_SCHEMA_VERSION`, `registry_release_lock.py`'s
+  `SCHEMA_VERSION`, and the `const` in both published schemas moved together;
+  the adopter Compose conformance checker and its inert plan probe moved with
+  the plan. The manifest, ownership report, and operator-files documents keep
+  `1.0`: their field shapes are unchanged. Decision 10's pre-retirement
+  detection and re-approval guidance was deliberately not repeated here, on
+  Jeremi's confirmation that no adopter has used the stack: there is no
+  pre-retirement document in existence to explain, and every removed member is
+  literally named `notary`, so the default diagnostics already name the cause.
+  Note that `release/registry-release-lock-payload.v1.schema.json` had already
+  been edited in place to drop Notary while its version `const` stayed `1.0`,
+  which is what made the version stop identifying a shape. Gates:
+  `cargo fmt --check` clean, `cargo clippy -p registryctl --all-targets` with
+  `-D warnings` clean, `cargo check --locked --workspace --all-targets` clean,
+  `cargo test --locked -p registryctl` green (28 targets, 0 failures),
+  `test_registry_release_lock.py` 10 passed, `test_registry_release.py` 71
+  passed, `test_check_adopter_compose_contract.py` 33 passed,
+  `test_check_release_source_model.py` 13 passed,
+  `check_adopter_compose_contract.sh` PASS on current and minimum-2.35.0, and
+  `registry-release validate` clean on beta-27.

@@ -20,7 +20,11 @@ use sigstore_verify::types::Bundle;
 use sigstore_verify::{verify, VerificationPolicy};
 
 pub const RELEASE_LOCK_SCHEMA_ID: &str = "io.registrystack.registry_release_lock";
-pub const RELEASE_LOCK_SCHEMA_VERSION: &str = "1.0";
+/// Version `2.0` because the Registry Notary retirement removed the Notary
+/// image, runtime recipe, and config-schema members from the signed payload.
+/// The published schemas and `release/scripts/registry_release_lock.py`
+/// declare the same version; they are one contract in three places.
+pub const RELEASE_LOCK_SCHEMA_VERSION: &str = "2.0";
 
 const RELEASE_REPOSITORY: &str = "registrystack/registry-stack";
 const RELEASE_WORKFLOW: &str = ".github/workflows/release.yml";

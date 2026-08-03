@@ -31,6 +31,7 @@ use deployment::{
     DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
     ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
     ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
+    DEPLOYMENT_BINDING_SCHEMA_VERSION, DEPLOYMENT_PLAN_SCHEMA_VERSION,
 };
 use registry_platform_crypto::canonicalize_json;
 use release_lock::{
@@ -2708,5 +2709,53 @@ fn python_release_lock_runtime_renders_compose_conformance() {
         "unexpected drift diagnostic:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&drift.stdout),
         String::from_utf8_lossy(&drift.stderr)
+    );
+}
+
+// The Registry Notary retirement removed `ports.notary` and three operator
+// secret ids from the binding, and the `Notary` product lane from the plan.
+// Both documents are read back from an adopter's disk under
+// `deny_unknown_fields`, so the declared schema version has to move with the
+// required shape. Leaving it at `1.0` would let two incompatible shapes claim
+// one version.
+#[test]
+fn binding_declares_the_post_retirement_schema_version() {
+    assert_eq!(DEPLOYMENT_BINDING_SCHEMA_VERSION, "2.0");
+    let binding = binding();
+    assert_eq!(binding.schema_version, DEPLOYMENT_BINDING_SCHEMA_VERSION);
+    binding.validate().unwrap();
+}
+
+#[test]
+fn binding_rejects_the_pre_retirement_schema_version() {
+    let mut binding = binding();
+    binding.schema_version = "1.0".to_string();
+    let error = binding
+        .validate()
+        .expect_err("a pre-retirement binding must not validate");
+    assert!(
+        format!("{error:#}").contains("io.registrystack.deployment_binding 1.0"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn deployment_plan_declares_the_post_retirement_schema_version() {
+    assert_eq!(DEPLOYMENT_PLAN_SCHEMA_VERSION, "2.0");
+    let plan = plan();
+    assert_eq!(plan.schema_version, DEPLOYMENT_PLAN_SCHEMA_VERSION);
+    plan.validate().unwrap();
+}
+
+#[test]
+fn deployment_plan_rejects_the_pre_retirement_schema_version() {
+    let mut plan = plan();
+    plan.schema_version = "1.0".to_string();
+    let error = plan
+        .validate()
+        .expect_err("a pre-retirement plan must not validate");
+    assert!(
+        format!("{error:#}").contains("io.registrystack.deployment_plan 1.0"),
+        "{error:#}"
     );
 }

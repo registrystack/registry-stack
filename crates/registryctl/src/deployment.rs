@@ -18,9 +18,17 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
 
 pub const DEPLOYMENT_PLAN_SCHEMA_ID: &str = "io.registrystack.deployment_plan";
-pub const DEPLOYMENT_PLAN_SCHEMA_VERSION: &str = "1.0";
+/// Version `2.0` because the Registry Notary retirement removed the `Notary`
+/// product lane and its five initialization actions from the required plan
+/// shape. The plan is read back from a transferred package under
+/// `deny_unknown_fields`, so the declared version has to move with the shape it
+/// names.
+pub const DEPLOYMENT_PLAN_SCHEMA_VERSION: &str = "2.0";
 pub const DEPLOYMENT_BINDING_SCHEMA_ID: &str = "io.registrystack.deployment_binding";
-pub const DEPLOYMENT_BINDING_SCHEMA_VERSION: &str = "1.0";
+/// Version `2.0` for the same reason as [`DEPLOYMENT_PLAN_SCHEMA_VERSION`]: the
+/// retirement removed `ports.notary` and three `secret_files` ids from the
+/// binding an operator owns and edits on disk.
+pub const DEPLOYMENT_BINDING_SCHEMA_VERSION: &str = "2.0";
 pub const DEPLOYMENT_MANIFEST_SCHEMA_ID: &str = "io.registrystack.deployment_manifest";
 pub const DEPLOYMENT_MANIFEST_SCHEMA_VERSION: &str = "1.0";
 pub const DEPLOYMENT_OWNERSHIP_REPORT_SCHEMA_ID: &str =

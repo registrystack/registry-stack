@@ -1066,7 +1066,7 @@ def validate_plan(path: Path) -> dict[str, str]:
         not isinstance(plan, dict)
         or set(plan) != expected_root_fields
         or plan.get("schema_id") != "io.registrystack.deployment_plan"
-        or plan.get("schema_version") != "1.0"
+        or plan.get("schema_version") != "2.0"
         or plan.get("single_instance") is not True
     ):
         raise ContractError("deployment plan probe has the wrong closed schema")

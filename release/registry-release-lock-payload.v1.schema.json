@@ -21,7 +21,7 @@
       "const": "io.registrystack.registry_release_lock"
     },
     "schema_version": {
-      "const": "1.0"
+      "const": "2.0"
     },
     "release": {
       "$ref": "#/$defs/release"

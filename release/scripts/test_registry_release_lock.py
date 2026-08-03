@@ -21,6 +21,23 @@ ROOT = SCRIPT.parents[2]
 
 
 class RegistryReleaseLockTests(unittest.TestCase):
+    def test_schema_version_matches_the_post_retirement_shape(self) -> None:
+        # The Registry Notary retirement removed the Notary image, runtime
+        # recipe, and config-schema members from the signed payload. Both
+        # published schemas and the producer have to name the shape they
+        # actually describe, so version 1.0 cannot keep standing for both.
+        self.assertEqual(release_lock.SCHEMA_VERSION, "2.0")
+        for schema_file in (
+            "release/registry-release-lock.v1.schema.json",
+            "release/registry-release-lock-payload.v1.schema.json",
+        ):
+            schema = json.loads((ROOT / schema_file).read_text(encoding="utf-8"))
+            self.assertEqual(
+                schema["properties"]["schema_version"]["const"],
+                release_lock.SCHEMA_VERSION,
+                schema_file,
+            )
+
     def test_create_payload_generates_complete_closed_example(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -15,7 +15,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ID = "io.registrystack.registry_release_lock"
-SCHEMA_VERSION = "1.0"
+# Version 2.0: the Registry Notary retirement removed the Notary image,
+# runtime recipe, and config-schema members from the signed payload.
+SCHEMA_VERSION = "2.0"
 REPOSITORY = "registrystack/registry-stack"
 WORKFLOW = ".github/workflows/release.yml"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
