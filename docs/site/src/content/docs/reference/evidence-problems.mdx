@@ -1,0 +1,65 @@
+---
+title: Evidence errors and problems reference
+description: What each application/problem+json response from the Evidence assertion service means and how to respond to it.
+status: current
+owner: registry-docs
+source_repos: [registry-stack]
+last_reviewed: "2026-08-03"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Evidence returns errors as problem details with the media type `application/problem+json`. The closed set of problem types, their HTTP status, and their exact body shape are frozen in `products/evidence/contracts/problem-contract.yaml` (contract `registry.evidence.public-problem/v1`) and generated into `products/evidence/generated/problem-v1.schema.json`; both files are the source of truth for this page. The `evidence-contracts` CI job byte-diffs a freshly regenerated copy of both files against the committed copies on every change (`products/evidence/scripts/check-contracts.sh`, wired into `.github/workflows/ci.yml`), so this reference cannot drift from a released Evidence binary without the build failing.
+
+`POST /v1/evidence` can return any problem documented on this page. `GET /v1/evidence-definitions` returns a narrower subset: `malformed_request`, `authentication_failed`, `rate_limited`, and `service_unavailable`.
+
+## Reading a problem response
+
+A problem body carries exactly five members: `type`, `title`, `status`, `code`, and `operation`, and no others. There is no `detail` member. Evidence's contract closes the body with `additionalProperties: false` and explicitly excludes request bodies or selector values, principal or credential inputs, source URLs or responses, script input or output, and any candidate count, score, hint, or comparison detail. Branch client code on the stable `code` member; `type` follows the fixed pattern `https://registrystack.org/problems/evidence/<code>`.
+
+```json
+{
+  "type": "https://registrystack.org/problems/evidence/evidence_not_available",
+  "title": "Evidence could not be produced",
+  "status": 422,
+  "code": "evidence_not_available",
+  "operation": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+}
+```
+
+The `operation` member is a ULID-shaped opaque identifier (pattern `^[0-9A-HJKMNP-TV-Z]{26}$`) that Evidence generates for the request; it is never taken from the caller. It matches the `X-Request-Id` response header on both successful and failing responses, and it is the identifier to quote to a deployment operator for support correlation.
+
+## Caller request problems
+
+These problem types indicate something about the request itself. Correct the request and resubmit; retrying an unchanged request returns the same problem.
+
+| Code | Status | Meaning | Retry helps | What to do |
+| --- | --- | --- | --- | --- |
+| `malformed_request` | 400 | The request body is not valid JSON, or it does not match the documented `EvidenceRequest` schema: an unknown field, a wrong type, or a structurally invalid request nonce or holder key. | No | Validate the request body against the schema published at `/openapi.json`, and remove any field the schema does not declare. |
+| `invalid_selector` | 400 | The request's selector does not match any of the configured alternative profiles for the requested requirement. | No | Fetch `/v1/evidence-definitions` and match the request's selector to one of the profiles listed there for the requirement. |
+| `authentication_failed` | 401 | No credential was supplied, more than one was supplied, the credential could not be parsed, or the bearer token did not verify. Evidence returns a `WWW-Authenticate: Bearer` header alongside this problem. | No | Supply exactly one `Authorization: Bearer` token, and confirm it has not expired and was issued for this deployment. |
+| `response_format_not_acceptable` | 406 | The `Accept` header fell outside the closed negotiation matrix: a duplicate, a combination of types, a quality parameter, or an unrecognized value. Missing `Accept`, `*/*`, and exactly `application/jose+json` all select the default signed response and do not trigger this problem. | No | Send at most one recognized media type in `Accept`: `application/jose+json`, `application/vnd.registrystack.evidence-unsigned+json`, or `application/dc+sd-jwt`, with no quality parameter and no combination with another type. |
+| `rate_limited` | 429 | The caller exceeded the configured per-principal request rate, or the separate per-principal-authority failed-selector rate (`crates/registry-evidence/src/rate_limit.rs`). | Yes, after backoff | Wait for the duration in the `Retry-After` header (this deployment sends `1` second) before retrying. |
+
+## Requests Evidence cannot satisfy
+
+A well-formed, authenticated request can still fail to produce evidence. Both problem types below intentionally withhold the specific reason: Evidence collapses several internal conditions into one public shape so that a response cannot be used to learn whether a record, grant, or requirement exists.
+
+| Code | Status | Meaning | Retry helps | What to do |
+| --- | --- | --- | --- | --- |
+| `not_authorized` | 403 | The authenticated caller's grant does not permit this requirement, this subject binding, or the negotiated response format, or the requirement identifier is unknown. Evidence does not reveal which of these applied, and an unknown requirement identifier is indistinguishable from a real one the caller is not authorized for. | No, without a grant change | Confirm the requirement identifier against `/v1/evidence-definitions` for the authenticated caller. If it is present there, ask the deployment operator to verify the grant covers this requirement, subject binding, and response format. |
+| `evidence_not_available` | 422 | The source produced no unique matching record, the match was ambiguous, a required fact was missing, or a derivation input could not be resolved. Evidence collapses all four conditions into this one code and applies uniform, bounded processing so response timing does not indicate which condition occurred. | No, not by resubmitting the same request unchanged | Confirm with the subject that the requested fact exists in the source system. Report a persistent, unexpected result to the deployment operator with the `operation` value; Evidence does not reveal which internal condition produced it. |
+
+## Source and deployment availability
+
+Both problem types below are transient 503 responses. Evidence assigns them by where the failure occurred, not by how long it lasted.
+
+| Code | Status | Meaning | Retry helps | What to do |
+| --- | --- | --- | --- | --- |
+| `dependency_unavailable` | 503 | The configured external source did not respond usably: unreachable, timed out, wrong credential, wrong media type, an oversized response, malformed JSON, or an error envelope. Evidence maps every source-boundary failure to this one code (`crates/registry-evidence/src/runtime.rs`, `source_failure_problem`). | Yes, after backoff | Retry with backoff. If it persists, report it to the deployment operator with the `operation` value: the connected source system is unavailable, not the request. |
+| `service_unavailable` | 503 | A transient failure inside the Evidence deployment itself: script execution, signing, audit-log writes, or discovery and configuration lookups. This code is also returned by the unauthenticated `/openapi.json` and `/ready` endpoints when the document or readiness state cannot be produced. | Yes, after backoff | Retry with backoff. If it persists, report it to the deployment operator with the `operation` value. |
+
+## Source
+
+This page transcribes `products/evidence/contracts/problem-contract.yaml` and `products/evidence/generated/problem-v1.schema.json`, and the runtime decisions in `crates/registry-evidence/src/problem.rs`, `crates/registry-evidence/src/runtime.rs`, and `crates/registry-evidence/src/server.rs` that choose which code a given failure returns. The full negotiation and per-operation status mapping is in `products/evidence/generated/registry-evidence.openapi.json`.

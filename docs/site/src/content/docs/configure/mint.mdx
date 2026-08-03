@@ -1,0 +1,206 @@
+---
+title: Configure Registry Mint
+description: Configure Registry Mint to issue short-lived, audience-bound access tokens to registered clients when a deployment has no identity provider.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Configure Registry Mint when a deployment needs to hand short-lived access tokens to a closed
+set of registered machine clients and has no identity provider to issue them.
+
+## When to use Registry Mint
+
+Registry Mint is a supporting service, not a product pattern of its own. Use it when a resource
+server such as Evidence needs signed, expiring, audience-bound tokens and standing up a
+general-purpose identity provider is not an option for the deployment.
+
+Registry Mint answers a narrower question than a shared JWKS can. A pooled key set can only say
+that a token was signed by a trusted key; it cannot say which caller signed it or what that
+caller is permitted to assert. Registry Mint splits the two questions across two places: the
+client registry binds a client id to that client's own public keys and to the authority Registry
+Mint will assert for it, and the token endpoint verifies an incoming request against the keys of
+the client it claims to be, then writes the authority from the registry, never from the request.
+
+## When not to use Registry Mint
+
+Skip Registry Mint when an identity provider already issues client-credentials tokens for the
+deployment. Registry Mint exists only for the case where none does; pointing Evidence at an
+existing IdP's token endpoint and JWKS does not require Registry Mint at all.
+
+Registry Mint is also not a place to route caller identity for people. It authenticates
+registered machine clients by private key, and any token bound to one named person rides inside
+a client's own signed request rather than a separate login. If a deployment needs a person to
+authenticate directly, that is an identity provider's job, not Registry Mint's.
+
+## Before you start
+
+You need:
+
+- The registered clients this deployment will serve: one client id, principal, evidence
+  audience, and set of requester tags per client.
+- A private JWK signing key for Registry Mint itself, in the algorithm the deployment will run
+  (`EdDSA`, `ES256`, or `RS256`), stored in a file owner-only and not reachable through a
+  symlink. `crates/registry-mint/src/secretfile.rs` enforces both at load time.
+- A private JWK per client. Registry Mint only ever stores and reads each client's public half;
+  keep the private half with the client.
+- A directory to hold one registration file per client.
+- The claim names the resource server (Evidence, for example) reads its principal, requester
+  tags, evidence audience, and grant pair from, so Registry Mint's `accessTokens.claims` can be
+  set to match them exactly.
+- TLS in front of Registry Mint. Registry Mint serves plain HTTP and expects TLS termination it
+  does not manage; Evidence in turn requires the token issuer and its key set to be HTTPS, with
+  no exception for loopback (`crates/registry-mint/demo/README.md`).
+
+## Configure the deployment
+
+Registry Mint reads one YAML document. Every relative path in it resolves against the document's
+own directory, and every field in it is startup-only: changing issuer identity, signing keys,
+the listener, or token policy means restarting the process.
+
+```yaml
+version: 1
+issuer: https://mint.example.org
+listener:
+  address: 127.0.0.1
+  port: 8081
+signing:
+  algorithm: EdDSA
+  activeKeyId: mint-2026-01
+  activeKeyFile: secrets/signing.jwk
+accessTokens:
+  audiences: [evidence]
+  lifetimeSeconds: 300
+  claims:
+    principal: sub
+    requesterTags: evidence_tags
+    evidenceAudience: evidence_audience
+    grantId: evidence_grant_id
+    grantAuthority: evidence_authority
+clientAssertion:
+  audience: https://mint.example.org/token
+  algorithms: [EdDSA]
+clients:
+  directory: clients
+```
+
+`issuer` must be an `https` URL with a host and no credentials, query, or fragment; resource
+servers compare it exactly. `accessTokens.lifetimeSeconds` is bounded to `60..=3600`: short
+enough that a leaked token expires quickly, long enough to survive verifier clock skew.
+`accessTokens.claims` must match the resource server's own claim names field for field, because
+that is the only place the two configurations have to agree. `clientAssertion.audience` is the
+value every client's signed request must carry as its own `aud`, which stops a request built for
+one endpoint from being replayed at another.
+
+Delegated tokens, bound to one named subject a client acts on behalf of, are a further optional
+step layered on top of this base configuration. `crates/registry-mint/README.md` covers the
+`accessTokens.claims.actor` field and the per-client `delegation` block that step needs; this
+walkthrough covers the base, undelegated flow.
+
+For the complete field list, including every default, see the
+[Registry Mint reference](../../reference/mint/).
+
+## Register a client
+
+Add one file per client under the directory named in `clients.directory`:
+
+```yaml
+clientId: health-desk
+principal: service:health-desk
+evidenceAudience: https://evidence.example.org
+requesterTags: [health-desk, region-north]
+keys:
+  - kty: OKP
+    crv: Ed25519
+    kid: health-desk-2026-01
+    x: "<public-key-x-coordinate>"
+```
+
+`keys` accepts public JWKs only; a document carrying a private key member is rejected outright.
+Loading the client registry is all-or-nothing, so one malformed registration fails the whole
+load rather than serving a partial registry.
+
+Validate the deployment before opening a socket:
+
+```sh
+mint check --config /etc/mint/mint.yaml
+```
+
+`check` loads the configuration, the signing key, and the client registry, then exits. Both
+`check` and `serve` accept `MINT_CONFIG` in place of `--config`.
+
+## Start Registry Mint
+
+```sh
+mint serve --config /etc/mint/mint.yaml
+```
+
+Onboarding, offboarding, and caller key rotation only need the client registry reloaded, not the
+process restarted: send the running process `SIGHUP` and it re-reads `clients.directory`,
+keeping the previous registry in place if the new one fails to load.
+
+## Obtain a token
+
+A client authenticates with the `client_credentials` grant and `private_key_jwt` client
+authentication (RFC 7523): it signs a short-lived JWT assertion with its own private key and
+posts it to the token endpoint.
+
+```sh
+curl -sS https://mint.example.org/token \
+  -d grant_type=client_credentials \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer \
+  --data-urlencode "client_assertion=<compact-jws-client-assertion>"
+```
+
+The assertion must carry `iss` and `sub` equal to the client id, `aud` equal to the configured
+`clientAssertion.audience`, a unique `jti`, and `iat`/`exp` inside
+`clientAssertion.maximumLifetimeSeconds`. Every `jti` is accepted once; presenting the same
+assertion twice is refused.
+
+The `mint token` subcommand builds and sends that request for local testing. It is a client
+tool: it signs with the caller's own key and never touches Registry Mint's signing key.
+
+```sh
+mint token --url https://mint.example.org/token \
+  --client-id health-desk --key ./dev/health-desk.jwk
+```
+
+It prints the access token alone on stdout, so `TOKEN=$(mint token ...)` is the whole usage.
+
+## Verify the deployment
+
+Request a token and confirm the response shape:
+
+```sh
+curl -sS https://mint.example.org/token \
+  -d grant_type=client_credentials \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer \
+  --data-urlencode "client_assertion=<compact-jws-client-assertion>"
+```
+
+```json
+{
+  "access_token": "SYNTHETIC_FIXTURE_TOKEN",
+  "token_type": "Bearer",
+  "expires_in": 300
+}
+```
+
+Confirm the published key set resolves at the configured `signing.jwksPath` (default
+`/.well-known/jwks.json`), and that `GET /ready` returns success once at least one client is
+registered.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The token request fails with `401 invalid_client` | Registry Mint collapses every client authentication failure, an unknown client id, a bad signature, a replayed `jti`, an expired assertion, into this one code, so the endpoint cannot be used to probe which client ids are registered. | Check the client id, the signing key, the assertion's `iat`/`exp`, and that the `jti` has not already been used. |
+| The token request fails with `400 unsupported_grant_type` | `grant_type` is missing or is not exactly `client_credentials`. | Send `grant_type=client_credentials` in the form body. |
+| `mint check` or `mint serve` refuses to start over the signing key | The key file is not a regular, owner-only, single-link file, or its `kid` and algorithm do not match `signing.activeKeyId` and `signing.algorithm`. | Regenerate or re-permission the private JWK so it is owned by the running user, unreadable by group and other, and not a symlink. |
+| Evidence rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
+| `GET /ready` returns `503` | No client is currently registered, or the client registry directory failed to load. | Add at least one valid registration under `clients.directory` and check the startup or reload log for the failing file. |

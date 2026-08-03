@@ -32,10 +32,22 @@ system that owns the data.
 | Caller needs | Use | Result |
 | --- | --- | --- |
 | Selected records or fields | Registry Relay | A protected, read-only API response |
+| A signed minimum-disclosure answer about one subject | Evidence | A signed assertion carrying the answer, not the source record |
 | A bounded answer or status | Registry Notary | A claim result without the source record |
 
-The two products can work together. Registry Relay obtains a limited source
-result, and Registry Notary evaluates a reviewed claim over that result.
+Registry Relay and Registry Notary can work together: Registry Relay obtains a
+limited source result, and Registry Notary evaluates a reviewed claim over
+that result.
+
+### Who does what
+
+- The assertion provider is an institution that answers requests with signed
+  facts through Evidence.
+- The data publisher is an institution that exposes records through Registry
+  Relay.
+- The consumer or verifier is a relying service that calls either door and
+  verifies the answers it receives.
+- The operator is whoever runs the deployment.
 
 ## Registry Stack is not the right tool when
 

@@ -1,0 +1,157 @@
+---
+title: Get a first Evidence assertion
+description: Install the Evidence toolset, scaffold a neutral deployment project, generate key material, and run the project's synthetic fixture cases offline.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Use the released Evidence toolset to take a scaffolded deployment project from nothing to passing
+assertion fixtures, entirely offline. The project you build here is the starting point for every
+later Evidence tutorial.
+
+<QuickstartMeta
+  outcome="A scaffolded Evidence deployment project whose project check and synthetic fixture cases pass offline."
+  time="About 15 minutes, including the toolset installation"
+  level="Local development with synthetic fixtures"
+  prerequisites={['A published release tag that ships the Evidence toolset', 'A shell with curl', 'Linux amd64, Linux arm64, or macOS arm64'] }
+/>
+
+The scaffold and its fixture cases are synthetic.
+Do not add production endpoints, source credentials, or personal data to this project.
+
+## Before you start
+
+Choose an exact published tag that ships the Evidence toolset from the
+[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
+download its installer:
+
+```sh
+tag="v<major>.<minor>.<patch>"
+installer="evidencectl-${tag}-install.sh"
+curl --proto '=https' --tlsv1.2 --fail --location \
+  --output "$installer" \
+  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
+```
+
+Releases older than the Evidence toolset do not carry these assets; the installer refuses to run
+without a pinned tag and names the release page to check.
+
+```sh
+bash "$installer"
+```
+
+The installer downloads the three toolset binaries (`evidence`, the runtime; `evidencectl`, the
+adopter tooling; `mint`, the token issuer), verifies every one against the release's
+`SHA256SUMS`, and installs them together or not at all. It checks integrity, not authenticity:
+for a higher-assurance installation, follow `release/VERIFY.md` from the same tag first, then
+rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at the verified directory.
+
+Confirm the toolset is on `PATH`:
+
+```sh
+evidencectl --version
+evidence --version
+```
+
+If your shell cannot find them, add the printed install directory (`~/.local/bin` unless you set
+`EVIDENCECTL_INSTALL_DIR`) to `PATH` before continuing.
+
+## Scaffold a deployment project
+
+Create a fresh project and enter it:
+
+```sh
+evidencectl new hello-evidence
+cd hello-evidence
+```
+
+The scaffold prints where everything went and the exact commands that come next. It creates
+`bundle/` (the governed deployment contract: acceptance definitions, adapters, derivations,
+schemas, fixtures, codelists), `runtime.yaml` (process-local paths and the listener), `secrets/`
+(empty, owner-only), `audit/`, and a project `README.md`. The bundle's one acceptance definition
+is a neutral residence-region example; `evidencectl new --help` also documents `--with-mint`,
+which pairs a Registry Mint configuration for the tutorial that serves assertions over HTTP.
+
+## Generate key material
+
+Generate the signing keypair and the two 32-byte secrets the runtime requires, exactly as the
+scaffold's next steps print them:
+
+```sh
+evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1
+evidencectl keygen secret --out secrets/audit-hmac-key
+evidencectl keygen secret --out secrets/subject-binding-hmac-key
+```
+
+Expected output:
+
+```text
+wrote secrets/signing-ed25519-private-jwk
+wrote secrets/signing-ed25519-public.jwk.json
+kid: scaffold-signing-key-1
+wrote secrets/audit-hmac-key
+wrote secrets/subject-binding-hmac-key
+```
+
+Every file is owner-only, and private bytes are never printed.
+
+## Freeze the deployment input
+
+Evidence treats the bundle and runtime file as trusted, startup-only artifacts and refuses
+mutable deployment input, so make them read-only before anything runs:
+
+```sh
+chmod -R a-w bundle && chmod 444 runtime.yaml
+```
+
+If you skip this step, the next command fails with `deployment input is not immutable`. That
+refusal is the runtime working as designed, not a broken install.
+
+## Run the fixtures
+
+Drive the `evidence` binary across the whole project:
+
+```sh
+evidencectl fixtures run --project .
+```
+
+Expected output:
+
+```text
+PASS: check
+PASS: fixtures/cases.yaml
+2 passed, 0 failed
+```
+
+Two things passed. `check` loaded, compiled, and validated the complete project: every selector,
+role, and source binding resolves, every script compiles, and the key material you generated
+parses. Then the bundle's synthetic fixture cases replayed through the real evaluation pipeline:
+request preparation, extraction, and the residence-region derivation, with no source system and
+no network. That is your first passing Evidence assertion run.
+
+## Cleanup
+
+Keep the project if you are continuing to the next tutorial. To remove it:
+
+```sh
+cd ..
+chmod -R u+w hello-evidence
+rm -rf hello-evidence
+```
+
+## Next
+
+- [Configure Evidence](../../configure/evidence/) explains every part of the project you built.
+- [Evaluate Evidence](../../start/evaluate-evidence/) covers what a real deployment costs to run.
+- [Registry Evidence API](../../reference/apis/registry-evidence/) documents the HTTP surface a
+  served deployment exposes.
+- [Evidence security model](../../security/evidence/) explains the invariants behind the
+  immutability refusal you saw.
