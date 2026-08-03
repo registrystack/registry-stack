@@ -327,6 +327,7 @@ export default defineConfig({
         {
           label: 'Answer with Evidence',
           items: [
+            { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get a first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Author an acceptance definition', slug: 'tutorials/author-an-acceptance-definition' },
             { label: 'Connect an institution source', slug: 'tutorials/connect-an-institution-source' },

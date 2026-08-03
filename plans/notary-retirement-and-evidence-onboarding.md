@@ -458,3 +458,36 @@ is parallel; B has no upstream dependencies and is the standing priority
   through registryctl and Notary end to end, and ending it in an Evidence
   assertion over a Relay-protected API needs the runnable composed path,
   which is D.
+- 2026-08-03: Front door rebalanced for Evidence, at Jeremi's direction. The
+  imbalance ran wider than B8 described. The homepage and `start/quickstart`
+  were both entirely Registry Relay and Registry Notary, with Evidence absent
+  from each, and the homepage still opened by defining the product as Relay
+  plus Notary. `Answer with Evidence` was also the only task-flow sidebar
+  section with no overview route, an omission already visible in
+  `information-architecture.test.mjs`, which enumerates every other section.
+  New `start/evidence-quickstart` is that overview: it names the four coequal
+  acceptance definitions, maps the six tutorials with their times and
+  outcomes, and states where the track stops, which is production signing and
+  not production approval. It carries no commands, so it neither competes
+  with the first-assertion tutorial nor needs a place in the tutorial gate.
+  Both front doors now open on a two-door choice and give Evidence the first
+  lane, and each Notary lane carries the same retirement sentence
+  `when-to-use` uses, unlinked, because publishing the retirement page is
+  C7's. Nothing was deleted: removing a Notary lane needs test changes and
+  belongs to C, which is blocked on C1. Three new assertions guard the result
+  rather than leaving it to drift, one extending the overview-route rule to
+  Evidence and two pinning an Evidence lane ahead of the Notary tutorial on
+  each page. Adding Evidence to the homepage exposed a claim that had become
+  false: `Both paths use the same authoring, offline test, disposable
+  development, and build commands` is true of the two registryctl paths and
+  not of Evidence, which has its own toolset and project shape, so it is now
+  scoped to registryctl. B8 still cannot be ticked. Its third part requires
+  the quickstart to end in an Evidence assertion over the Relay-protected
+  API, which is the composed path and needs D. A style-guide pass over the
+  three touched pages afterwards removed four live violations the automated
+  checks do not catch: `above` as a directional reference on both front
+  doors, bold used for keywords inside the track list, `should` where an
+  obligation was meant, and a Next list mixing fragments with sentences. The
+  six per-tutorial times, the 23 and 12 fixture counts, and the five
+  refusals cited on the overview were each read back out of the tutorial
+  they describe rather than recalled.

@@ -68,6 +68,7 @@ test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
     ['Connect an existing registry', "slug: 'configure'"],
+    ['Answer with Evidence', "slug: 'start/evidence-quickstart'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
@@ -118,6 +119,23 @@ test('starts with the spreadsheet registry and keeps HTTP under existing registr
     /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/,
   );
   assert.match(homepageSource, /\]\(start\/pre-1\.0-cutover\/\)/);
+});
+
+test('gives Evidence a lane on both front doors, ahead of the retiring Notary path', () => {
+  assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
+  assert.match(homepageSource, /\]\(tutorials\/first-evidence-assertion\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/first-evidence-assertion\/\)/);
+  assertOrdered(
+    homepageSource,
+    ['tutorials/first-evidence-assertion/', 'tutorials/verify-claim-registry-api/'],
+    'homepage lane',
+  );
+  assertOrdered(
+    quickstartSource,
+    ['tutorials/first-evidence-assertion/', 'tutorials/verify-claim-registry-api/'],
+    'quickstart lane',
+  );
 });
 
 test('keeps validation on offline test and nested development commands', () => {

@@ -1,21 +1,35 @@
 ---
 title: Start with Registry Stack 1.0
-description: Run Registry Relay and Registry Notary from a spreadsheet, then adapt the source or evidence rule.
+description: Answer a bounded question with Evidence, or publish protected records with Registry Relay, then adapt the source or the definition.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start with the maintained spreadsheet registry.
-It is the shortest complete path through Registry Relay, Registry Notary,
-authorization, source access, evidence evaluation, and minimized disclosure.
+Pick the door that matches what your caller needs. To learn only a fact about
+one subject, start with Evidence. To read specific records or fields, start
+with Registry Relay over the maintained spreadsheet registry. Both first runs
+use one terminal and synthetic data. Neither needs a source checkout,
+production keys, or a deployment package.
+
+## Answer a bounded question with Evidence
+
+Evidence signs the answer to one bounded question about one subject without
+releasing the record behind it.
+[Get a first Evidence assertion](../../tutorials/first-evidence-assertion/)
+takes a scaffolded deployment project from nothing to passing assertion
+fixtures offline, in about 15 minutes.
+
+The [Evidence quickstart](../evidence-quickstart/) maps the whole track: six
+tutorials running from that first offline project to production signing and a
+rehearsed key rotation.
 
 ## Start from a spreadsheet
 
@@ -23,11 +37,16 @@ authorization, source access, evidence evaluation, and minimized disclosure.
 creates the released `spreadsheet` project, checks its evidence rules offline,
 and runs Relay and Notary locally over maintained synthetic records.
 
-Take this path first when evaluating Registry Stack.
+Take this path when the institution has a workbook, or can prepare a reviewed
+workbook derivative.
 Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
 after the sample works.
 
-## Expose evidence
+## Expose Notary evidence claims
+
+Registry Notary is being retired and is no longer a recommended starting
+point. Evidence is the supported way to answer a bounded question.
+This path remains documented for deployments that already run it.
 
 The starter already exposes selected records and evaluates two predicate
 claims.
@@ -50,9 +69,6 @@ Continue with:
   normalization
 - [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
   for a synthetic example of that generic integration path
-
-The first run uses one terminal and synthetic data.
-You do not need a source checkout, production keys, or a deployment package.
 
 ## Move an older project
 

@@ -1,21 +1,37 @@
 ---
 title: Registry Stack documentation
-description: Start a registry from a spreadsheet, expose bounded evidence, or connect an existing registry.
+description: Answer a bounded question with Evidence, start a registry from a spreadsheet, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps an institution expose selected registry data through
-Registry Relay and bounded evidence through Registry Notary without giving
-callers direct access to the source.
+Registry Stack helps an institution answer questions about data it already
+holds without giving callers direct access to the source. Two doors: Evidence
+signs the answer to one bounded question, and Registry Relay exposes selected
+records through a protected read-only API.
+
+## Answer a bounded question with Evidence
+
+Use Evidence when the caller needs to learn only a fact, not to read a record.
+It answers one bounded question about one subject and signs the answer,
+releasing the answer rather than the row behind it. Adult status, residence
+region, professional licence status, and legal-parent relationship are coequal
+acceptance definitions; you author whichever one your institution needs, the
+same way.
+
+[Get a first Evidence assertion](tutorials/first-evidence-assertion/) takes a
+scaffolded deployment project from nothing to passing assertion fixtures
+offline, in about 15 minutes.
+The [Evidence quickstart](start/evidence-quickstart/) maps the six tutorials
+that run from there to production signing.
 
 ## Start a registry from a spreadsheet
 
@@ -30,7 +46,11 @@ evidence that a local file cannot count itself.
 takes about 20 minutes and uses released artifacts without a source checkout.
 After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
 
-## Expose bounded evidence
+## Expose Notary evidence claims
+
+Registry Notary is being retired and is no longer a recommended starting
+point. Evidence is the supported way to answer a bounded question.
+This path remains documented for deployments that already run it.
 
 The spreadsheet starter already includes one evidence service.
 Registry Relay performs the exact source lookup and sends only the field needed
@@ -56,13 +76,18 @@ the source requires authentication or response normalization.
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.
-Registry Notary owns evidence evaluation and disclosure.
+Evidence owns bounded question answering, signing, and minimum disclosure, and
+runs independently of Relay; it can read a Relay API as one fixed HTTP source.
+Registry Notary owns evidence evaluation and disclosure on the retiring path.
 The caller receives only the output authorized for that service.
 
-Both paths use the same authoring, offline test, disposable development, and
-build commands. The 1.0 project-local workbook path stops there. A governed
-deployment starts after an operator-managed HTTP source is bound, then
-continues through independent approval and package generation.
+Both registryctl paths, spreadsheet and HTTP, use the same authoring, offline
+test, disposable development, and build commands. The 1.0 project-local
+workbook path stops there. A governed deployment starts after an
+operator-managed HTTP source is bound, then continues through independent
+approval and package generation. Evidence is not one of those paths: it has
+its own toolset and its own deployment project shape, covered by the
+[Evidence quickstart](start/evidence-quickstart/).
 
 ## Move beyond the first run
 
