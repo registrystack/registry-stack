@@ -33,11 +33,13 @@ pub struct RunArgs {
     pub json: bool,
 }
 
-/// The result of one `evidence` invocation: whether it exited zero, and, when
-/// it did not, its captured stderr for the operator to read.
+/// The result of one `evidence` invocation: whether it exited zero, when it did
+/// not its captured stderr for the operator to read, and, for a fixture run,
+/// how many cases that fixture evaluated.
 struct StepOutcome {
     passed: bool,
     stderr: Option<String>,
+    evaluated_cases: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +55,9 @@ struct FixtureReport {
     passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stderr: Option<String>,
+    /// Absent when the fixture failed, or when `evidence` reported no count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evaluated_cases: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +65,12 @@ struct RunReport {
     check: CheckReport,
     fixtures: Vec<FixtureReport>,
     passed: bool,
+    /// The cases every fixture in this run evaluated, summed.
+    ///
+    /// The step counts above measure artifacts, which a reader mistakes for
+    /// coverage: a project with four fixture files reports the same `5 passed`
+    /// whether those files hold four cases or forty.
+    evaluated_cases: usize,
 }
 
 pub fn run(command: FixturesCommand) -> Result<ExitCode> {
@@ -98,11 +109,16 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 path: fixture_path.clone(),
                 passed: outcome.passed,
                 stderr: outcome.stderr,
+                evaluated_cases: outcome.evaluated_cases,
             });
         }
     }
 
     let overall_passed = check_passed && fixtures.iter().all(|fixture| fixture.passed);
+    let evaluated_cases = fixtures
+        .iter()
+        .filter_map(|fixture| fixture.evaluated_cases)
+        .sum();
     let report = RunReport {
         check: CheckReport {
             passed: check_passed,
@@ -110,6 +126,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         },
         fixtures,
         passed: overall_passed,
+        evaluated_cases,
     };
 
     if args.json {
@@ -280,16 +297,34 @@ fn run_evidence_step(evidence_bin: &Path, runtime_path: &Path, args: &[&str]) ->
         Ok(output) if output.status.success() => StepOutcome {
             passed: true,
             stderr: None,
+            evaluated_cases: evaluated_cases(&String::from_utf8_lossy(&output.stdout)),
         },
         Ok(output) => StepOutcome {
             passed: false,
             stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
+            evaluated_cases: None,
         },
         Err(error) => StepOutcome {
             passed: false,
             stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
+            evaluated_cases: None,
         },
     }
+}
+
+/// Read the case count out of `Evidence fixture passed (N evaluated cases)`.
+///
+/// This driver makes no semantic decision, so the count is `evidence`'s own
+/// figure or nothing at all. An unrecognized line leaves it absent rather than
+/// guessed, which keeps a total that is short honest instead of wrong.
+fn evaluated_cases(stdout: &str) -> Option<usize> {
+    stdout.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Evidence fixture passed (")?
+            .strip_suffix(" evaluated cases)")?
+            .parse()
+            .ok()
+    })
 }
 
 /// Print one line per step and a summary line.
@@ -303,7 +338,11 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         lines.extend(indented(report.check.stderr.as_deref()));
     }
     for fixture in &report.fixtures {
-        lines.push(step_line(&fixture.path, fixture.passed));
+        let mut line = step_line(&fixture.path, fixture.passed);
+        if let Some(cases) = fixture.evaluated_cases {
+            line.push_str(&format!(" ({cases} cases)"));
+        }
+        lines.push(line);
         if !fixture.passed {
             lines.extend(indented(fixture.stderr.as_deref()));
         }
@@ -312,7 +351,13 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
         usize::from(report.check.passed) + report.fixtures.iter().filter(|f| f.passed).count();
     let failed_count =
         usize::from(!report.check.passed) + report.fixtures.iter().filter(|f| !f.passed).count();
-    lines.push(format!("{passed_count} passed, {failed_count} failed"));
+    // The step counts stay, because they are what the exit code is made of.
+    // The case total is beside them because it is the number a reader is
+    // actually looking for: how much of the deployment this run exercised.
+    lines.push(format!(
+        "{passed_count} passed, {failed_count} failed ({} cases evaluated)",
+        report.evaluated_cases
+    ));
 
     for line in lines {
         if to_stderr {

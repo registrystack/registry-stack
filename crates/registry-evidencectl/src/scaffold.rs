@@ -64,6 +64,13 @@ const MINT_AUTHENTICATION_NOTE: &str = "\
 # deployment in mint/. Every value below is mirrored in mint/mint.yaml, and a
 # single-sided edit produces tokens Mint issues and this deployment refuses.";
 
+/// The listener ports the generated documents bind.
+///
+/// Mint's is fixed, because a paired project runs both processes on one host
+/// and the two ports have to differ for either to serve.
+const DEFAULT_LISTENER_PORT: u16 = 8080;
+const MINT_LISTENER_PORT: u16 = 8081;
+
 /// Project-relative locations the scaffold owns.
 const BUNDLE_DIRECTORY: &str = "bundle";
 const SECRET_DIRECTORY: &str = "secrets";
@@ -74,10 +81,14 @@ const MINT_DIRECTORY: &str = "mint";
 const MINT_CONFIG_FILE: &str = "mint/mint.yaml";
 const MINT_CLIENT_DIRECTORY: &str = "mint/clients";
 const MINT_SECRET_DIRECTORY: &str = "mint/secrets";
-/// The example caller's key is not Mint's own, so it sits beside rather than in
-/// the secret root Mint reads. Both are under a `secrets` path component, which
-/// is what the generated `.gitignore` excludes.
-const MINT_CALLER_SECRET_DIRECTORY: &str = "mint/secrets/caller";
+/// The example caller's key, at project root rather than inside `mint/`.
+///
+/// A caller is a different party from the issuer that registers it, and a
+/// scaffold is what adopters copy structure from. Keeping this key under
+/// `mint/` would model a trust boundary that does not exist, and would put the
+/// caller's private key on the Mint host for anyone who promotes `mint/` as a
+/// unit.
+const CALLER_SECRET_DIRECTORY: &str = "caller";
 
 /// One rendered file: where it lands in the project, and its template bytes.
 struct ProjectFile {
@@ -164,6 +175,15 @@ pub struct NewArgs {
     #[arg(long, default_value = "urn:example:scaffold:issuer")]
     pub issuer_id: String,
 
+    /// Port the generated runtime file binds the Evidence listener to.
+    ///
+    /// One machine often carries several scaffolded projects, and the default
+    /// is the same in every one of them. Editing the frozen runtime file to
+    /// move a port means unfreezing it, which is the state the project is
+    /// least safe in.
+    #[arg(long, default_value_t = DEFAULT_LISTENER_PORT)]
+    pub port: u16,
+
     /// Also render a paired Registry Mint configuration for the project.
     #[arg(long)]
     pub with_mint: bool,
@@ -174,6 +194,16 @@ pub struct NewArgs {
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
+    // A paired project is two processes on one host. Rendering both onto one
+    // port produces documents that each look right and cannot both serve, and
+    // the loser of the race is whichever was started second.
+    if args.with_mint && args.port == MINT_LISTENER_PORT {
+        bail!(
+            "--port {MINT_LISTENER_PORT} is the port the paired Mint deployment binds; \
+             choose another port for Evidence"
+        );
+    }
+
     if directory_has_entries(&args.directory)? && !args.force {
         bail!(
             "refusing to scaffold into the non-empty directory {}; pass --force to proceed",
@@ -241,6 +271,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
             write_project_file(&path, &rendered)?;
         }
         create_secret_directory(&root.join(MINT_SECRET_DIRECTORY))?;
+        create_secret_directory(&root.join(CALLER_SECRET_DIRECTORY))?;
     }
 
     report(&root, &secret_root, args.with_mint);
@@ -271,6 +302,8 @@ fn placeholders(root: &Path, args: &NewArgs) -> anyhow::Result<Vec<(&'static str
         ("audit_path", path_string(&root.join(AUDIT_FILE))?),
         ("provider_id", args.provider_id.clone()),
         ("issuer_id", args.issuer_id.clone()),
+        ("listener_port", args.port.to_string()),
+        ("mint_listener_port", MINT_LISTENER_PORT.to_string()),
         ("trust_domain", TRUST_DOMAIN.to_owned()),
         ("requirement_id", REQUIREMENT_ID.to_owned()),
         ("framework_id", FRAMEWORK_ID.to_owned()),
@@ -306,8 +339,8 @@ fn placeholders(root: &Path, args: &NewArgs) -> anyhow::Result<Vec<(&'static str
             path_string(&root.join(MINT_SECRET_DIRECTORY))?,
         ),
         (
-            "mint_caller_secret_root",
-            path_string(&root.join(MINT_CALLER_SECRET_DIRECTORY))?,
+            "caller_secret_root",
+            path_string(&root.join(CALLER_SECRET_DIRECTORY))?,
         ),
         ("mint_signing_key_id", MINT_SIGNING_KEY_ID.to_owned()),
         ("mint_client_id", MINT_CLIENT_ID.to_owned()),
@@ -419,12 +452,16 @@ fn report(root: &Path, secret_root: &Path, with_mint: bool) {
         "  evidencectl keygen secret --out {}",
         secret_root.join("subject-binding-hmac-key").display()
     );
+    println!("  # The source's bearer token. Against a real source it is that system's");
+    println!("  # own token, written to the path below with mode 0600; against a stand-in");
+    println!("  # source, generate one. Not keygen secret: that makes HMAC key material,");
+    println!("  # whose raw bytes an HTTP header value rejects. check, the fixtures and");
+    println!("  # startup all pass without a token; the first live request is where a");
+    println!("  # missing one is discovered.");
     println!(
-        "  # obtain the source system's own bearer token and write it to {},",
+        "  evidencectl keygen token --out {}",
         secret_root.join("source-bearer-token").display()
     );
-    println!("  # mode 0600. check, the fixtures and startup all pass without it; the");
-    println!("  # first live request is where a missing token is discovered.");
     println!(
         "  chmod -R a-w {} && chmod 444 {}",
         root.join(BUNDLE_DIRECTORY).display(),
@@ -447,7 +484,7 @@ fn report(root: &Path, secret_root: &Path, with_mint: bool) {
         );
         println!(
             "  evidencectl keygen signing --out-dir {} --kid {MINT_CLIENT_KEY_ID}",
-            root.join(MINT_CALLER_SECRET_DIRECTORY).display()
+            root.join(CALLER_SECRET_DIRECTORY).display()
         );
         println!(
             "  # copy the caller public key into {}/{MINT_CLIENT_ID}.yaml.example,",

@@ -65,6 +65,33 @@ fn the_printed_next_steps_name_the_source_bearer_token() {
     );
 }
 
+/// Anyone standing the project up against a stand-in source has to invent that
+/// token, and the neighbouring `keygen secret` lines make it the obvious tool.
+/// It is the wrong one: it writes raw bytes, and a bearer token ends up in an
+/// HTTP header. The step that names the token must name the generator that
+/// suits it.
+#[test]
+fn the_printed_next_steps_offer_a_generator_for_a_stand_in_sources_token() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let outcome = evidencectl(&["new", project.to_str().expect("project path")]);
+    assert!(
+        outcome.status.success(),
+        "evidencectl new failed: {}",
+        String::from_utf8_lossy(&outcome.stderr)
+    );
+
+    let printed = String::from_utf8_lossy(&outcome.stdout);
+    let token_step = printed
+        .lines()
+        .find(|line| line.contains("keygen token"))
+        .unwrap_or_else(|| panic!("no printed step generates a bearer token:\n{printed}"));
+    assert!(
+        token_step.contains("source-bearer-token"),
+        "the token generator step does not write the token the bundle reads: {token_step}"
+    );
+}
+
 fn passes_check_and_every_fixture(project: &Path) {
     provision_secrets(project);
     let fixtures = scaffolded_fixtures(project);
@@ -307,6 +334,60 @@ fn the_mint_configuration_is_rendered_only_when_it_is_asked_for() {
     );
 }
 
+/// A scaffold is what adopters copy structure from, so where it puts a key is
+/// a claim about who owns it. The caller is not Mint, and `mint/` is the unit
+/// an operator promotes to the Mint host.
+#[test]
+fn the_example_callers_key_lives_outside_the_mint_deployment() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    scaffold(&[project.to_str().expect("project path"), "--with-mint"]);
+
+    let caller = project.join("caller");
+    let metadata = fs::metadata(&caller).expect("the caller key directory exists");
+    assert!(metadata.is_dir());
+    assert_eq!(
+        metadata.permissions().mode() & 0o777,
+        0o700,
+        "the caller key directory must be owner-only"
+    );
+    assert_eq!(
+        fs::read_dir(&caller).expect("caller key directory").count(),
+        0,
+        "the scaffold must not generate the caller's key material"
+    );
+
+    // Nothing the operator is told to put under mint/ is the caller's private
+    // half. `mint/secrets/` is Mint's own signing key and nothing else.
+    let readme = fs::read_to_string(project.join("README.md")).expect("readme");
+    // The rendered paths are the canonical ones the scaffold wrote, which on
+    // this platform resolves the temporary directory's symlinked parent.
+    let rendered_caller = fs::canonicalize(&caller).expect("canonical caller path");
+    assert!(
+        readme.contains(&format!(
+            "keygen signing --out-dir {}",
+            rendered_caller.to_str().expect("caller path")
+        )),
+        "the README must generate the caller's key outside mint/"
+    );
+    assert!(
+        !readme.contains("mint/secrets/caller"),
+        "no step may put the caller's key inside the Mint deployment"
+    );
+
+    // The generated ignore rules have to cover the new location, or the first
+    // commit of a scaffolded project carries a private key.
+    assert!(
+        fs::read_to_string(project.join(".gitignore"))
+            .expect("gitignore")
+            .lines()
+            .any(|line| line.trim() == "caller/"),
+        "the caller key directory must be excluded from version control"
+    );
+}
+
 /// The two documents are rendered from one set of values, and this is what says
 /// so: every value the pairing depends on has to agree on both sides.
 #[test]
@@ -412,6 +493,63 @@ fn the_rendered_mint_configuration_passes_mint_check() {
     assert!(
         logged.contains("\"clients\":1"),
         "mint check must have loaded the registered caller: {logged}"
+    );
+}
+
+/// The runtime file is frozen at mode 444 before the project is ever served,
+/// so a port chosen after the fact costs an unfreeze. The flag exists so the
+/// second project on a host never has to enter that state.
+#[test]
+fn the_listener_port_is_chosen_when_the_project_is_generated() {
+    let workspace = TempDir::new().expect("temporary directory");
+
+    let defaulted = workspace.path().join("defaulted");
+    scaffold(&[defaulted.to_str().expect("project path")]);
+    assert_eq!(
+        yaml(&defaulted.join("runtime.yaml"))["listener"]["port"],
+        serde_norway::Value::from(8080),
+        "an unspecified port keeps the documented default"
+    );
+
+    let chosen = workspace.path().join("chosen");
+    scaffold(&[chosen.to_str().expect("project path"), "--port", "9443"]);
+    assert_eq!(
+        yaml(&chosen.join("runtime.yaml"))["listener"]["port"],
+        serde_norway::Value::from(9443)
+    );
+
+    // A paired project runs both processes at once, so the one collision the
+    // scaffold can see is the one it refuses rather than renders.
+    let paired = workspace.path().join("paired");
+    let refused = evidencectl(&[
+        "new",
+        paired.to_str().expect("project path"),
+        "--with-mint",
+        "--port",
+        "8081",
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("the paired Mint deployment binds"),
+        "the refusal must name why 8081 is taken: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let paired = workspace.path().join("paired-ok");
+    scaffold(&[
+        paired.to_str().expect("project path"),
+        "--with-mint",
+        "--port",
+        "9443",
+    ]);
+    assert_eq!(
+        yaml(&paired.join("runtime.yaml"))["listener"]["port"],
+        serde_norway::Value::from(9443)
+    );
+    assert_eq!(
+        yaml(&paired.join(MINT_CONFIG))["listener"]["port"],
+        serde_norway::Value::from(8081),
+        "Mint keeps its own port"
     );
 }
 
@@ -637,7 +775,7 @@ fn provision_mint_secrets(project: &Path) {
     // The caller's own key belongs to the caller, so it lands where the README
     // says it does rather than beside Mint's.
     write_secret(
-        &root.join("secrets/caller/signing-ed25519-private-jwk"),
+        &project.join("caller/signing-ed25519-private-jwk"),
         caller_jwk.as_bytes(),
     );
     fs::write(

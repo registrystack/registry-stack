@@ -137,10 +137,16 @@ impl std::error::Error for CliError {}
 /// The diagnostic names a bundle-relative artifact, a schema path, and a text
 /// location so an operator can find the defect. It carries no document value,
 /// which is what keeps a failed `check` safe to paste into a ticket.
+///
+/// A service failure carries an owned message instead, because the operating
+/// system decides both the address and the reason and neither is known when
+/// this enum is written. Those two are the whole diagnosis of a failed start,
+/// so a fixed string here would cost an operator the port and the cause.
 #[derive(Debug, PartialEq, Eq)]
 enum CommandError {
     Cli(CliError),
     Deployment(&'static str, ArtifactFault),
+    Service(String),
 }
 
 impl fmt::Display for CommandError {
@@ -148,6 +154,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::Cli(error) => fmt::Display::fmt(error, formatter),
             Self::Deployment(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
     }
 }
@@ -226,18 +233,13 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     .await
                     .map_err(runtime_initialization_error)?,
             );
-            tracing::info!(
-                target: "registry_evidence::startup",
-                bundle_revision = runtime.bundle().revision(),
-                runtime_revision = runtime.runtime_revision(),
-                bind_host = runtime.runtime_config().listener.bind_host,
-                port = runtime.runtime_config().listener.port,
-                metrics = runtime.runtime_config().metrics_listener.is_some(),
-                "evidence service starting"
-            );
+            // The startup announcement belongs to the server, which makes it
+            // after both listeners are held. Nothing is reported here, because
+            // a start reported before the bind describes a service that may
+            // never have got its port.
             server::serve(runtime, shutdown_signal())
                 .await
-                .map_err(|_| CommandError::Cli(CliError("service failed")))?;
+                .map_err(|error| CommandError::Service(error.to_string()))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Verify {
@@ -273,7 +275,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
 fn deployment_load_error(error: BundleError) -> CommandError {
     let message = match &error {
         BundleError::Unavailable => "deployment input is unavailable",
-        BundleError::NotImmutable => "deployment input is not immutable",
+        BundleError::NotImmutable(_) => "deployment input is not immutable",
         BundleError::UnsupportedEntry => "deployment contains an unsupported entry",
         BundleError::InvalidPath => "deployment contains an invalid path binding",
         BundleError::UnknownFile(_) => "deployment artifact closure is invalid",

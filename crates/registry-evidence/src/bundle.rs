@@ -46,8 +46,8 @@ const ALLOWED_DIRECTORIES: [&str; 6] = [
 pub enum BundleError {
     #[error("the Evidence deployment bundle is unavailable")]
     Unavailable,
-    #[error("the Evidence deployment bundle is not an immutable read-only directory")]
-    NotImmutable,
+    #[error("an Evidence deployment input is not immutable: {0}")]
+    NotImmutable(ArtifactFault),
     #[error("the Evidence deployment bundle contains an unsupported filesystem entry")]
     UnsupportedEntry,
     #[error("the Evidence deployment bundle contains a prohibited path")]
@@ -74,6 +74,7 @@ impl BundleError {
             Self::Config(fault)
             | Self::InvalidArtifact(fault)
             | Self::InvalidScript(fault)
+            | Self::NotImmutable(fault)
             | Self::UnknownFile(fault) => Some(fault),
             _ => None,
         }
@@ -88,6 +89,7 @@ impl BundleError {
             Self::Config(fault) => Self::Config(fault.bind(artifact)),
             Self::InvalidArtifact(fault) => Self::InvalidArtifact(fault.bind(artifact)),
             Self::InvalidScript(fault) => Self::InvalidScript(fault.bind(artifact)),
+            Self::NotImmutable(fault) => Self::NotImmutable(fault.bind(artifact)),
             other => other,
         }
     }
@@ -150,6 +152,11 @@ impl fmt::Display for ArtifactFault {
 /// An artifact fault whose artifact the caller binds later.
 fn invalid_artifact(cause: &'static str) -> BundleError {
     BundleError::InvalidArtifact(ArtifactFault::unbound(cause))
+}
+
+/// An immutability fault whose artifact the caller binds when it knows one.
+fn not_immutable(cause: &'static str) -> BundleError {
+    BundleError::NotImmutable(ArtifactFault::unbound(cause))
 }
 
 /// A script fault whose artifact the caller binds later.
@@ -266,13 +273,17 @@ impl RuntimeDocument {
             return Err(BundleError::InvalidPath);
         }
         let filesystem_read_only = filesystem_is_read_only(path)?;
-        validate_read_only(&metadata, filesystem_read_only)?;
+        let writable_runtime = "the runtime file is writable";
+        validate_read_only(&metadata, filesystem_read_only, writable_runtime)
+            .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
         let bytes = read_stable_file(
             path,
             &metadata,
             crate::config::MAX_CONFIG_BYTES as u64,
             filesystem_read_only,
-        )?;
+            writable_runtime,
+        )
+        .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
         let config = RuntimeConfig::parse_yaml(&bytes).map_err(|error| {
             BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
         })?;
@@ -287,12 +298,14 @@ impl RuntimeDocument {
                 return Err(BundleError::InvalidPath);
             }
             let ca_filesystem_read_only = filesystem_is_read_only(ca_path)?;
-            validate_read_only(&ca_metadata, ca_filesystem_read_only)?;
+            let writable_ca = "the TLS CA bundle the runtime file names is writable";
+            validate_read_only(&ca_metadata, ca_filesystem_read_only, writable_ca)?;
             let ca_bytes = read_stable_file(
                 ca_path,
                 &ca_metadata,
                 MAX_CA_BUNDLE_BYTES,
                 ca_filesystem_read_only,
+                writable_ca,
             )?;
             validate_ca_bundle(&ca_bytes).map_err(|error| error.in_artifact(RUNTIME_FILE))?;
             ca_bundles.insert(profile.to_owned(), ca_bytes);
@@ -411,7 +424,11 @@ fn capture_bundle_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Bundle
         return Err(BundleError::InvalidPath);
     }
     let filesystem_read_only = filesystem_is_read_only(root)?;
-    validate_read_only(&root_metadata, filesystem_read_only)?;
+    validate_read_only(
+        &root_metadata,
+        filesystem_read_only,
+        "the bundle directory is writable",
+    )?;
     let canonical_root = fs::canonicalize(root).map_err(|_| BundleError::Unavailable)?;
     let mut paths = Vec::new();
     collect_paths(
@@ -430,7 +447,14 @@ fn capture_bundle_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Bundle
     let mut total = 0_u64;
     for (relative, path, scanned_metadata) in paths {
         let cap = file_size_cap(&relative);
-        let bytes = read_stable_file(&path, &scanned_metadata, cap, filesystem_read_only)?;
+        let bytes = read_stable_file(
+            &path,
+            &scanned_metadata,
+            cap,
+            filesystem_read_only,
+            "the bundle artifact is writable",
+        )
+        .map_err(|error| error.in_artifact(&relative))?;
         total = total
             .checked_add(u64::try_from(bytes.len()).map_err(|_| BundleError::TooLarge)?)
             .ok_or(BundleError::TooLarge)?;
@@ -463,11 +487,23 @@ fn collect_paths(
         if metadata.file_type().is_symlink() {
             return Err(BundleError::InvalidPath);
         }
-        validate_read_only(&metadata, filesystem_read_only)?;
         let relative_path = path
             .strip_prefix(root)
             .map_err(|_| BundleError::InvalidPath)?;
         let relative = path_to_bundle_string(relative_path)?;
+        // Named after the relative path is known, so a writable artifact says
+        // which one it is. A path the bundle grammar refuses is refused as a
+        // path first; both fail closed, and neither reaches the caller unread.
+        validate_read_only(
+            &metadata,
+            filesystem_read_only,
+            if metadata.is_dir() {
+                "the bundle directory is writable"
+            } else {
+                "the bundle artifact is writable"
+            },
+        )
+        .map_err(|error| error.in_artifact(&relative))?;
         let top = relative.split('/').next().ok_or(BundleError::InvalidPath)?;
         if directory == root {
             if metadata.is_dir() {
@@ -520,22 +556,36 @@ fn path_to_bundle_string(path: &Path) -> Result<String, BundleError> {
     Ok(value.to_owned())
 }
 
+/// Refuse a writable deployment input, naming which input it was.
+///
+/// Every caller passes its own cause because the classes are not
+/// interchangeable to whoever has to fix one: a writable bundle artifact is
+/// re-frozen with the documented `chmod`, while a writable runtime file or CA
+/// bundle sits outside the bundle entirely and re-freezing changes nothing.
 #[cfg(unix)]
-fn validate_read_only(metadata: &Metadata, filesystem_read_only: bool) -> Result<(), BundleError> {
+fn validate_read_only(
+    metadata: &Metadata,
+    filesystem_read_only: bool,
+    cause: &'static str,
+) -> Result<(), BundleError> {
     use std::os::unix::fs::PermissionsExt as _;
     if !filesystem_read_only && metadata.permissions().mode() & 0o222 != 0 {
-        Err(BundleError::NotImmutable)
+        Err(not_immutable(cause))
     } else {
         Ok(())
     }
 }
 
 #[cfg(not(unix))]
-fn validate_read_only(metadata: &Metadata, filesystem_read_only: bool) -> Result<(), BundleError> {
+fn validate_read_only(
+    metadata: &Metadata,
+    filesystem_read_only: bool,
+    cause: &'static str,
+) -> Result<(), BundleError> {
     if filesystem_read_only || metadata.permissions().readonly() {
         Ok(())
     } else {
-        Err(BundleError::NotImmutable)
+        Err(not_immutable(cause))
     }
 }
 
@@ -567,15 +617,18 @@ fn read_stable_file(
     scanned: &Metadata,
     cap: u64,
     filesystem_read_only: bool,
+    writable_cause: &'static str,
 ) -> Result<Vec<u8>, BundleError> {
     if scanned.len() > cap {
         return Err(BundleError::TooLarge);
     }
     let mut file = open_no_follow(path)?;
     let opened = file.metadata().map_err(|_| BundleError::Unavailable)?;
-    validate_read_only(&opened, filesystem_read_only)?;
+    validate_read_only(&opened, filesystem_read_only, writable_cause)?;
     if !opened.is_file() || !same_file(scanned, &opened) || opened.len() > cap {
-        return Err(BundleError::NotImmutable);
+        return Err(not_immutable(
+            "the file was replaced between the directory scan and opening it",
+        ));
     }
     let mut bytes = Vec::new();
     file.by_ref()
@@ -589,7 +642,7 @@ fn read_stable_file(
     if !same_file(&opened, &after)
         || after.len() != u64::try_from(bytes.len()).map_err(|_| BundleError::TooLarge)?
     {
-        return Err(BundleError::NotImmutable);
+        return Err(not_immutable("the file changed while it was being read"));
     }
     Ok(bytes)
 }
@@ -1286,7 +1339,7 @@ fn validate_schema_node(node: &JsonValue, role: SchemaRole) -> Result<(), Bundle
                 && !constant
             {
                 return Err(invalid_artifact(
-                    "schema integers must be bounded or enumerated",
+                    "schema integers need both a minimum and a maximum, or an enum, or a const",
                 ));
             }
         }
@@ -1781,6 +1834,10 @@ fn validate_runtime_bindings(
     Ok(())
 }
 
+/// The secret root is the one immutability check whose subject is outside the
+/// bundle, so its cause says so. Re-freezing the bundle does not touch it, and
+/// an operator told only that a deployment input is not immutable audits the
+/// bundle first and finds nothing wrong with it.
 fn validate_secret_root(path: &Path) -> Result<(), BundleError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -1790,12 +1847,16 @@ fn validate_secret_root(path: &Path) -> Result<(), BundleError> {
     {
         use std::os::unix::fs::PermissionsExt as _;
         if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(BundleError::NotImmutable);
+            return Err(not_immutable(
+                "the secret root directory the runtime file names is reachable by group or other",
+            ));
         }
     }
     #[cfg(not(unix))]
     if !metadata.permissions().readonly() {
-        return Err(BundleError::NotImmutable);
+        return Err(not_immutable(
+            "the secret root directory the runtime file names is writable",
+        ));
     }
     Ok(())
 }
@@ -2129,15 +2190,55 @@ mod tests {
         );
     }
 
+    /// The closed subset is learnable, but only if each rule states itself
+    /// whole. A lower bound alone is what JSON Schema habit supplies, and it is
+    /// refused, so the refusal has to say that an upper bound is the missing
+    /// half rather than leave the author to guess which of three admitted forms
+    /// was meant.
+    #[test]
+    fn an_integer_bounded_on_one_side_is_refused_by_the_whole_rule() {
+        let admitted = [
+            "{type: integer, minimum: 0, maximum: 64}",
+            "{type: integer, enum: [1, 2]}",
+            "{type: integer, const: 1}",
+        ];
+        for node in admitted {
+            let node: JsonValue = serde_norway::from_str(node).expect("admitted integer node");
+            assert!(
+                validate_schema_node(&node, SchemaRole::Facts).is_ok(),
+                "the subset admits this integer: {node}"
+            );
+        }
+
+        for node in [
+            "{type: integer, minimum: 0}",
+            "{type: integer, maximum: 64}",
+            "{type: integer}",
+        ] {
+            let node: JsonValue = serde_norway::from_str(node).expect("unbounded integer node");
+            let refused = validate_schema_node(&node, SchemaRole::Facts)
+                .expect_err("an integer bounded on one side is refused");
+            assert_eq!(
+                refused.artifact_fault().map(ArtifactFault::fault),
+                Some(&SchemaFault::because(
+                    "schema integers need both a minimum and a maximum, or an enum, or a const"
+                )),
+                "the refusal must name the whole rule: {node}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn writable_bundle_and_unknown_files_fail_closed() {
         let writable = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("adult-status", writable.path());
-        assert!(matches!(
-            Bundle::load(writable.path()),
-            Err(BundleError::NotImmutable)
-        ));
+        let writable_error = Bundle::load(writable.path()).expect_err("a writable bundle fails");
+        let fault = writable_error
+            .artifact_fault()
+            .expect("the refusal names what is writable");
+        assert_eq!(fault.artifact(), "");
+        assert_eq!(fault.fault().cause(), "the bundle directory is writable");
 
         let unknown = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("adult-status", unknown.path());
@@ -2219,10 +2320,12 @@ mod tests {
         )
         .expect("write runtime document");
 
-        assert!(matches!(
-            RuntimeDocument::load(&runtime_path),
-            Err(BundleError::NotImmutable)
-        ));
+        let writable = RuntimeDocument::load(&runtime_path).expect_err("a writable runtime fails");
+        let fault = writable
+            .artifact_fault()
+            .expect("the refusal names what is writable");
+        assert_eq!(fault.artifact(), RUNTIME_FILE);
+        assert_eq!(fault.fault().cause(), "the runtime file is writable");
         fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
             .expect("lock runtime document");
         let runtime = RuntimeDocument::load(&runtime_path).expect("runtime loads");
@@ -2232,6 +2335,21 @@ mod tests {
         assert_eq!(
             runtime.bytes(),
             fs::read(&runtime_path).expect("read runtime")
+        );
+
+        // Everything the operator can re-freeze is already frozen here, so the
+        // refusal has to name the one input outside the bundle. Re-freezing the
+        // bundle in answer to it changes nothing, which is what makes an
+        // unnamed immutability failure cost a mode audit of the whole tree.
+        fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o750))
+            .expect("loosen secret root");
+        let loose = RuntimeDocument::load(&runtime_path).expect_err("a group-readable root fails");
+        let fault = loose
+            .artifact_fault()
+            .expect("the refusal names what is loose");
+        assert_eq!(
+            fault.fault().cause(),
+            "the secret root directory the runtime file names is reachable by group or other"
         );
     }
 }

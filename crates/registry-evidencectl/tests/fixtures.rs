@@ -45,7 +45,9 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 ///   the file named by `$ARGV_LOG`;
 /// - exits 1 with a fixed diagnostic on stderr when its step name equals
 ///   `$FAIL_STEP` (`check`, or `evaluate:<fixture path>`), and exits 0
-///   otherwise.
+///   otherwise;
+/// - prints the real `evidence evaluate` summary line, with `$CASES` cases,
+///   when `$CASES` is set and the step is an evaluation.
 fn write_stub_evidence(dir: &Path) -> PathBuf {
     let path = dir.join("evidence");
     let script = r#"#!/bin/sh
@@ -81,6 +83,9 @@ if [ "$step" = "${FAIL_STEP:-}" ]; then
 fi
 
 printf 'stub ok for %s\n' "$step"
+if [ -n "$fixture" ] && [ -n "${CASES:-}" ]; then
+  printf 'Evidence fixture passed (%s evaluated cases)\n' "$CASES"
+fi
 exit 0
 "#;
     fs::write(&path, script).expect("write stub evidence script");
@@ -272,6 +277,98 @@ fn json_output_is_one_parseable_document_on_stdout_with_expected_pass_fail_value
     // Human diagnostics belong on stderr in JSON mode, not on stdout.
     let stderr = stderr_of(&output);
     assert!(stderr.contains("FAIL: fixtures/b.yaml"), "{stderr}");
+}
+
+/// The step counts measure artifacts, and a reader takes the summary line for
+/// coverage. Two fixture files holding seven cases each is a fourteen-case run,
+/// and reporting it as `3 passed` says nothing about how much was exercised.
+#[test]
+fn the_summary_totals_the_cases_each_fixture_evaluated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml", "fixtures/b.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "7")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("PASS: fixtures/a.yaml (7 cases)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("3 passed, 0 failed (14 cases evaluated)"),
+        "{stdout}"
+    );
+
+    // A failing fixture evaluated nothing this run can count, so the total
+    // reports what actually ran rather than an estimate of what would have.
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "7")
+        .env("FAIL_STEP", "evaluate:fixtures/b.yaml")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    assert_eq!(report["evaluated_cases"], serde_json::json!(7));
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert_eq!(fixtures[0]["evaluated_cases"], serde_json::json!(7));
+    assert!(
+        fixtures[1].get("evaluated_cases").is_none(),
+        "a failed fixture reports no count: {}",
+        fixtures[1]
+    );
+}
+
+/// An `evidence` that reports no count at all leaves the total short rather
+/// than guessed. The driver makes no semantic decision of its own, and a
+/// fabricated case count would be exactly that.
+#[test]
+fn an_unrecognized_summary_line_is_counted_as_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env_remove("CASES")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("2 passed, 0 failed (0 cases evaluated)"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("cases)\n") || !stdout.contains("PASS: fixtures/a.yaml ("),
+        "an uncounted fixture must not claim a count: {stdout}"
+    );
 }
 
 #[test]

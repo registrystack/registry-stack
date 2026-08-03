@@ -19,7 +19,7 @@ issuer: {{token_issuer}}
 # issuer above is https, so put a terminator in front of this listener.
 listener:
   address: 127.0.0.1
-  port: 8081
+  port: {{mint_listener_port}}
   maximumRequestBytes: 16384
   requestTimeoutMilliseconds: 5000
 

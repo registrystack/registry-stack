@@ -1,4 +1,7 @@
 # Key material, audit records and local output never belong in version control.
 secrets/
+# The example caller's own key, which a paired --with-mint project keeps
+# outside mint/ because the caller is not the issuer that registers it.
+caller/
 audit/
 out/
