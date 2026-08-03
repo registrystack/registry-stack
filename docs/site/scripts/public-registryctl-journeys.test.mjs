@@ -110,26 +110,14 @@ function assertOverlayChecksum(relativePath) {
 const compose =
   'docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml';
 const actions = `${compose} -f generated/compose.initialize.yaml`;
-// Registry Notary is retired. `servingStages`, `stateVerifiers`, and `productUpdate` below still
-// include its lane because they back `upgrade-and-rollback.mdx`, a page owned by a different
-// rewrite pass. `firstInstallation` and `ordinaryStartAndStop` back the two-lane
-// `single-node-compose-behind-proxy.mdx` and use their own two-lane arrays instead of these.
+// A generated package has exactly two product lanes, `relay-public` and
+// `relay-consultation`, so every documented sequence stages and verifies the same services
+// (`crates/registryctl/src/deployment.rs`).
 const servingStages = [
   'registry-relay-consultation-stage-secrets',
-  'registry-notary-stage-secrets',
   'registry-postgresql-stage-secrets',
 ].map((service) => `${compose} run --rm --no-deps ${service}`);
 const stateVerifiers = [
-  'registry-relay-public-verify-state',
-  'registry-relay-consultation-verify-state',
-  'registry-notary-verify-state',
-].map((service) => `${actions} run --rm --no-deps ${service}`);
-
-const twoLaneServingStages = [
-  'registry-relay-consultation-stage-secrets',
-  'registry-postgresql-stage-secrets',
-].map((service) => `${compose} run --rm --no-deps ${service}`);
-const twoLaneStateVerifiers = [
   'registry-relay-public-verify-state',
   'registry-relay-consultation-verify-state',
 ].map((service) => `${actions} run --rm --no-deps ${service}`);
@@ -143,16 +131,16 @@ const firstInstallation = [
   `${actions} run --rm registry-relay-consultation-prepare-state`,
   `${actions} run --rm registry-relay-public-initialize`,
   `${actions} run --rm registry-relay-consultation-initialize`,
-  ...twoLaneStateVerifiers,
-  ...twoLaneServingStages,
+  ...stateVerifiers,
+  ...servingStages,
   `${compose} up --detach --wait --wait-timeout 120`,
   `${compose} ps`,
 ].join('\n');
 
 const ordinaryStartAndStop = [
   `${compose} config --no-interpolate --no-env-resolution --quiet`,
-  ...twoLaneStateVerifiers,
-  ...twoLaneServingStages,
+  ...stateVerifiers,
+  ...servingStages,
   `${compose} up --detach --wait --wait-timeout 120`,
   `${compose} ps`,
   `${compose} down`,
@@ -161,11 +149,9 @@ const ordinaryStartAndStop = [
 const productUpdate = [
   `${actions} run --rm --no-deps registry-relay-public-preview-state`,
   `${actions} run --rm --no-deps registry-relay-consultation-preview-state`,
-  `${actions} run --rm --no-deps registry-notary-preview-state`,
   `${compose} stop`,
   `${actions} run --rm --no-deps registry-relay-public-accept-state`,
   `${actions} run --rm --no-deps registry-relay-consultation-accept-state`,
-  `${actions} run --rm --no-deps registry-notary-accept-state`,
   ...stateVerifiers,
   ...servingStages,
   `${compose} up --detach --wait --wait-timeout 120`,
@@ -332,17 +318,17 @@ test('product update executes preview, stop, accept, exact verify, then start', 
       '    printf "preview:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *" stop")',
-      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    printf "stopped\\n" >"$DX_UPDATE_STATE"',
       '    printf "stop\\n" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *-accept-state)',
       '    test "$(cat "$DX_UPDATE_STATE")" = stopped',
-      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^preview:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    printf "accept:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *-verify-state)',
-      '    test "$(grep -c "^accept:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^accept:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    if test "$(cat "$DX_UPDATE_STATE")" = stopped; then',
       '      printf "verify-before:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
       '    else',
@@ -353,16 +339,16 @@ test('product update executes preview, stop, accept, exact verify, then start', 
       '    ;;',
       '  *-stage-secrets)',
       '    test "$(cat "$DX_UPDATE_STATE")" = stopped',
-      '    test "$(grep -c "^verify-before:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^verify-before:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    printf "stage:%s\\n" "$last" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *" up --detach --wait --wait-timeout 120")',
-      '    test "$(grep -c "^stage:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^stage:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    printf "start\\n" >>"$DX_UPDATE_EVENTS"',
       '    printf "running\\n" >"$DX_UPDATE_STATE"',
       '    ;;',
       '  *" ps")',
-      '    test "$(grep -c "^verify-after:" "$DX_UPDATE_EVENTS")" -eq 3',
+      '    test "$(grep -c "^verify-after:" "$DX_UPDATE_EVENTS")" -eq 2',
       '    printf "ps\\n" >>"$DX_UPDATE_EVENTS"',
       '    ;;',
       '  *)',
@@ -387,21 +373,16 @@ test('product update executes preview, stop, accept, exact verify, then start', 
     [
       'preview:registry-relay-public-preview-state',
       'preview:registry-relay-consultation-preview-state',
-      'preview:registry-notary-preview-state',
       'stop',
       'accept:registry-relay-public-accept-state',
       'accept:registry-relay-consultation-accept-state',
-      'accept:registry-notary-accept-state',
       'verify-before:registry-relay-public-verify-state',
       'verify-before:registry-relay-consultation-verify-state',
-      'verify-before:registry-notary-verify-state',
       'stage:registry-relay-consultation-stage-secrets',
-      'stage:registry-notary-stage-secrets',
       'stage:registry-postgresql-stage-secrets',
       'start',
       'verify-after:registry-relay-public-verify-state',
       'verify-after:registry-relay-consultation-verify-state',
-      'verify-after:registry-notary-verify-state',
       'ps',
       '',
     ].join('\n'),

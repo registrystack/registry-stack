@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-24"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -24,14 +24,14 @@ against that public guide.
 | Repository | [registrystack/registry-stack](https://github.com/registrystack/registry-stack) |
 | Assessment type | Maintainer self-assessment |
 | Review history | No public review ledger yet |
-| Last reviewed | 2026-06-24 |
+| Last reviewed | 2026-08-03 |
 
 ## Overview
 
 Registry Stack helps operators publish governed registry-facing services over
 data they already hold. The two main runtime patterns are protected registry
-APIs through Registry Relay and governed evidence responses through Registry
-Notary.
+APIs through Registry Relay and signed minimum-disclosure assertions through
+Evidence.
 
 The public architecture, boundary model, and product roles are documented in
 [Architecture](../../explanation/architecture/) and
@@ -57,8 +57,8 @@ Software guarantees include:
   governed evidence evaluation.
 - Disclosure controls that can return narrower evidence instead of source
   records.
-- Credential issuance for configured Notary surfaces, including SD-JWT VC
-  issuance where configured.
+- Signed, stateless Evidence assertions, serialized as a flattened JWS or, under
+  Evidence's frozen profile, as an SD-JWT VC response.
 - Hash-chained audit records emitted by runtime services.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
@@ -120,7 +120,7 @@ Primary public evidence:
 - [RS-SEC-G](../../spec/rs-sec-g/)
 - [Contracts](../../reference/contracts/)
 - [OpenSSF evidence](../openssf-evidence/)
-- [Registry Notary API reference](../../reference/apis/registry-notary/)
+- [Evidence API reference](../../reference/apis/registry-evidence/)
 - [Registry Relay API reference](../../reference/apis/registry-relay/)
 - GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
   security evidence, image lock, release manifest, and candidate attestations

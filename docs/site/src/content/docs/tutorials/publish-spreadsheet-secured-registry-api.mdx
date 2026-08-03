@@ -1,13 +1,12 @@
 ---
 title: Start a registry from a spreadsheet
-description: Start a protected spreadsheet registry, make denied and allowed records requests, and expose minimized evidence through Registry Notary.
+description: Start a protected spreadsheet registry, make denied and allowed records requests, and inspect the authored contract behind them.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-04"
 doc_type: tutorial
 persona:
   - data publisher
@@ -18,12 +17,16 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Start with a three-row public works workbook. By the end of this tutorial, you
-will have a protected records API in Registry Relay and a separate evidence API
-in Registry Notary. You will make one denied records request, read one authorized
-record, and verify two facts without receiving that record.
+will have a protected records API in Registry Relay and a private consultation
+that exposes a single field from the same workbook. You will make one denied
+records request, read one authorized record, and inspect the two independent
+contracts behind them.
+
+Registry Notary is retired. The starter authors two Relay lanes, `relay-public`
+and `relay-consultation`, and no third product.
 
 <QuickstartMeta
-  outcome="A protected local API over a spreadsheet, plus minimized evidence answers from Relay and Notary."
+  outcome="A protected local API over a spreadsheet, plus a private consultation that exposes one reviewed field."
   time="About 20 minutes after Registryctl and Docker are installed"
   level="Local development with a contained spreadsheet"
   prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'curl', 'A spreadsheet application', 'A shell and a text editor'] }
@@ -98,8 +101,8 @@ contains three synthetic records:
 | `PW-002` | `central-02` | `health` | `planned` |
 | `PW-003` | `coastal-03` | `transport` | `active` |
 
-Keep the identifiers' case and punctuation. The first live request reads
-`pw_001`. The follow-on evidence tutorial uses `PW-002`.
+Keep the identifiers' case and punctuation. The live request reads `pw_001`. The
+other two rows exist so an authorized caller can be shown not to receive them.
 
 ## Test the starter
 
@@ -111,17 +114,17 @@ registryctl test
 
 ```text
 Registry Stack test: passed for fictional-public-works-registry.
-Fixtures: 8.
+Fixtures: 3.
 Next: registryctl dev
 ```
 
-This checks active, planned, and missing-record behavior, the derived
-authorization-before-source cases, and the exact one-field snapshot output
-contract. It does not start Docker, resolve a secret, or contact a source.
+This checks active, planned, and missing-record behavior against the exact
+one-field snapshot output contract. It does not start Docker, resolve a secret,
+or contact a source.
 
 ## Start the local registry
 
-Start the disposable Registry Relay and Registry Notary runtime:
+Start the disposable Registry Relay runtime:
 
 ```sh
 registryctl dev --detach
@@ -129,24 +132,24 @@ registryctl dev --detach
 
 Registryctl validates the project, mounts the contained workbook read-only,
 creates development-only trust and isolated credentials, and starts released
-digest-locked images on loopback HTTP. Its
-output identifies both APIs and prints ready-to-run commands with owner-only
-curl configuration files:
+digest-locked images on loopback HTTP. Its output identifies the API and prints
+ready-to-run commands with owner-only curl configuration files:
 
 ```text
 Relay API: http://127.0.0.1:4242
-Evidence API: http://127.0.0.1:4243
+Source mode: local_snapshot
 Records denied request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/records-denied.curl'
 Records request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/records-request.curl'
-Evidence request: curl --config '/<absolute-project-path>/.registry-stack/dev/local/<runtime-id>/credentials/request.curl'
 ```
 
 Your absolute path and runtime identifier will differ. Copy commands from your
 own output rather than the example above. The curl configurations keep
 disposable credentials out of the command line and your shell environment.
-The generated runtime publishes only the two application ports on host
-loopback. Put an operator-owned reverse proxy or ingress in front when adapting
-the products to a shared environment that requires TLS.
+The consultation Relay is private: it has no host-published port, and the only
+surface you can call is the records API above.
+The generated runtime publishes its application port on host loopback only. Put
+an operator-owned reverse proxy or ingress in front when adapting the products
+to a shared environment that requires TLS.
 
 ### Make one denied records request
 
@@ -187,40 +190,6 @@ but it cannot choose a different `project_id` by changing the record identifier
 in the URL.
 Relay derives the required filter from the authenticated principal.
 
-### Request minimized evidence
-
-Copy the complete command after `Evidence request:` and run it unchanged. This
-request goes to Registry Notary. Notary authorizes the evidence request, then
-asks the private consultation Relay for only the source value needed to decide
-the two claims.
-
-The response contains generated identifiers, timestamps, and provenance. These
-are the relevant fields:
-
-```json
-{
-  "results": [
-    {
-      "claim_id": "project-record-exists",
-      "value": true,
-      "satisfied": true,
-      "disclosure": "predicate"
-    },
-    {
-      "claim_id": "project-status-accepted",
-      "value": true,
-      "satisfied": true,
-      "disclosure": "predicate"
-    }
-  ]
-}
-```
-
-This is an abridged response. Both predicates are true because `pw_001` exists
-and its status is `active`. The evidence response does not contain `north-01`,
-`water`, `active`, or the workbook row. Relay owns the bounded source read;
-Notary owns claim evaluation and disclosure.
-
 ## Run the maintained smoke check
 
 Run the development checks:
@@ -232,16 +201,16 @@ registryctl dev smoke
 ```text
 Development smoke: passed.
   unauthorized: status=denied; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved; minimized_claim_ids=none
-  authorized: status=authorized; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved; minimized_claim_ids=project-record-exists,project-status-accepted
+  authorized: status=authorized; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved; minimized_claim_ids=none
 ```
 
-The first scenario proves that the live evidence route denies the unauthenticated
-request. The second performs the authorized lookup and reports only the two
-configured claim identifiers. A local workbook has no request counter, so the
-runtime honestly reports those effects as `unobserved`. The derived offline
-authorization-before-source fixture still verifies the zero-source-effect
-denial invariant in Relay. The direct records requests above and this evidence
-smoke check exercise different public surfaces.
+The first scenario proves that the live records route denies the unauthenticated
+request. The second performs the authorized lookup. A local workbook has no
+request counter, so the runtime honestly reports those effects as `unobserved`.
+The starter authors no attribute release profile, so the authorized scenario
+releases no minimized attribute identifier and both lines report `none`. This
+check drives the same records route you called by hand above, without you
+handling the disposable credential.
 
 ## Inspect the contract you own
 
@@ -296,30 +265,27 @@ These are the four fields returned by your records request. Scope, purpose, and
 principal-bound filtering are independent gates. The generated development
 caller is convenient, but it does not weaken or bypass the authored policy.
 
-### Find the evidence policy
+### Find the consultation policy
 
 In the same file, find `public-works-verification`:
 
 ```yaml
+kind: consultation_api
+version: 1
 purpose: public-works-case-management
-access: { scopes: ["evidence:projects:read"] }
+legal_basis: public-service-delivery
+consent: not_required
 consultations:
   project:
     integration: project-record-snapshot
     input: { project_id: request.target.identifiers.project_id }
-claims:
-  project-record-exists:
-    cel: project.matched
-    disclosure: predicate
-  project-status-accepted:
-    cel: 'project.matched && project.status == "active"'
-    disclosure: predicate
 ```
 
 `integrations/project-record-snapshot/integration.yaml` allows the consultation
-Relay to expose only `status` to Notary. Both claims use predicate disclosure,
-so the evidence caller receives boolean decisions instead of that status or the
-record.
+Relay to expose only `status`, and nothing else from the workbook row. The
+records API and the consultation are separate services over the same entity:
+the four-field projection above belongs to `projects-records` and does not widen
+what the consultation may return.
 
 Inspect the focused offline trace when you want to see those boundaries without
 running the stack:
@@ -333,24 +299,18 @@ registryctl test \
 
 ```text
 Registry Stack test: passed for fictional-public-works-registry.
-Fixtures: 3.
+Fixtures: 1.
   PASS project-record-snapshot.match
     inputs: project_id
     calls: call=1 operation=snapshot method=GET path=/snapshot query=[] headers=[] body=none
     outputs: status
-    claims: project-record-exists, project-status-accepted
     outcome: match
-  PASS project-record-snapshot.match::derived/request_to_consultation_binding
-    inputs: project_id
-    calls: notary-relay-consultation
-    claims: project-record-exists, project-status-accepted
-    source access: true
-  PASS project-record-snapshot.match::derived/authorization_before_source
-    inputs: project_id
-    expected error: authorization.denied
-    source access: false
 Next: registryctl dev
 ```
+
+The trace names the one declared output. A widened projection or a second source
+call would appear on these lines, which is what makes the offline trace worth
+reading before you run anything.
 
 ## Stop the disposable runtime
 
@@ -370,7 +330,7 @@ The authored project and workbook remain.
 ## Build the review inputs
 
 Review directly authored non-secret values, then build deterministic unsigned
-inputs for the three product lanes:
+inputs for the two product lanes:
 
 ```sh
 registryctl check --explain --show-authored-values
@@ -378,29 +338,29 @@ registryctl build
 ```
 
 Confirm the four-field records projection, the case-management purpose, the
-principal-bound `project_id`, the single `status` consultation output, and the
-two predicate claims. The build ends with:
+principal-bound `project_id`, and the single `status` consultation output. The
+build ends with:
 
 ```text
-Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Built unsigned signing inputs for relay-public, relay-consultation.
 Build output: .registry-stack/build/local
 Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build
 ```
 
-The public Relay, private consultation Relay, and Notary remain separate review
-and ownership lanes. Building does not approve, sign, or deploy them. Registry
+The public Relay and the private consultation Relay remain separate review and
+ownership lanes. Building does not approve, sign, or deploy them. Registry
 Stack 1.0 runs a project-local workbook only in the disposable development
 runtime. It does not package that workbook for a governed deployment.
 
 ## What you built
 
-You turned a spreadsheet into two deliberately different APIs:
+You turned a spreadsheet into two deliberately different surfaces:
 
 - The public Relay refused an anonymous call and returned one principal-bound,
   four-field record to an authorized caller.
-- The consultation Relay exposed only `status` to Notary after authorization.
-- Notary returned two predicate decisions without returning `status` or the
-  spreadsheet row.
+- The private consultation Relay declares a single `status` output over the same
+  entity and publishes no host port.
+- The two are separate signing lanes, so widening one does not widen the other.
 - Disposable credentials remained isolated in owner-only files instead of
   your shell environment or generated review inputs.
 

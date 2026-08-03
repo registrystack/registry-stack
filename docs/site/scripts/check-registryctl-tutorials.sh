@@ -168,8 +168,8 @@ node "$HELPER" assert-contains "$OPENCRVS_TUTORIAL" \
 	'OAuth' \
 	'Rhai' \
 	'POST /api/events/events/search' \
-	'birth-event-found' \
-	'birth-event-registered' \
+	'birth-event-verification' \
+	'kind: consultation_api' \
 	'opencrvs-events-api-overlay-v1.sh' \
 	'OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"' \
 	'registryctl test' \
@@ -621,7 +621,7 @@ node "$HELPER" assert-fence-in-file \
 node "$HELPER" assert-fence-file-equals \
 	"$OPENCRVS_TUTORIAL" 'Map the minimized outputs' rhai 1 "$OPENCRVS_ADAPTER"
 node "$HELPER" assert-fence-in-file \
-	"$OPENCRVS_TUTORIAL" 'Keep one consultation-backed claim' yaml 1 "$OPENCRVS_PROJECT_FILE"
+	"$OPENCRVS_TUTORIAL" 'Keep one consultation-backed service' yaml 1 "$OPENCRVS_PROJECT_FILE"
 node "$HELPER" assert-fence-file-equals \
 	"$OPENCRVS_TUTORIAL" 'Author the synthetic match fixture' yaml 1 "$OPENCRVS_MATCH"
 
@@ -649,9 +649,7 @@ node "$HELPER" assert-contains "$REPORT_ROOT/opencrvs-check-explain.txt" \
 	'registry.project.explanation.v1' \
 	'birth-event-search' \
 	'birth-event-verification' \
-	'oauth2_client_credentials' \
-	'birth-event-found' \
-	'birth-event-registered'
+	'oauth2_client_credentials'
 run_reports "$OPENCRVS_PROJECT" opencrvs
 run_synthetic_runtime \
 	"$OPENCRVS_PROJECT" \

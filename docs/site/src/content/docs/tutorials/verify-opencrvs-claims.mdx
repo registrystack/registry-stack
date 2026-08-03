@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -35,8 +35,7 @@ This page exercises exactly this synthetic example:
 - A response limited to two results with `id`, `type`, `status`, and `trackingId`
 - One Rhai mapping that checks cardinality, event type, and the returned tracking id
 - Minimized outputs `event_type` and `registered`
-- Two Notary predicate claims, `birth-event-found` and `birth-event-registered`, rooted in one
-  Relay consultation
+- One consultation service, `birth-event-verification`, holding exactly one Relay consultation
 - Match, no match, ambiguity, source rejection, subject mismatch, malformed source response,
   timeout, OAuth redirect, OAuth media type, token type, extra-member, expiry, oversize response,
   and authorization denial cases
@@ -107,7 +106,7 @@ copying a source-tree fixture.
 
 Keep every identifier, credential, token, and source response synthetic.
 The maintained executable example uses registry id `synthetic-opencrvs-events-api`, integration
-alias `birth-event-search`, and evidence service `birth-event-verification`.
+alias `birth-event-search`, and consultation service `birth-event-verification`.
 These names identify the synthetic project only.
 
 ## Declare the synthetic event lookup
@@ -203,7 +202,7 @@ development:
 The `.invalid` origins prevent accidental contact with a real deployment.
 The environment stores secret references, not values.
 Relay owns token acquisition, the authorization header, and the source call.
-Rhai and Notary receive no client secret, token, or token response.
+Rhai scripts and consultation callers receive no client secret, token, or token response.
 
 ## Map the minimized outputs
 
@@ -261,39 +260,29 @@ The adapter constructs the closed output object field by field.
 It does not return the response, event id, tracking id, declaration, OAuth material, or
 source-only metadata.
 
-## Keep one consultation-backed claim
+## Keep one consultation-backed service
 
-The overlay replaces the starter evidence service in `registry-stack.yaml` with:
+The overlay replaces the starter service in `registry-stack.yaml` with:
 
 ```yaml
 services:
   birth-event-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: birth-event-registration-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access:
-      scopes: ["evidence:birth-event:read"]
     consultations:
       event:
         integration: birth-event-search
         input:
           tracking_id: request.target.identifiers.opencrvs_tracking_id
-    claims:
-      birth-event-found:
-        cel: event.matched
-        disclosure: predicate
-      birth-event-registered:
-        cel: >-
-          event.matched
-            && event.event_type == "birth"
-            && event.registered
-        disclosure: predicate
 ```
 
-Both claims have exactly one Relay consultation.
-There is no self-attested, source-free, or caller-defined fallback.
+The service declares exactly one consultation, and that consultation derives from exactly one
+declared integration.
+There is no self-attested, source-free, or caller-defined fallback: the only way to reach an
+answer is the authorized source read.
 
 ## Author the synthetic match fixture
 
@@ -302,15 +291,6 @@ The exact `integrations/birth-event-search/fixtures/match.yaml` file is:
 ```yaml
 name: birth-event-match
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers:
-      - { scheme: opencrvs_tracking_id, value: TRK-SYNTH000001 }
-  claims: [birth-event-found, birth-event-registered]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: birth-event-registration-verification
 input: { tracking_id: TRK-SYNTH000001 }
 interactions:
   - expect:
@@ -353,9 +333,6 @@ expect:
   outputs:
     event_type: birth
     registered: true
-  claims:
-    birth-event-found: true
-    birth-event-registered: true
 ```
 
 The public overlay also contains the exact synthetic fixtures for no match, ambiguity, source
@@ -389,12 +366,13 @@ registryctl dev down
 ```
 
 The denial scenario reports zero token and source calls.
-The authorized scenario reports one token call, one source call, and only
-`birth-event-found,birth-event-registered` as minimized claim identifiers.
+The authorized scenario reports one token call, one source call, and
+`minimized_claim_ids=none`, because this project releases no attributes and returns only the
+declared consultation outputs.
 
 ## Review and build
 
-Review the redacted plan and build the three product-lane inputs:
+Review the redacted plan and build the two product-lane inputs:
 
 ```sh
 registryctl check --explain
@@ -402,7 +380,6 @@ registryctl build
 ```
 
 Confirm that OAuth, Rhai, source access, and minimized outputs remain in `relay-consultation`.
-Confirm that claim evaluation and disclosure remain in `notary`.
 The generated result is still synthetic fixture evidence.
 
 ## Record the evidence limits
@@ -412,7 +389,7 @@ State all of these limits with the case-study result:
 - The request and response are synthetic.
 - The OAuth profile is the exact closed profile declared in the project.
 - The Rhai mapping is the reviewed script digest.
-- The output and claim are the exact ids declared in the project.
+- The outputs are the exact ids declared in the project.
 - Only the executed negative cases have evidence.
 
 Do not claim live OpenCRVS compatibility, maintainer endorsement, country-configuration

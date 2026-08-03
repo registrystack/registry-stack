@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -110,8 +110,7 @@ registryctl build --against <approved-set>
 registryctl build --format json
 ```
 
-An initial combined project can emit the closed lanes `relay-public`, `relay-consultation`, and
-`notary`.
+An initial project can emit the closed lanes `relay-public` and `relay-consultation`.
 `--against` verifies the current approved set for an update and limits output to affected lanes.
 `build` does not sign, assemble, deploy, or activate.
 Its next action is source-aware. A build backed by a project-local file remains for development
@@ -162,7 +161,7 @@ registryctl deploy verify \
   --approved-set <file>
 ```
 
-Generation consumes one verified three-lane approved set and the signed release lock installed
+Generation consumes one verified two-lane approved set and the signed release lock installed
 with Registryctl.
 `--binding` selects a closed deployment binding.
 Omit it to generate safe loopback defaults into the package.
@@ -224,7 +223,7 @@ registryctl trust approved-set assemble ...
 
 ```text
 registryctl trust anchor create \
-  --lane <relay-public|relay-consultation|notary> \
+  --lane <relay-public|relay-consultation> \
   --input <lane-signing-input> \
   --public-key <public-jwk> \
   --threshold <number> \
@@ -248,7 +247,7 @@ registryctl trust bundle verify \
   --bundle-dir <signed-artifact-directory> \
   --anchor <signed-artifact-directory>/anchor.json
 registryctl trust bundle sign \
-  --lane <relay-public|relay-consultation|notary> \
+  --lane <relay-public|relay-consultation> \
   --input <lane-signing-input> \
   --anchor <file> \
   --key <file:or-op-locator> \
@@ -264,18 +263,17 @@ An unprefixed path or unknown scheme fails before output creation.
 
 ### Assemble an approved set
 
-Initial assembly supplies all three verified lane directories:
+Initial assembly supplies both verified lane directories:
 
 ```text
 registryctl trust approved-set assemble \
   --relay-public <signed-artifact-directory> \
   --relay-consultation <signed-artifact-directory> \
-  --notary <signed-artifact-directory> \
   --output-file <file>
 ```
 
 Update assembly supplies `--from <approved-set>` plus every affected replacement.
-The approved set is an operator handoff, not a fourth signature or activation authority.
+The approved set is an operator handoff, not a third signature or activation authority.
 
 ## `tooling`
 

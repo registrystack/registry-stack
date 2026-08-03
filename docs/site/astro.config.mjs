@@ -329,7 +329,7 @@ export default defineConfig({
               label: 'Advanced',
               collapsed: true,
               items: [
-                { label: 'Approve an evidence change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
+                { label: 'Approve a source change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
               ],
             },
           ],

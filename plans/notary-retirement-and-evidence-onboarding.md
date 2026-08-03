@@ -200,7 +200,7 @@ residue the workstream did not reach, not new scope.
       single-node-compose-behind-proxy, retention-and-persistent-state,
       approve-initial-baseline, rotate-credentials-and-trust,
       inspect-and-diagnose, environment-variables, errors, api-stability).
-- [ ] E2. Light-touch pages updated (~25 pages with 1-9 Notary mentions).
+- [x] E2. Light-touch pages updated (~25 pages with 1-9 Notary mentions).
 - [ ] E3. Final sweep: a case-insensitive Notary search over the docs
       product surface matches only history pages and the retirement page.
 
@@ -908,3 +908,29 @@ is parallel; B has no upstream dependencies and is the standing priority
   Gates: `cargo fmt --check` clean, `cargo clippy -p registryctl --all-targets`
   with `-D warnings` clean, `cargo check --locked --workspace --all-targets`
   clean, `cargo test --locked -p registryctl` green (28 targets, 0 failures).
+
+- 2026-08-04: E2 done. The light-touch pass closed the tracked page debt and
+  `check-notary-surface.mjs` lost its `pendingRewrite` waiver set entirely: with
+  the debt at zero, an empty waiver hook plus its three tests is dead weight
+  that invites new waivers, so every current product-surface page is now held to
+  the same unconditional rule. Four tutorials were rewritten against real binary
+  runs rather than prose, and every number in them was wrong: fixture counts
+  25->21, 9->7, 8->3, 3->1, and both `build` fences named a third product lane
+  that no longer exists. Five docs test files, not the docs, were the stale side
+  of the remaining failures; they still encoded the three-lane deployment world
+  contradicted by `crates/registryctl/src/deployment.rs`. Two generated example
+  sources still carried Notary-era service shapes and were repaired at the
+  source, then regenerated with `node scripts/generate-registryctl-example-overlays.mjs`
+  (never hand-edited): `docs/site/examples/registryctl/jsonplaceholder-todo-live`
+  became a `consultation_api` service with claim-free fixtures and environments.
+  Two invariant losses to decide on separately: `registryctl` no longer
+  generates the `::derived/authorization_before_source` fixture (it went with
+  the claim model), so adopter tooling has lost its offline proof that
+  authorization precedes source access, and it reports no `claims` member at
+  all, so the tutorial gate now asserts absent-or-empty. Also worth noting:
+  `check-registryctl-tutorials.sh` is not part of `npm run check`, which is why
+  the tutorials and five test files drifted undetected. Gates: `npm test` 293
+  tests / 293 pass / 0 fail, `npm run check` clean (link check 31736 links,
+  llms 166 passed), `node scripts/check-notary-surface.mjs` passed with no
+  waiver, and `bash scripts/check-registryctl-tutorials.sh` PASS across all six
+  reader journeys.

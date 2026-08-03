@@ -1,13 +1,5 @@
 name: completed-todo
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: public_todo_id, value: "4" }]
-  claims: [todo-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-source-connection-demonstration
 input: { todo_id: "4" }
 interactions:
   - expect:
@@ -23,4 +15,3 @@ interactions:
 expect:
   outcome: match
   outputs: { completed: true }
-  claims: { todo-record-exists: true, todo-completed: true }

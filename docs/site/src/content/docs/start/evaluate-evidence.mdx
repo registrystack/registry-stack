@@ -105,11 +105,10 @@ compilation caches independently per binary. Neither image declares a Docker
 has a healthcheck subcommand; the orchestrator probes `GET /health` over HTTP
 instead (`docker/README.md`).
 
-These images are explicitly not release evidence. `docker/README.md` notes
-that the released Notary and Relay images come from a separate,
-byte-reproducible path (`release/docker/`, built outside Docker); if Mint or
-Evidence images become release artifacts, they will follow that path, not
-this one.
+These images are explicitly not release evidence. The released Relay image
+comes from a separate, byte-reproducible path (`release/docker/`, built
+outside Docker); if Mint or Evidence images become release artifacts, they
+will follow that path, not this one.
 
 A static compose reference deployment sits beside the images, in
 `docker/compose/`. `docker-compose.yaml` wires one user-defined network with

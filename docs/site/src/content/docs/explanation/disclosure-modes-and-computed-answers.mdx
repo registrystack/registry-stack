@@ -33,9 +33,11 @@ it. What follows describes what Evidence actually does.
 ## Evidence has no caller-selectable disclosure modes
 
 The most important difference is a subtraction.
-An Evidence request carries exactly four members: a per-request nonce, the requirement identifier,
-the purpose, and one selector per declared subject role. The request schema is closed and rejects
-anything else (`products/evidence/contracts/request.schema.yaml`).
+An Evidence request carries four required members: a per-request nonce, the requirement identifier,
+the purpose, and one selector per declared subject role. The only optional member is a holder
+public key, which is echoed into the SD-JWT VC `cnf` claim and never reaches authorization,
+selectors, scripts, source requests, or audit. The request schema is closed and rejects anything
+else (`products/evidence/contracts/request.schema.yaml`).
 There is no disclosure mode, no redaction field list, no allowed set, and no downgrade policy,
 because there is nothing for a caller to choose.
 

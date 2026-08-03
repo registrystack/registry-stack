@@ -6,8 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -41,8 +40,8 @@ Registryctl generates and verifies `generated/`. It does not activate the packag
 coordinate backups, admit traffic, or decide recovery.
 
 The deployment operator owns `binding.yaml`, `operator/`, package retention, the
-complete recovery groups, traffic removal, and the manual abort decision. Relay,
-Notary, and PostgreSQL remain in the generated package's declared recovery groups. Do
+complete recovery groups, traffic removal, and the manual abort decision. Relay and
+PostgreSQL remain in the generated package's declared recovery groups. Do
 not copy product state, trust anchors, bundles, audit state, or anti-rollback files
 between lanes or instance identities.
 
@@ -82,7 +81,7 @@ The `relay-public-state` group preserves the public Relay lane, its package, app
 set, bundle, anchor, audit and anti-rollback state, source and materialization state,
 and exact instance, stream, and accepted sequence.
 
-The `consultation-state` group preserves consultation Relay, Notary, PostgreSQL, their
+The `consultation-state` group preserves consultation Relay, PostgreSQL, their
 package and signed inputs, audit and anti-rollback state, complete databases, role and
 key-lifecycle records, and exact instance, stream, and accepted sequences.
 
@@ -124,14 +123,14 @@ target approved set.
 1. Verify current and candidate packages against their approved sets and externally
    recorded closure digests.
 2. Render both effective Compose models without resolving environment values.
-3. Verify operator files, every current and candidate bundle and anchor, and all three
+3. Verify operator files, every current and candidate bundle and anchor, and both
    current `verify_state` actions.
 4. Quiesce each affected recovery group and close its pre-change recovery record.
 5. Stop the current package with its generated Compose `down` command.
-6. From the candidate, stage operator secrets and run all three read-only
+6. From the candidate, stage operator secrets and run both read-only
    `verify_state` actions before ordinary startup.
 7. When a private-lane contract changed, start and verify PostgreSQL and consultation
-   Relay before Notary or any externally reachable dependant.
+   Relay before any externally reachable dependant.
 8. Start the remaining candidate services with the generated Compose `up --detach
    --wait --wait-timeout 120` command.
 9. Keep traffic blocked until product canaries, audit continuity, and every affected

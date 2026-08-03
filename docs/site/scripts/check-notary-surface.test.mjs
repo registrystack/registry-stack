@@ -1,15 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
-import {
-  checkNotarySurface,
-  findUnframedNotaryMentions,
-  pendingNotaryRewrites,
-} from './check-notary-surface.mjs';
+import { checkNotarySurface, findUnframedNotaryMentions } from './check-notary-surface.mjs';
 
 async function writePage(root, relative, frontmatter, body) {
   const path = resolve(root, 'src/content/docs', relative);
@@ -105,37 +100,18 @@ test('holds status: draft pages to the same rule, because they are still publish
   }
 });
 
-test('skips pages awaiting the light-touch pass but holds every other page', async () => {
+// The light-touch pass is finished, so the checker has no waiver list. Every
+// current product-surface page is held to the same rule.
+test('holds every current product-surface page, with no page-level waiver', async () => {
   await withSite(async (root) => {
     const claim = 'Registry Notary issues credentials through OID4VCI.';
     await writePage(root, 'operate/backup-and-restore.mdx', 'status: current', claim);
     await writePage(root, 'operate/single-node-compose-behind-proxy.mdx', 'status: current', claim);
 
     const findings = await findUnframedNotaryMentions(root);
-    assert.deepEqual(
-      findings.map(({ path }) => path),
-      ['src/content/docs/operate/single-node-compose-behind-proxy.mdx'],
-      'only the listed page is skipped',
-    );
+    assert.deepEqual(findings.map(({ path }) => path), [
+      'src/content/docs/operate/backup-and-restore.mdx',
+      'src/content/docs/operate/single-node-compose-behind-proxy.mdx',
+    ]);
   });
-});
-
-test('names every page still owing a light-touch pass so the debt is countable', () => {
-  for (const path of pendingNotaryRewrites) {
-    assert.match(path, /^src\/content\/docs\/.+\.mdx$/u, `${path} is not a docs page path`);
-  }
-  assert.ok(
-    !pendingNotaryRewrites.has('src/content/docs/explanation/architecture.mdx'),
-    'rewritten pages must leave the pending list',
-  );
-});
-
-// A deleted page that stays listed silently inflates the reported debt and
-// waives a check for a path no reader can reach.
-test('lists only pages that still exist, so deletions leave the pending list', () => {
-  const siteRoot = resolve(import.meta.dirname, '..');
-  const missing = [...pendingNotaryRewrites].filter(
-    (path) => !existsSync(resolve(siteRoot, path)),
-  );
-  assert.deepEqual(missing, [], 'pending pages that no longer exist must be removed from the list');
 });

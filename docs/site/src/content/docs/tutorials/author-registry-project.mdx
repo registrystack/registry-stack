@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-04"
 doc_type: tutorial
 persona:
   - data publisher
@@ -17,10 +17,14 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Use the released HTTP starter to model one bounded lookup against a registry API.
 First test and run the contract with synthetic observations. Then bind the reviewed source in the
-authored project files, without changing the Registry Relay and Registry Notary boundaries.
+authored project files, without changing the Registry Relay boundary.
+
+Registry Notary is retired. A project has two product lanes, `relay-public` and
+`relay-consultation`, and the starter authors a consultation service over one bounded HTTP
+source.
 
 <QuickstartMeta
-  outcome="A tested bounded HTTP integration, a disposable local runtime, and unsigned inputs for three independently approved product lanes."
+  outcome="A tested bounded HTTP integration, a disposable local runtime, and unsigned inputs for two independently approved product lanes."
   time="About 15 minutes after Registryctl and Docker are installed"
   level="Local development with synthetic records"
   prerequisites={['A released Registryctl 1.0 installation', 'Docker Engine', 'Docker Compose 2.35.0 or later', 'A shell with curl and a text editor'] }
@@ -93,7 +97,7 @@ The authored files have separate responsibilities:
 
 | Path | Decision you own |
 | --- | --- |
-| `registry-stack.yaml` | Evidence service, purpose, caller scopes, claims, and disclosure |
+| `registry-stack.yaml` | The consultation service, its purpose, legal basis, consent basis, and the input each consultation maps from the request |
 | `integrations/person-record/integration.yaml` | Typed input, fixed request, source outcomes, and minimized output |
 | `integrations/person-record/fixtures/` | Synthetic requests, responses, and expected results |
 | `environments/local.yaml` | Default development scenario, source destination, and secret references |
@@ -113,12 +117,12 @@ A passing starter reports:
 
 ```text
 Registry Stack test: passed for fictional-citizen-registry.
-Fixtures: 25.
+Fixtures: 21.
 Next: registryctl dev
 ```
 
-This command exercises the three authored outcomes and their derived security cases without
-starting Docker, resolving a secret, or contacting a source.
+This command exercises the three authored outcomes (match, ambiguous, and no match) and their
+derived security cases without starting Docker, resolving a secret, or contacting a source.
 Fixture evidence proves the authored contract against synthetic observations, not compatibility
 with an institution's live registry.
 
@@ -135,18 +139,12 @@ The focused result is:
 
 ```text
 Registry Stack test: passed for fictional-citizen-registry.
-Fixtures: 9.
+Fixtures: 7.
   PASS person-record.active-person
     inputs: person_id
     calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
     outputs: active
-    claims: person-active, person-record-exists
     outcome: match
-  PASS person-record.active-person::derived/request_to_consultation_binding
-    inputs: person_id
-    calls: notary-relay-consultation
-    claims: person-record-exists
-    source access: true
   PASS person-record.active-person::derived/request_authority
     inputs: person_id
     expected error: fixture.request_mismatch
@@ -171,19 +169,18 @@ Fixtures: 9.
     calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
     expected error: source.deadline_exceeded
     source access: true
-  PASS person-record.active-person::derived/authorization_before_source
-    inputs: person_id
-    expected error: authorization.denied
-    source access: false
   PASS person-record.active-person::derived/output_minimization
     inputs: person_id
     calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
     outputs: active
-    claims: person-active, person-record-exists
     outcome: match
     source access: true
 Next: registryctl dev
 ```
+
+The derived cases assert that the fixed request cannot be widened, that each source failure mode
+is rejected rather than coerced into an answer, and that only the declared output leaves the
+integration.
 
 The trace may show the synthetic identifier and `active` value authored in that fixture.
 Do not use `--trace` with observations copied from a production source.
@@ -198,30 +195,34 @@ registryctl dev --detach
 
 Registryctl validates the project, rebuilds stale product inputs, checks the installed release
 lock, and starts digest-locked images.
-The command prints loopback endpoints plus `Request`, `Smoke`, `Logs`, and `Down` actions.
+The command prints the loopback Relay API endpoint, the source mode, and the `Smoke`, `Logs`, and
+`Down` actions. A project that also serves a records API prints two records request commands; this
+starter authors a consultation only, so it prints none.
 The authored local environment selects the synthetic `active-person` scenario, so there is no
 scenario-selection flag.
 
 The development trust anchors, credentials, bundles, and state are local disposable material.
 They use the `development` trust domain and are not inputs to a governed deployment.
 
-Run the maintained denial and authorized checks:
+Run the maintained runtime check:
 
 ```sh
 registryctl dev smoke
 ```
 
-A passing report has this shape:
+A passing report for this starter is one line:
 
 ```text
 Development smoke: passed.
-  unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0; minimized_claim_ids=none
-  authorized: status=authorized; passed=true; token_counter_delta=0; source_counter_delta=1; minimized_claim_ids=person-record-exists
 ```
 
-The denial result proves that authorization stopped the source call.
-The authorized result proves one bounded source call and reports only the minimized claim
-identifiers.
+The scenario lines are reported only for a project that serves a records API. The smoke run drives
+the `unauthorized` and `authorized` records scenarios, proves that authorization stopped the source
+call on denial, and reports only the minimized attribute identifiers the authorized call released.
+This starter authors a consultation and no records API, so it has no records scenario to drive and
+the report carries no scenario line. Follow
+[Publish a spreadsheet-backed registry API](../publish-spreadsheet-secured-registry-api/) for the
+starter that exercises the denial and authorized path end to end.
 The smoke report contains no credential or source-returned value.
 
 Inspect value-free log availability if a scenario fails:
@@ -230,8 +231,8 @@ Inspect value-free log availability if a scenario fails:
 registryctl dev logs
 ```
 
-The report keeps the public Relay, consultation Relay, Notary, and synthetic source identities
-separate without copying their log values into Registryctl output.
+The report keeps the public Relay, consultation Relay, and synthetic source identities separate
+without copying their log values into Registryctl output.
 
 ## Stop the disposable runtime
 
@@ -252,8 +253,7 @@ Validate the authored project and inspect its redacted effective plan:
 registryctl check --explain
 ```
 
-Review the fixed request, authorization policy, source bounds, minimized output, claims, and
-disclosure.
+Review the fixed request, authorization policy, source bounds, and minimized output.
 `check` is offline and does not resolve a secret.
 
 Build deterministic unsigned inputs:
@@ -265,23 +265,22 @@ registryctl build
 The human result identifies the build path and governed handoff:
 
 ```text
-Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Built unsigned signing inputs for relay-public, relay-consultation.
 Build output: .registry-stack/build/local
 Next: registryctl trust anchor create --help
 ```
 
-For this combined project, that directory contains signing inputs for `relay-public`,
-`relay-consultation`, and `notary`.
+That directory contains signing inputs for `relay-public` and `relay-consultation`.
 `build` does not create production keys, sign a bundle, assemble an approved baseline set, or
 activate a product.
-The public Relay, consultation Relay, and Notary remain independently approved.
+The public Relay and the consultation Relay remain independently approved.
 
 The selected environment controls the two Relay inputs independently.
 A nonempty `relay.allowed_clients` list admits the intended public OpenID Connect clients.
 Registryctl rejects an empty list rather than generating a public Relay that accepts every client
 from the trusted issuer.
-The `notary_relay` workload binding enables the separate consultation Relay input and admits only
-the configured Notary workload client; do not copy that client into `relay.allowed_clients`.
+The `relay.consultation` binding enables the separate consultation Relay input and admits only its
+configured workload client and principal; do not copy that client into `relay.allowed_clients`.
 
 ## Bind the reviewed registry
 
@@ -293,8 +292,8 @@ Keep the passing starter as a known-good baseline, then adapt only the authored 
 2. In `environments/local.yaml`, set `development.source_mode` to `operator_bound`, replace the
    source origin, and bind secret references when authentication is required. Never put a secret
    value in the project.
-3. Change `registry-stack.yaml` only when the input, purpose, caller scope, claim, or disclosure
-   meaning differs from the starter.
+3. Change `registry-stack.yaml` only when the consultation input, purpose, legal basis, or consent
+   basis differs from the starter.
 4. Replace the fixtures with wholly synthetic observations for every accepted and rejected source
    outcome. Do not copy production responses or personal records into fixtures.
 
@@ -379,8 +378,8 @@ starter embedded in that Registryctl release.
 It stops before replacing any file when the starter is missing, changed, or contains another
 authored file.
 `registryctl test --environment local` remains offline.
-Its completed, missing, ambiguous, authorization, and minimization cases are wholly synthetic
-and remain the authoritative project-contract evidence.
+Its completed, missing, and ambiguous cases are wholly synthetic and remain
+the authoritative project-contract evidence.
 The two `check` commands verify the explicit environment bindings without contacting the public
 API.
 
@@ -430,10 +429,10 @@ Registryctl reports plus the two public responses when
 ## What you built
 
 You modeled the boundary for an existing HTTP registry, tested it with synthetic observations,
-ran the real Relay and Notary path against a fixed synthetic source, and produced unsigned inputs
-for three product lanes.
-The denial path performed no source work.
-The authorized path released only the configured claim identifiers.
+ran the real Relay path against a fixed synthetic source, and produced unsigned inputs for two
+product lanes.
+The fixture set proves that the fixed request cannot be widened and that only the declared output
+leaves the integration.
 
 ## Next
 

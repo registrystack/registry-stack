@@ -10,30 +10,14 @@ integrations:
     source:
       origin: https://jsonplaceholder.typicode.com
 
-issuance:
-  issuer: did:web:notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-
-callers:
-  evidence-client:
-    api_key_fingerprint: { secret: EVIDENCE_CLIENT_TOKEN_HASH }
-    scopes: ["evidence:todo:read"]
-
 relay:
   origin: https://relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [fictional-relay-client]
-
-notary_relay:
-  base_url: http://registry-relay-consultation:8080
-  workload_client_id: fictional-registry-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: fictional-consultation-client, principal_id: fictional-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: fictional-registry-relay }
-  notary: { service: fictional-registry-notary }

@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-manifest
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-08-04"
 doc_type: specification
 doc_id: RS-DM-MANIFEST
 category: normative
@@ -31,7 +31,7 @@ audience:
 
 This document defines the data model of the Registry Manifest portable metadata manifest: the `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry's catalog, datasets, services, requirements, evidence, and policies, and from which Registry Manifest renders a static, standards-shaped discovery bundle. It is the structural counterpart to the [Registry Relay protocol](../rs-pr-relay/): RS-PR-RELAY Section 1 and REQ-PR-RELAY-011 defer the metadata-manifest format to this document.
 
-The manifest format is owned by Registry Manifest, a pure library and command-line interface with no runtime data dependencies; Registry Relay serves and scopes the compiled artifacts but does not define or version the format. This document and [RS-ARC-G](../rs-arc-g/) state that boundary at different altitudes: RS-ARC-G fixes it as an architectural invariant (REQ-ARC-G-001, REQ-ARC-G-002, REQ-ARC-G-006), and this document refines the Registry Manifest component of RS-ARC-G Section 3 one level down, into the structure the manifest takes and the invariants its validator enforces at load. As [RS-DM-CLAIM](../rs-dm-claim/) is the data-model form of the Registry Notary protocol, this document is the data-model form of the portable metadata layer.
+The manifest format is owned by Registry Manifest, a pure library and command-line interface with no runtime data dependencies; Registry Relay serves and scopes the compiled artifacts but does not define or version the format. This document and [RS-ARC-G](../rs-arc-g/) state that boundary at different altitudes: RS-ARC-G fixes it as an architectural invariant (REQ-ARC-G-001, REQ-ARC-G-002, REQ-ARC-G-006), and this document refines the Registry Manifest component of RS-ARC-G Section 3 one level down, into the structure the manifest takes and the invariants its validator enforces at load. This document is the data-model form of the portable metadata layer.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2. Defined terms are used per [RS-TERMS](../rs-terms/).
 
@@ -42,6 +42,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.0 | 2026-06-13 | draft | Initial portable metadata data model, distilled from the Registry Manifest overview, the validate-and-render guide, and the reference, and graded against the schema types and the load-time validator the Registry Manifest core enforces. |
 | 0.2.0 | 2026-06-20 | draft | Added governed evidence gateway metadata, policy id/hash binding, ODRL enforcement profile validation, and the runtime PDP boundary. |
 | 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
+| 0.3.1 | 2026-08-04 | draft | Recorded that Registry Notary is retired: Section 7 and REQ-DM-MANIFEST-010 now state that the `registry-notary` access kind and its federation vocabulary are validated published surface with no maintained runtime behind them, and the retired product's claim data model is no longer cross-referenced. No validator behavior changed. |
 | 0.3.0 | 2026-07-07 | draft | Corrected REQ-DM-MANIFEST-007 to require a unique `(id, version)` pair rather than independently unique `id` and `version` values, corrected the REQ-DM-MANIFEST-002 runtime-only-key example, renamed the static discovery bundle consistently, and rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time (issue #249, issue #285). |
 
 ## 1. Scope and references
@@ -62,7 +63,7 @@ This specification does not define:
 
 - **The exact manifest schema.** Every key, its type, and its default belong to the [Registry Manifest reference](../../products/registry-manifest/reference/), and the rendered artifacts are themselves the authoritative schema documents Registry Manifest emits. This document states the model's structure and the invariants the validator enforces, and does not restate field schemas that would drift from the source.
 - **Runtime serving and scoping.** How Registry Relay serves a compiled bundle, scopes it per caller, and binds its logical concepts to live data sources belongs to [RS-PR-RELAY](../rs-pr-relay/).
-- **Claim evaluation.** The Registry Notary claim definition is a separate data model with its own specification, [RS-DM-CLAIM](../rs-dm-claim/); the manifest only advertises the federation metadata that points a caller at a delegated evaluator.
+- **Assertion evaluation.** How a runtime evaluates a question about a subject and returns a signed, minimum-disclosure answer belongs to [RS-PR-EVIDENCE](../rs-pr-evidence/). The manifest describes a source portably; it does not define an assertion, a requirement, or how one is evaluated.
 
 For the narrative two-layer pipeline, see the [architecture overview](../../explanation/architecture/); for the authoring and command surface, see the [Registry Manifest overview](../../products/registry-manifest/) and the [validate and render guide](../../products/registry-manifest/validate-and-render/).
 
@@ -96,7 +97,7 @@ REQ-DM-MANIFEST-001: A metadata manifest MUST declare `schema_version: registry-
 
 The manifest is portable: it carries the static description of a registry and nothing about a particular deployment. This boundary is what lets a manifest be authored, reviewed, hosted, and pinned without access to any production system, and what keeps Registry Manifest a pure library with no data dependencies (REQ-ARC-G-001).
 
-REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, peer allow-lists, federation signing keys, replay stores, or token URLs. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in Registry Relay or Registry Notary configuration, never in the manifest.
+REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, peer allow-lists, federation signing keys, replay stores, or token URLs. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in a runtime service's own configuration, never in the manifest.
 
 ## 4. Catalog and top-level structure
 
@@ -126,11 +127,13 @@ REQ-DM-MANIFEST-009: A governed evidence pack MUST declare `odrl_enforcement.pro
 
 ## 7. Federation discovery metadata
 
-A manifest MAY advertise the metadata a partner needs to configure Registry Notary static-peer delegated evaluation. This metadata is public discovery: it describes where a delegated evaluator is and what it evaluates, not who may call it.
+Registry Notary is retired, and no maintained runtime consumes this section. Registry Manifest still validates the vocabulary, because it is published schema surface that manifests in the field already carry, so the requirement below records what the validator enforces today rather than a capability an adopter can deploy. Whether the vocabulary is removed or renamed is a manifest version decision that has not been taken.
 
-REQ-DM-MANIFEST-010: Where an evidence offering declares `access.kind: registry-notary`, the manifest MUST carry a `federation` block with HTTPS issuer, JWKS, and federation-API URLs, a `did:web` node identifier bound to the issuer host, the supported protocol version `registry-notary-federation/v0.1`, and an `access.ruleset` that names a declared evaluation profile. This metadata is public discovery only and MUST NOT be read as an access grant: peer authorization remains with Registry Notary, which decides at runtime which peers may call it (REQ-ARC-G-009).
+A manifest MAY advertise the metadata a partner needed to configure static-peer delegated evaluation against that retired product. This metadata is public discovery: it describes where a delegated evaluator is and what it evaluates, not who may call it.
 
-Federation discovery metadata is also not a trust bootstrap by itself. A consumer that reads federation metadata from an external manifest validates the issuer, JWKS, federation API, and `did:web` host against local trust policy before treating any key or endpoint as authoritative. In the registry stack's runtime path, trusted peer keys and endpoints come from Registry Notary configuration, not from accepting an arbitrary published manifest.
+REQ-DM-MANIFEST-010: Where an evidence offering declares `access.kind: registry-notary`, the manifest MUST carry a `federation` block with HTTPS issuer, JWKS, and federation-API URLs, a `did:web` node identifier bound to the issuer host, the supported protocol version `registry-notary-federation/v0.1`, and an `access.ruleset` that names a declared evaluation profile. This metadata is public discovery only and MUST NOT be read as an access grant (REQ-ARC-G-009). The service that would have decided at runtime which peers may call it is retired, so a manifest declaring this access kind advertises an endpoint no maintained runtime serves.
+
+Federation discovery metadata is also not a trust bootstrap by itself. A consumer that reads federation metadata from an external manifest validates the issuer, JWKS, federation API, and `did:web` host against local trust policy before treating any key or endpoint as authoritative. The registry stack no longer has a runtime path that consumes this metadata at all.
 
 ## 8. Rendered artifacts and standards
 
@@ -159,9 +162,9 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. This check and the general unknown-key rejection REQ-DM-MANIFEST-013 requires both operate over an intermediate JSON value, so a rejection error carries the offending key's dotted field path but not its YAML line or column (REQ-DM-MANIFEST-002).
 - **Standards conformance is not validated.** The renderers emit standards-shaped artifacts but do not validate them against the external standard bodies. A rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard (REQ-DM-MANIFEST-011).
 - **URI checks are shallow.** A field required to be a URI is checked for an HTTP or HTTPS scheme or for the identifier pattern, not for full RFC 3987 IRI validity (REQ-DM-MANIFEST-004, REQ-DM-MANIFEST-005).
-- **Federation metadata is not a trust anchor.** Registry Manifest validates required federation fields and selected URL shapes, but a published manifest does not bind an external consumer to trust a JWKS endpoint, a federation API host, or a peer identity. Host pinning and trust bootstrap belong to the consumer's local policy and Registry Notary peer configuration (REQ-DM-MANIFEST-010).
+- **Federation metadata is not a trust anchor.** Registry Manifest validates required federation fields and selected URL shapes, but a published manifest does not bind an external consumer to trust a JWKS endpoint, a federation API host, or a peer identity. Host pinning and trust bootstrap belong to the consumer's local policy, and the runtime that once held the peer configuration is retired (REQ-DM-MANIFEST-010).
 - **Library callers own untrusted-input resource limits.** The command-line path may impose its own input limits, but callers that embed Registry Manifest as a library and accept manifests from untrusted parties still need request size, nesting, collection-count, and time limits appropriate to their service boundary. Manifest validation is not a general resource sandbox.
-- **Notary-specific validation depends on Notary access semantics.** The Notary federation checks apply where the manifest declares a Registry Notary evidence access path. A generic `conforms_to` value or generic URI metadata alone must not be treated by consumers as proof that the Notary endpoint set is complete and safe to trust.
+- **The federation checks are keyed to a retired access kind.** They apply only where the manifest declares the `registry-notary` evidence access path, and they validate shape, not reachability. A generic `conforms_to` value or generic URI metadata alone must not be treated by consumers as proof that an endpoint set is complete and safe to trust, and the product behind that access kind is retired in any case.
 - **Publication provenance depends on a clean destination.** The `package_digest` pins the artifact inventory it sees. It is not proof that every file was created by the current publish invocation if the output directory already contained local files.
 - **Evidence pack metadata remains partly opaque.** Governed evidence packs require key metadata and validate selected object shapes, supported gate names, supported output names, policy digest shape, inline-policy digest binding, and supported ODRL enforcement terms. The implementation still represents several fields as JSON values rather than a fully typed external evidence-pack schema (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009).
 - **Profile fixtures are non-normative.** The example profiles shipped with Registry Manifest are illustrative until reviewed against official artifacts; they are not authoritative profiles for any named external system (see the [profile fixtures guide](../../products/registry-manifest/profile-fixtures/)).
@@ -198,7 +201,7 @@ This specification is `verified`: every requirement describes shipped behavior a
 ## Next
 
 - [RS-PR-RELAY](../rs-pr-relay/) is the protocol that serves and scopes the compiled artifacts this model describes.
-- [RS-DM-CLAIM](../rs-dm-claim/) is the sibling data model for the Registry Notary claim definition this manifest can point a caller toward.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) is the protocol for evaluating a reviewed question about a subject over a source this model can describe.
 - [RS-ARC-G](../rs-arc-g/) places Registry Manifest and the portable metadata layer in the registry stack architecture.
 - [RS-TERMS](../rs-terms/) defines the metadata manifest, evidence, and policy vocabulary used here.
 - [Architecture overview](../../explanation/architecture/) is the narrative data flow that places the portable metadata layer and the runtime services side by side.

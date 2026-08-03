@@ -8,8 +8,7 @@ source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-notary
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -111,11 +110,11 @@ What these levels mean for integrators:
 - OGC API Features and OGC API EDR are listed as profiled `emits` claims for Registry Relay.
   The claims are scoped to the tested feature-gated adapter routes, not full OGC conformance.
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
-  [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials, but it does
-  not emit a full W3C VC Data Model envelope. [Registry Relay](../../products/registry-relay/)
-  no longer emits or hosts VC artifacts.
-  {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. Promote when a reviewed VC profile and validation fixtures are pinned. */}
+  Registry Notary, the retired product that issued SD-JWT VC credentials under this alignment,
+  never emitted a full W3C VC Data Model envelope. [Registry Relay](../../products/registry-relay/)
+  does not emit or host VC artifacts either.
+  {/* The retired product's evidence packet stated "W3C Verifiable Credentials Data Model: NOT PRESENT". This was a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
   vocabulary terms are emitted as JSON-LD.
-  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in relay or notary source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}
+  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in Relay source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}

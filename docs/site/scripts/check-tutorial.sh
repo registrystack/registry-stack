@@ -241,7 +241,7 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-
 require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
 	'POST /api/events/events/search'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
-	'birth-event-found'
+	'birth-event-verification'
 
 if ((DRY_RUN)); then
 	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'

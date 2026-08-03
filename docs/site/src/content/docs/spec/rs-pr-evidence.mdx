@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: specification
 doc_id: RS-PR-EVIDENCE
 category: normative
@@ -37,18 +37,17 @@ The contract files are the source of truth; this document is their protocol-leve
 Where a contract carries a numeric limit, a field name, or an enumerated value, this document points
 at the file rather than copying the value, so the two cannot drift apart.
 
-Evidence is a separate product from Registry Relay and Registry Notary.
-It is the Evidence counterpart to [RS-PR-RELAY](../rs-pr-relay/) and
-[RS-PR-NOTARY](../rs-pr-notary/), and it is not a Registry Notary mode, rewrite, or reduced
-configuration (`products/evidence/README.md`).
+Evidence is a separate product from Registry Relay.
+It is the Evidence counterpart to [RS-PR-RELAY](../rs-pr-relay/), and it is not a Registry Relay
+mode, rewrite, or reduced configuration (`products/evidence/README.md`).
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
 
-{/* TODO[evidence]: RS-ARC-G Section 3 names Registry Manifest, Registry Relay, and Registry Notary
-    as components and does not yet define an Evidence component, so this document deliberately does
-    not claim to refine a numbered RS-ARC-G requirement. Add that relationship once RS-ARC-G places
-    Evidence in the architecture. */}
+{/* RS-ARC-G 0.6.0 places Evidence in the architecture as its own component and states its
+    boundary in REQ-ARC-G-007, REQ-ARC-G-014, and REQ-ARC-G-015. This document still does not claim
+    to refine a numbered RS-ARC-G requirement; adding that mapping is a separate normative
+    decision. */}
 
 {/* TODO[evidence]: src/data/standards.yaml records sd-jwt-vc, cccev, openapi, and json-schema
     without listing registry-evidence under `used_by`. The register entries need an Evidence row
@@ -59,6 +58,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-08-03 | draft | Initial profile derived from the frozen V1 contracts. |
+| 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Evidence in the architecture. |
 
 ## 1. Scope and references
 
@@ -98,9 +98,8 @@ challenges, federation, delegated agents, workflow, public or federated catalogs
 mutation, source planning, multi-source fulfillment, and an application database.
 The SD-JWT VC output is a second encoding of one stateless assertion under a frozen profile; it is
 never a credential lifecycle.
-Evidence must not depend on `registry-notary*`.
-Registry Relay's protocol is specified by RS-PR-RELAY and Registry Notary's by RS-PR-NOTARY; neither
-governs Evidence, and Evidence inherits no requirement from either.
+Registry Relay's protocol is specified by RS-PR-RELAY; it does not govern Evidence, and Evidence
+inherits no requirement from it.
 
 ## 2. Service surface and discovery
 
@@ -613,12 +612,9 @@ the entries this page references.
 
 ## Next
 
-{/* TODO[evidence]: ../../reference/apis/registry-evidence/ is not published yet. The internal link
-    check will fail until that reference page lands. */}
-
 - [Registry Evidence API reference](../../reference/apis/registry-evidence/) is the route-level
   reference and the link to the generated OpenAPI document.
 - [RS-ARC-G](../rs-arc-g/) places the registry stack services in one architecture.
 - [RS-SEC-G](../rs-sec-g/) holds the cross-product security model this protocol sits inside.
-- [RS-PR-NOTARY](../rs-pr-notary/) specifies Registry Notary, the separate product that owns
-  credential issuance.
+- [RS-PR-RELAY](../rs-pr-relay/) specifies Registry Relay, the separate product that serves
+  protected reads over data an institution already holds.

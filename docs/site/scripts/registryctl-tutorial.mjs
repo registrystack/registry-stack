@@ -328,15 +328,21 @@ export function assertProjectReports(
     'build fixture set differs from test',
   );
 
+  // registryctl derived this case from an evidence service's own authorization
+  // decision, and stopped generating it when that service kind was removed
+  // (crates/registryctl/src/project_authoring/fixtures.rs). It is no longer
+  // required, but a project that still reports one must prove the denial
+  // happened before any source call.
   const authorizationCheck = testReport.fixtures.find((fixture) =>
     fixture.fixture.endsWith('::derived/authorization_before_source'),
   );
-  invariant(authorizationCheck, 'authorization-before-source fixture is missing');
-  invariant(
-    authorizationCheck.expected_error === 'authorization.denied' &&
-      authorizationCheck.source_access === false,
-    'authorization-before-source fixture does not prove zero source access',
-  );
+  if (authorizationCheck) {
+    invariant(
+      authorizationCheck.expected_error === 'authorization.denied' &&
+        authorizationCheck.source_access === false,
+      'authorization-before-source fixture does not prove zero source access',
+    );
+  }
 
   if (minimizationMode === 'derived') {
     const minimizationCheck = testReport.fixtures.find((fixture) =>
@@ -360,8 +366,8 @@ export function assertProjectReports(
       'project-record-snapshot.match outputs must be exactly ["status"]',
     );
     invariant(
-      JSON.stringify(snapshotResult.claims) === JSON.stringify([]),
-      'project-record-snapshot.match claims must be empty for the Relay-only starter',
+      snapshotResult.claims === undefined || snapshotResult.claims.length === 0,
+      'project-record-snapshot.match must report no claims for the Relay-only starter',
     );
   }
 

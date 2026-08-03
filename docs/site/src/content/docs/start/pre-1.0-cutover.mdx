@@ -6,7 +6,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -32,7 +32,7 @@ anchors, approved sets, deployment packages, and anti-rollback state.
 | Pre-1.0 concept | Registry Stack 1.0 |
 | --- | --- |
 | `registryctl init --from <starter>` or `registryctl init relay` | `registryctl init <directory> --template http` or `registryctl init <directory> --template spreadsheet` |
-| `registryctl add notary` | Declare the complete 1.0 project; both public templates contain the combined product path |
+| `registryctl add notary` | No replacement; Registry Notary is retired. A 1.0 project declares Relay lanes only. To answer a bounded question instead of serving records, use [Evidence](../evaluate-evidence/) and its own `evidencectl` tooling |
 | `registryctl start` | `registryctl dev` or `registryctl dev --detach` |
 | `registryctl stop` | `registryctl dev down` |
 | `registryctl restart` | Run `registryctl dev down`, then `registryctl dev` |
@@ -60,8 +60,8 @@ Adapt a public starter separately for DHIS2, FHIR, or another domain system.
 
 ## Recreate governed material
 
-Build the reviewed 1.0 project into the three required lanes:
-`relay-public`, `relay-consultation`, and `notary`.
+Build the reviewed 1.0 project into the two required lanes:
+`relay-public` and `relay-consultation`.
 Create new governed anchors, sign each lane, and assemble a new approved
 baseline set.
 

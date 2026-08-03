@@ -151,7 +151,7 @@ test('published reference page identifies generated sources and the no-country-v
   assert.match(page, /Relay runtime schema/);
   assert.match(page, /does not inspect a project, live runtime configuration, environment variables/);
   assert.match(page, /five project-authoring sections describe configuration people commit/);
-  assert.match(page, /intent sidecars are documentation knowledge\s+only/);
+  assert.match(page, /intent sidecar is documentation knowledge\s+only/);
   assert.match(page, /Field release history: not verified/);
   assert.match(page, /Assignment coverage does not claim that every path has unique prose/);
   assert.match(component, /configuration-reference-coverage\.json/);

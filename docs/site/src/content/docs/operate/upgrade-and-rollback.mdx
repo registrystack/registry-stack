@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -108,7 +108,7 @@ mutable image tags, or combine a binding change with this product or evidence up
 ## Verify current state before shutdown
 
 From the current package root, follow its `generated/RUNBOOK.md`. Verify the effective
-Compose model and run all three dedicated, networkless state checks. Use the same explicit
+Compose model and run both dedicated, networkless state checks. Use the same explicit
 Compose project name for the current and candidate packages:
 
 ```sh
@@ -116,7 +116,6 @@ export REGISTRY_STACK_COMPOSE_PROJECT="${REGISTRY_STACK_COMPOSE_PROJECT:-<packag
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
 ```
 
 Abort before shutdown if package, operator-file, bundle, anchor, Compose, or state
@@ -130,7 +129,7 @@ candidate's operator files.
 The preview actions verify the later candidate without changing durable anti-rollback state.
 Do not stop any service unless every preview succeeds.
 
-In the literal generated order below, keep current services running through all three preview
+In the literal generated order below, keep current services running through both preview
 commands.
 After those previews succeed, remove externally reachable traffic before the `stop` command and
 keep the source and write freeze required by the pre-update recovery groups.
@@ -139,21 +138,16 @@ Run the sequence from the candidate package root:
 ```sh
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-preview-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-preview-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-preview-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml stop
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-accept-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-accept-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-accept-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation-stage-secrets
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-postgresql-stage-secrets
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-public-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-relay-consultation-verify-state
-docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm --no-deps registry-notary-verify-state
 docker compose --project-name "$REGISTRY_STACK_COMPOSE_PROJECT" --env-file generated/compose.empty.env -f generated/compose.yaml ps
 ```
 
@@ -169,9 +163,8 @@ Do not configure an automated rollback across this boundary.
 ## Verify the updated deployment
 
 - Confirm the expected services are healthy in `docker compose ... ps`.
-- Verify PostgreSQL and consultation Relay before admitting a Notary caller.
-- Exercise one authenticated canary for each affected public, consultation, evaluation,
-  issuance, and status path.
+- Verify PostgreSQL before admitting a consultation Relay caller.
+- Exercise one authenticated canary for each affected public and consultation path.
 - Exercise every affected SnapshotExact materialization because global readiness does
   not prove execution-time freshness.
 - Confirm audit records extend the retained chains without logging their values.
@@ -191,7 +184,7 @@ freshness, canary coverage, or safe rollback after product acceptance.
 Before the manual abort boundary, leave the current package running when a preview fails.
 If the current services were stopped after successful previews but no acceptance completed,
 restart the still-intact current package with its `generated/RUNBOOK.md`.
-Verify the current closure and run all three current `verify_state` actions before its ordinary
+Verify the current closure and run both current `verify_state` actions before its ordinary
 `up`.
 
 After the boundary, never start the older closure or restore a pre-update accepted
@@ -200,7 +193,7 @@ sequence. Choose one of these manual recovery paths:
 1. Complete the forward update after correcting the candidate's operator-controlled
    dependency.
 2. Restore a complete `relay-public-state` or `consultation-state` group at the same or
-   newer accepted sequence, then run all three read-only `verify_state` actions.
+   newer accepted sequence, then run both read-only `verify_state` actions.
 3. Provision a new instance identity, review and sign every affected lane, generate a
    new package, and follow first installation.
 
@@ -216,7 +209,7 @@ Reinitializing the same identity is not recovery.
 | Candidate generation reports an unresolved `generated.previous/` | Resolve the prior change and retention decision; do not delete the closure to bypass the guard |
 | Candidate verification reports a closure or approved-set mismatch | Keep the candidate offline and regenerate it from the intended verified inputs |
 | `verify_state` rejects the target as older | Keep services and traffic stopped; use a signed target with a higher sequence or restore a coherent same-or-newer group |
-| PostgreSQL or consultation Relay does not become healthy | Keep Notary and external dependants stopped; restore or repair the coherent private recovery group |
+| PostgreSQL or consultation Relay does not become healthy | Keep external dependants stopped; restore or repair the coherent private recovery group |
 | A failure appears after product acceptance | Do not restart the previous closure; complete forward, restore same-or-newer coherent state, or replace the instance identity |
 
 ## Next

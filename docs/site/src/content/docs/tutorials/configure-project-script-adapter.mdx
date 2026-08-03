@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -96,10 +96,11 @@ The overlay reports:
 Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay.
 ```
 
-The public overlay contains the integration, environment, Rhai script, evidence service, and every
-positive and negative fixture.
+The public overlay contains the integration, environment, Rhai script, consultation service, and
+every positive and negative fixture.
 The documentation gate applies that same overlay to a fresh HTTP starter, inspects the human
-`check --explain` plan, tests all fixtures, and builds all three product-lane inputs.
+`check --explain` plan, tests all fixtures, and builds both product-lane inputs (`relay-public`
+and `relay-consultation`).
 Use the [synthetic OpenCRVS Events API-shaped search](../verify-opencrvs-claims/) to review every
 maintained file and the limits of that evidence.
 
@@ -255,7 +256,6 @@ interactions:
 expect:
   outcome: match
   outputs: { active: true }
-  claims: { person-record-exists: true, person-active: true }
 ```
 
 Keep the request, input, name, and classification fields from the starter fixture.
@@ -295,8 +295,8 @@ registryctl dev down
 ```
 
 For this OAuth scenario, the denial report has zero token and source calls.
-The authorized report has one token exchange, one source call, and the minimized claim
-identifiers `person-active` and `person-record-exists`.
+The authorized report has one token exchange, one source call, and `minimized_claim_ids=none`,
+because the starter project releases no attributes.
 Retained output contains no token, credential, or source-returned value.
 
 ## Review and rebuild
@@ -308,10 +308,11 @@ registryctl check --explain
 registryctl build
 ```
 
-Confirm that the evidence service still has exactly one Relay consultation.
+Confirm that the consultation service still declares exactly one consultation.
 The consultation Relay owns the OAuth destination, credential consumers, Rhai script, source
 authority, and minimized `active` output.
-Notary owns claims and disclosure, and receives no OAuth credential or source origin.
+A downstream consumer of that consultation reads the minimized output and receives no OAuth
+credential and no source origin.
 
 For the exact maintained execution of the no-expiry branch, use the
 [synthetic OpenCRVS Events API-shaped search](../verify-opencrvs-claims/).

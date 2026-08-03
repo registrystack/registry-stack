@@ -175,13 +175,6 @@ test('parses one strict JSON document and asserts subsets without array-order co
 });
 
 test('accepts matching test, check, and build reports with derived security evidence', () => {
-  const fixture = {
-    integration: 'person-record',
-    fixture: 'match::derived/authorization_before_source',
-    expected_error: 'authorization.denied',
-    source_access: false,
-    passed: true,
-  };
   const minimization = {
     integration: 'person-record',
     fixture: 'match::derived/output_minimization',
@@ -191,7 +184,7 @@ test('accepts matching test, check, and build reports with derived security evid
     schema_version: 'registryctl.project_command.v1',
     project: 'fictional-registry',
     environment: 'local',
-    fixtures: [fixture, minimization],
+    fixtures: [minimization],
   };
   const testReport = JSON.stringify({ ...common, status: 'passed' });
   const checkReport = JSON.stringify({ ...common, status: 'valid' });
@@ -221,26 +214,19 @@ test('accepts matching test, check, and build reports with derived security evid
 });
 
 test('accepts snapshot reports with explicit minimized outputs and no claims', () => {
-  const authorization = {
-    integration: 'project-record-snapshot',
-    fixture: 'match::derived/authorization_before_source',
-    expected_error: 'authorization.denied',
-    source_access: false,
-    passed: true,
-  };
+  // registryctl reports no `claims` member at all for a Relay-only project.
   const snapshot = {
     integration: 'project-record-snapshot',
     fixture: 'match',
     outcome: 'match',
     outputs: ['status'],
-    claims: [],
     passed: true,
   };
   const common = {
     schema_version: 'registryctl.project_command.v1',
     project: 'fictional-public-works-registry',
     environment: 'local',
-    fixtures: [snapshot, authorization],
+    fixtures: [snapshot],
   };
   const testReport = JSON.stringify({ ...common, status: 'passed' });
   const checkReport = JSON.stringify({ ...common, status: 'valid' });
@@ -260,6 +246,28 @@ test('accepts snapshot reports with explicit minimized outputs and no claims', (
     ),
   );
 
+  const withClaims = { ...snapshot, claims: ['project-record-exists'] };
+  const reportWithClaims = JSON.stringify({
+    ...common,
+    status: 'passed',
+    fixtures: [withClaims],
+  });
+  assert.throws(
+    () =>
+      assertProjectReports(
+        reportWithClaims,
+        JSON.stringify({ ...common, status: 'valid', fixtures: [withClaims] }),
+        JSON.stringify({
+          schema_version: 'registryctl.reviewed_project_build_report.v1',
+          build: { ...common, status: 'built', fixtures: [withClaims] },
+          affected_lanes: ['relay-public', 'relay-consultation'],
+        }),
+        'fictional-public-works-registry',
+        'snapshot',
+      ),
+    /must report no claims/,
+  );
+
   const extraOutput = {
     ...snapshot,
     outputs: ['status', 'project_id'],
@@ -267,12 +275,12 @@ test('accepts snapshot reports with explicit minimized outputs and no claims', (
   const reportWithExtraOutput = JSON.stringify({
     ...common,
     status: 'passed',
-    fixtures: [extraOutput, authorization],
+    fixtures: [extraOutput],
   });
   const checkWithExtraOutput = JSON.stringify({
     ...common,
     status: 'valid',
-    fixtures: [extraOutput, authorization],
+    fixtures: [extraOutput],
   });
   assert.throws(
     () =>
@@ -284,7 +292,7 @@ test('accepts snapshot reports with explicit minimized outputs and no claims', (
           build: {
             ...common,
             status: 'built',
-            fixtures: [extraOutput, authorization],
+            fixtures: [extraOutput],
           },
           affected_lanes: ['relay-public', 'relay-consultation'],
         }),
@@ -292,6 +300,43 @@ test('accepts snapshot reports with explicit minimized outputs and no claims', (
         'snapshot',
       ),
     /outputs must be exactly/,
+  );
+});
+
+// registryctl stopped generating this derived case with the Notary claim model
+// (crates/registryctl/src/project_authoring/fixtures.rs). A project that still
+// reports one must still prove the denial happened before any source call.
+test('rejects a reported authorization-before-source case that reached the source', () => {
+  const reached = {
+    integration: 'person-record',
+    fixture: 'match::derived/authorization_before_source',
+    expected_error: 'authorization.denied',
+    source_access: true,
+    passed: true,
+  };
+  const common = {
+    schema_version: 'registryctl.project_command.v1',
+    project: 'fictional-registry',
+    environment: 'local',
+    fixtures: [
+      reached,
+      { integration: 'person-record', fixture: 'match::derived/output_minimization', passed: true },
+    ],
+  };
+
+  assert.throws(
+    () =>
+      assertProjectReports(
+        JSON.stringify({ ...common, status: 'passed' }),
+        JSON.stringify({ ...common, status: 'valid' }),
+        JSON.stringify({
+          schema_version: 'registryctl.reviewed_project_build_report.v1',
+          build: { ...common, status: 'built' },
+          affected_lanes: ['relay-public', 'relay-consultation'],
+        }),
+        'fictional-registry',
+      ),
+    /does not prove zero source access/,
   );
 });
 
@@ -489,8 +534,8 @@ test('OpenCRVS remains a synthetic case study, not a template or conformance cla
   assert.match(tutorial, /POST \/api\/events\/events\/search/);
   assert.match(tutorial, /birth-event-search/);
   assert.match(tutorial, /birth-event-match/);
-  assert.match(tutorial, /birth-event-found/);
-  assert.match(tutorial, /birth-event-registered/);
+  assert.match(tutorial, /birth-event-verification/);
+  assert.match(tutorial, /kind: consultation_api/);
   assert.doesNotMatch(tutorial, /--template opencrvs|init --from opencrvs/);
   assert.match(cutover, /public 1\.0 starters are `http` and `spreadsheet`/);
   assert.match(cutover, /OAuth-backed Rhai is an adaptation of an HTTP project/);
