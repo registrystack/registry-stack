@@ -32,6 +32,25 @@ pub struct OperationSummary {
 #[derive(Debug, Clone)]
 pub struct ResolvedSchema(pub serde_json::Value);
 
+/// The marker left in place of a schema node that repeats a `$ref` already on
+/// the resolution stack. Cutting the repeat bounds an otherwise infinite
+/// expansion without discarding the rest of the operation; the marker declares
+/// no type, so no stage can mistake it for something projectable, and the
+/// flattener names the recursion it stands for.
+pub const RECURSIVE_REF_KEY: &str = "x-evidencectl-recursive-ref";
+
+/// A resolved response schema with the readings the resolver made on the way.
+///
+/// A note records where the document was ambiguous or unrepresentable and what
+/// was done about it: a cut recursion, or a type read from a structural
+/// keyword. Every note is reported to the operator, because a reading the tool
+/// made on their behalf is one they may need to disagree with.
+#[derive(Debug, Clone)]
+pub struct ResolvedResponse {
+    pub schema: ResolvedSchema,
+    pub notes: Vec<String>,
+}
+
 /// One selectable leaf of the resolved schema, presented to the user and
 /// mapped one-to-one onto a projection allowlist entry.
 ///
@@ -76,6 +95,12 @@ pub enum Provenance {
     Sample,
     /// Derived from a page-size parameter in the spec.
     PageSize,
+    /// The closed subset's own ceiling, used because the document states a
+    /// bound above it. This is deliberately not [`Provenance::Spec`]: the
+    /// number in the draft is not the number the document states, and
+    /// crediting the document for it would tell a reviewer the source promised
+    /// something it never promised.
+    SubsetCeiling,
     /// Chosen by the operator at the prompt, either where nothing could be
     /// derived or in place of a suggestion they edited. Nothing the tool
     /// derived carries this: it is the one provenance that is not a

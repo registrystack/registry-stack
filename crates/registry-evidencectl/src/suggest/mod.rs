@@ -114,8 +114,17 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     }
 
     let flag_driven = args.operation.is_some() && !args.selection.is_empty();
-    if !flag_driven && !interactive::is_interactive() {
-        bail!(missing_flags_message(&args));
+    // A run with no terminal to prompt on still gets told what it could have
+    // asked for, and each answer is only knowable once the one before it is
+    // settled: the operations come from the document, the leaves from the
+    // chosen operation's response schema. So the two refusals happen at the two
+    // points where the answer exists, not together at the top.
+    if args.operation.is_none() && !interactive::is_interactive() {
+        bail!(
+            "{}\n\nthis document declares:\n{}",
+            missing_flags_message(&args),
+            list_operations(&operations)
+        );
     }
 
     let summary = match &args.operation {
@@ -141,7 +150,11 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     }
     let operation = summary.key.clone();
 
-    let schema = spec.response_schema(&operation, &args.status, &args.media_type)?;
+    let resolved = spec.response_schema(&operation, &args.status, &args.media_type)?;
+    for note in &resolved.notes {
+        eprintln!("evidencectl: {note}");
+    }
+    let schema = resolved.schema;
     let (leaves, warnings) = flatten::candidate_leaves(&schema);
     for warning in &warnings {
         eprintln!("evidencectl: {warning}");
@@ -158,6 +171,15 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     }
 
     let selection = if args.selection.is_empty() {
+        if !interactive::is_interactive() {
+            bail!(
+                "{}\n\nthis operation's `{}` `{}` response offers:\n{}",
+                missing_flags_message(&args),
+                args.status,
+                args.media_type,
+                list_leaves(&leaves)
+            );
+        }
         interactive::choose_leaves(&leaves)?
     } else {
         check_selection(&args.selection, &leaves)?;
@@ -426,10 +448,17 @@ fn with_page_size_fallback(
         return Ok(needs);
     };
     let clamped = u64::try_from(maximum.min(MAX_PROJECTED_ITEMS)).unwrap_or(1);
+    // A page size above the subset ceiling is not what the draft ends up
+    // stating, so the parameter does not get the credit for what it does.
+    let provenance = if maximum <= MAX_PROJECTED_ITEMS {
+        Provenance::PageSize
+    } else {
+        Provenance::SubsetCeiling
+    };
     for need in needs.iter_mut().filter(|need| eligible(need)) {
         need.suggestion = Some(SuggestedBound {
             values: BoundValues::MaxItems(clamped),
-            provenance: Provenance::PageSize,
+            provenance: provenance.clone(),
         });
     }
     Ok(needs)
@@ -466,17 +495,31 @@ fn find_operation<'a>(
         .iter()
         .find(|operation| operation.key == *key)
         .ok_or_else(|| {
-            let available = operations
-                .iter()
-                .map(|operation| format!("  {} {}", operation.key.method, operation.key.path))
-                .collect::<Vec<_>>()
-                .join("\n");
             anyhow::anyhow!(
-                "this document declares no `{} {}` with a JSON response schema; it declares:\n{available}",
+                "this document declares no `{} {}` with a JSON response schema; it declares:\n{}",
                 key.method,
-                key.path
+                key.path,
+                list_operations(operations)
             )
         })
+}
+
+/// The document's operations, one `--operation` argument per line.
+fn list_operations(operations: &[OperationSummary]) -> String {
+    operations
+        .iter()
+        .map(|operation| format!("  {} {}", operation.key.method, operation.key.path))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The response's selectable leaves, one `--select` argument per line.
+fn list_leaves(leaves: &[CandidateLeaf]) -> String {
+    leaves
+        .iter()
+        .map(|leaf| format!("  {}", leaf.pointer))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn describe_responses(responses: &[(String, String)]) -> String {

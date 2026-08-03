@@ -342,6 +342,9 @@ pub(super) fn provenance_label(provenance: &Provenance) -> Option<&'static str> 
         Provenance::Format => Some("its declared format"),
         Provenance::Sample => Some("the sample response (widened)"),
         Provenance::PageSize => Some("a page-size parameter in the spec"),
+        Provenance::SubsetCeiling => {
+            Some("the subset ceiling, because the document states a larger bound")
+        }
         Provenance::Operator => None,
     }
 }
@@ -1291,8 +1294,12 @@ fn render_report(inputs: &EmitInputs) -> String {
     }
 
     out.push_str(&format!(
-        "Still needs your input ({} schema bound(s), plus the source block below):\n",
-        inputs.narrowed.unresolved.len()
+        "Still needs your input ({}):\n",
+        match inputs.narrowed.unresolved.len() {
+            0 => "the source block below".to_owned(),
+            1 => "1 schema bound, plus the source block below".to_owned(),
+            count => format!("{count} schema bounds, plus the source block below"),
+        }
     ));
     for need in &inputs.narrowed.unresolved {
         out.push_str(&format!(

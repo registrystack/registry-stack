@@ -188,6 +188,7 @@ fn provenance_phrase(provenance: &Provenance) -> &'static str {
         Provenance::Format => "the declared format",
         Provenance::Sample => "the sample response, widened",
         Provenance::PageSize => "a page-size parameter in the spec",
+        Provenance::SubsetCeiling => "the subset ceiling; the document states a larger bound",
         Provenance::Operator => "your own answer",
     }
 }
