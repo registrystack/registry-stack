@@ -303,6 +303,47 @@ fn a_page_size_bounds_the_collection_but_not_an_array_inside_a_record() {
     );
 }
 
+/// When an operation advertises more than one size ceiling, the bound has to
+/// be one a response can actually reach. The smallest ceiling is that bound;
+/// the largest is a number the server will never return.
+#[test]
+fn the_smallest_advertised_size_ceiling_bounds_the_collection() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let document = OPENAPI_DOCUMENT.replace(
+        "        - name: pageSize\n",
+        "        - name: limit\n          in: query\n          schema:\n            type: integer\n            maximum: 200\n        - name: pageSize\n",
+    );
+    let openapi = write(workspace.path(), "records.openapi.yaml", &document);
+
+    let output = evidencectl(&[
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--select".to_owned(),
+        "/records/*/trackingId".to_owned(),
+        "--source-id".to_owned(),
+        "source-f".to_owned(),
+    ]);
+    assert!(
+        output.status.success(),
+        "source suggest failed: {}",
+        stderr_of(&output)
+    );
+
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("maxItems: 50"),
+        "the smallest ceiling must bound the collection: {stdout}"
+    );
+    assert!(
+        !stdout.contains("maxItems: 200"),
+        "a ceiling the response cannot reach must not become the bound: {stdout}"
+    );
+}
+
 /// The runtime's fixed-request method is an enumeration of two. An operation
 /// outside it is refused by name, before any file is drafted.
 #[test]

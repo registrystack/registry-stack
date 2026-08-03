@@ -254,6 +254,39 @@ fn page_size_maximums_matches_limit_named_parameters() {
     assert_eq!(maximums, vec![50]);
 }
 
+#[test]
+fn page_size_maximums_ignores_a_page_index_beside_a_page_size() {
+    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let maximums = spec
+        .page_size_maximums(&operation("GET", "/records"))
+        .expect("no ref errors");
+    // `page` bounds how many pages exist, not how many items one carries.
+    // Reading its maximum as an item count would bound the array at 10000.
+    assert_eq!(maximums, vec![50]);
+}
+
+#[test]
+fn page_size_maximums_reads_every_genuine_size_parameter() {
+    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let mut maximums = spec
+        .page_size_maximums(&operation("GET", "/events"))
+        .expect("no ref errors");
+    maximums.sort_unstable();
+    assert_eq!(maximums, vec![25, 200]);
+}
+
+#[test]
+fn page_size_maximums_ignores_names_that_only_contain_a_matching_word() {
+    let spec = openapi::Spec::load(&fixture("paging-parameters.yaml")).expect("loads");
+    let maximums = spec
+        .page_size_maximums(&operation("GET", "/reports"))
+        .expect("no ref errors");
+    assert!(
+        maximums.is_empty(),
+        "a byte ceiling and a rate-limit burst are not page sizes: {maximums:?}"
+    );
+}
+
 // --- flatten::candidate_leaves ------------------------------------------------
 
 #[test]
@@ -382,4 +415,22 @@ fn candidate_leaves_truncates_at_depth_limit_and_warns() {
             .any(|warning| warning.contains("16") && warning.contains("/deep")),
         "warnings: {warnings:#?}"
     );
+}
+
+/// The sampler refuses an oversized sample before reading it. The loader is
+/// held to the same rule, so a mistaken path is named as one rather than read
+/// into memory whole.
+#[test]
+fn an_oversized_document_is_refused_before_it_is_read() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("huge.openapi.yaml");
+    let file = std::fs::File::create(&path).expect("create");
+    // Sparse where the filesystem supports it: the point is the declared
+    // length, not the bytes.
+    file.set_len(17 * 1024 * 1024).expect("set_len");
+    drop(file);
+
+    let error = openapi::Spec::load(&path).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("exceeding the"), "message was: {message}");
 }

@@ -347,7 +347,7 @@ fn accept_suggestions(needs: &[BoundNeed]) -> BTreeMap<(String, BoundKind), Boun
                 eprintln!(
                     "evidencectl: adopting {} for `{}`{derivation}{note}",
                     describe_bound(&suggestion.values),
-                    need.pointer,
+                    narrow::display_pointer(&need.pointer),
                 );
                 resolutions.insert(
                     (need.pointer.clone(), need.kind.clone()),
@@ -357,7 +357,7 @@ fn accept_suggestions(needs: &[BoundNeed]) -> BTreeMap<(String, BoundKind), Boun
             None => eprintln!(
                 "evidencectl: nothing implies {} for `{}`; left as a TODO in the draft",
                 need.kind.label(),
-                need.pointer
+                narrow::display_pointer(&need.pointer)
             ),
         }
     }
@@ -412,11 +412,16 @@ fn with_page_size_fallback(
     if !needs.iter().any(eligible) {
         return Ok(needs);
     }
+    // The smallest advertised ceiling is the only one a response can actually
+    // reach: a server honouring both `pageSize` (max 50) and `limit` (max 200)
+    // never returns more than 50 items. Taking the largest would bound the
+    // array well above anything the operation can produce, which is the wrong
+    // direction for a minimum-disclosure bound.
     let Some(maximum) = spec
         .page_size_maximums(operation)?
         .into_iter()
         .filter(|maximum| *maximum > 0)
-        .max()
+        .min()
     else {
         return Ok(needs);
     };

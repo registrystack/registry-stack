@@ -24,6 +24,44 @@ use super::types::{OperationKey, OperationSummary, ResolvedSchema};
 /// listing is filtered here rather than at the far end of the pipeline.
 const OPERATION_METHODS: [&str; 2] = ["get", "post"];
 
+/// OpenAPI documents larger than this are rejected before they are read, the
+/// way `sample::load_sample` rejects an oversized sample. The largest published
+/// registry API descriptions are a few megabytes; a document past this ceiling
+/// is a mistaken path rather than a specification to draft from.
+const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Query parameter names that bound how many items one response carries,
+/// compared against the parameter's name lowercased with `_`, `-` and `.`
+/// removed.
+///
+/// The list is deliberately closed. A name outside it yields no page-size
+/// value at all, so the bound it would have set stays an unresolved
+/// `TODO(evidencectl)` for the operator to answer, which is the outcome this
+/// tool prefers over a bound it cannot justify. `page`, `pageNumber`,
+/// `pageIndex`, `offset` and `start` are absent on purpose: they count pages
+/// or positions, not items.
+const PAGE_SIZE_NAMES: [&str; 8] = [
+    "pagesize",
+    "perpage",
+    "size",
+    "limit",
+    "pagelimit",
+    "count",
+    "maxresults",
+    "maxrecords",
+];
+
+/// Whether `name` names a page-size query parameter, comparing the whole
+/// normalized name against [`PAGE_SIZE_NAMES`].
+fn is_page_size_name(name: &str) -> bool {
+    let normalized: String = name
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | '.'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    PAGE_SIZE_NAMES.contains(&normalized.as_str())
+}
+
 /// A loaded, dialect-checked OpenAPI document.
 ///
 /// `load` accepts OpenAPI 3.0.x and 3.1.x, in YAML or JSON, from a local
@@ -42,6 +80,16 @@ impl Spec {
     /// version string. No network access is performed; `path` must name a
     /// local file.
     pub fn load(path: &Path) -> Result<Spec> {
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
+        if metadata.len() > MAX_DOCUMENT_BYTES {
+            bail!(
+                "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
+                path.display(),
+                metadata.len(),
+                MAX_DOCUMENT_BYTES
+            );
+        }
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading OpenAPI document at {}", path.display()))?;
         let document: Value = serde_norway::from_str(&text)
@@ -207,14 +255,19 @@ impl Spec {
     }
 
     /// Integer `maximum` values found on `key`'s query parameters (path-item
-    /// level and operation level) whose name contains `page`, `size`, or
-    /// `limit`, case-insensitively.
+    /// level and operation level) whose name is one of [`PAGE_SIZE_NAMES`].
     ///
     /// This is a naming heuristic, not a semantic one: it does not attempt
     /// to determine whether a matching parameter actually bounds page size,
     /// and it looks only at the parameter's own `schema.maximum`. Later
     /// pipeline stages decide whether and how to use the values as
     /// `Provenance::PageSize`.
+    ///
+    /// The match is on the whole normalized name rather than a substring,
+    /// because a substring match cannot tell a page size from a page index:
+    /// `page` and `pageSize` both contain `page`, but only one of them bounds
+    /// how many items a response carries, and reading the other as an item
+    /// count would suggest a bound orders of magnitude too generous.
     pub fn page_size_maximums(&self, key: &OperationKey) -> Result<Vec<i64>> {
         let paths = self
             .document
@@ -246,8 +299,7 @@ impl Spec {
             if parameter.get("in").and_then(Value::as_str) != Some("query") {
                 continue;
             }
-            let lower = name.to_ascii_lowercase();
-            if !(lower.contains("page") || lower.contains("size") || lower.contains("limit")) {
+            if !is_page_size_name(name) {
                 continue;
             }
             let Some(schema) = parameter.get("schema") else {

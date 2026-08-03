@@ -901,3 +901,184 @@ fn verify_classifies_a_runtime_initialization_message_as_secrets_unprovisioned()
     let classification = emit::verify(&project, Some(&stub)).expect("verify");
     assert_eq!(classification, CheckClassification::SecretsUnprovisioned);
 }
+
+// --- Escaping and pointer rendering -------------------------------------
+
+/// The reproduce line is documented as paste-ready. A path carrying `$` or a
+/// backtick must therefore reach the shell as literal text: unquoted, `$HOME`
+/// expands and a backtick pair runs a command, so the pasted line reproduces
+/// something other than the run it claims to reproduce.
+#[test]
+fn the_reproduce_line_quotes_shell_expansion_characters() {
+    let mut inputs = base_inputs();
+    inputs.openapi_path = PathBuf::from("/srv/specs/$HOME/records`id`.yaml");
+    let artifacts = emit::draft(&inputs).expect("draft");
+
+    assert!(
+        artifacts
+            .equivalent_command
+            .contains("'/srv/specs/$HOME/records`id`.yaml'"),
+        "expansion characters must be single-quoted: {}",
+        artifacts.equivalent_command
+    );
+}
+
+/// A property name may legally contain a double quote or a backslash. Both
+/// terminate or escape inside a Rhai string literal, so an unescaped one
+/// produces an extract script that does not parse, or parses as something
+/// other than the pointer it was drafted from.
+#[test]
+fn the_extract_script_escapes_quotes_in_a_pointer() {
+    let mut inputs = base_inputs();
+    inputs.selection = vec![r#"/say"hi"#.to_owned(), r"/back\slash".to_owned()];
+    let artifacts = emit::draft(&inputs).expect("draft");
+    let extract = file_contents(&artifacts, "adapters/search-a-extract.rhai");
+
+    assert!(
+        extract.contains(r#"get_path(source_response, "/say\"hi")"#),
+        "a double quote must be escaped in the Rhai literal:\n{extract}"
+    );
+    assert!(
+        extract.contains(r#"get_path(source_response, "/back\\slash")"#),
+        "a backslash must be escaped in the Rhai literal:\n{extract}"
+    );
+}
+
+/// The same applies to the drafted YAML: a double-quoted scalar carrying a raw
+/// newline or tab folds, silently changing the value the runtime reads.
+#[test]
+fn drafted_yaml_escapes_control_characters_in_a_scalar() {
+    let mut inputs = base_inputs();
+    inputs.media_type = "application/json\nx-injected: true".to_owned();
+    let artifacts = emit::draft(&inputs).expect("draft");
+    let source_block = artifacts
+        .files
+        .iter()
+        .find(|file| file.bundle_relative_path.ends_with(".yaml"))
+        .map(|file| file.contents.clone())
+        .unwrap_or_default();
+    let combined = format!("{}\n{}", artifacts.source_block, source_block);
+
+    assert!(
+        combined.contains(r"application/json\nx-injected"),
+        "a newline must be escaped rather than folded:\n{combined}"
+    );
+    // A raw newline inside the quoted scalar would make the injected key a
+    // sibling mapping entry.
+    assert!(
+        !combined.contains("\nx-injected: true"),
+        "the scalar must not break out into its own mapping key:\n{combined}"
+    );
+}
+
+/// The emitted TODOs are read inside an adopter's project, where the scaffold
+/// wrote `bundle/evidence.yaml`. `templates/` is an evidencectl source
+/// directory that does not exist there.
+#[test]
+fn emitted_todos_name_paths_that_exist_in_a_scaffolded_project() {
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let all = artifacts
+        .files
+        .iter()
+        .fold(artifacts.source_block.clone(), |mut text, file| {
+            text.push('\n');
+            text.push_str(&file.contents);
+            text
+        });
+
+    assert!(
+        all.contains("bundle/evidence.yaml"),
+        "the guidance must name the scaffolded path:\n{all}"
+    );
+    assert!(
+        !all.contains("templates/bundle/"),
+        "an evidencectl source path is not a path in the adopter's project:\n{all}"
+    );
+}
+
+/// A response body that is itself an array still needs a `maxItems`. The bound
+/// belongs to the root node, which has no property to hang a comment on and no
+/// pointer text of its own.
+#[test]
+fn a_root_level_array_carries_its_own_bound_annotation() {
+    let mut inputs = base_inputs();
+    inputs.selection = vec!["/*/trackingId".to_owned()];
+    inputs.narrowed = NarrowOutcome {
+        schema: json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {"trackingId": {"type": "string", "minLength": 0, "maxLength": 64}}
+            }
+        }),
+        unresolved: vec![BoundNeed {
+            pointer: String::new(),
+            kind: BoundKind::ArrayMaxItems,
+            suggestion: None,
+        }],
+    };
+    inputs.needs = vec![BoundNeed {
+        pointer: String::new(),
+        kind: BoundKind::ArrayMaxItems,
+        suggestion: None,
+    }];
+
+    let artifacts = emit::draft(&inputs).expect("draft");
+    let response_schema = file_contents(&artifacts, "schemas/search-a-response.schema.yaml");
+
+    assert!(
+        response_schema.contains("TODO(evidencectl): (response root) needs maxItems"),
+        "the root array's own bound must be annotated:\n{response_schema}"
+    );
+    assert!(
+        !response_schema.contains("TODO(evidencectl):  "),
+        "an empty pointer must not render as blank text:\n{response_schema}"
+    );
+    assert!(
+        !artifacts.report.contains("TODO(evidencectl):  "),
+        "an empty pointer must not render as blank text in the report:\n{}",
+        artifacts.report
+    );
+}
+
+/// A rejected bundle and unprovisioned secrets are opposite outcomes: one means
+/// the draft is wrong, the other means the draft is fine and the operator has
+/// not generated keys yet. Classifying a bundle rejection as the latter reports
+/// success for a draft the runtime refused.
+#[cfg(unix)]
+#[test]
+fn verify_never_classifies_a_bundle_rejection_as_unprovisioned_secrets() {
+    for stage in ["bundle", "source", "rate-limit"] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script = format!(
+            "#!/bin/sh\nprintf 'evidence: runtime {stage} initialization failed\\n' >&2\nexit 1\n"
+        );
+        let stub = write_stub_evidence(temp.path(), &script);
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).expect("mkdir project");
+
+        let classification = emit::verify(&project, Some(&stub)).expect("verify");
+        assert!(
+            matches!(classification, CheckClassification::BundleRejected { .. }),
+            "a {stage}-stage failure is a rejected bundle, got {classification:?}"
+        );
+    }
+}
+
+/// A future runtime may append a reason to a secret-stage message. The
+/// classification must survive that without loosening into a prefix match that
+/// also catches the bundle stage.
+#[cfg(unix)]
+#[test]
+fn verify_classifies_a_secret_stage_message_carrying_a_reason() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = "#!/bin/sh\nprintf 'evidence: runtime audit initialization failed: the audit chain head does not verify\\n' >&2\nexit 1\n";
+    let stub = write_stub_evidence(temp.path(), script);
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).expect("mkdir project");
+
+    let classification = emit::verify(&project, Some(&stub)).expect("verify");
+    assert_eq!(classification, CheckClassification::SecretsUnprovisioned);
+}

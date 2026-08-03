@@ -275,12 +275,29 @@ pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassi
     Ok(CheckClassification::BundleRejected { stderr })
 }
 
-/// True when `stderr` is one of the runtime's fixed
-/// "runtime <kind> initialization failed" messages, which mean the bundle
-/// itself was accepted and only local secret/runtime material is missing.
+/// The runtime initialization stages that fail only because local secret or
+/// key material has not been provisioned yet. Reaching any of them means the
+/// bundle itself was already accepted.
+///
+/// The list is exact rather than a `runtime ... initialization failed` shape,
+/// because the runtime reports bundle, source and rate-limit failures through
+/// the same shape. Matching the shape would report a draft the runtime refused
+/// as a success.
+const SECRET_STAGE_MESSAGES: [&str; 3] = [
+    "evidence: runtime secret initialization failed",
+    "evidence: runtime audit initialization failed",
+    "evidence: runtime signing initialization failed",
+];
+
+/// True when `stderr` names one of [`SECRET_STAGE_MESSAGES`].
+///
+/// The comparison is a prefix so a stage message that grows a trailing reason
+/// still classifies; the stage name itself is still matched in full.
 fn is_secrets_unprovisioned(stderr: &str) -> bool {
     let trimmed = stderr.trim();
-    trimmed.starts_with("evidence: runtime ") && trimmed.ends_with("initialization failed")
+    SECRET_STAGE_MESSAGES
+        .iter()
+        .any(|message| trimmed.starts_with(message))
 }
 
 /// Derive a plain RFC 6901 `get_path` pointer from an extended projection
@@ -416,7 +433,8 @@ impl SchemaAnnotations {
         let key = (pointer.to_owned(), kind.clone());
         if self.unresolved.contains(&key) {
             return Some(format!(
-                "# TODO(evidencectl): {pointer} needs {}",
+                "# TODO(evidencectl): {} needs {}",
+                display_pointer(pointer),
                 kind.label()
             ));
         }
@@ -426,6 +444,16 @@ impl SchemaAnnotations {
                 |label| format!("# derived from {label}"),
             )
         })
+    }
+}
+
+/// Renders a pointer for a message, naming the root rather than printing an
+/// empty string. Matches the wording `narrow` and `flatten` already use.
+fn display_pointer(pointer: &str) -> &str {
+    if pointer.is_empty() {
+        "(response root)"
+    } else {
+        pointer
     }
 }
 
@@ -451,11 +479,46 @@ fn yaml_flow_scalar_string(value: &str) -> String {
 
 fn quote_if(value: &str, quoted: bool) -> String {
     if quoted {
-        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-        format!("\"{escaped}\"")
+        format!("\"{}\"", escape_double_quoted(value))
     } else {
         value.to_owned()
     }
+}
+
+/// Escapes `value` for the interior of a double-quoted YAML or Rhai string.
+///
+/// One function serves both because the two grammars agree on every escape
+/// used here: `\\`, `\"`, `\n`, `\r`, `\t`, and `\xNN` for the remaining
+/// control characters, all of which are below `U+00A0` and so fit two hex
+/// digits.
+///
+/// Every value passed here originates in the OpenAPI document: property names,
+/// media types, enum members. A property name may legally contain a quote, a
+/// backslash or a control character, and none of those may reach the output
+/// raw. A raw newline folds a YAML scalar (turning the rest of the value into
+/// a sibling mapping entry) and terminates a Rhai literal; a raw quote ends
+/// either one early.
+fn escape_double_quoted(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str(r"\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str(r"\n"),
+            '\r' => escaped.push_str(r"\r"),
+            '\t' => escaped.push_str(r"\t"),
+            control if control.is_control() => {
+                escaped.push_str(&format!(r"\x{:02x}", control as u32));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// Renders `value` as a complete double-quoted Rhai string literal.
+fn rhai_string_literal(value: &str) -> String {
+    format!("\"{}\"", escape_double_quoted(value))
 }
 
 fn needs_yaml_quoting(value: &str) -> bool {
@@ -504,7 +567,9 @@ fn needs_yaml_quoting(value: &str) -> bool {
     if value.contains(": ") || value.ends_with(':') || value.contains(" #") {
         return true;
     }
-    value.contains('\n')
+    // Any control character, not just a newline: a plain scalar carrying one
+    // either folds or is rejected outright, and the quoted form escapes it.
+    value.chars().any(char::is_control)
 }
 
 fn render_key(key: &str) -> String {
@@ -609,6 +674,15 @@ fn render_response_schema(inputs: &EmitInputs) -> String {
         "# states where a bound came from so it can be reviewed rather than trusted",
     );
     push_line(&mut out, 0, "# blindly.");
+    // A response body that is itself an array needs a `maxItems` like any other
+    // array, but the root node has no property line to hang the comment on:
+    // `render_schema_node` annotates children only. It is annotated here or
+    // nowhere.
+    if let Some(kind) = inputs.narrowed.schema.as_object().and_then(bound_kind_of) {
+        if let Some(comment) = annotations.comment_for("", kind) {
+            push_line(&mut out, 0, &comment);
+        }
+    }
     render_schema_node(&inputs.narrowed.schema, "", 0, &annotations, &mut out);
     out
 }
@@ -879,7 +953,10 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
         push_line(
             &mut out,
             1,
-            &format!("let {variable} = get_path(source_response, \"{get_path_pointer}\");"),
+            &format!(
+                "let {variable} = get_path(source_response, {});",
+                rhai_string_literal(get_path_pointer)
+            ),
         );
         push_line(&mut out, 1, &format!("if is_missing({variable}) {{"));
         push_line(
@@ -1040,7 +1117,7 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     push_line(
         &mut out,
         3,
-        "# templates/bundle/evidence.yaml (sources.source-a.request.selectorInputs)",
+        "# bundle/evidence.yaml (sources.source-a.request.selectorInputs)",
     );
     push_line(
         &mut out,
@@ -1052,25 +1129,17 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
         3,
         "# TODO(evidencectl): prepareScript — author this script from",
     );
-    push_line(
-        &mut out,
-        3,
-        "# templates/bundle/adapters/source-a-prepare.rhai.",
-    );
+    push_line(&mut out, 3, "# bundle/adapters/source-a-prepare.rhai.");
     push_line(
         &mut out,
         3,
         "# TODO(evidencectl): adapterParameters and adapterParametersSchema — copy the",
     );
+    push_line(&mut out, 3, "# shape from bundle/evidence.yaml and");
     push_line(
         &mut out,
         3,
-        "# shape from templates/bundle/evidence.yaml and",
-    );
-    push_line(
-        &mut out,
-        3,
-        "# templates/bundle/schemas/adapter-parameters.schema.yaml.",
+        "# bundle/schemas/adapter-parameters.schema.yaml.",
     );
     // The two channels are chosen from the method, not fixed: the runtime
     // rejects a GET source whose JSON body channel is anything but forbidden,
@@ -1228,7 +1297,7 @@ fn render_report(inputs: &EmitInputs) -> String {
     for need in &inputs.narrowed.unresolved {
         out.push_str(&format!(
             "  - TODO(evidencectl): {} needs {}\n",
-            need.pointer,
+            display_pointer(&need.pointer),
             need.kind.label()
         ));
     }
@@ -1267,14 +1336,19 @@ fn path_display(path: &Path) -> String {
 /// matches nothing. Single quotes are used because they suppress every
 /// expansion; the only character they cannot carry is the single quote itself,
 /// which is spliced in as `'\''`.
+///
+/// The decision to quote is an allowlist rather than a list of characters
+/// known to be special. A denylist has to be complete to be correct, and the
+/// cost of an omission is not a cosmetic one: an unquoted `$` expands a
+/// parameter and an unquoted backtick runs a command, so a pointer through a
+/// property named `$id` would silently reproduce a different run.
 fn shell_quote(value: &str) -> String {
-    const SHELL_SPECIAL: [char; 19] = [
-        '*', '?', '[', ']', '{', '}', '\n', '"', '\'', '\\', '|', '&', ';', '<', '>', '(', ')',
-        '~', '#',
-    ];
-    let unsafe_value =
-        value.is_empty() || value.chars().any(char::is_whitespace) || value.contains(SHELL_SPECIAL);
-    if !unsafe_value {
+    const SHELL_SAFE: [char; 6] = ['_', '.', '/', ':', '@', '-'];
+    let safe = !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || SHELL_SAFE.contains(&character));
+    if safe {
         return value.to_owned();
     }
     format!("'{}'", value.replace('\'', r"'\''"))

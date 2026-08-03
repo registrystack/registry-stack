@@ -456,7 +456,7 @@ fn child_pointer(parent: &str, key: &str) -> String {
 
 /// Renders a pointer for a message, naming the root rather than printing an
 /// empty string.
-fn display_pointer(pointer: &str) -> &str {
+pub fn display_pointer(pointer: &str) -> &str {
     if pointer.is_empty() {
         "(response root)"
     } else {
