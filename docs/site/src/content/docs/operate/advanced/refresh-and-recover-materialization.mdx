@@ -190,7 +190,7 @@ Relay remains fail closed. Restore the complete matching recovery set or escalat
 deleting another file to force reacquisition.
 
 {/* Evidence: crates/registry-relay/src/ingest/mod.rs and
-    crates/registry-relay/tests/live_consultation_journeys.rs. */}
+    crates/registry-relay/src/ingest/cache.rs. */}
 
 For other recovery cases, keep traffic blocked and restore the complete matching recovery set, or
 republish a reviewed source export and repeat the offline, reload, posture, and canary gates.
