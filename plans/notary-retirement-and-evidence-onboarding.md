@@ -25,6 +25,20 @@ Created 2026-08-03. Owner: Jeremi Joslin.
    the registryctl authoring gate.
 7. solmara-lab is rebuilt as the composed demo (Relay + Mint + Evidence).
 8. The archive story for retired Notary material is deferred.
+9. Retirement scope, decided 2026-08-03: the retirement covers products and
+   runtimes. The shared platform and manifest layers keep their historical
+   vocabulary so artifacts issued before the retirement still parse and can
+   still be read. A name that only names the past is kept; a code path built
+   for Notary that no longer has a caller is deleted.
+10. Approved baseline sets, decided 2026-08-03: the schema version is bumped
+    and previously issued approved-set documents are rejected with a message
+    naming re-approval as the remedy. Adopters must re-approve. Tolerating
+    and ignoring the removed cross-lane interface digests would honor a
+    signed approval whose integrity claim is no longer enforced, which is
+    the wrong failure mode for a governance artifact. Security-sensitive
+    (authorization and integrity): carries a review note under G5. This is
+    an adopter-facing breaking change, and it is unrelated to G4, which is
+    about the frozen Evidence V1 contracts.
 
 ## Constraints
 
@@ -118,6 +132,28 @@ gates for its area (see Verification), and committed.
       Ships with or after B1, in the same release as the code-pin advance.
 - [x] C8. Repo docs updated: `AGENTS.md` (Evidence boundary section
       simplified), `CONTRIBUTING.md`, `README.md`.
+
+Opened 2026-08-03 by the post-merge review of C. Each is deletion-cascade
+residue the workstream did not reach, not new scope.
+
+- [ ] C9. A Relay-only source-read conformance successor exists. The
+      external integration runner and its evidence packet went with Notary,
+      and the retirement guard that froze their absence is now gone too
+      (2026-08-03), so nothing in `release/` currently exercises a real
+      source read end to end. Until this lands, a release must not claim
+      source-read or data-minimization assurance from conformance evidence.
+      Decide first whether the successor belongs in `release/conformance/`
+      beside `relay-oidc`, or as a Relay integration test.
+- [ ] C10. The manifest layer's Notary vocabulary is resolved.
+      `registry-manifest-core` still requires the protocol identifier
+      `registry-notary-federation/v0.1` from any manifest that declares a
+      `federation` block, and still names the enforcement profile
+      `registry-evidence-gateway-pdp/v1`. Both are dead surface: federation
+      and PDP are explicit Evidence non-goals, and no shipped product
+      consumes either. Decide between removing the `federation` block from
+      the manifest schema and renaming the identifiers. Either way it is a
+      published schema change and needs a manifest version decision, which
+      is why it is not folded into the mechanical deletions.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
 
@@ -689,3 +725,50 @@ is parallel; B has no upstream dependencies and is the standing priority
   `## Registry Notary` hardcoded as a product section, so removing that
   section reports 40 released error codes as removed. The fix belongs to C5 in
   `release/`, a different owning area with work already in flight.
+
+- 2026-08-03: The two diagrams E1 orphaned were redrawn rather than dropped.
+  `registry-trust-boundaries.svg` now draws the spine Registry Mint, caller,
+  Evidence, Registry Relay, registry sources, with the edge labels that make
+  each hop checkable (short-lived access token; bearer token, purpose,
+  revision, selectors; one fixed HTTP request per evaluation;
+  deny-by-default read), two service-edge rules, six named boundary blocks, a
+  bottom operator-to-verifier key lane, and a footnote listing the five
+  unauthenticated Evidence routes. It deliberately draws no Mint-to-Evidence
+  arrow, because the dependency runs one way and an arrow would contradict
+  the page. `registry-country-evidence-mesh.svg` became three tiers with
+  Relay and Evidence side by side as protected read and minimum disclosure,
+  and no arrow between them, because the section does not claim one. The
+  describe and enforce boundary stayed in prose, where it was already
+  correct. The audit that found them also confirmed six deleted sections stay
+  deleted: federation trust, credential issuance lifecycle, wallets,
+  delegated subject access, the Notary approval lane, and the Notary posture
+  producer each described machinery Evidence V1 explicitly lacks.
+
+- 2026-08-03: Workstream C merged into main. Two conflicts, both in the
+  projects data the E1 diagram work had already rewritten, resolved in favor
+  of the rewritten version; the merged `projects.yaml` carries six ids and no
+  Notary reference, and `npm run generate` reproduced every generated
+  artifact byte for byte.
+
+- 2026-08-03: Post-merge review of C settled three questions and opened C9
+  and C10. First, the approved baseline set: C removed the cross-lane
+  interface digests without bumping
+  `APPROVED_BASELINE_SET_SCHEMA_VERSION`, and the structs deny unknown
+  fields, so a previously issued signed approval was already being rejected,
+  just with an unreadable serde error under a version claiming nothing
+  changed. Decision 10 above settles it: bump, reject legibly, adopters
+  re-approve. Second, the retired external integration runner's absence
+  guard was deleted; it asserted nothing about behaviour and would have
+  failed CI for anyone restoring source-read coverage under the same names.
+  The successor it leaves owed is C9. Third, decision 9 above draws the line
+  between a retired product and the layers underneath it. Applying it:
+  `registry_notary_from_env`, `registry_notary_access_profile`, the Notary
+  federation request JWT verifier profile, and `NOTARY_POSTURE_EXAMPLE_V1`
+  are code paths with no caller and are deleted, while
+  `ProductAcceptanceLaneV1::Notary` and
+  `ProductAcceptanceProductV1::RegistryNotary` stay parseable on purpose:
+  they are names, not behaviour, and keeping them means an operator reading
+  an old bundle is told registry-notary is retired instead of meeting an
+  unknown-variant error. The manifest layer's federation and PDP identifiers
+  are the one case that is neither, because changing them is a published
+  schema change; that is C10.
