@@ -382,3 +382,23 @@ is parallel; B has no upstream dependencies and is the standing priority
   consumer or verifier yet; E5 is that page, so the gap is real and visible
   rather than papered over. The three how-to pages under tutorials/ are not
   labeled: the requirement keys off `doc_type`, not the URL segment.
+- 2026-08-03: B5's E2 (serve assertions over HTTP with a Mint token) is
+  published and gated. Four processes, all started by the page's own fences:
+  a stand-in source, Mint, a TLS terminator in front of Mint, and Evidence.
+  The terminator is not decoration. `config.rs` requires `https` for the
+  token issuer and its JWKS URI with no loopback exception, and
+  `outboundTls.trustProfiles` governs only the calls Evidence makes to
+  sources, so a development CA reaches the JWKS client through `SSL_CERT_FILE`
+  on the `evidence` process alone and nothing on the machine is retrusted.
+  Sources are exempt from `https` only for numeric loopback, which is why the
+  stand-in can be plain `http://127.0.0.1:8092`; the page says so and calls it
+  a development affordance. The gate pins a negative control: restarting
+  Evidence without the trust anchor yields HTTP 401 with
+  `authentication_failed` and `UnknownIssuer` in the log, so a passing run
+  proves the token is checked rather than that a request succeeded. No token
+  is ever echoed or put on a command line; `mint token` writes to a file
+  under `umask 077` and curl reads it with `--header @file`. Mint changes now
+  route to the tutorial gate, since the gate builds and runs `mint`. B5 stays
+  open: E5 (verify an assertion as a consumer) is the last of the five, and
+  it is also the page that will let a tutorial claim the consumer or verifier
+  persona.

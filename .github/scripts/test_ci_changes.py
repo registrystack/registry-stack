@@ -103,6 +103,13 @@ class CiChangesTest(unittest.TestCase):
                 "evidence_tutorial"
             ]
         )
+        # The gate runs `mint` too, so a Mint change that breaks the served
+        # tutorial has to reach the job that replays it.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-mint/src/lib.rs",))[
+                "evidence_tutorial"
+            ]
+        )
         self.assertFalse(
             classify(
                 self.workspace,

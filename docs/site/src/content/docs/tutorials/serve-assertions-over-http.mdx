@@ -1,0 +1,718 @@
+---
+title: Serve assertions over HTTP
+description: Run a scaffolded Evidence project as a service, issue a real access token from the paired Registry Mint deployment, and receive a signed assertion over HTTP.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+The first tutorial ended offline: fixture cases replayed the whole evaluation pipeline with no
+source, no credential, and no network. Here the same kind of project becomes a service. You start
+Evidence, start the Registry Mint deployment that issues the access tokens it verifies, present a
+real token over HTTP, and read the signed assertion that comes back.
+
+<QuickstartMeta
+  outcome="A running Evidence deployment that returns a signed assertion over HTTP to a caller holding a real Mint-issued access token."
+  time="About 30 minutes"
+  level="Local development against a stand-in source, behind a development certificate"
+  prerequisites={['The Evidence toolset on PATH (evidence, evidencectl and mint)', 'Comfort with the scaffolded project layout from the first tutorial', 'python3, openssl and curl']}
+/>
+
+Everything here is synthetic: a stand-in source with one invented record, a certificate authority
+that exists for half an hour on your machine, and the scaffold's abstract acceptance definition. Do
+not point this project at production endpoints or real data.
+
+[Get a first Evidence assertion](../first-evidence-assertion/) installs the toolset and explains
+what the scaffold creates; this tutorial assumes both.
+
+## What has to be running
+
+An offline fixture run needs one process. A served request needs four, and it is worth knowing why
+before you start any of them.
+
+- **A source**, on `127.0.0.1:8092`. Evidence answers a requirement by reading a system that
+  already holds the data, so something has to answer. You write a stand-in with one invented record.
+- **Registry Mint**, on `127.0.0.1:8081`. Evidence verifies access tokens; it does not issue them.
+  Mint is what a deployment with no identity provider uses to issue them.
+- **A TLS terminator in front of Mint**, on `127.0.0.1:8443`. Evidence requires `https` for the
+  token issuer and its key set, with no exception for loopback, and Mint serves plain HTTP and
+  expects a terminator it does not manage. In a real deployment that terminator is the ingress you
+  already run, and this one stands in for it.
+- **Evidence**, on `127.0.0.1:8080`.
+
+The two Python processes are development scaffolding, written from the standard library so there is
+nothing to install. Neither is part of Evidence, and neither belongs anywhere near a real
+deployment.
+
+## Scaffold a project with a paired token issuer
+
+Create a fresh project and enter it:
+
+```sh
+evidencectl new serve-evidence --with-mint
+cd serve-evidence
+```
+
+`--with-mint` adds two directories to the layout the first tutorial built. `mint/` holds a Registry
+Mint configuration whose issuer, audience, algorithm, and claim names were written from the same
+source as the matching values in `bundle/evidence.yaml`, so the two documents agree by
+construction. `caller/` holds the key material of the client that will ask for a token. Splitting
+the caller out is the point: the deployment and the party requesting evidence from it are different
+parties, and they hold different keys.
+
+The scaffold prints the next commands for both deployments. Read them; the ones below are those
+commands.
+
+## Generate the key material for three parties
+
+Three parties need keys here, and no two of them share one:
+
+```sh
+evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1
+evidencectl keygen secret --out secrets/audit-hmac-key
+evidencectl keygen secret --out secrets/subject-binding-hmac-key
+evidencectl keygen token --out secrets/source-bearer-token
+evidencectl keygen signing --out-dir mint/secrets --kid scaffold-mint-key-1
+evidencectl keygen signing --out-dir caller --kid scaffold-client-key-1
+```
+
+Expected output:
+
+```text
+wrote secrets/signing-ed25519-private-jwk
+wrote secrets/signing-ed25519-public.jwk.json
+kid: scaffold-signing-key-1
+wrote secrets/audit-hmac-key
+wrote secrets/subject-binding-hmac-key
+wrote secrets/source-bearer-token
+wrote mint/secrets/signing-ed25519-private-jwk
+wrote mint/secrets/signing-ed25519-public.jwk.json
+kid: scaffold-mint-key-1
+wrote caller/signing-ed25519-private-jwk
+wrote caller/signing-ed25519-public.jwk.json
+kid: scaffold-client-key-1
+```
+
+The Evidence signing key signs assertions. The Mint signing key signs access tokens. The caller
+signing key signs the short client assertion the caller presents to Mint to prove which registered
+client it is. Every private file is owner-only, and no private byte is ever printed.
+
+`keygen token` is the odd one out, and the first tutorial did not need it. It generates the bearer
+token this deployment presents to its source. It is not `keygen secret`, because that produces raw
+HMAC key material whose bytes an HTTP header value rejects. Against a real institution you do not
+generate this at all: the institution issues it, and you write it to the same path with mode 0600.
+
+## Register the caller with Mint
+
+Mint authorizes a caller from its own registration file, never from what the caller signs. The
+scaffold left that file as an example because it had no caller key to put in it. You have one now:
+
+```sh
+public_key="$(grep -o '"x":[[:space:]]*"[^"]*"' \
+  caller/signing-ed25519-public.jwk.json | cut -d'"' -f4)"
+sed "s|replace-with-the-caller-public-key|$public_key|" \
+  mint/clients/scaffold-client.yaml.example >mint/clients/scaffold-client.yaml
+rm mint/clients/scaffold-client.yaml.example
+```
+
+Only the public half moves. A registration carrying a private JWK member is refused when Mint
+loads the directory, which is the check that makes this directory safe to review and to commit.
+
+Read `mint/clients/scaffold-client.yaml` once. Every authority the caller will ever have is in it:
+the principal Evidence records, the audience minted into the evidence it receives, and the
+requester tags that decide which requirements it may ask about. A caller whose tags match no
+authority profile in `bundle/evidence.yaml` authenticates successfully and is then refused
+everything.
+
+## Point the deployment at a local issuer URL
+
+The scaffold wrote `https://mint.invalid` on both sides, which is a name that never resolves, on
+purpose. Replace it with the address the terminator will answer on.
+
+Evidence validates the token issuer and its key set as `https` URLs with no exception for loopback,
+so `http://127.0.0.1:8081` is not accepted here even though Mint is listening on it. That refusal
+is the reason the terminator exists.
+
+Find this block in `bundle/evidence.yaml`:
+
+```yaml
+authentication:
+  kind: oidc-access-token
+  issuer: https://mint.invalid
+  audiences: [evidence-scaffold]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://mint.invalid/.well-known/jwks.json
+```
+
+Replace it with:
+
+```yaml
+authentication:
+  kind: oidc-access-token
+  issuer: https://localhost:8443
+  audiences: [evidence-scaffold]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://localhost:8443/.well-known/jwks.json
+```
+
+The claim names below the block stay exactly as they are. They name where in a token Evidence
+reads the principal, the requester tags, the evidence audience, and the optional grant pair, and
+Mint's configuration already mints those same names.
+
+## Point Mint at the same URL
+
+Two values in `mint/mint.yaml` name the same deployment and both have to move with it. Find this
+line:
+
+```yaml
+issuer: https://mint.invalid
+```
+
+Replace it with:
+
+```yaml
+issuer: https://localhost:8443
+```
+
+Then find this block:
+
+```yaml
+clientAssertion:
+  audience: https://mint.invalid/token
+```
+
+Replace it with:
+
+```yaml
+clientAssertion:
+  audience: https://localhost:8443/token
+```
+
+The two are different things that happen to share a hostname. The issuer is what Mint writes into
+every token it signs, and it is what Evidence compares against. The client assertion audience is
+what a caller writes into the short JWT it presents here, so an assertion made for another service
+cannot be replayed against this token endpoint. Changing one and not the other produces tokens one
+side accepts and the other refuses.
+
+## Check the Mint configuration
+
+```sh
+mint check --config mint/mint.yaml
+```
+
+Expected output, on one line:
+
+```text
+{"timestamp":"...","level":"INFO","fields":{"message":"configuration is valid",
+"issuer":"https://localhost:8443","clients":1},"target":"registry_mint"}
+```
+
+`"clients":1` is the line to read. It says the registration you wrote was loaded, rather than
+skipped as an example file. A zero there means the rename in the previous step did not happen, and
+every token request would fail later with an unregistered client.
+
+## Issue a development certificate
+
+The terminator needs a certificate, and Evidence has to trust whoever issued it. Make a
+throwaway certificate authority and one server certificate under it:
+
+```sh
+mkdir -p dev
+cat >dev/openssl.cnf <<'CNF'
+# Certificate parameters for local development only. A real deployment gets
+# its server certificate from whatever issues certificates for its ingress.
+[req]
+distinguished_name = dn
+prompt = no
+
+[dn]
+CN = localhost
+
+[ca_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,keyCertSign
+
+[leaf_extensions]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:localhost, IP:127.0.0.1
+CNF
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes \
+  -days 30 -config dev/openssl.cnf -extensions ca_extensions \
+  -subj '/CN=Evidence tutorial development CA' \
+  -keyout dev/ca.key -out dev/ca.pem
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes \
+  -config dev/openssl.cnf -subj '/CN=localhost' \
+  -keyout dev/tls.key -out dev/tls.csr
+openssl x509 -req -in dev/tls.csr -sha256 -days 30 \
+  -CA dev/ca.pem -CAkey dev/ca.key -CAcreateserial \
+  -extfile dev/openssl.cnf -extensions leaf_extensions -out dev/tls.pem
+chmod 600 dev/ca.key dev/tls.key
+```
+
+The configuration file carries what a modern TLS client will not do without. `serverAuth` in the
+extended key usage and both names in the subject alternative name are required, because a
+certificate without them is refused whatever its subject says. `-sha256` is passed explicitly on
+every command because some `openssl` builds still default to SHA-1, and a SHA-1 signature is
+rejected outright.
+
+## Write the TLS terminator
+
+```sh
+cat >dev/tls-terminator.py <<'PY'
+#!/usr/bin/env python3
+"""Terminate TLS in front of Mint, for local development only.
+
+Mint serves plain HTTP and expects a terminator it does not manage, and
+Evidence requires https for the token issuer and its key set with no exception
+for loopback. In a real deployment this is your ingress.
+
+It forwards verbatim: it adds nothing and inspects nothing.
+"""
+
+import http.client
+import ssl
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HOP_BY_HOP = ("connection", "transfer-encoding", "content-length")
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        self.forward("GET", None)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        self.forward("POST", self.rfile.read(length))
+
+    def forward(self, method, body):
+        upstream = http.client.HTTPConnection("127.0.0.1", UPSTREAM_PORT, timeout=10)
+        headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.lower() not in ("host", "connection")
+        }
+        upstream.request(method, self.path, body=body, headers=headers)
+        response = upstream.getresponse()
+        payload = response.read()
+        self.send_response(response.status)
+        for name, value in response.getheaders():
+            if name.lower() not in HOP_BY_HOP:
+                self.send_header(name, value)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+        upstream.close()
+
+    def log_message(self, format, *args):
+        pass
+
+
+if __name__ == "__main__":
+    listen_port, UPSTREAM_PORT = int(sys.argv[1]), int(sys.argv[2])
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(sys.argv[3], sys.argv[4])
+    server = ThreadingHTTPServer(("127.0.0.1", listen_port), Handler)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()
+PY
+```
+
+## Write a stand-in for the source
+
+Evidence has to call something. This serves the one route the scaffolded bundle declares, and it
+authenticates the deployment with the bearer token you generated beside the other secrets:
+
+```sh
+cat >dev/stand-in-source.py <<'PY'
+#!/usr/bin/env python3
+"""A stand-in for the system that already holds the data.
+
+Evidence has to call something to answer a requirement. This serves the one
+route the scaffolded bundle declares, `POST /v1/facts`, from a fixed synthetic
+table, and it authenticates the deployment with the bearer token generated
+beside the deployment's other secrets. Everything it knows is invented.
+"""
+
+import json
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# The one synthetic record the bundle's `positive` fixture case replays.
+RECORDS = {("RCD-000123", "RGC-07"): "2000-01-01"}
+
+EXPECTED_BEARER = os.environ["SOURCE_BEARER_TOKEN"]
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != "/v1/facts":
+            return self.reply(404, {"error": "not_found"})
+        if self.headers.get("Authorization") != f"Bearer {EXPECTED_BEARER}":
+            return self.reply(401, {"error": "unauthorized"})
+
+        length = int(self.headers.get("Content-Length", "0"))
+        lookup = json.loads(self.rfile.read(length) or b"{}").get("lookup", {})
+        key = (lookup.get("record_reference"), lookup.get("registry_code"))
+        # Note what the source is told: which record to look up, and nothing
+        # about the requirement, the purpose, or the caller asking.
+        print(f"source <- lookup for {key[0]}", file=sys.stderr, flush=True)
+
+        event_date = RECORDS.get(key)
+        if event_date is None:
+            return self.reply(200, {"total": 0})
+        return self.reply(200, {"total": 1, "event_date": event_date})
+
+    def reply(self, status, payload):
+        encoded = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, format, *args):
+        pass
+
+
+if __name__ == "__main__":
+    HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+```
+
+It returns the two fields the bundle's projection keeps and nothing else. The scaffold declares
+`posture: field-projected` for this source, which asserts that the source itself disclosed no more
+than the projection keeps. A stand-in that returned whole records would make that declaration
+false. [Connect an institution source](../connect-an-institution-source/) covers the honest posture
+for a source that does return more.
+
+## Repoint the source
+
+The bundle still names `https://source.invalid`, which never answers. Find this line in
+`bundle/evidence.yaml`:
+
+```yaml
+    baseUrl: https://source.invalid
+```
+
+Replace it with:
+
+```yaml
+    baseUrl: http://127.0.0.1:8092
+```
+
+Source URLs are the one place the `https` requirement gives way, and only for a numeric loopback
+address. It is a development affordance, not a general exemption: a source on any other host is
+required to be `https`, and a stand-in reached by hostname would be too.
+
+## Freeze the deployment input
+
+```sh
+chmod -R a-w bundle && chmod 444 runtime.yaml
+```
+
+A served deployment is where this rule earns its keep. Evidence reads the bundle once at startup
+and refuses to start if anything in it is writable, so the configuration answering requests is the
+configuration you reviewed, for the whole life of the process.
+
+To edit again, run `chmod -R u+w bundle` and freeze it after each round.
+
+## Start the four processes
+
+Start them in dependency order and wait for each to answer before starting the next:
+
+```sh
+mkdir -p dev/logs out && chmod 700 out
+
+wait_for() {
+  name="$1"
+  shift
+  for _ in $(seq 1 150); do
+    if "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  printf '%s never became ready; read dev/logs\n' "$name" >&2
+  return 1
+}
+
+SOURCE_BEARER_TOKEN="$(cat secrets/source-bearer-token)" \
+  python3 dev/stand-in-source.py 8092 >dev/logs/source.log 2>&1 &
+source_pid=$!
+
+mint serve --config mint/mint.yaml >dev/logs/mint.log 2>&1 &
+mint_pid=$!
+wait_for Mint curl --fail --silent http://127.0.0.1:8081/.well-known/jwks.json
+
+python3 dev/tls-terminator.py 8443 8081 dev/tls.pem dev/tls.key \
+  >dev/logs/tls.log 2>&1 &
+tls_pid=$!
+wait_for 'the TLS terminator' curl --fail --silent --cacert dev/ca.pem \
+  https://localhost:8443/.well-known/jwks.json
+
+SSL_CERT_FILE=dev/ca.pem evidence serve --runtime runtime.yaml \
+  >dev/logs/evidence.log 2>&1 &
+evidence_pid=$!
+wait_for Evidence curl --fail --silent http://127.0.0.1:8080/ready
+
+printf 'source %s, Mint %s, terminator %s, Evidence %s\n' \
+  "$source_pid" "$mint_pid" "$tls_pid" "$evidence_pid"
+```
+
+Expected output, with your own process ids:
+
+```text
+source 51274, Mint 51275, terminator 51279, Evidence 51284
+```
+
+Two details in that block are the whole reason it is longer than four `&` lines.
+
+`SSL_CERT_FILE` is set on the `evidence` process alone, and it is how a development certificate
+authority becomes trustworthy to exactly one process rather than to the machine. Evidence fetches
+the issuer key set over ordinary HTTPS using the platform trust store, and the bundle's
+`outboundTls` trust profiles do not apply: those govern the calls Evidence makes to sources. A real
+deployment needs none of this, because a real ingress certificate already chains to a trusted root.
+
+`/ready` is polled rather than `/health`. Both answer without a token, and the difference matters
+here: `/health` reports that the process is alive, while `/ready` reports that startup finished,
+which for this deployment includes fetching that key set. Waiting on the wrong one would send the
+first request into a service that has not finished starting.
+
+## Get an access token
+
+The caller now proves who it is to Mint and receives a short-lived access token:
+
+```sh
+( umask 077
+  mint token --url https://localhost:8443/token \
+    --client-id scaffold-client \
+    --key caller/signing-ed25519-private-jwk \
+    --ca-certificate dev/ca.pem >out/access-token
+  { printf 'Authorization: Bearer '; cat out/access-token; } >out/auth-header )
+```
+
+Nothing is printed, and that is deliberate. The token goes straight to a file created under
+`umask 077`, and the second command builds the header file curl will read it from. A token on a
+command line reaches the process table and the shell history of everyone on the machine; a token
+echoed to a terminal reaches whatever is capturing that terminal. Neither is recoverable after the
+fact, so the habit is worth forming on a synthetic token.
+
+`mint token` is a caller-side convenience: it builds the RFC 7523 client assertion, signs it with
+the caller key, posts it, and keeps the access token from the response. `--ca-certificate` is what
+lets it trust the development terminator, and it is the caller's exact counterpart to
+`SSL_CERT_FILE` on the Evidence process.
+
+The token lives for five minutes. That is the point of Mint: a caller holding a five-minute token
+is a much smaller problem than a caller holding a long-lived bearer secret, and rotating it is
+running this command again.
+
+## Request an assertion
+
+```sh
+nonce="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')"
+cat >out/request.json <<JSON
+{
+  "requestNonce": "$nonce",
+  "requirement": "urn:example:scaffold:requirement:example-flag:v1",
+  "purpose": "scaffold-eligibility",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "subject-lookup-v1",
+        "values": {
+          "record_reference": "RCD-000123",
+          "registry_code": "RGC-07"
+        }
+      }
+    }
+  ]
+}
+JSON
+
+curl --silent --request POST \
+  --header @out/auth-header \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @out/request.json \
+  --output out/response.json \
+  --write-out 'HTTP %{http_code}\n' \
+  http://127.0.0.1:8080/v1/evidence
+```
+
+Expected output:
+
+```text
+HTTP 200
+```
+
+The request names a requirement, a purpose, and one subject, and it carries no question of its own.
+Which source is read, which fields reach it, and how the answer is derived are all properties of
+the reviewed bundle, so a caller cannot widen a request by asking differently.
+
+The nonce is fresh per request and comes back inside the signed assertion. A consumer that keeps
+the nonce it sent can tell a live answer from a replayed one. `--header @file` is what keeps the
+token off this command line as well.
+
+## Read the signed assertion
+
+The response is a flattened JWS, so it arrives as JSON with the assertion in a base64url payload.
+Decode both halves:
+
+```sh
+python3 - out/response.json <<'PY'
+import base64
+import json
+import sys
+
+
+def decode(segment):
+    padded = segment + "=" * (-len(segment) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded))
+
+
+response = json.load(open(sys.argv[1]))
+print(json.dumps(decode(response["protected"]), indent=2))
+print(json.dumps(decode(response["payload"]), indent=2))
+PY
+```
+
+Expected output, with your own identifiers, timestamps, and nonce:
+
+```text
+{
+  "alg": "EdDSA",
+  "kid": "scaffold-signing-key-1",
+  "typ": "evidence+jws",
+  "cty": "application/evidence+json"
+}
+{
+  "schema": "registry.assertion-evidence/v1",
+  "requestNonce": "9tFiuUOoe4qHyhBDUXfob3OfKbh0SuEdcSd3BVkO-EM",
+  "id": "urn:ulid:01KZ32G21R8J10C9VCWRGXAXFA",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:scaffold:requirement:example-flag:v1",
+  "isConformantTo": "urn:example:scaffold:evidence-type:example-flag:v1",
+  "issuedBy": "urn:example:scaffold:issuer",
+  "providedBy": "urn:example:scaffold:provider",
+  "issuedAt": "2026-08-03T05:45:40Z",
+  "observedAt": "2026-08-03T05:45:40Z",
+  "validUntil": "2026-08-04T05:45:40Z",
+  "purpose": "scaffold-eligibility",
+  "audience": "https://requester.invalid",
+  "configurationRevision": "sha256:db37f3a53859d8e610f1f5a71b7c34d9e2815c5721c630afd2f3414e757b7f0a",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_NlL_pz-3-B980yt6cUlN9FOmNCk-Q9iRknWoTbn1m1o"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:scaffold:concept:example-flag",
+      "value": true
+    }
+  ]
+}
+```
+
+Read the payload for what is absent. The source returned a date; the assertion carries one boolean.
+The request carried two selector values; the assertion carries an opaque binding instead, derived
+with the subject-binding key so the same subject is recognizable to this audience and to nobody
+else. That gap between what was read and what was said is the minimum disclosure the product is
+named for, and it is enforced by the output gate rather than by the derivation being careful.
+
+`kid` names the key that signed it and `configurationRevision` names the exact bundle that produced
+it, so a consumer can pin both. Verifying the signature is a consumer's job and a tutorial of its
+own.
+
+## Confirm the token check is real
+
+A request that succeeds proves less than it looks like, because you have not yet seen one fail.
+Restart Evidence without the development trust anchor, so it cannot fetch the issuer key set:
+
+```sh
+kill "$evidence_pid"
+wait "$evidence_pid" 2>/dev/null || true
+
+evidence serve --runtime runtime.yaml >dev/logs/evidence-untrusted.log 2>&1 &
+evidence_pid=$!
+wait_for Evidence curl --fail --silent http://127.0.0.1:8080/ready
+
+curl --silent --request POST \
+  --header @out/auth-header \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @out/request.json \
+  --output out/refusal.json \
+  --write-out 'HTTP %{http_code}\n' \
+  http://127.0.0.1:8080/v1/evidence
+
+grep -o 'the access-token issuer key set[^"]*' dev/logs/evidence-untrusted.log
+grep -o 'invalid peer certificate: [A-Za-z]*' dev/logs/evidence-untrusted.log
+```
+
+Expected output:
+
+```text
+HTTP 401
+the access-token issuer key set could not be retrieved; every request is rejected until it can be
+invalid peer certificate: UnknownIssuer
+```
+
+Same frozen bundle, same valid token, same live Mint, and the answer is a refusal. Evidence cannot
+reach a key set it trusts, so it cannot verify a signature, so it refuses every request rather than
+accepting one it could not check. `out/refusal.json` names the failure as
+`authentication_failed`, which is all a caller is told: a refusal that explained which check failed
+would be a probing tool.
+
+Note what did not happen. The process started, and `/ready` and `/health` both answer normally,
+because a deployment that has to be restarted to recover from an issuer outage is worse than one
+that refuses requests while it retries. The log line is where an operator sees it, which is why an
+Evidence deployment's logs need somewhere to go before it takes traffic.
+
+## Cleanup
+
+Stop everything and remove the project:
+
+```sh
+kill "$source_pid" "$mint_pid" "$tls_pid" "$evidence_pid" 2>/dev/null || true
+wait 2>/dev/null || true
+cd ..
+chmod -R u+w serve-evidence
+rm -rf serve-evidence
+```
+
+`chmod -R u+w` comes first because the bundle is still frozen, and the development certificate
+authority key goes with the directory. A throwaway authority that outlives its tutorial is a
+machine that trusts a key nobody is looking after.
+
+## Next
+
+- [Connect an institution source](../connect-an-institution-source/) replaces the stand-in with an
+  adapter for a real institution API, proven offline.
+- [Configure Registry Mint](../../configure/mint/) documents every field of the token issuer, its
+  client registrations, and its key rotation.
+- [Registry Evidence API](../../reference/apis/registry-evidence/) documents the request and
+  response shapes this tutorial used, and the rest of the served surface.
+- [Move to production signing](../move-evidence-to-production-signing/) replaces the scaffold's
+  file-backed signing key with managed key material.
+- [Evidence security model](../../security/evidence/) explains the authentication, freezing, and
+  minimum-disclosure invariants this tutorial exercised.

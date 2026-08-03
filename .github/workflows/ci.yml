@@ -1033,7 +1033,7 @@ jobs:
           set -euo pipefail
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-evidence -p registry-evidencectl
+            -p registry-evidence -p registry-evidencectl -p registry-mint
 
       - name: Execute the Evidence tutorials in a clean container
         shell: bash
@@ -1046,6 +1046,7 @@ jobs:
             --mount "type=bind,src=${PWD},dst=/work,readonly" \
             --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
             --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
+            --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 

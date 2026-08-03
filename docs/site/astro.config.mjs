@@ -330,6 +330,7 @@ export default defineConfig({
             { label: 'Get a first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Author an acceptance definition', slug: 'tutorials/author-an-acceptance-definition' },
             { label: 'Connect an institution source', slug: 'tutorials/connect-an-institution-source' },
+            { label: 'Serve assertions over HTTP', slug: 'tutorials/serve-assertions-over-http' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
             { label: 'Move to production signing', slug: 'tutorials/move-evidence-to-production-signing' },

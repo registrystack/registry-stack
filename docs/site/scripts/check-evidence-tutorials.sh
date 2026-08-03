@@ -3,10 +3,10 @@
 # Execute the current Evidence tutorials from a fresh reader directory.
 #
 # This gate builds the Evidence toolset from the checked-out source unless
-# EVIDENCE_BIN and EVIDENCECTL_BIN select exact candidate or released bytes,
-# then replays each registered tutorial's own shell fences in its own reader
-# directory. Every tutorial creates the files it needs from its documented
-# commands, so what CI runs is what a reader copies.
+# EVIDENCE_BIN, EVIDENCECTL_BIN and MINT_BIN select exact candidate or released
+# bytes, then replays each registered tutorial's own shell fences in its own
+# reader directory. Every tutorial creates the files it needs from its
+# documented commands, so what CI runs is what a reader copies.
 #
 # Usage:
 #   scripts/check-evidence-tutorials.sh                 replay every tutorial
@@ -26,8 +26,8 @@
 #   SPEC_OUTPUTS    lines the replay transcript must contain
 #
 # Configuration:
-#   EVIDENCE_BIN / EVIDENCECTL_BIN        run these exact binaries instead of
-#                                         building from source
+#   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
+#   MINT_BIN                              building from source
 #   EVIDENCE_TUTORIAL_CARGO_PROFILE       ci (default) or release
 #   EVIDENCE_TUTORIAL_DOCS_ROOT           tutorial directory override (tests)
 
@@ -50,6 +50,7 @@ EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	author-an-acceptance-definition
 	connect-an-institution-source
+	serve-assertions-over-http
 )
 
 load_spec() {
@@ -138,6 +139,45 @@ load_spec() {
 			'2 passed, 0 failed (12 cases evaluated)'
 		)
 		;;
+	serve-assertions-over-http)
+		SPEC_FENCES=14
+		# The only tutorial that runs the product as a service, so the reader
+		# journey leaves four background processes running from fence 9 until
+		# the teardown fence stops them. Three of the four edits retarget the
+		# scaffold's placeholder issuer at the local TLS terminator, and the
+		# fourth retargets the placeholder source at the stand-in.
+		SPEC_STEPS=(
+			'run:1-3'
+			'edit:Point the deployment at a local issuer URL|yaml|1|Point the deployment at a local issuer URL|yaml|2|bundle/evidence.yaml'
+			'edit:Point Mint at the same URL|yaml|1|Point Mint at the same URL|yaml|2|mint/mint.yaml'
+			'edit:Point Mint at the same URL|yaml|3|Point Mint at the same URL|yaml|4|mint/mint.yaml'
+			'run:4-7'
+			'edit:Repoint the source|yaml|1|Repoint the source|yaml|2|bundle/evidence.yaml'
+			'run:8-14'
+		)
+		SPEC_LITERALS=(
+			'evidencectl new serve-evidence --with-mint'
+			'evidencectl keygen token --out secrets/source-bearer-token'
+			'mint check --config mint/mint.yaml'
+			'chmod -R a-w bundle && chmod 444 runtime.yaml'
+			'SSL_CERT_FILE=dev/ca.pem evidence serve --runtime runtime.yaml'
+			'mint token --url https://localhost:8443/token'
+			'http://127.0.0.1:8080/v1/evidence'
+		)
+		SPEC_OUTPUTS=(
+			# The page quotes this line, and a caller registration left
+			# as an example file would be skipped silently here and only
+			# fail much later, at the token request.
+			'"message":"configuration is valid"'
+			'HTTP 200'
+			'"kid": "scaffold-signing-key-1"'
+			'"providesValueFor": "urn:example:scaffold:concept:example-flag"'
+			# The negative control. Without it a passing run would prove
+			# only that a request succeeded, never that a token is checked.
+			'HTTP 401'
+			'the access-token issuer key set could not be retrieved'
+		)
+		;;
 	*)
 		printf '%s is not a registered Evidence tutorial\n' "$1" >&2
 		exit 2
@@ -211,17 +251,18 @@ resolve_profile_dir() {
 SHIM_DIR="$WORK_ROOT/bin"
 
 prepare_toolset() {
-	if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" ]]; then
+	if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-evidence -p registry-evidencectl)
+			-p registry-evidence -p registry-evidencectl -p registry-mint)
 		EVIDENCE_BIN="$TARGET_DIR/$profile_dir/evidence"
 		EVIDENCECTL_BIN="$TARGET_DIR/$profile_dir/evidencectl"
+		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 	fi
 	local bin
-	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN"; do
+	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN" "$MINT_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -240,6 +281,7 @@ prepare_toolset() {
 	mkdir -p "$SHIM_DIR"
 	ln -s "$EVIDENCE_BIN" "$SHIM_DIR/evidence"
 	ln -s "$EVIDENCECTL_BIN" "$SHIM_DIR/evidencectl"
+	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
 # ---------------------------------------------------------------------------

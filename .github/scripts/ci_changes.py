@@ -77,8 +77,13 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/src/content/docs/tutorials/author-an-acceptance-definition.mdx",
         "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+        "docs/site/src/content/docs/tutorials/serve-assertions-over-http.mdx",
     }
 )
+
+# The gate also builds and runs `mint`, because one tutorial serves assertions
+# to a caller holding a real Mint-issued token.
+EVIDENCE_TUTORIAL_PACKAGES = EVIDENCE_PACKAGES | frozenset(SHARDS["mint"])
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -530,7 +535,7 @@ def classify(
     evidence_tutorial = (
         complete
         or any(path in EVIDENCE_TUTORIAL_INPUTS for path in paths)
-        or bool(affected & EVIDENCE_PACKAGES)
+        or bool(affected & EVIDENCE_TUTORIAL_PACKAGES)
     )
 
     matrix = []

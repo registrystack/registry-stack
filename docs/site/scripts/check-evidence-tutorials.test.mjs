@@ -62,7 +62,7 @@ test('a relative toolset binary path is refused before anything runs', async () 
   // symlinks, so a relative path would resolve against the wrong directory and
   // surface much later as "command not found".
   const { code, output } = await runGate(
-    { EVIDENCE_BIN: 'bin/evidence', EVIDENCECTL_BIN: 'bin/evidencectl' },
+    { EVIDENCE_BIN: 'bin/evidence', EVIDENCECTL_BIN: 'bin/evidencectl', MINT_BIN: 'bin/mint' },
     [],
   );
   assert.notEqual(code, 0, 'a relative binary path must fail the gate');
