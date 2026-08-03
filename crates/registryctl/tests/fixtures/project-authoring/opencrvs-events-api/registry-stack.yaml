@@ -8,25 +8,13 @@ integrations:
 
 services:
   birth-event-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: birth-event-registration-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access:
-      scopes: ["evidence:birth-event:read"]
     consultations:
       event:
         integration: birth-event-search
         input:
           tracking_id: request.target.identifiers.opencrvs_tracking_id
-    claims:
-      birth-event-found:
-        cel: event.matched
-        disclosure: predicate
-      birth-event-registered:
-        cel: >-
-          event.matched
-            && event.event_type == "birth"
-            && event.registered
-        disclosure: predicate

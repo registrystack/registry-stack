@@ -92,31 +92,31 @@ gates for its area (see Verification), and committed.
 
 ### C. Notary deletion cascade
 
-- [ ] C1. Decisions on record before deletion: ROADMAP pilot line reframed
+- [x] C1. Decisions on record before deletion: ROADMAP pilot line reframed
       to Relay + Evidence; retirement decision page drafted (published in
       C7); changelog entry drafted.
-- [ ] C2. registryctl surgery complete: Notary compiler target, dev
+- [x] C2. registryctl surgery complete: Notary compiler target, dev
       credentials, deployment wiring, and release-lock entries removed;
       registryctl builds and tests green as Relay-only tooling.
-- [ ] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
+- [x] C3. `registry-notary*` crates and `products/notary` deleted; Relay's
       Notary dev-dependency contract tests dropped; workspace members,
       `deny.toml`, and `Cargo.lock` updated; workspace green.
-- [ ] C4. Platform crates with no remaining consumers deleted (candidates:
+- [x] C4. Platform crates with no remaining consumers deleted (candidates:
       `oid4vci`, `pdp`, `replay`); verified with `cargo tree`, including
       `registry-platform-testing` usage.
-- [ ] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
+- [x] C5. CI updated: Notary OpenAPI drift gate removed, Relay's kept,
       Evidence gates confirmed present.
-- [ ] C6. Release tooling: a new manifest without Notary components
+- [x] C6. Release tooling: a new manifest without Notary components
       validates; the source-model proof passes; the OpenID conformance
       runner's fate decided and recorded (retire if it was OID4VCI-only).
       Old manifests untouched.
-- [ ] C7. Docs surface removal: authored Notary pages and the mirrored
+- [x] C7. Docs surface removal: authored Notary pages and the mirrored
       `products/registry-notary` docset removed along with their
       `repo-docs.yaml`, `docsets.yaml`, and `openapi-sources.yaml` config;
       every removed URL redirects to its Evidence equivalent or the
       retirement page; retirement page published; site description updated.
       Ships with or after B1, in the same release as the code-pin advance.
-- [ ] C8. Repo docs updated: `AGENTS.md` (Evidence boundary section
+- [x] C8. Repo docs updated: `AGENTS.md` (Evidence boundary section
       simplified), `CONTRIBUTING.md`, `README.md`.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
@@ -491,6 +491,110 @@ is parallel; B has no upstream dependencies and is the standing priority
   six per-tutorial times, the 23 and 12 fixture counts, and the five
   refusals cited on the overview were each read back out of the tutorial
   they describe rather than recalled.
+- 2026-08-03: C1 done after Jeremi approved the framing. The ROADMAP pilot
+  line now names Registry Relay and Evidence; the docs changelog records the
+  retirement decision without claiming the deletion is complete; and the
+  retirement decision page is drafted with `draft: true` for publication in
+  C7. No runtime, contract, or Relay implementation changed. Next in C: C2.
+- 2026-08-03: C2 done. registryctl is Relay-only tooling: the Notary compiler,
+  authoring model, credentials, runtime/deployment wiring, trust material, and
+  release-lock entries are gone. Public and consultation Relay lanes retain
+  distinct client identities, and malformed retired approved-set values fail
+  closed. This is a pre-1.0 breaking project/release-lock migration: operators
+  rebuild generated deployment material before later decommissioning or
+  archiving old Notary state; no automatic database cleanup occurs. Relay
+  production source and frozen Evidence contracts are unchanged. Formatting,
+  check, Clippy, registryctl/language-server/workspace tests, cargo-deny, and
+  the affected release-lock/compose gates passed. The full workspace command
+  still reaches the unchanged main-branch failure in
+  `registry-evidencectl/tests/scaffold.rs::the_rendered_mint_configuration_passes_mint_check`:
+  Mint validation succeeds but emits no stdout, while the test expects a
+  success sentence and client count. That failure reproduces in the untouched
+  original checkout and is outside C; the same workspace tests pass when the
+  unrelated `registry-evidencectl` crate is excluded. Next in C: the mandatory
+  C3 deletion approval stop, with C4 reverse-dependency evidence.
+- 2026-08-03: C6 done. `registry-stack-beta-27.yaml` defines the first
+  post-Notary release at v0.17.0, with Relay, the reviewed PostgreSQL runtime,
+  Manifest, registryctl, Evidence, evidencectl, Mint, docs, and installers but
+  no Notary artifact. Current release workflows, image locks, security
+  evidence, repeatability checks, stable-surface metrics, and source-model
+  proof follow that inventory; pre-0.17 candidate and image-lock validation
+  still requires the historical Notary closure, and every older manifest is
+  byte-untouched. The OpenID runner was retired because its plans and protocol
+  path were exclusively Notary OID4VCI; its initial report remains historical,
+  while the independent Relay OIDC smoke remains supported. The likewise
+  Notary-bound external-integration runner was retired rather than relabelled
+  as evidence for a topology it never exercised. Capsule backfill follows the
+  same v0.17 boundary, and upgrade-exercise v1 is explicitly frozen as a
+  historical pre-v0.17 contract instead of reading deleted paths for a current
+  target. The five required C6 commands passed, as did the consolidated
+  585-test release suite (2 skipped), release
+  workflow lint/structure checks, candidate compatibility tests, and the
+  current plus historical-base stable-surface checks. Evidence artifacts stay
+  optional until F3; C6 does not claim that separate workstream complete. Next
+  in C: C3 approval, then C5 can complete against the deleted workspace graph.
+- 2026-08-03: C8 done. Root `AGENTS.md`, `CONTRIBUTING.md`, and `README.md`
+  now describe the two maintained runtime patterns, Relay and Evidence, plus
+  their optional composition and Mint's supporting role. Current crate maps,
+  verification commands, security-review language, architecture diagram, and
+  onboarding links no longer present Notary as an available product; release
+  validation points at the C6 beta-27 manifest and the retired OpenID command
+  is absent. Historical decision, changelog, and release evidence were not
+  rewritten, and no docs-site or solmara-lab file changed. The focused
+  deployment-documentation tests, offline link check, stale-surface scan,
+  beta-27 validation, and diff check passed. Next in C: the mandatory C3
+  approval, then C3/C4 and prepared C5.
+- 2026-08-03: C3 done after Jeremi approved the exact deletion list. All five
+  `registry-notary*` crates, `products/notary`, Relay's two Notary contract-test
+  artifacts, and the two Notary profile handoff examples are deleted. The
+  workspace manifest and lock no longer contain a Notary package; Relay keeps
+  `registry-platform-testing`, and no Relay production source changed.
+  `deny.toml` required no edit because it held no Notary-specific allowance.
+  Formatting, check, Clippy, the complete workspace test suite, cargo-deny,
+  Evidence contract reproduction, and Evidence source neutrality passed. The
+  workspace test was run with the shell's inherited `RUST_LOG=warn` removed,
+  matching CI; the one test it had suppressed then passed without an
+  Evidencectl change. Next in C: C4 orphan platform cleanup.
+- 2026-08-03: C5 done. Current CI no longer routes, tests, fuzzes, covers, or
+  publishes a PostgreSQL conformance lane for Notary. Relay's OpenAPI,
+  exposure, advisory, assurance, and coverage gates remain, and Evidence
+  contract reproduction plus source-neutrality stay in the Rust aggregate.
+  The obsolete Notary-versus-Relay advisory-checker byte-identity guard was
+  removed while Relay's checker tests remain. The CI classifier's generated
+  authoring-reference inputs and artifacts now follow the Relay-only
+  registryctl source contract instead of reading deleted Notary schemas.
+  Actionlint, the 30 classifier tests, the 71 gate-inventory tests and live
+  146-gate inventory, Relay's 41 security/advisory tests, the 71 release
+  aggregate tests, the focused generated-reference suite, Relay OpenAPI, and
+  both Evidence gates passed. The full docs suite now reaches seven stale
+  post-C2/C3 consumers and generated closures reserved for C7; its C5-owned
+  reference tests pass byte-exactly. Next in C: C4 orphan platform cleanup.
+- 2026-08-03: C4 done. The orphaned `registry-platform-cache`,
+  `registry-platform-oid4vci`, `registry-platform-replay`, and
+  `registry-platform-sts` crates and the OID4VCI fuzz target/corpus are
+  deleted. `registry-platform-pdp` remains in Relay's production dependency
+  tree, and `registry-platform-testing` remains in Relay's development tree;
+  both reverse trees terminate through `registry-relay` and `registryctl`.
+  Workspace and fuzz manifests, lockfiles, CI routing, nightly security,
+  secret-scanning paths, platform docs, and testing helpers now match the
+  retained surface. Formatting, workspace check, Clippy, complete workspace
+  tests, cargo-deny, Evidence contracts and neutrality, platform hygiene and
+  config audits, fuzz compilation, CI classifier/inventory tests, and the
+  explicit package-absence proof passed. Next in C: C7 docs surface removal.
+- 2026-08-03: C7 done. Six authored Notary pages, four Notary-only diagrams,
+  the current mirrored product docset, generated API, navigation, project,
+  contract, and source aggregation are removed. The retirement decision is
+  published, the site presents Relay and Evidence as the maintained runtime
+  products, and the Relay-only registryctl tutorial and generated diagnostic
+  closures no longer depend on retired Notary artifacts. Historical docset
+  pins remain intact. Every retired authored, mirrored-product, project, and
+  generated API URL, including all 27 operation routes plus Markdown twins
+  for former content pages, redirects through the current-docset resolver to
+  an Evidence replacement or the retirement decision, so archive builds never
+  target absent pages. The retirement redirect tests, 285-test docs suite,
+  generation, content/style/OpenAPI/tutorial/SVG checks, Astro typecheck and
+  build, accessibility and machine-readable output checks, SEO, and 31,725
+  internal links and assets passed. All C work is complete.
 - 2026-08-03: D1 done in solmara-lab. `just up-evidence` runs a second CRA
   Relay serving the civil register as a governed records API, Registry Mint
   issuing the caller token, and Registry Evidence answering adult status over

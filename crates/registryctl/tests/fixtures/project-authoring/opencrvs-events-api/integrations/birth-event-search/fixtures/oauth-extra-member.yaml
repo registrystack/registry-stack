@@ -14,4 +14,4 @@ interactions:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: Bearer
         unexpected: rejected
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }

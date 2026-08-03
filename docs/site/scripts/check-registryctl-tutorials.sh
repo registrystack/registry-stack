@@ -23,7 +23,6 @@ if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
 	HTTP_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/author-registry-project.md"
 	SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/publish-spreadsheet-secured-registry-api.md"
 	USE_SPREADSHEET_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/use-your-spreadsheet.md"
-	EVIDENCE_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-claim-registry-api.md"
 	OAUTH_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/configure-project-script-adapter.md"
 	OAUTH_HOWTO="$RELEASED_DOCS_ROOT/configure/oauth-client-credentials.md"
 	OPENCRVS_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-opencrvs-claims.md"
@@ -33,7 +32,6 @@ else
 	HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
 	SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
 	USE_SPREADSHEET_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/use-your-spreadsheet.mdx"
-	EVIDENCE_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx"
 	OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
 	OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
 	OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
@@ -148,15 +146,6 @@ node "$HELPER" assert-contains "$SPREADSHEET_TUTORIAL" \
 	'project-record-snapshot' \
 	'registryctl test' \
 	'registryctl dev smoke' \
-	'registryctl check --explain' \
-	'registryctl build'
-node "$HELPER" assert-contains "$EVIDENCE_TUTORIAL" \
-	'project-status-accepted' \
-	'project.status == "planned"' \
-	'default_fixture: planned' \
-	'registryctl dev --detach' \
-	'registryctl dev smoke' \
-	'registryctl dev down' \
 	'registryctl check --explain' \
 	'registryctl build'
 node "$HELPER" assert-contains "$OAUTH_HOWTO" \
@@ -290,7 +279,7 @@ run_reports() {
 			"$report_directory/build.json"
 	fi
 
-	for lane in relay-public relay-consultation notary; do
+	for lane in relay-public relay-consultation; do
 		test -f \
 			"$project_directory/.registry-stack/build/local/signing-inputs/$lane/signing-input.v1.json"
 	done
@@ -314,8 +303,6 @@ run_spreadsheet_runtime() {
 	local status=$6
 	local records_denied_config
 	local records_config
-	local evidence_config
-	local evidence_body
 	local denied_status
 
 	if [[ "$RUNNER_MODE" != "sealed" ]]; then
@@ -332,17 +319,9 @@ run_spreadsheet_runtime() {
 	records_config="$(find \
 		"$project_directory/.registry-stack/dev/local" \
 		-type f -path '*/credentials/records-request.curl' -print)"
-	evidence_config="$(find \
-		"$project_directory/.registry-stack/dev/local" \
-		-type f -path '*/credentials/request.curl' -print)"
-	evidence_body="$(find \
-		"$project_directory/.registry-stack/dev/local" \
-		-type f -path '*/credentials/request.json' -print)"
 	for request_artifact in \
 		"$records_denied_config" \
-		"$records_config" \
-		"$evidence_config" \
-		"$evidence_body"; do
+		"$records_config"; do
 		if [[ -z "$request_artifact" || "$request_artifact" == *$'\n'* ]]; then
 			printf 'expected exactly one generated development request artifact per public journey\n' >&2
 			exit 1
@@ -350,10 +329,8 @@ run_spreadsheet_runtime() {
 	done
 	node "$HELPER" assert-contains "$report_directory/dev-start.txt" \
 		'Relay API: http://127.0.0.1:4242' \
-		'Evidence API: http://127.0.0.1:4243' \
 		"Records denied request: curl --config '$records_denied_config'" \
-		"Records request: curl --config '$records_config'" \
-		"Evidence request: curl --config '$evidence_config'"
+		"Records request: curl --config '$records_config'"
 	denied_status="$(curl --silent --show-error \
 		--config "$records_denied_config" \
 		--no-include \
@@ -373,24 +350,13 @@ run_spreadsheet_runtime() {
 	node "$HELPER" assert-not-contains "$report_directory/records-request.json" \
 		'PW-002' \
 		'PW-003'
-	node "$HELPER" assert-json-subset "$evidence_body" \
-		"{\"target\":{\"identifiers\":[{\"scheme\":\"project_id\",\"value\":\"$project_id\"}]}}"
-	curl --silent --show-error --config "$evidence_config" \
-		>"$report_directory/evidence-request.json"
-	node "$HELPER" assert-json-subset "$report_directory/evidence-request.json" \
-		'{"results":[{"claim_id":"project-record-exists","value":true,"satisfied":true,"disclosure":"predicate"},{"claim_id":"project-status-accepted","value":true,"satisfied":true,"disclosure":"predicate"}]}'
-	node "$HELPER" assert-not-contains "$report_directory/evidence-request.json" \
-		'north-01' \
-		'water' \
-		'active' \
-		'planned'
 	"$REGISTRYCTL_BIN" -C "$project_directory" dev smoke \
 		>"$report_directory/dev-smoke.txt"
 	node "$HELPER" assert-contains "$report_directory/dev-smoke.txt" \
 		'Development smoke: passed.' \
 		'unauthorized: status=denied; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved' \
 		'authorized: status=authorized; passed=true; token_counter_delta=unobserved; source_counter_delta=unobserved' \
-		'minimized_claim_ids=project-record-exists,project-status-accepted'
+		'minimized_claim_ids=none'
 	"$REGISTRYCTL_BIN" -C "$project_directory" dev down \
 		>"$report_directory/dev-down.txt"
 	ACTIVE_DEV_PROJECT=""
@@ -400,7 +366,6 @@ run_synthetic_runtime() {
 	local project_directory=$1
 	local report_directory=$2
 	local expected_token_delta=$3
-	local expected_claim_ids=$4
 
 	if [[ "$RUNNER_MODE" != "sealed" ]]; then
 		return
@@ -411,12 +376,10 @@ run_synthetic_runtime() {
 	"$REGISTRYCTL_BIN" -C "$project_directory" dev --detach \
 		>"$report_directory/dev-start.txt"
 	node "$HELPER" assert-contains "$report_directory/dev-start.txt" \
-		'Relay API: http://127.0.0.1:4242' \
-		'Evidence API: http://127.0.0.1:4243' \
-		'Evidence request: curl --config '
+		'Relay API: http://127.0.0.1:4242'
 	if find "$project_directory/.registry-stack/dev/local" -type f \
-		\( -name 'relay-*-tls.*' -o -name 'notary-tls.*' \) -print -quit | grep -q .; then
-		printf 'development runtime generated obsolete product listener TLS material\n' >&2
+		-name 'relay-*-tls.*' -print -quit | grep -q .; then
+		printf 'development runtime generated obsolete listener TLS material\n' >&2
 		exit 1
 	fi
 	"$REGISTRYCTL_BIN" -C "$project_directory" dev smoke \
@@ -425,7 +388,7 @@ run_synthetic_runtime() {
 		'Development smoke: passed.' \
 		'unauthorized: status=denied; passed=true; token_counter_delta=0; source_counter_delta=0' \
 		"authorized: status=authorized; passed=true; token_counter_delta=$expected_token_delta; source_counter_delta=1" \
-		"minimized_claim_ids=$expected_claim_ids"
+		'minimized_claim_ids=none'
 	"$REGISTRYCTL_BIN" -C "$project_directory" dev down \
 		>"$report_directory/dev-down.txt"
 	ACTIVE_DEV_PROJECT=""
@@ -446,8 +409,7 @@ run_reports "$HTTP_PROJECT" http
 run_synthetic_runtime \
 	"$HTTP_PROJECT" \
 	"$REPORT_ROOT/http/runtime" \
-	0 \
-	'person-record-exists'
+	0
 (
 	cd "$HTTP_PROJECT"
 	"$REGISTRYCTL_BIN" test
@@ -595,67 +557,6 @@ run_spreadsheet_runtime \
 	active
 printf 'Adapted spreadsheet reader journey: PASS\n'
 
-EVIDENCE_PROJECT="$SPREADSHEET_PROJECT"
-EVIDENCE_REPORT="$REPORT_ROOT/spreadsheet-evidence"
-mkdir -p "$EVIDENCE_REPORT"
-(
-	cd "$EVIDENCE_PROJECT"
-	"$REGISTRYCTL_BIN" test \
-		--integration project-record-snapshot \
-		--fixture planned \
-		--trace
-) >"$EVIDENCE_REPORT/before-trace.txt"
-node "$HELPER" assert-contains "$EVIDENCE_REPORT/before-trace.txt" \
-	'PASS project-record-snapshot.planned' \
-	'claims: project-record-exists'
-
-node "$HELPER" replace-fence-pair \
-	"$EVIDENCE_TUTORIAL" \
-	'Change the authored evidence rule' yaml 1 \
-	'Change the authored evidence rule' yaml 2 \
-	"$EVIDENCE_PROJECT/registry-stack.yaml"
-node "$HELPER" replace-fence-pair \
-	"$EVIDENCE_TUTORIAL" \
-	'Observe the current policy result' yaml 1 \
-	'Change the authored evidence rule' yaml 3 \
-	"$EVIDENCE_PROJECT/integrations/project-record-snapshot/fixtures/planned.yaml"
-node "$HELPER" replace-fence-pair \
-	"$EVIDENCE_TUTORIAL" \
-	'Run the changed Relay and Notary path' yaml 1 \
-	'Run the changed Relay and Notary path' yaml 2 \
-	"$EVIDENCE_PROJECT/environments/local.yaml"
-
-(
-	cd "$EVIDENCE_PROJECT"
-	"$REGISTRYCTL_BIN" test \
-		--integration project-record-snapshot \
-		--fixture planned \
-		--trace
-) >"$EVIDENCE_REPORT/after-trace.txt"
-node "$HELPER" assert-contains "$EVIDENCE_REPORT/after-trace.txt" \
-	'PASS project-record-snapshot.planned' \
-	'claims: project-record-exists, project-status-accepted' \
-	'outcome: match'
-(
-	cd "$EVIDENCE_PROJECT"
-	"$REGISTRYCTL_BIN" test
-) >"$EVIDENCE_REPORT/test.txt"
-
-run_spreadsheet_runtime \
-	"$EVIDENCE_PROJECT" \
-	"$EVIDENCE_REPORT/runtime" \
-	PW-002 \
-	central-02 \
-	health \
-	planned
-
-run_reports \
-	"$EVIDENCE_PROJECT" \
-	spreadsheet-evidence \
-	fictional-public-works-registry \
-	snapshot
-printf 'Spreadsheet evidence-change reader journey: PASS\n'
-
 PUBLIC_SOURCE_PROJECT="$WORK_ROOT/public-source-reader"
 "$REGISTRYCTL_BIN" init "$PUBLIC_SOURCE_PROJECT" --template http \
 	>"$REPORT_ROOT/public-source-init.txt"
@@ -755,8 +656,7 @@ run_reports "$OPENCRVS_PROJECT" opencrvs
 run_synthetic_runtime \
 	"$OPENCRVS_PROJECT" \
 	"$REPORT_ROOT/opencrvs/runtime" \
-	1 \
-	'birth-event-found,birth-event-registered'
+	1
 printf 'OAuth and Rhai reader journey: PASS\n'
 printf 'OpenCRVS Events API case-study journey: PASS\n'
 

@@ -8,9 +8,6 @@
 
 use std::collections::BTreeSet;
 
-use registry_notary_server::{
-    NotaryActivationCode, NotaryActivationCodeLifecycle, NOTARY_ACTIVATION_CODE_DEFINITIONS,
-};
 use registry_platform_ops::{
     BundleVerificationCode, BundleVerificationCodeLifecycle, BundleVerificationEvidencePolicy,
     BUNDLE_VERIFICATION_CODE_DEFINITIONS,
@@ -44,7 +41,6 @@ pub enum ErrorReferenceFamily {
     AuthoringValidation,
     BundleVerification,
     FixtureExecution,
-    NotaryActivation,
     OperatorPreflight,
     RelayActivation,
     RelayProcessStartup,
@@ -57,7 +53,6 @@ impl ErrorReferenceFamily {
             Self::AuthoringValidation => "authoring_validation",
             Self::BundleVerification => "bundle_verification",
             Self::FixtureExecution => "fixture_execution",
-            Self::NotaryActivation => "notary_activation",
             Self::OperatorPreflight => "operator_preflight",
             Self::RelayActivation => "relay_activation",
             Self::RelayProcessStartup => "relay_process_startup",
@@ -69,7 +64,6 @@ impl ErrorReferenceFamily {
             Self::AuthoringValidation => "authoring",
             Self::FixtureExecution => "fixture",
             Self::BundleVerification
-            | Self::NotaryActivation
             | Self::OperatorPreflight
             | Self::RelayActivation
             | Self::RelayProcessStartup => "operator",
@@ -80,7 +74,6 @@ impl ErrorReferenceFamily {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorReferenceOwner {
-    RegistryNotary,
     RegistryPlatformOps,
     RegistryRelay,
     Registryctl,
@@ -90,7 +83,6 @@ impl ErrorReferenceOwner {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::RegistryNotary => "registry_notary",
             Self::RegistryPlatformOps => "registry_platform_ops",
             Self::RegistryRelay => "registry_relay",
             Self::Registryctl => "registryctl",
@@ -101,7 +93,6 @@ impl ErrorReferenceOwner {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorReferenceProduct {
-    RegistryNotary,
     RegistryPlatformOps,
     RegistryRelay,
     Registryctl,
@@ -112,7 +103,6 @@ impl ErrorReferenceProduct {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::RegistryNotary => "registry_notary",
             Self::RegistryPlatformOps => "registry_platform_ops",
             Self::RegistryRelay => "registry_relay",
             Self::Registryctl => "registryctl",
@@ -183,7 +173,6 @@ pub struct FixtureErrorReferenceV1 {
 #[serde(rename_all = "snake_case")]
 pub enum OperatorErrorOmissionFamily {
     BundleVerification,
-    NotaryActivation,
     OperatorPreflight,
     RelayActivation,
     RelayProcessStartup,
@@ -193,7 +182,6 @@ impl OperatorErrorOmissionFamily {
     const fn as_str(self) -> &'static str {
         match self {
             Self::BundleVerification => "bundle_verification",
-            Self::NotaryActivation => "notary_activation",
             Self::OperatorPreflight => "operator_preflight",
             Self::RelayActivation => "relay_activation",
             Self::RelayProcessStartup => "relay_process_startup",
@@ -319,7 +307,6 @@ pub fn fixture_error_reference() -> FixtureErrorReferenceV1 {
 pub fn operator_error_reference() -> OperatorErrorReferenceV1 {
     let mut entries = preflight_reference_entries();
     entries.extend(bundle_verification_reference_entries());
-    entries.extend(notary_activation_reference_entries());
     entries.extend(relay_activation_reference_entries());
     entries.extend(relay_process_startup_reference_entries());
     entries.sort_by(|left, right| entry_key(left).cmp(&entry_key(right)));
@@ -488,44 +475,6 @@ fn relay_process_startup_reference_entries() -> Vec<ErrorReferenceEntry> {
         .collect()
 }
 
-fn notary_activation_reference_entries() -> Vec<ErrorReferenceEntry> {
-    NOTARY_ACTIVATION_CODE_DEFINITIONS
-        .iter()
-        .map(|definition| {
-            let code = definition.code.as_str().to_string();
-            let lifecycle = match definition.lifecycle {
-                NotaryActivationCodeLifecycle::Unreleased => ErrorReferenceLifecycle::Unreleased,
-                NotaryActivationCodeLifecycle::Released { .. } => ErrorReferenceLifecycle::Released,
-            };
-            ErrorReferenceEntry {
-                family: ErrorReferenceFamily::NotaryActivation,
-                code: code.clone(),
-                owner: ErrorReferenceOwner::RegistryNotary,
-                product: ErrorReferenceProduct::RegistryNotary,
-                phase: definition.phase.to_string(),
-                safe_meaning: definition.meaning.to_string(),
-                rule: definition.rule.to_string(),
-                safe_remediation: definition.remediation.to_string(),
-                field_address_pattern: None,
-                evidence_scope: definition.evidence_scope.to_string(),
-                secret_sensitive_value_policy: ErrorReferenceValuePolicy::NoRuntimeValues,
-                docs_anchor: docs_anchor(
-                    ErrorReferenceFamily::NotaryActivation,
-                    ErrorReferenceProduct::RegistryNotary,
-                    definition.docs_slug,
-                ),
-                lifecycle,
-                introduced_in: definition
-                    .lifecycle
-                    .introduced_version()
-                    .map(str::to_string),
-                stability: ErrorReferenceStability::Pre1StableCode,
-                evidence_limitation: definition.evidence_limitation.to_string(),
-            }
-        })
-        .collect()
-}
-
 fn expected_operator_omissions() -> Vec<OperatorErrorOmission> {
     Vec::new()
 }
@@ -685,28 +634,6 @@ fn validate_source_catalogs() -> Result<(), ErrorReferenceValidationError> {
     {
         return Err(ErrorReferenceValidationError::SourceCatalogMismatch);
     }
-    let mut notary_docs_slugs = BTreeSet::new();
-    if NOTARY_ACTIVATION_CODE_DEFINITIONS.len() != NotaryActivationCode::ALL.len()
-        || !NotaryActivationCode::ALL.iter().all(|code| {
-            let definition = code.definition();
-            definition.code == *code
-                && notary_lifecycle_version_is_valid(definition.lifecycle)
-                && static_metadata_is_complete(&[
-                    definition.phase,
-                    definition.meaning,
-                    definition.rule,
-                    definition.remediation,
-                    definition.evidence_scope,
-                    definition.evidence_policy,
-                    definition.evidence_limitation,
-                ])
-                && docs_slug_is_valid(definition.docs_slug)
-                && notary_docs_slugs.insert(definition.docs_slug)
-                && NOTARY_ACTIVATION_CODE_DEFINITIONS.contains(definition)
-        })
-    {
-        return Err(ErrorReferenceValidationError::SourceCatalogMismatch);
-    }
     Ok(())
 }
 
@@ -719,15 +646,6 @@ fn docs_slug_is_valid(slug: &str) -> bool {
         && slug
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn notary_lifecycle_version_is_valid(lifecycle: NotaryActivationCodeLifecycle) -> bool {
-    match lifecycle {
-        NotaryActivationCodeLifecycle::Unreleased => lifecycle.introduced_version().is_none(),
-        NotaryActivationCodeLifecycle::Released { introduced_version } => {
-            is_numeric_release_version(introduced_version)
-        }
-    }
 }
 
 fn lifecycle_version_is_valid(
@@ -783,10 +701,6 @@ fn docs_anchor(
 fn expected_docs_anchor(entry: &ErrorReferenceEntry) -> String {
     let source_slug = match entry.family {
         ErrorReferenceFamily::BundleVerification => BUNDLE_VERIFICATION_CODE_DEFINITIONS
-            .iter()
-            .find(|definition| definition.code.as_str() == entry.code)
-            .map(|definition| definition.docs_slug),
-        ErrorReferenceFamily::NotaryActivation => NOTARY_ACTIVATION_CODE_DEFINITIONS
             .iter()
             .find(|definition| definition.code.as_str() == entry.code)
             .map(|definition| definition.docs_slug),

@@ -1,13 +1,5 @@
 name: match
 classification: synthetic
-request:
-  target:
-    type: Project
-    identifiers: [{ scheme: project_id, value: pw_001 }]
-  claims: [project-record-exists, project-status-accepted]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-works-case-management
 input: { project_id: pw_001 }
 interactions:
   - expect: { method: GET, path: /snapshot }
@@ -15,6 +7,3 @@ interactions:
 expect:
   outcome: match
   outputs: { status: active }
-  claims:
-    project-record-exists: true
-    project-status-accepted: true

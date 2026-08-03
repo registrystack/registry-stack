@@ -16,9 +16,6 @@
       "outputs": [
         "active"
       ],
-      "claims": [
-        "is_active"
-      ],
       "outcome": "matched",
       "source_access": false,
       "passed": true

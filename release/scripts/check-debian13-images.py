@@ -35,8 +35,6 @@ DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
-    Path("products/notary/Dockerfile"),
-    Path("release/docker/Dockerfile.registry-notary"),
     Path("release/docker/Dockerfile.registry-relay"),
 )
 
@@ -58,20 +56,14 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
     Path("crates/registry-relay/docs/ops.md"),
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
-    Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
-    Path("products/notary/docs/security-assurance.md"),
 )
 
-RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
-PREPARATION_DOCKERFILES = DOCKERFILES[3:]
+RUST_BUILDER_DOCKERFILES = DOCKERFILES[:2]
+PREPARATION_DOCKERFILES = DOCKERFILES[2:]
 RELAY_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
     Path("release/docker/Dockerfile.registry-relay"),
-)
-NOTARY_DOCKERFILES = (
-    Path("products/notary/Dockerfile"),
-    Path("release/docker/Dockerfile.registry-notary"),
 )
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
@@ -289,53 +281,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
 
-    product_notary = texts[Path("products/notary/Dockerfile")]
-    require(
-        product_notary,
-        'ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"',
-        Path("products/notary/Dockerfile"),
-        "PKCS#11-enabled product build",
-        failures,
-    )
-    for relative in NOTARY_DOCKERFILES:
-        text = texts[relative]
-        require(
-            text,
-            "registry-notary-cel-worker",
-            relative,
-            "Notary CEL worker binary",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            'ENTRYPOINT ["/usr/local/bin/registry-notary"]',
-            relative,
-            "absolute Notary entrypoint",
-            failures,
-        )
-        require(
-            text,
-            "chown -R 65532:65532",
-            relative,
-            "numeric nonroot-owned Notary runtime directories",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            "WORKDIR /var/lib/registry-notary",
-            relative,
-            "Notary working directory",
-            failures,
-        )
-        if re.search(
-            r"^\s*(?:COPY|ADD)\b[^\n]*(?:\.so\b|pkcs11[^/\s]*module)",
-            text,
-            re.IGNORECASE | re.MULTILINE,
-        ):
-            failures.append(
-                f"{relative}: vendor PKCS#11 modules must remain external read-only mounts"
-            )
-
     candidate_workflow = texts[Path(".github/workflows/release-candidate.yml")]
     release_workflow = texts[Path(".github/workflows/release.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
@@ -358,25 +303,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 ".github/workflows/release.yml: promotion workflow must not "
                 f"rebuild candidate artifacts: {forbidden!r}"
             )
-    require(
-        binary_recipe,
-        "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
-        Path("release/scripts/build-release-binaries.sh"),
-        "PKCS#11-enabled release build",
-        failures,
-    )
-
-    live_journey = texts[
-        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
-    ]
-    require(
-        live_journey,
-        RUST_BUILDER,
-        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
-        "pinned Debian 13 live-journey builder",
-        failures,
-    )
-
     return failures
 
 

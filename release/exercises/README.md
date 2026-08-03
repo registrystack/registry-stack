@@ -102,12 +102,19 @@ If the candidate coordinate, manifest, product inputs, trust generation,
 activation generation, or retained evidence changes, discard the result and
 repeat the lifecycle against the new exact digests.
 
-## Upgrade lifecycle
+## Historical Notary-era upgrade lifecycle
+
+The `registry-stack.upgrade-exercise/v1` contract is retained to validate
+committed Notary-era upgrade records whose target version is earlier than
+v0.17.0. The validator rejects v0.17.0 and later targets before reading any
+Notary-era schema, image, or release-input path. Post-Notary upgrades require
+a successor contract; do not repurpose v1 by removing its Notary fields.
 
 ## Candidate-neutral preparation
 
 `upgrade-exercise-v1.template.json` defines the machine-validated evidence
-record for a Registry Stack stable upgrade. The template is preparation only.
+record for a historical Registry Stack stable upgrade. The template is
+preparation only.
 Its `record_kind` is `template`, every result is `not_run`, and both candidate
 attestations are `false`. Every result's observation and evidence fields are
 null. A validated template contains zero candidate evidence and does not

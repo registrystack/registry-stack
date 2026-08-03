@@ -16,8 +16,6 @@ paths = ["^editors/vscode/\\.vscode-test/"]
 [[allowlists]]
 description = "Allow synthetic JWT fixtures used only by the platform fuzz harnesses."
 paths = [
-  "^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\\.json$",
-  "^products/platform/fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
   "^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\\.jwt$",
   "^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
 ]

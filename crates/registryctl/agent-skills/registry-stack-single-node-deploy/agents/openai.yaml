@@ -1,6 +1,6 @@
 interface:
   display_name: "Registry Stack Single-Node Deploy"
-  short_description: "Deploy and validate a local Relay/Notary stack"
+  short_description: "Deploy and validate a local Relay stack"
   default_prompt: "Use $registry-stack-single-node-deploy to set up and validate this single-node Registry stack."
 
 policy:

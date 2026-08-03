@@ -1,6 +1,6 @@
 # 1.0 Release Readiness
 
-This document tracks the evidence that Registry Relay and Registry Notary are
+This document tracks the evidence that Registry Relay and Evidence are
 ready for a stable release. "Stable" means both semver API stability
 commitments and a production security posture suitable for government
 deployments that self-host the stack.
@@ -34,7 +34,7 @@ client, plus where those guarantees could leak (logs, error messages, audit
 records, caches, timing).
 
 - [ ] Relay threat model written and reviewed.
-- [ ] Notary threat model written and reviewed.
+- [ ] Evidence threat model written and reviewed.
 - [ ] Attack checklist derived from the threat models (drives section 4).
 
 ## 3. Standards conformance
@@ -46,25 +46,16 @@ write.
 - [x] Inventory of standards and specification claims across docs and specs.
       Evidence: [`standards-claims-inventory.md`](notes/standards-claims-inventory.md).
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
-- [ ] OpenID conformance suite running repeatably against a supported
-      deployment topology (#205). Must not depend on the retired monorepo lab,
-      which was replaced by the standalone
-      [Solmara Lab](https://github.com/registrystack/solmara-lab) (#224).
-      The release-owned [OIDF harness and plan mapping](conformance/openid/README.md)
-      and [Relay OIDC smoke](conformance/relay-oidc/README.md) no longer depend
-      on either lab. The Relay smoke is source-ready and directly runnable
-      against a digest-pinned published candidate, but no reviewed 1.0
-      candidate result exists yet. The OIDF harness's
-      [initial report](conformance/openid/initial-report.md) preserves the
-      historical hosted-lab failures but does not yet prove a pinned release
-      topology.
-- [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
-- [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The
-      [candidate-neutral source packet](conformance/integrations/README.md)
-      pins both unofficial profiles, closes the public result shape, and
-      validates published candidate assets. It is not live evidence; the
-      external compatibility, instance, source-side audit, and teardown
-      prerequisites remain required for each candidate run.
+- [ ] OpenID conformance evidence for supported surfaces. The release-owned
+      [Relay OIDC smoke](conformance/relay-oidc/README.md) is source-ready and
+      directly runnable against a digest-pinned published candidate, but no
+      reviewed 1.0 candidate result exists yet. The retired Notary OID4VCI
+      wrapper was product-specific and is no longer an active gate; its
+      [initial report](conformance/openid/initial-report.md) remains historical
+      evidence only.
+- [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The prior
+      integration packet was Notary-specific and was retired on 2026-08-03.
+      No current Relay or Evidence interoperability claim replaces it.
 
 ## 4. Adversarial verification
 
@@ -74,13 +65,12 @@ section is about challenging it.
 - [ ] Maintainer adversarial review of the load-bearing crates:
       `registry-platform-pdp`, `registry-platform-sdjwt`,
       `registry-platform-crypto`, `registry-platform-authcommon`, Relay scope
-      enforcement, Notary disclosure policy evaluation. `registry-platform-sts`
-      is parked outside the workspace until a consumer is promoted (#298).
+      enforcement, and Evidence assertion evaluation and signing.
 - [ ] Negative-path test coverage mapped against the attack checklist;
       gaps closed with tests that assert denial and correct audit records.
       Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).
 - [ ] cargo-fuzz targets for manifest and artifact parsers (#26).
-- [ ] cargo-fuzz targets for token, credential, Relay consultation, and script
+- [ ] cargo-fuzz targets for token, assertion, Relay consultation, and script
       adapter parse boundaries.
 - [ ] Data-minimization leak review across logs, error paths, audit records,
       and caches (maintainer work; #176 is the known open case).
@@ -126,7 +116,7 @@ What 1.0 promises the institutions that run this.
       source-built release-tag images; release-artifact verification,
       credential issuance, metrics, the historical Redis replay/nonce path used
       by that release, and anti-rollback monotonic rejection remain outside this
-      run). Current Notary replay and nonce correctness state is PostgreSQL-backed.
+      run).
       Backup and restore guidance for generated and single-node deployments is
       documented in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
       (#226). The
@@ -159,7 +149,7 @@ What 1.0 promises the institutions that run this.
 
 ## 8. Data protection posture
 
-Notary's pitch is minimization; it will be held to it.
+Evidence's pitch is minimum disclosure; it will be held to it.
 
 - [ ] Behavioral guarantee claims extracted from the docs site and verified
       against implementation. Extraction evidence:

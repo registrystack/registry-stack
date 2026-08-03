@@ -2,18 +2,17 @@ version: 1
 starter:
   id: fhir-r4
   release: 0.16.3
-  content_digest: sha256:6eef001b4c172831a33abf13484c6389195fc2aca787f55750555bed1850a0ea
+  content_digest: sha256:db68aeeaa207bd7a1f2d5f87557e45d888097b6b82379ce14c2acc424ee4d1ac
 registry: { id: fictional-fhir-registry }
 integrations:
   coverage: { file: integrations/coverage/integration.yaml }
 services:
   coverage-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: coverage-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access: { scopes: ["evidence:coverage:read"] }
     consultations:
       coverage:
         integration: coverage
@@ -21,18 +20,3 @@ services:
           birthdate: request.target.identifiers.birthdate
           family: request.target.identifiers.family
           given: request.target.identifiers.given
-    claims:
-      patient-record-exists: { cel: "coverage.matched", disclosure: predicate }
-      coverage-active:
-        cel: >-
-          coverage.coverage_status != null
-            ? coverage.matched && coverage.coverage_status == "active"
-            : false
-        disclosure: predicate
-      insurer-name: { output: coverage.insurer_name, disclosure: value }
-    credential_profiles:
-      coverage-status:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/coverage-status/v1
-        validity: 5m
-        claims: [patient-record-exists, coverage-active, insurer-name]

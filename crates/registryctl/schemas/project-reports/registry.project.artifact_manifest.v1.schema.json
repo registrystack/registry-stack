@@ -126,7 +126,6 @@
               "runtime_config",
               "consultation_contract",
               "source_plan",
-              "claim_configuration",
               "deployment_input",
               "review_record",
               "documentation"
@@ -179,7 +178,6 @@
           "items": {
             "enum": [
               "registry_relay",
-              "registry_notary",
               "bundle_signer",
               "deployment_tooling",
               "project_documentation",

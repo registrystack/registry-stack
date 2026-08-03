@@ -123,7 +123,7 @@ impl ProjectExecutionContext {
     ///
     /// The path must be absolute and identify an existing, non-symlink regular
     /// file with executable permissions. Validation happens before the path can
-    /// reach either Relay or Notary worker configuration.
+    /// reach Relay worker configuration.
     pub fn new(worker_program: impl AsRef<Path>) -> Result<Self> {
         let worker_program = worker_program.as_ref();
         if !worker_program.is_absolute() {
@@ -206,10 +206,7 @@ mod project_execution_context_tests {
 }
 
 fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> {
-    if compiled.relay_private.is_empty()
-        && compiled.relay_consultation_private.is_empty()
-        && compiled.notary_private.is_empty()
-    {
+    if compiled.relay_private.is_empty() && compiled.relay_consultation_private.is_empty() {
         bail!("generated deployment has no product configuration");
     }
     if !compiled.relay_private.is_empty() {
@@ -229,9 +226,6 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
             &compiled.relay_consultation_private,
             "config/relay.yaml",
         )?;
-    }
-    if !compiled.notary_private.is_empty() {
-        validate_generated_notary(compiled)?;
     }
     Ok(())
 }
@@ -369,19 +363,6 @@ fn read_project_workbook(root: &Path, relative: &Path, byte_limit: u64) -> Resul
         bail!("workbook source input exceeds the Relay byte limit");
     }
     Ok(bytes)
-}
-
-fn validate_generated_notary(compiled: &CompiledProject) -> Result<()> {
-    let notary_config = compiled
-        .notary_private
-        .get(Path::new("config/notary.yaml"))
-        .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
-    let notary: StandaloneRegistryNotaryConfig =
-        serde_norway::from_slice(notary_config).context("generated Notary config did not parse")?;
-    notary
-        .validate()
-        .context("generated Notary config failed the production validator")?;
-    Ok(())
 }
 
 fn validate_generated_relay(
@@ -686,7 +667,7 @@ fn generated_evidence(
 struct PreparedReviewedProject {
     loaded: LoadedRegistryProject,
     compiled: CompiledProject,
-    signing_input_identities: [registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    signing_input_identities: Vec<registry_platform_config::ProductAcceptanceIdentityV1>,
     preceding_approved_set_digest: Option<String>,
     anchor_rotation_lanes: Vec<crate::ApprovedLaneV1>,
     retained_rotation_evidence: BTreeMap<crate::ApprovedLaneV1, RetainedReviewedEvidence>,
@@ -735,18 +716,19 @@ pub fn build_reviewed_project(
     )?;
     preflight_project_rhai_scripts(&prepared.loaded)?;
     validate_generated_product_configs(&prepared.compiled)?;
-    let has_project_local_file_input = prepared
-        .loaded
-        .environment
-        .as_ref()
-        .is_some_and(|environment| {
-            environment
-                .entities
-                .values()
-                .any(|binding| matches!(&binding.provider, RecordProvider::Xlsx { .. }))
-        });
+    let has_project_local_file_input =
+        prepared
+            .loaded
+            .environment
+            .as_ref()
+            .is_some_and(|environment| {
+                environment
+                    .entities
+                    .values()
+                    .any(|binding| matches!(&binding.provider, RecordProvider::Xlsx { .. }))
+            });
     let artifact_inputs = validate_project_workbook_inputs(&prepared.loaded, &prepared.compiled)?;
-    let (fixtures, generated_observations, request_observations, call_budget_actual) =
+    let (fixtures, generated_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &prepared.loaded,
             &prepared.compiled,
@@ -760,7 +742,6 @@ pub fn build_reviewed_project(
         &prepared.loaded,
         &fixtures,
         &generated_observations,
-        &request_observations,
         call_budget_actual,
     )?;
     let output = prepared
@@ -921,7 +902,6 @@ fn prepare_reviewed_project(
             let expected = &signing_input_identities[match lane {
                 crate::ApprovedLaneV1::RelayPublic => 0,
                 crate::ApprovedLaneV1::RelayConsultation => 1,
-                crate::ApprovedLaneV1::Notary => 2,
             }];
             if verified.acceptance_identity() != expected {
                 bail!("approved set lane identity does not match the selected project environment");
@@ -940,7 +920,6 @@ fn prepare_reviewed_project(
                     crate::ApprovedLaneV1::RelayConsultation => {
                         VerifiedBaselineLane::RelayConsultation
                     }
-                    crate::ApprovedLaneV1::Notary => VerifiedBaselineLane::Notary,
                 }),
             )?
             .ok_or_else(|| anyhow!("approved set lane baseline is absent"))?;
@@ -968,7 +947,6 @@ fn prepare_reviewed_project(
                 let previous = set.lanes.get(*lane).reviewed_binding();
                 current.lane_scoped_reviewed_input_digest
                     != previous.lane_scoped_reviewed_input_digest
-                    || current.interfaces != previous.interfaces
             })
         })
         .collect::<Vec<_>>();
@@ -1014,9 +992,6 @@ fn prepare_reviewed_project(
         relay_consultation: affected_lanes
             .contains(&crate::ApprovedLaneV1::RelayConsultation)
             .then(|| selected_binding(crate::ApprovedLaneV1::RelayConsultation)),
-        notary: affected_lanes
-            .contains(&crate::ApprovedLaneV1::Notary)
-            .then(|| selected_binding(crate::ApprovedLaneV1::Notary)),
     };
     bindings.validate_bindings()?;
     Ok(PreparedReviewedProject {
@@ -1033,20 +1008,10 @@ fn prepare_reviewed_project(
 
 fn reviewed_bindings(
     compiled: &CompiledProject,
-    identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    identities: &[registry_platform_config::ProductAcceptanceIdentityV1],
 ) -> Result<crate::ReviewedBuildUpdateV1> {
     let review_bytes = canonical_json_line(&compiled.review)?;
     let state_bytes = canonical_json_line(&compiled.approval_state)?;
-    let consultation_interface = compiled
-        .review
-        .get("consultations")
-        .and_then(Value::as_object)
-        .filter(|consultations| !consultations.is_empty())
-        .map(|consultations| {
-            canonicalize_json(&Value::Object(consultations.clone())).map(|bytes| sha256_uri(&bytes))
-        })
-        .transpose()
-        .context("failed to canonicalize reviewed consultation interface")?;
     let binding = |lane: crate::ApprovedLaneV1,
                    identity: &registry_platform_config::ProductAcceptanceIdentityV1,
                    files: &BTreeMap<PathBuf, Box<[u8]>>|
@@ -1085,14 +1050,6 @@ fn reviewed_bindings(
         Ok(crate::ReviewedLaneBindingV1 {
             lane_scoped_reviewed_input_digest: lane_digest,
             signing_input_closure_digest: format!("sha256:{}", hex::encode(hasher.finalize())),
-            interfaces: match lane {
-                crate::ApprovedLaneV1::RelayPublic => crate::CrossLaneInterfaceDigestsV1::default(),
-                crate::ApprovedLaneV1::RelayConsultation | crate::ApprovedLaneV1::Notary => {
-                    crate::CrossLaneInterfaceDigestsV1 {
-                        consultation_relay_notary: consultation_interface.clone(),
-                    }
-                }
-            },
         })
     };
     Ok(crate::ReviewedBuildUpdateV1 {
@@ -1101,16 +1058,15 @@ fn reviewed_bindings(
             &identities[0],
             &compiled.relay_private,
         )?),
-        relay_consultation: Some(binding(
-            crate::ApprovedLaneV1::RelayConsultation,
-            &identities[1],
-            &compiled.relay_consultation_private,
-        )?),
-        notary: Some(binding(
-            crate::ApprovedLaneV1::Notary,
-            &identities[2],
-            &compiled.notary_private,
-        )?),
+        relay_consultation: (!compiled.relay_consultation_private.is_empty())
+            .then(|| {
+                binding(
+                    crate::ApprovedLaneV1::RelayConsultation,
+                    &identities[1],
+                    &compiled.relay_consultation_private,
+                )
+            })
+            .transpose()?,
     })
 }
 
@@ -1136,7 +1092,7 @@ fn write_compiled_project(
     project: &str,
     environment: &str,
     artifact_inputs: &[ArtifactInputDigest],
-    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1],
 ) -> Result<ProjectArtifactManifestRef> {
     let emitted_lanes = signing_input_identities
         .iter()
@@ -1164,17 +1120,14 @@ fn write_compiled_project_selected(
     project: &str,
     environment: &str,
     artifact_inputs: &[ArtifactInputDigest],
-    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1; 3],
+    signing_input_identities: &[registry_platform_config::ProductAcceptanceIdentityV1],
     emitted_lanes: &[registry_platform_config::ProductAcceptanceLaneV1],
     retained_rotation_evidence: &BTreeMap<crate::ApprovedLaneV1, RetainedReviewedEvidence>,
     reviewed_build: Option<&ReviewedBuildRecordV1>,
 ) -> Result<ProjectArtifactManifestRef> {
-    if compiled.relay_private.is_empty()
-        || compiled.relay_consultation_private.is_empty()
-        || compiled.notary_private.is_empty()
-    {
+    if compiled.relay_private.is_empty() {
         bail!(
-            "governed build requires complete relay-public, relay-consultation, and notary signing inputs; continue authoring with project test and project check, then add the missing product binding before project build"
+            "governed build requires Relay signing inputs; continue authoring with project test and project check, then add deployment.relay before project build"
         );
     }
     let expected_parent = root.join(BUILD_ROOT);
@@ -1218,28 +1171,23 @@ fn write_compiled_project_selected(
         write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
         write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
     }
-    if !compiled.notary_private.is_empty() {
-        let notary_root = temporary.join("private/notary");
-        create_dir_owner_only(&notary_root)?;
-        write_file_map(&notary_root, &compiled.notary_private)?;
-        write_private_file(&notary_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
-        write_private_file(
-            &notary_root.join(APPROVAL_STATE_PATH),
-            &approval_state_bytes,
-        )?;
-    }
-    for (identity, files) in [
-        (&signing_input_identities[0], &compiled.relay_private),
-        (
-            &signing_input_identities[1],
-            &compiled.relay_consultation_private,
-        ),
-        (&signing_input_identities[2], &compiled.notary_private),
-    ] {
+    for (identity, files) in
+        signing_input_identities
+            .iter()
+            .filter_map(|identity| match identity.lane {
+                registry_platform_config::ProductAcceptanceLaneV1::RelayPublic => {
+                    Some((identity, &compiled.relay_private))
+                }
+                registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
+                    Some((identity, &compiled.relay_consultation_private))
+                }
+                _ => None,
+            })
+    {
         if !emitted_lanes.contains(&identity.lane) {
             continue;
         }
-        let approved_lane = crate::ApprovedLaneV1::from_acceptance_lane(identity.lane);
+        let approved_lane = crate::ApprovedLaneV1::try_from_acceptance_lane(identity.lane)?;
         let (lane_review_bytes, lane_approval_state_bytes) = retained_rotation_evidence
             .get(&approved_lane)
             .map(|evidence| (evidence.review.as_ref(), evidence.approval_state.as_ref()))
@@ -1298,7 +1246,7 @@ fn write_compiled_project_selected(
 
 fn governed_signing_input_identities(
     loaded: &LoadedRegistryProject,
-) -> Result<[registry_platform_config::ProductAcceptanceIdentityV1; 3]> {
+) -> Result<Vec<registry_platform_config::ProductAcceptanceIdentityV1>> {
     use registry_platform_config::{
         ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1, ProductAcceptanceProductV1,
         ProductTrustDomainV1,
@@ -1321,15 +1269,6 @@ fn governed_signing_input_identities(
                 "governed build requires a public and consultation Relay binding; continue authoring with project test and project check, then add deployment.relay before project build"
             )
         })?;
-    let notary = environment
-        .deployment
-        .notary
-        .as_ref()
-        .ok_or_else(|| {
-            anyhow!(
-                "governed build requires a Notary binding; continue authoring with project test and project check, then add deployment.notary before project build"
-            )
-        })?;
     let project = loaded.project.registry.id.clone();
     let identity = |lane, product, instance| ProductAcceptanceIdentityV1 {
         trust_domain: ProductTrustDomainV1::Governed,
@@ -1340,23 +1279,18 @@ fn governed_signing_input_identities(
         stream: project.clone(),
         instance,
     };
-    let identities = [
-        identity(
-            ProductAcceptanceLaneV1::RelayPublic,
-            ProductAcceptanceProductV1::RegistryRelay,
-            relay.service.clone(),
-        ),
-        identity(
+    let mut identities = vec![identity(
+        ProductAcceptanceLaneV1::RelayPublic,
+        ProductAcceptanceProductV1::RegistryRelay,
+        relay.service.clone(),
+    )];
+    if project_requires_relay_consultation_baseline(loaded) {
+        identities.push(identity(
             ProductAcceptanceLaneV1::RelayConsultation,
             ProductAcceptanceProductV1::RegistryRelay,
             format!("{}-consultation", relay.service),
-        ),
-        identity(
-            ProductAcceptanceLaneV1::Notary,
-            ProductAcceptanceProductV1::RegistryNotary,
-            notary.service.clone(),
-        ),
-    ];
+        ));
+    }
     for identity in &identities {
         identity
             .validate()
@@ -1373,7 +1307,7 @@ fn product_acceptance_lane_name(
         registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
             "relay-consultation"
         }
-        registry_platform_config::ProductAcceptanceLaneV1::Notary => "notary",
+        _ => unreachable!("registryctl emits Relay lanes only"),
     }
 }
 
@@ -1460,8 +1394,6 @@ struct ApprovedBaselineSetPaths<'a> {
     relay_anchor: Option<&'a Path>,
     relay_consultation_against: Option<&'a Path>,
     relay_consultation_anchor: Option<&'a Path>,
-    notary_against: Option<&'a Path>,
-    notary_anchor: Option<&'a Path>,
 }
 
 impl<'a> ApprovedBaselineSetPaths<'a> {
@@ -1473,8 +1405,6 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
             relay_anchor: None,
             relay_consultation_against: None,
             relay_consultation_anchor: None,
-            notary_against: None,
-            notary_anchor: None,
         }
     }
 
@@ -1491,8 +1421,6 @@ impl<'a> ApprovedBaselineSetPaths<'a> {
                 .and_then(|set| set.relay_consultation_against.as_deref()),
             relay_consultation_anchor: baselines
                 .and_then(|set| set.relay_consultation_anchor.as_deref()),
-            notary_against: baselines.and_then(|set| set.notary_against.as_deref()),
-            notary_anchor: baselines.and_then(|set| set.notary_anchor.as_deref()),
         }
     }
 }
@@ -1509,7 +1437,6 @@ impl VerifiedBaselineLane {
             Self::Relay | Self::RelayConsultation => {
                 registry_platform_config::ProductAcceptanceProductV1::RegistryRelay
             }
-            Self::Notary => registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
         }
     }
 
@@ -1519,7 +1446,6 @@ impl VerifiedBaselineLane {
             Self::RelayConsultation => {
                 registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation
             }
-            Self::Notary => registry_platform_config::ProductAcceptanceLaneV1::Notary,
         }
     }
 
@@ -1527,38 +1453,29 @@ impl VerifiedBaselineLane {
         match self {
             Self::Relay => "relay",
             Self::RelayConsultation => "relay_consultation",
-            Self::Notary => "notary",
         }
     }
 }
 
 impl VerifiedBaselineSet {
     fn is_empty(&self) -> bool {
-        self.relay.is_none() && self.relay_consultation.is_none() && self.notary.is_none()
+        self.relay.is_none() && self.relay_consultation.is_none()
     }
 
     fn iter(&self) -> impl Iterator<Item = &VerifiedBaseline> {
-        [
-            self.relay.as_ref(),
-            self.relay_consultation.as_ref(),
-            self.notary.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
+        [self.relay.as_ref(), self.relay_consultation.as_ref()]
+            .into_iter()
+            .flatten()
     }
 
     fn common(&self) -> Option<&VerifiedBaseline> {
-        self.relay
-            .as_ref()
-            .or(self.relay_consultation.as_ref())
-            .or(self.notary.as_ref())
+        self.relay.as_ref().or(self.relay_consultation.as_ref())
     }
 
     fn get(&self, lane: crate::ApprovedLaneV1) -> Option<&VerifiedBaseline> {
         match lane {
             crate::ApprovedLaneV1::RelayPublic => self.relay.as_ref(),
             crate::ApprovedLaneV1::RelayConsultation => self.relay_consultation.as_ref(),
-            crate::ApprovedLaneV1::Notary => self.notary.as_ref(),
         }
     }
 
@@ -1566,7 +1483,6 @@ impl VerifiedBaselineSet {
         json!({
             "relay": self.relay.as_ref().map(|baseline| &baseline.verified_manifest),
             "relay_consultation": self.relay_consultation.as_ref().map(|baseline| &baseline.verified_manifest),
-            "notary": self.notary.as_ref().map(|baseline| &baseline.verified_manifest),
         })
     }
 
@@ -1578,12 +1494,7 @@ impl VerifiedBaselineSet {
             VerifiedBaselineLane::RelayConsultation if self.relay_consultation.is_none() => {
                 self.relay_consultation = Some(baseline);
             }
-            VerifiedBaselineLane::Notary if self.notary.is_none() => {
-                self.notary = Some(baseline);
-            }
-            VerifiedBaselineLane::Relay
-            | VerifiedBaselineLane::RelayConsultation
-            | VerifiedBaselineLane::Notary => {
+            VerifiedBaselineLane::Relay | VerifiedBaselineLane::RelayConsultation => {
                 bail!("approved baseline set contains a duplicate product lane")
             }
         }
@@ -1619,16 +1530,8 @@ fn validate_approved_baseline_set_paths(paths: ApprovedBaselineSetPaths<'_>) -> 
         "--relay-consultation-anchor",
         paths.relay_consultation_anchor,
     )?;
-    validate_named_baseline_pair(
-        "--notary-against",
-        paths.notary_against,
-        "--notary-anchor",
-        paths.notary_anchor,
-    )?;
     if paths.against.is_some()
-        && (paths.relay_against.is_some()
-            || paths.relay_consultation_against.is_some()
-            || paths.notary_against.is_some())
+        && (paths.relay_against.is_some() || paths.relay_consultation_against.is_some())
     {
         bail!("--against cannot be combined with product-specific baselines");
     }
@@ -1656,11 +1559,6 @@ fn load_verified_approved_baseline_set(
                 paths.relay_consultation_anchor,
                 VerifiedBaselineLane::RelayConsultation,
             ),
-            (
-                paths.notary_against,
-                paths.notary_anchor,
-                VerifiedBaselineLane::Notary,
-            ),
         ] {
             if let Some(baseline) = load_verified_baseline(against, anchor, loaded, Some(lane))? {
                 baselines.insert(baseline)?;
@@ -1679,7 +1577,6 @@ fn load_verified_approved_baseline_set(
             .ok_or_else(|| anyhow!("approved baseline comparison requires an environment"))?;
         let products = project_promotion_products(environment);
         let requires_relay = products.contains(&PromotionProjectedProduct::Relay);
-        let requires_notary = products.contains(&PromotionProjectedProduct::Notary);
         let requires_relay_consultation = project_requires_relay_consultation_baseline(loaded)
             || baselines.common().is_some_and(|baseline| {
                 baseline
@@ -1689,7 +1586,6 @@ fn load_verified_approved_baseline_set(
             });
         if baselines.relay.is_some() != requires_relay
             || baselines.relay_consultation.is_some() != requires_relay_consultation
-            || baselines.notary.is_some() != requires_notary
         {
             bail!("approved baseline set is incomplete for the selected product topology");
         }
@@ -1728,13 +1624,12 @@ fn load_verified_baseline(
         registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation => {
             VerifiedBaselineLane::RelayConsultation
         }
-        registry_platform_config::ProductAcceptanceLaneV1::Notary => VerifiedBaselineLane::Notary,
+        _ => bail!("verified baseline uses a retired non-Relay lane"),
     });
     let expected_identities = governed_signing_input_identities(loaded)?;
     let expected_identity = match lane {
         VerifiedBaselineLane::Relay => &expected_identities[0],
         VerifiedBaselineLane::RelayConsultation => &expected_identities[1],
-        VerifiedBaselineLane::Notary => &expected_identities[2],
     };
     if identity != expected_identity {
         bail!(
@@ -1801,24 +1696,6 @@ fn load_verified_baseline(
         bail!(
             "verified baseline review and approval state disagree on the Relay consultation input"
         );
-    }
-    let disclosure_profiles: DisclosureReviewProfiles = serde_json::from_value(
-        review
-            .get("disclosure_profiles")
-            .cloned()
-            .ok_or_else(|| anyhow!("baseline review record lacks disclosure_profiles"))?,
-    )
-    .context("baseline review disclosure_profiles are invalid")?;
-    let disclosure_digest = digest_json(
-        &serde_json::to_value(&disclosure_profiles)
-            .context("failed to canonicalize baseline disclosure_profiles")?,
-    )?;
-    if approval_state
-        .get("disclosure_digest")
-        .and_then(Value::as_str)
-        != Some(disclosure_digest.as_str())
-    {
-        bail!("verified baseline approval state does not bind the review disclosure profiles");
     }
     validate_verified_product_closure(&approval_state, &verified.manifest, lane)?;
     let approval_state_digest = sha256_uri(&approval_state_bytes);
@@ -1898,7 +1775,6 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
             "registry",
             "compiler_version",
             "baseline",
-            "disclosure_profiles",
             "semantic_changes",
             "environment",
             "entity_materializations",
@@ -1917,11 +1793,6 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
     ) {
         bail!("baseline review record baseline status is invalid");
     }
-    let profiles_value = review
-        .get("disclosure_profiles")
-        .ok_or_else(|| anyhow!("baseline review record lacks disclosure_profiles"))?;
-    let _: DisclosureReviewProfiles = serde_json::from_value(profiles_value.clone())
-        .context("baseline review disclosure_profiles are invalid")?;
     validate_semantic_changes(
         review
             .get("semantic_changes")
@@ -1975,7 +1846,6 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             "report_digest",
             "authored_input_digest",
             "semantic_digests",
-            "disclosure_digest",
             "promotion_projection",
             "generated_closure_digests",
             "baseline",
@@ -1988,31 +1858,17 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             bail!("baseline approval state field {field} must be a string");
         }
     }
-    for field in [
-        "report_digest",
-        "authored_input_digest",
-        "disclosure_digest",
-    ] {
+    for field in ["report_digest", "authored_input_digest"] {
         validate_review_sha256(state.get(field), field, false)?;
     }
     let semantic = exact_review_object(
         state
             .get("semantic_digests")
             .ok_or_else(|| anyhow!("baseline approval state lacks semantic_digests"))?,
-        &[
-            "claim",
-            "integration",
-            "service_policy",
-            "operator_security",
-        ],
+        &["integration", "service_policy", "operator_security"],
         "baseline approval semantic_digests",
     )?;
-    for field in [
-        "claim",
-        "integration",
-        "service_policy",
-        "operator_security",
-    ] {
+    for field in ["integration", "service_policy", "operator_security"] {
         validate_review_sha256(semantic.get(field), field, false)?;
     }
     let promotion_projection: ProjectPromotionProjectionV1 = serde_json::from_value(
@@ -2029,14 +1885,12 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
         state
             .get("generated_closure_digests")
             .ok_or_else(|| anyhow!("baseline approval state lacks generated_closure_digests"))?,
-        &["reviewable", "relay", "relay_consultation", "notary"],
+        &["reviewable", "relay", "relay_consultation"],
         "baseline approval generated_closure_digests",
     )?;
     validate_review_sha256(closure.get("reviewable"), "reviewable", false)?;
-    for field in ["relay", "notary"] {
-        if !closure.get(field).is_some_and(Value::is_null) {
-            validate_review_sha256(closure.get(field), field, false)?;
-        }
+    if !closure.get("relay").is_some_and(Value::is_null) {
+        validate_review_sha256(closure.get("relay"), "relay", false)?;
     }
     if !closure
         .get("relay_consultation")
@@ -2055,16 +1909,11 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
     {
         bail!("baseline approval Relay consultation closure requires the Relay product closure");
     }
-    for (field, product) in [
-        ("relay", PromotionProjectedProduct::Relay),
-        ("notary", PromotionProjectedProduct::Notary),
-    ] {
-        let has_closure = closure.get(field).is_some_and(Value::is_string);
-        if has_closure != promotion_products.contains(&product) {
-            bail!(
-                "baseline approval promotion_projection product inventory disagrees with generated_closure_digests"
-            );
-        }
+    let has_relay_closure = closure.get("relay").is_some_and(Value::is_string);
+    if has_relay_closure != promotion_products.contains(&PromotionProjectedProduct::Relay) {
+        bail!(
+            "baseline approval promotion_projection product inventory disagrees with generated_closure_digests"
+        );
     }
     validate_approval_baseline(
         state.get("baseline"),
@@ -2159,12 +2008,7 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
             .ok_or_else(|| anyhow!("baseline semantic change dimension must be a string"))?;
         if !matches!(
             dimension,
-            "compiler"
-                | "claim"
-                | "integration"
-                | "service_policy"
-                | "operator_security"
-                | "disclosure"
+            "compiler" | "integration" | "service_policy" | "operator_security"
         ) || !dimensions.insert(dimension)
         {
             bail!("baseline semantic_changes contain an unknown or duplicate dimension");
@@ -2194,7 +2038,7 @@ fn validate_approval_baseline(
         baseline
             .get("verified_manifests")
             .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifests"))?,
-        &["relay", "relay_consultation", "notary"],
+        &["relay", "relay_consultation"],
         "baseline approval verified_manifests",
     )?;
     let mut present = 0_usize;
@@ -2212,13 +2056,6 @@ fn validate_approval_baseline(
             registry_platform_config::ProductAcceptanceLaneV1::RelayConsultation,
             PromotionProjectedProduct::Relay,
             consultation_closure,
-        ),
-        (
-            "notary",
-            registry_platform_config::ProductAcceptanceProductV1::RegistryNotary,
-            registry_platform_config::ProductAcceptanceLaneV1::Notary,
-            PromotionProjectedProduct::Notary,
-            promotion_products.contains(&PromotionProjectedProduct::Notary),
         ),
     ] {
         let Some(value) = manifests.get(field) else {
@@ -2256,17 +2093,8 @@ fn validate_approval_baseline(
 fn semantic_change_records(
     loaded: &LoadedRegistryProject,
     baseline: Option<&Value>,
-    disclosure_digest: &str,
 ) -> Vec<SemanticChange> {
     let mut changes = [
-        (
-            "claim",
-            loaded.semantic_digests.claim.as_str(),
-            baseline
-                .and_then(|review| review.get("semantic_digests"))
-                .and_then(|digests| digests.get("claim"))
-                .and_then(Value::as_str),
-        ),
         (
             "integration",
             loaded.semantic_digests.integration.as_str(),
@@ -2289,13 +2117,6 @@ fn semantic_change_records(
             baseline
                 .and_then(|review| review.get("semantic_digests"))
                 .and_then(|digests| digests.get("operator_security"))
-                .and_then(Value::as_str),
-        ),
-        (
-            "disclosure",
-            disclosure_digest,
-            baseline
-                .and_then(|review| review.get("disclosure_digest"))
                 .and_then(Value::as_str),
         ),
     ]
@@ -2515,16 +2336,6 @@ fn lower_authored_fixture(
     body_cache: &mut BTreeMap<PathBuf, Value>,
     max_body_bytes: u64,
 ) -> Result<FixtureDocument> {
-    if let Some(request) = authored.request.as_ref() {
-        if authored.classification != AuthoredFixtureClassification::Synthetic {
-            bail!("fixture governed requests require classification: synthetic");
-        }
-        let request = serde_json::to_value(request)
-            .context("failed to inspect the governed synthetic fixture request")?;
-        if contains_sensitive_request_key(&request) || contains_fixture_secret_reference(&request) {
-            bail!("fixture governed request contains a forbidden credential-like field");
-        }
-    }
     let interactions = authored
         .interactions
         .into_iter()
@@ -2576,27 +2387,11 @@ fn lower_authored_fixture(
     Ok(FixtureDocument {
         name: authored.name,
         classification: authored.classification,
-        request: authored.request,
         input: authored.input,
         variables: authored.variables,
         interactions,
         expect: authored.expect,
     })
-}
-
-fn contains_fixture_secret_reference(value: &Value) -> bool {
-    match value {
-        Value::String(value) => {
-            let lower = value.to_ascii_lowercase();
-            value.starts_with("${")
-                || lower.starts_with("secret://")
-                || lower.starts_with("env://")
-                || lower.starts_with("vault://")
-        }
-        Value::Array(values) => values.iter().any(contains_fixture_secret_reference),
-        Value::Object(object) => object.values().any(contains_fixture_secret_reference),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
-    }
 }
 
 fn resolve_fixture_body(
@@ -2789,22 +2584,6 @@ fn validate_request_mapping(mapping: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_disclosure(disclosure: &DisclosureDeclaration) -> Result<()> {
-    match disclosure {
-        DisclosureDeclaration::Mode(_) => Ok(()),
-        DisclosureDeclaration::Policy { default, allowed } => {
-            if allowed.is_empty() || !allowed.contains(default) {
-                bail!("disclosure policy must allow its default mode");
-            }
-            let unique = allowed.iter().copied().collect::<BTreeSet<_>>();
-            if unique.len() != allowed.len() {
-                bail!("disclosure allowed modes contain duplicates");
-            }
-            Ok(())
-        }
-    }
-}
-
 fn validate_secret_reference(reference: &SecretReference) -> Result<()> {
     let value = reference.secret.as_str();
     let mut bytes = value.bytes();
@@ -2852,27 +2631,6 @@ fn validate_https_or_local_loopback_origin(
     {
         bail!(
             "{field} must be an exact HTTPS origin or an HTTP IP-loopback origin in a local environment"
-        );
-    }
-    Ok(())
-}
-
-fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Result<()> {
-    let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
-    let secure = origin.scheme() == "https";
-    let local_loopback = origin.scheme() == "http" && url_host_is_ip_loopback(&origin);
-    let private_service = origin.scheme() == "http"
-        && matches!(origin.host(), Some(url::Host::Domain(host)) if host != "localhost" && !host.ends_with(".localhost"));
-    if (!secure && !local_loopback && !private_service)
-        || origin.host().is_none()
-        || !origin.username().is_empty()
-        || origin.password().is_some()
-        || origin.path() != "/"
-        || origin.query().is_some()
-        || origin.fragment().is_some()
-    {
-        bail!(
-            "{field} must be an exact HTTPS origin, HTTP private-service hostname origin, or HTTP IP-loopback origin"
         );
     }
     Ok(())
@@ -2941,29 +2699,6 @@ fn validate_absolute_runtime_path(path: &Path, field: &str) -> Result<()> {
     {
         bail!("{field} must be normalized and cannot traverse");
     }
-    Ok(())
-}
-
-fn validate_full_date(value: &str) -> Result<()> {
-    if value.len() != 10
-        || value.as_bytes()[4] != b'-'
-        || value.as_bytes()[7] != b'-'
-        || !value
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
-    {
-        bail!("date must use RFC 3339 full-date syntax");
-    }
-    let year = value[0..4].parse::<i32>()?;
-    let month = value[5..7].parse::<u8>()?;
-    let day = value[8..10].parse::<u8>()?;
-    time::Date::from_calendar_date(
-        year,
-        time::Month::try_from(month).map_err(|_| anyhow!("date month is invalid"))?,
-        day,
-    )
-    .context("date is invalid")?;
     Ok(())
 }
 

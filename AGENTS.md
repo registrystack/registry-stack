@@ -3,20 +3,21 @@
 This is the Registry Stack monorepo: registry-facing services over data
 institutions already hold. Pre-1.0; APIs and deployment contracts may change.
 
-Three independent runtime patterns are relevant:
+Two independent runtime patterns are relevant:
 
 - **Registry Relay** exposes protected, scoped, read-only HTTP APIs over
   existing sources.
-- **Registry Notary** certifies evidence: claim evaluation, credential
-  issuance, disclosure policy, audit provenance.
-- **Evidence** is a separate minimum-disclosure assertion service. It is not a
-  Notary mode or rewrite and does not inherit the Notary product model.
+- **Evidence** returns signed, minimum-disclosure assertions from fixed
+  requests to authoritative sources.
+
+The two patterns compose without merging their product boundaries: Evidence
+may use a Relay-protected API as a fixed HTTP source.
 
 Registry Manifest describes sources portably; Relay is its consumer in code
-(Notary does not depend on the manifest crates). `registry-platform-*` crates
-are shared primitives. `registryctl` is adopter tooling.
+and `registry-platform-*` crates are shared primitives. `registryctl` is Relay
+adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
-Registry Mint is a supporting service, not a fourth pattern: it issues the
+Registry Mint is a supporting service, not a third pattern: it issues the
 access tokens a resource server such as Evidence verifies, for deployments with
 no identity provider. The dependency runs one way only. Mint's tests drive
 Evidence's authenticator; Evidence does not depend on Mint.
@@ -26,13 +27,12 @@ Evidence's authenticator; Evidence does not depend on Mint.
 | Area | Owns |
 |---|---|
 | `crates/registry-relay` | Protected read APIs (Relay) |
-| `crates/registry-notary*` | Evidence gateway: server, core, client, source adapters, worker harness (Notary) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, project scaffolds, fixture runs |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
-| `crates/registry-platform-*` | Shared primitives: audit, authcommon, cache, config, crypto, httpsec, httputil, oid4vci, oidc, ops, pdp, replay, sdjwt, sts, testing |
-| `crates/registryctl` | Adopter tooling |
+| `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
+| `crates/registryctl` | Relay adopter tooling |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -40,27 +40,25 @@ Evidence's authenticator; Evidence does not depend on Mint.
 
 ## Evidence product boundary
 
-Evidence work must remain independent from `registry-notary*`. Do not copy or
-depend on Notary product abstractions merely because both products use the word
-evidence. In particular, Evidence version one does not inherit credential
-issuance lifecycle, OID4VCI, PDP, replay, federation, worker, or document
-subsystems. Evidence serializes the same stateless assertion as an SD-JWT VC
-response format under its own frozen profile; that is a second encoding of one
-response, never a credential lifecycle.
+Evidence is its own minimum-disclosure assertion product, not a Relay mode.
+Evidence may consume a Relay-protected API through its ordinary fixed HTTP
+source contract, but it does not inherit Relay's authorization or policy
+model. Evidence serializes the same stateless assertion as a signed flattened
+JWS or, under its own frozen profile, as an SD-JWT VC response. The latter is a
+second encoding of one response, never a credential lifecycle.
 
 The runtime implementation is one `registry-evidence` crate and one `evidence`
 binary. It may reuse narrowly applicable `registry-platform-*`
 primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
-and testing. It must not depend on `registry-notary*`.
+and testing.
 
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material and deployment-project
 scaffolds and drives fixture runs, but it shells out to the `evidence` binary
 for every Evidence semantic decision and never re-implements evaluation,
-signing, or verification. It must not depend on `registry-notary*`, and its
-source and scaffold templates are covered by the same source-product and
-domain neutrality checks as the runtime.
+signing, or verification. Its source and scaffold templates are covered by the
+same source-product and domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,
@@ -89,10 +87,6 @@ DHIS2 and OpenCRVS names and behavior are test-only. Evidence production code,
 dependencies, Cargo features, public configuration schemas, routes, and CLI
 options must remain source-product neutral.
 
-The `changing-notary-endpoints` skill and Notary-specific OpenAPI commands do
-not apply to Evidence. Use the Evidence-specific guidance and verification
-commands rather than extending Notary guidance by analogy.
-
 The adopter demo is maintained separately in
 [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
 
@@ -113,10 +107,9 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 --workspace --all-targets`, `cargo clippy --workspace --all-targets --
 -D warnings`, `cargo test --locked --workspace`, the full `cargo deny check`
 (advisories included; unresolvable RUSTSEC advisories carry scoped ignores in
-`deny.toml` with review triggers), and the Notary and Relay OpenAPI drift checks
-(`just openapi-check` from `products/notary`, `just openapi-contract` from
-`crates/registry-relay`). cargo-deny needs v0.19+ to parse this
-`deny.toml`; CI pins 0.19.8.
+`deny.toml` with review triggers), and the Relay OpenAPI drift check
+(`just openapi-contract` from `crates/registry-relay`). cargo-deny needs v0.19+
+to parse this `deny.toml`; CI pins 0.19.8.
 
 Evidence-specific contracts and source neutrality:
 
@@ -129,7 +122,6 @@ Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-python3 -m unittest release/scripts/test_openid_conformance_runner.py
 release/scripts/registry-release validate release/manifests/<current>.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -140,15 +132,15 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
 ## Rules that bite
 
 - Every commit needs a DCO sign-off: `git commit -s`.
-- Commit subjects: imperative mood; `fix(notary):`, `feat(relay):`, and
-  `feat(evidence):` style prefixes are the norm for product-scoped changes.
+- Commit subjects: imperative mood; `feat(relay):` and `feat(evidence):` style
+  prefixes are the norm for product-scoped changes.
 - History may be rewritten during review (session commits get squashed). In
   durable docs, cite only commits reachable from pushed `main`, and prefer
   stable facts plus dates over commit SHAs.
 - Major functionality and bug fixes require automated tests with the change.
 - Keep a change scoped to one owning area (`crates/`, `products/`,
   `docs/site/`, `release/`).
-- Changes to authentication, authorization, credential issuance, signing,
+- Changes to authentication, authorization, assertion evaluation or signing,
   audit integrity, release provenance, deployment defaults, or data
   minimization are security-sensitive and need explicit review notes.
 - Generated outputs (OpenAPI under `docs/site/openapi/`, `docs/site`
@@ -156,7 +148,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
   generator commands, never hand-edited, and must be bit-for-bit repeatable.
   If you change an HTTP endpoint, regenerating and committing the OpenAPI
   documents is part of the change, not a follow-up.
-- Suspected vulnerabilities (credential disclosure, auth bypass, audit
+- Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit
   redaction failure, connector data leakage, signing key handling) go through
   `SECURITY.md`, never public issues or PRs.
 

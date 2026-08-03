@@ -10,7 +10,6 @@
 fn project_semantic_impact_report(
     loaded: &LoadedRegistryProject,
     baseline: Option<&Value>,
-    disclosure_digest: &str,
 ) -> ProjectSemanticImpactReportV1 {
     let report_baseline = if baseline.is_some() {
         ProjectBaseline::VerifiedSignedBundle
@@ -22,11 +21,12 @@ fn project_semantic_impact_report(
     } else {
         SemanticDirection::Unbaselined
     };
-    let changes = changed_semantic_dimensions(loaded, baseline, disclosure_digest)
+    let changes = changed_semantic_dimensions(loaded, baseline)
         .into_iter()
         .filter(|dimension| {
             affected_products(loaded, baseline, *dimension).any()
-                && (baseline.is_some() || semantic_dimension_has_current_subjects(loaded, *dimension))
+                && (baseline.is_some()
+                    || semantic_dimension_has_current_subjects(loaded, *dimension))
         })
         .map(|dimension| semantic_impact_for_dimension(loaded, baseline, dimension, direction))
         .collect();
@@ -43,11 +43,6 @@ fn semantic_dimension_has_current_subjects(
     dimension: SemanticDimension,
 ) -> bool {
     match dimension {
-        SemanticDimension::Claim | SemanticDimension::Disclosure => loaded
-            .project
-            .services
-            .values()
-            .any(|service| !service.claims.is_empty()),
         SemanticDimension::Integration => {
             !loaded.project.integrations.is_empty()
                 || !loaded.project.entities.is_empty()
@@ -65,17 +60,9 @@ fn semantic_dimension_has_current_subjects(
 fn changed_semantic_dimensions(
     loaded: &LoadedRegistryProject,
     baseline: Option<&Value>,
-    disclosure_digest: &str,
 ) -> Vec<SemanticDimension> {
     let previous_digests = baseline.and_then(|state| state.get("semantic_digests"));
     let mut changes = [
-        (
-            SemanticDimension::Claim,
-            loaded.semantic_digests.claim.as_str(),
-            previous_digests
-                .and_then(|digests| digests.get("claim"))
-                .and_then(Value::as_str),
-        ),
         (
             SemanticDimension::Integration,
             loaded.semantic_digests.integration.as_str(),
@@ -95,13 +82,6 @@ fn changed_semantic_dimensions(
             loaded.semantic_digests.operator_security.as_str(),
             previous_digests
                 .and_then(|digests| digests.get("operator_security"))
-                .and_then(Value::as_str),
-        ),
-        (
-            SemanticDimension::Disclosure,
-            disclosure_digest,
-            baseline
-                .and_then(|state| state.get("disclosure_digest"))
                 .and_then(Value::as_str),
         ),
     ]
@@ -152,7 +132,10 @@ fn semantic_impact_for_dimension(
 struct AffectedProducts {
     relay_public: bool,
     relay_consultation: bool,
-    notary: bool,
+}
+
+fn project_has_relay_topology(project: &RegistryProject) -> bool {
+    !project.integrations.is_empty() || !project.entities.is_empty() || !project.services.is_empty()
 }
 
 impl AffectedProducts {
@@ -160,7 +143,6 @@ impl AffectedProducts {
         Self {
             relay_public: false,
             relay_consultation: false,
-            notary: false,
         }
     }
 
@@ -168,15 +150,10 @@ impl AffectedProducts {
         Self {
             relay_public: true,
             relay_consultation: true,
-            notary: true,
         }
     }
 
     const fn any(self) -> bool {
-        self.relay_public || self.relay_consultation || self.notary
-    }
-
-    const fn any_relay(self) -> bool {
         self.relay_public || self.relay_consultation
     }
 
@@ -184,7 +161,6 @@ impl AffectedProducts {
         Self {
             relay_public: self.relay_public || other.relay_public,
             relay_consultation: self.relay_consultation || other.relay_consultation,
-            notary: self.notary || other.notary,
         }
     }
 
@@ -192,7 +168,6 @@ impl AffectedProducts {
         Self {
             relay_public: self.relay_public && other.relay_public,
             relay_consultation: self.relay_consultation && other.relay_consultation,
-            notary: self.notary && other.notary,
         }
     }
 }
@@ -202,7 +177,7 @@ fn affected_products(
     baseline: Option<&Value>,
     dimension: SemanticDimension,
 ) -> AffectedProducts {
-    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
+    let requires_relay = project_has_relay_topology(&loaded.project);
     let current_products = AffectedProducts {
         relay_public: requires_relay,
         relay_consultation: requires_relay
@@ -211,26 +186,18 @@ fn affected_products(
                 .services
                 .values()
                 .any(|service| !service.consultations.is_empty()),
-        notary: requires_notary,
     };
     let product_topology = current_products.union(baseline_product_topology(baseline));
     let dimension_products = match dimension {
-        SemanticDimension::Claim | SemanticDimension::Disclosure => AffectedProducts {
-            relay_public: false,
-            relay_consultation: false,
-            notary: true,
-        },
         SemanticDimension::Integration => AffectedProducts {
             relay_public: !product_topology.relay_consultation,
             relay_consultation: product_topology.relay_consultation,
-            notary: true,
         },
         SemanticDimension::ServicePolicy
         | SemanticDimension::OperatorSecurity
         | SemanticDimension::Compiler => AffectedProducts {
             relay_public: true,
             relay_consultation: true,
-            notary: true,
         },
     };
     dimension_products.intersect(product_topology)
@@ -248,7 +215,6 @@ fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
         for product in products {
             match product.as_str() {
                 Some("relay") => topology.relay_public = true,
-                Some("notary") => topology.notary = true,
                 _ => return AffectedProducts::both(),
             }
         }
@@ -267,15 +233,14 @@ fn baseline_product_topology(baseline: Option<&Value>) -> AffectedProducts {
             relay_consultation: digests
                 .get("relay_consultation")
                 .is_some_and(Value::is_string),
-            notary: digests.get("notary").is_some_and(Value::is_string),
         };
         if topology.any() {
             return topology;
         }
     }
 
-    // Older or malformed signed baselines do not provide enough product
-    // inventory to prove that a removed product has no retirement obligation.
+    // Older or malformed signed baselines do not distinguish the two Relay
+    // deployment lanes, so retain obligations for both.
     AffectedProducts::both()
 }
 
@@ -293,8 +258,8 @@ fn affected_subjects(
 
     // A dimension digest cannot identify the changed member. Include the full
     // authored identity closure that can feed compilation, fixture validation,
-    // policy review, or disclosure review. Only stable authored identifiers and
-    // aliases are retained, never authored values or filesystem locations.
+    // policy review, or route review. Only stable authored identifiers and aliases
+    // are retained, never authored values or filesystem locations.
     for (integration_alias, integration) in &loaded.integrations {
         add(AffectedSubjectKind::Integration, integration_alias.clone());
         for (_, fixture) in &integration.fixtures {
@@ -312,11 +277,6 @@ fn affected_subjects(
                 format!("{service_id}.{consultation_id}"),
             );
         }
-        for claim_id in service.claims.keys() {
-            let id = format!("{service_id}.{claim_id}");
-            add(AffectedSubjectKind::Claim, id.clone());
-            add(AffectedSubjectKind::Disclosure, id);
-        }
     }
 
     if products.relay_public {
@@ -331,25 +291,18 @@ fn affected_subjects(
             "registry-relay.consultation.config".to_string(),
         );
     }
-    if products.any_relay() {
+    if products.relay_public {
+        add(
+            AffectedSubjectKind::GeneratedArtifact,
+            "registry-relay.runtime-config".to_string(),
+        );
+    }
+    if products.relay_consultation {
         for artifact in [
             "registry-relay.consultation-contracts",
             "registry-relay.integration-packs",
             "registry-relay.private-bindings",
             "registry-relay.runtime-config",
-        ] {
-            add(AffectedSubjectKind::GeneratedArtifact, artifact.to_string());
-        }
-    }
-    if products.notary {
-        add(
-            AffectedSubjectKind::ProductInput,
-            "registry-notary.config".to_string(),
-        );
-        for artifact in [
-            "registry-notary.claim-configuration",
-            "registry-notary.disclosure-policy",
-            "registry-notary.runtime-config",
         ] {
             add(AffectedSubjectKind::GeneratedArtifact, artifact.to_string());
         }
@@ -371,9 +324,7 @@ fn has_consultation_signing_input(
         .values()
         .any(|service| !service.consultations.is_empty())
         || baseline
-            .and_then(|state| {
-                state.pointer("/generated_closure_digests/relay_consultation")
-            })
+            .and_then(|state| state.pointer("/generated_closure_digests/relay_consultation"))
             .is_some_and(Value::is_string)
 }
 
@@ -383,20 +334,15 @@ const fn subject_kind_rank(kind: AffectedSubjectKind) -> u8 {
         AffectedSubjectKind::Fixture => 1,
         AffectedSubjectKind::ServicePolicy => 2,
         AffectedSubjectKind::Consultation => 3,
-        AffectedSubjectKind::Claim => 4,
-        AffectedSubjectKind::Disclosure => 5,
-        AffectedSubjectKind::ProductInput => 6,
-        AffectedSubjectKind::GeneratedArtifact => 7,
+        AffectedSubjectKind::ProductInput => 4,
+        AffectedSubjectKind::GeneratedArtifact => 5,
     }
 }
 
 fn consumers(products: AffectedProducts) -> Vec<ImpactConsumer> {
     let mut consumers = vec![ImpactConsumer::RegistryctlAuthoring];
-    if products.any_relay() {
+    if products.any() {
         consumers.push(ImpactConsumer::RegistryRelay);
-    }
-    if products.notary {
-        consumers.push(ImpactConsumer::RegistryNotary);
     }
     consumers.push(ImpactConsumer::EditorTooling);
     consumers.push(ImpactConsumer::DocsGenerator);
@@ -418,22 +364,7 @@ fn review_classes(
             ImpactReviewClass::Privacy,
             ImpactReviewClass::Security,
             ImpactReviewClass::Relay,
-            ImpactReviewClass::Notary,
             ImpactReviewClass::Compatibility,
-            ImpactReviewClass::Testing,
-            ImpactReviewClass::Operations,
-            ImpactReviewClass::Release,
-        ],
-        SemanticDimension::Claim | SemanticDimension::Disclosure => vec![
-            ImpactReviewClass::Contract,
-            ImpactReviewClass::Authoring,
-            ImpactReviewClass::Semantics,
-            ImpactReviewClass::Interoperability,
-            ImpactReviewClass::Privacy,
-            ImpactReviewClass::Security,
-            ImpactReviewClass::Notary,
-            ImpactReviewClass::Compatibility,
-            ImpactReviewClass::Documentation,
             ImpactReviewClass::Testing,
             ImpactReviewClass::Operations,
             ImpactReviewClass::Release,
@@ -448,7 +379,6 @@ fn review_classes(
             ImpactReviewClass::Privacy,
             ImpactReviewClass::Security,
             ImpactReviewClass::Relay,
-            ImpactReviewClass::Notary,
             ImpactReviewClass::Compatibility,
             ImpactReviewClass::Documentation,
             ImpactReviewClass::Testing,
@@ -456,19 +386,13 @@ fn review_classes(
             ImpactReviewClass::Release,
         ],
     };
-    if !products.any_relay() {
+    if !products.any() {
         classes.retain(|class| *class != ImpactReviewClass::Relay);
-    }
-    if !products.notary {
-        classes.retain(|class| *class != ImpactReviewClass::Notary);
     }
     classes
 }
 
-fn product_impacts(
-    dimension: SemanticDimension,
-    products: AffectedProducts,
-) -> Vec<ProductImpact> {
+fn product_impacts(dimension: SemanticDimension, products: AffectedProducts) -> Vec<ProductImpact> {
     let runtime_impact = if dimension == SemanticDimension::OperatorSecurity {
         ProductImpactClass::Reconfigure
     } else {
@@ -478,15 +402,9 @@ fn product_impacts(
         product: ProjectProduct::Registryctl,
         impact: ProductImpactClass::Revalidate,
     }];
-    if products.any_relay() {
+    if products.any() {
         impacts.push(ProductImpact {
             product: ProjectProduct::Relay,
-            impact: runtime_impact,
-        });
-    }
-    if products.notary {
-        impacts.push(ProductImpact {
-            product: ProjectProduct::Notary,
             impact: runtime_impact,
         });
     }
@@ -499,15 +417,11 @@ fn product_impacts(
 
 fn requirements(products: AffectedProducts) -> ImpactRequirements {
     let actions = [
-        (
-            products.relay_public,
-            RequiredProductAction::RelayPublic,
-        ),
+        (products.relay_public, RequiredProductAction::RelayPublic),
         (
             products.relay_consultation,
             RequiredProductAction::RelayConsultation,
         ),
-        (products.notary, RequiredProductAction::Notary),
     ]
     .into_iter()
     .filter_map(|(required, action)| required.then_some(action))
@@ -541,20 +455,14 @@ mod semantic_impact_tests {
         .expect("Relay-only semantic-impact fixture loads")
     }
 
-    fn disclosure_digest() -> String {
-        format!("sha256:{}", "d".repeat(64))
-    }
-
-    fn matching_baseline(loaded: &LoadedRegistryProject, disclosure_digest: &str) -> Value {
+    fn matching_baseline(loaded: &LoadedRegistryProject) -> Value {
         json!({
             "compiler_version": env!("CARGO_PKG_VERSION"),
             "semantic_digests": {
-                "claim": loaded.semantic_digests.claim,
                 "integration": loaded.semantic_digests.integration,
                 "service_policy": loaded.semantic_digests.service_policy,
                 "operator_security": loaded.semantic_digests.operator_security,
             },
-            "disclosure_digest": disclosure_digest,
         })
     }
 
@@ -574,12 +482,11 @@ mod semantic_impact_tests {
         match consumer {
             ImpactConsumer::RegistryctlAuthoring => 0,
             ImpactConsumer::RegistryRelay => 1,
-            ImpactConsumer::RegistryNotary => 2,
-            ImpactConsumer::EditorTooling => 3,
-            ImpactConsumer::DocsGenerator => 4,
-            ImpactConsumer::BundleSigner => 5,
-            ImpactConsumer::DeploymentTooling => 6,
-            ImpactConsumer::Operator => 7,
+            ImpactConsumer::EditorTooling => 2,
+            ImpactConsumer::DocsGenerator => 3,
+            ImpactConsumer::BundleSigner => 4,
+            ImpactConsumer::DeploymentTooling => 5,
+            ImpactConsumer::Operator => 6,
         }
     }
 
@@ -592,12 +499,11 @@ mod semantic_impact_tests {
             ImpactReviewClass::Privacy => 4,
             ImpactReviewClass::Security => 5,
             ImpactReviewClass::Relay => 6,
-            ImpactReviewClass::Notary => 7,
-            ImpactReviewClass::Compatibility => 8,
-            ImpactReviewClass::Documentation => 9,
-            ImpactReviewClass::Testing => 10,
-            ImpactReviewClass::Operations => 11,
-            ImpactReviewClass::Release => 12,
+            ImpactReviewClass::Compatibility => 7,
+            ImpactReviewClass::Documentation => 8,
+            ImpactReviewClass::Testing => 9,
+            ImpactReviewClass::Operations => 10,
+            ImpactReviewClass::Release => 11,
         }
     }
 
@@ -605,27 +511,23 @@ mod semantic_impact_tests {
         match product {
             ProjectProduct::Registryctl => 0,
             ProjectProduct::Relay => 1,
-            ProjectProduct::Notary => 2,
-            ProjectProduct::Editor => 3,
-            ProjectProduct::Docs => 4,
+            ProjectProduct::Editor => 2,
+            ProjectProduct::Docs => 3,
         }
     }
 
     #[test]
-    fn initial_report_is_dimension_precise_and_preserves_legacy_projection() {
+    fn initial_report_is_dimension_precise() {
         let loaded = loaded_project();
-        let disclosure_digest = disclosure_digest();
-        let report = project_semantic_impact_report(&loaded, None, &disclosure_digest);
+        let report = project_semantic_impact_report(&loaded, None);
 
         assert_eq!(report.baseline, ProjectBaseline::InitialWithoutBaseline);
         assert_eq!(
             dimensions(&report),
             vec![
-                SemanticDimension::Claim,
                 SemanticDimension::Integration,
                 SemanticDimension::ServicePolicy,
                 SemanticDimension::OperatorSecurity,
-                SemanticDimension::Disclosure,
             ]
         );
         assert!(report.changes.iter().all(|change| {
@@ -633,30 +535,23 @@ mod semantic_impact_tests {
                 && change.direction == SemanticDirection::Unbaselined
         }));
 
-        let legacy = semantic_change_records(&loaded, None, &disclosure_digest);
-        assert_eq!(
-            serde_json::to_value(report.dimension_only_changes()).expect("projection serializes"),
-            serde_json::to_value(legacy).expect("legacy changes serialize"),
-        );
+        assert_eq!(report.dimension_only_changes().len(), report.changes.len());
     }
 
     #[test]
     fn verified_baseline_reports_each_changed_dimension_conservatively() {
         let loaded = loaded_project();
-        let disclosure_digest = disclosure_digest();
         let dimension_cases = [
-            (SemanticDimension::Claim, "claim"),
             (SemanticDimension::Integration, "integration"),
             (SemanticDimension::ServicePolicy, "service_policy"),
             (SemanticDimension::OperatorSecurity, "operator_security"),
-            (SemanticDimension::Disclosure, "disclosure_digest"),
             (SemanticDimension::Compiler, "compiler_version"),
         ];
 
         for (expected, key) in dimension_cases {
-            let mut baseline = matching_baseline(&loaded, &disclosure_digest);
+            let mut baseline = matching_baseline(&loaded);
             match key {
-                "disclosure_digest" | "compiler_version" => {
+                "compiler_version" => {
                     baseline[key] = Value::String("previous".to_string());
                 }
                 semantic_digest => {
@@ -664,8 +559,7 @@ mod semantic_impact_tests {
                         Value::String(format!("sha256:{}", "0".repeat(64)));
                 }
             }
-            let report =
-                project_semantic_impact_report(&loaded, Some(&baseline), &disclosure_digest);
+            let report = project_semantic_impact_report(&loaded, Some(&baseline));
             assert_eq!(report.baseline, ProjectBaseline::VerifiedSignedBundle);
             assert_eq!(
                 dimensions(&report),
@@ -681,9 +575,8 @@ mod semantic_impact_tests {
     #[test]
     fn matching_verified_baseline_has_no_changes() {
         let loaded = loaded_project();
-        let disclosure_digest = disclosure_digest();
-        let baseline = matching_baseline(&loaded, &disclosure_digest);
-        let report = project_semantic_impact_report(&loaded, Some(&baseline), &disclosure_digest);
+        let baseline = matching_baseline(&loaded);
+        let report = project_semantic_impact_report(&loaded, Some(&baseline));
 
         assert_eq!(report.baseline, ProjectBaseline::VerifiedSignedBundle);
         assert!(report.changes.is_empty());
@@ -691,9 +584,9 @@ mod semantic_impact_tests {
     }
 
     #[test]
-    fn relay_only_impact_never_requires_notary_review_signing_or_activation() {
+    fn relay_public_impact_uses_only_the_public_action_lane() {
         let loaded = loaded_relay_only_project();
-        let report = project_semantic_impact_report(&loaded, None, &disclosure_digest());
+        let report = project_semantic_impact_report(&loaded, None);
 
         assert_eq!(
             dimensions(&report),
@@ -704,29 +597,19 @@ mod semantic_impact_tests {
         );
         for change in report.changes {
             assert!(change.consumers.contains(&ImpactConsumer::RegistryRelay));
-            assert!(!change.consumers.contains(&ImpactConsumer::RegistryNotary));
             assert!(change.review_classes.contains(&ImpactReviewClass::Relay));
-            assert!(!change.review_classes.contains(&ImpactReviewClass::Notary));
             assert!(change
                 .product_impacts
                 .iter()
                 .any(|impact| impact.product == ProjectProduct::Relay));
-            assert!(!change
-                .product_impacts
-                .iter()
-                .any(|impact| impact.product == ProjectProduct::Notary));
             let expected = actions(&[RequiredProductAction::RelayPublic]);
             assert_eq!(change.requirements.signing, expected);
             assert_eq!(change.requirements.activation, expected);
             assert_eq!(change.requirements.restart, expected);
-            assert!(!change.affected_subjects.iter().any(|subject| {
-                subject.id.starts_with("registry-notary.")
-                    || subject.id == "registry-relay.consultation.config"
-                    || matches!(
-                        subject.kind,
-                        AffectedSubjectKind::Claim | AffectedSubjectKind::Disclosure
-                    )
-            }));
+            assert!(!change
+                .affected_subjects
+                .iter()
+                .any(|subject| { subject.id == "registry-relay.consultation.config" }));
         }
     }
 
@@ -746,102 +629,24 @@ mod semantic_impact_tests {
             .map(|subject| subject.id.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            product_inputs,
-            vec![
-                "registry-notary.config",
-                "registry-relay.consultation.config",
-            ]
-        );
-    }
-
-    #[test]
-    fn verified_baseline_product_removal_keeps_removed_product_obligations() {
-        let current = loaded_relay_only_project();
-        let previous = loaded_project();
-        let mut baseline = matching_baseline(
-            &previous,
-            &format!("sha256:{}", "b".repeat(64)),
-        );
-        for digest in [
-            "claim",
-            "integration",
-            "service_policy",
-            "operator_security",
-        ] {
-            baseline["semantic_digests"][digest] =
-                Value::String(format!("sha256:{}", "0".repeat(64)));
-        }
-        baseline["promotion_projection"] = json!({
-            "products": ["relay", "notary"],
-        });
-        baseline["generated_closure_digests"] = json!({
-            "relay_consultation": format!("sha256:{}", "c".repeat(64)),
-        });
-        let report =
-            project_semantic_impact_report(&current, Some(&baseline), &disclosure_digest());
-
-        for dimension in [SemanticDimension::Claim, SemanticDimension::Disclosure] {
-            let change = report
-                .changes
-                .iter()
-                .find(|change| change.dimension == dimension)
-                .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
-            assert!(change.consumers.contains(&ImpactConsumer::RegistryNotary));
-            assert!(!change.consumers.contains(&ImpactConsumer::RegistryRelay));
-            let expected = actions(&[RequiredProductAction::Notary]);
-            assert_eq!(change.requirements.signing, expected);
-            assert_eq!(change.requirements.activation, expected);
-            assert_eq!(change.requirements.restart, expected);
-        }
-        for dimension in [
-            SemanticDimension::Integration,
-            SemanticDimension::ServicePolicy,
-            SemanticDimension::OperatorSecurity,
-        ] {
-            let change = report
-                .changes
-                .iter()
-                .find(|change| change.dimension == dimension)
-                .unwrap_or_else(|| panic!("{dimension:?} product-removal impact is retained"));
-            let expected = if dimension == SemanticDimension::Integration {
-                actions(&[
-                    RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
-                ])
-            } else {
-                actions(&[
-                    RequiredProductAction::RelayPublic,
-                    RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
-                ])
-            };
-            assert_eq!(change.requirements.signing, expected);
-            assert_eq!(change.requirements.activation, expected);
-            assert_eq!(change.requirements.restart, expected);
-        }
+        assert_eq!(product_inputs, vec!["registry-relay.consultation.config"]);
     }
 
     #[test]
     fn legacy_baseline_without_product_inventory_stays_conservative() {
         let current = loaded_relay_only_project();
         let previous = loaded_project();
-        let mut baseline =
-            matching_baseline(&previous, &format!("sha256:{}", "b".repeat(64)));
+        let mut baseline = matching_baseline(&previous);
         baseline["semantic_digests"]["integration"] =
             Value::String(format!("sha256:{}", "0".repeat(64)));
-        let report =
-            project_semantic_impact_report(&current, Some(&baseline), &disclosure_digest());
+        let report = project_semantic_impact_report(&current, Some(&baseline));
         let integration = report
             .changes
             .iter()
             .find(|change| change.dimension == SemanticDimension::Integration)
             .expect("legacy baseline conservatively retains integration impact");
 
-        let expected = actions(&[
-            RequiredProductAction::RelayConsultation,
-            RequiredProductAction::Notary,
-        ]);
+        let expected = actions(&[RequiredProductAction::RelayConsultation]);
         assert_eq!(integration.requirements.signing, expected);
         assert_eq!(integration.requirements.activation, expected);
         assert_eq!(integration.requirements.restart, expected);
@@ -852,22 +657,14 @@ mod semantic_impact_tests {
         let loaded = loaded_project();
         let expected = [
             (
-                SemanticDimension::Claim,
-                actions(&[RequiredProductAction::Notary]),
-            ),
-            (
                 SemanticDimension::Integration,
-                actions(&[
-                    RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
-                ]),
+                actions(&[RequiredProductAction::RelayConsultation]),
             ),
             (
                 SemanticDimension::ServicePolicy,
                 actions(&[
                     RequiredProductAction::RelayPublic,
                     RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
                 ]),
             ),
             (
@@ -875,30 +672,20 @@ mod semantic_impact_tests {
                 actions(&[
                     RequiredProductAction::RelayPublic,
                     RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
                 ]),
-            ),
-            (
-                SemanticDimension::Disclosure,
-                actions(&[RequiredProductAction::Notary]),
             ),
             (
                 SemanticDimension::Compiler,
                 actions(&[
                     RequiredProductAction::RelayPublic,
                     RequiredProductAction::RelayConsultation,
-                    RequiredProductAction::Notary,
                 ]),
             ),
         ];
 
         for (dimension, expected) in expected {
-            let impact = semantic_impact_for_dimension(
-                &loaded,
-                None,
-                dimension,
-                SemanticDirection::Changed,
-            );
+            let impact =
+                semantic_impact_for_dimension(&loaded, None, dimension, SemanticDirection::Changed);
             assert_eq!(impact.requirements.signing, expected);
             assert_eq!(impact.requirements.activation, expected);
             assert_eq!(impact.requirements.restart, expected);
@@ -918,19 +705,13 @@ mod semantic_impact_tests {
     fn each_dimension_names_the_full_safe_authored_identity_closure() {
         let loaded = loaded_project();
         for dimension in [
-            SemanticDimension::Claim,
             SemanticDimension::Integration,
             SemanticDimension::ServicePolicy,
             SemanticDimension::OperatorSecurity,
-            SemanticDimension::Disclosure,
             SemanticDimension::Compiler,
         ] {
-            let impact = semantic_impact_for_dimension(
-                &loaded,
-                None,
-                dimension,
-                SemanticDirection::Changed,
-            );
+            let impact =
+                semantic_impact_for_dimension(&loaded, None, dimension, SemanticDirection::Changed);
             let subjects = impact
                 .affected_subjects
                 .iter()
@@ -974,14 +755,6 @@ mod semantic_impact_tests {
                 subject.kind == AffectedSubjectKind::Consultation
                     && subject.id == "health-verification.health"
             }));
-            assert!(impact.affected_subjects.iter().any(|subject| {
-                subject.kind == AffectedSubjectKind::Claim
-                    && subject.id == "health-verification.child-program-active"
-            }));
-            assert!(impact.affected_subjects.iter().any(|subject| {
-                subject.kind == AffectedSubjectKind::Disclosure
-                    && subject.id == "health-verification.child-program-active"
-            }));
             assert!(impact
                 .affected_subjects
                 .iter()
@@ -1000,21 +773,14 @@ mod semantic_impact_tests {
             schema_version: ProjectSemanticImpactSchemaVersion::V1,
             baseline: ProjectBaseline::VerifiedSignedBundle,
             changes: [
-                SemanticDimension::Claim,
                 SemanticDimension::Integration,
                 SemanticDimension::ServicePolicy,
                 SemanticDimension::OperatorSecurity,
-                SemanticDimension::Disclosure,
                 SemanticDimension::Compiler,
             ]
             .into_iter()
             .map(|dimension| {
-                semantic_impact_for_dimension(
-                    &loaded,
-                    None,
-                    dimension,
-                    SemanticDirection::Changed,
-                )
+                semantic_impact_for_dimension(&loaded, None, dimension, SemanticDirection::Changed)
             })
             .collect(),
         };
@@ -1025,7 +791,6 @@ mod semantic_impact_tests {
             "127.0.0.1",
             "/run/secrets/relay-workload-token",
             "HEALTH_REGISTRY_USERNAME",
-            "REGISTRY_NOTARY_ISSUER_JWK",
             "health-relay-client",
             "A0000000001",
             "Nia",
@@ -1039,18 +804,17 @@ mod semantic_impact_tests {
     }
 
     #[test]
-    fn verified_projection_matches_legacy_changes_including_compiler() {
+    fn verified_projection_includes_changed_integration_and_compiler() {
         let loaded = loaded_project();
-        let disclosure_digest = disclosure_digest();
-        let mut baseline = matching_baseline(&loaded, &disclosure_digest);
-        baseline["semantic_digests"]["claim"] = Value::String(format!("sha256:{}", "0".repeat(64)));
+        let mut baseline = matching_baseline(&loaded);
+        baseline["semantic_digests"]["integration"] =
+            Value::String(format!("sha256:{}", "0".repeat(64)));
         baseline["compiler_version"] = Value::String("previous".to_string());
 
-        let report = project_semantic_impact_report(&loaded, Some(&baseline), &disclosure_digest);
-        let legacy = semantic_change_records(&loaded, Some(&baseline), &disclosure_digest);
+        let report = project_semantic_impact_report(&loaded, Some(&baseline));
         assert_eq!(
-            serde_json::to_value(report.dimension_only_changes()).expect("projection serializes"),
-            serde_json::to_value(legacy).expect("legacy changes serialize"),
+            dimensions(&report),
+            vec![SemanticDimension::Integration, SemanticDimension::Compiler],
         );
     }
 }

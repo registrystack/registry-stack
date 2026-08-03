@@ -11,4 +11,4 @@ interactions:
       status: 200
       headers: { Content-Type: text/plain }
       body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }

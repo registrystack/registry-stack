@@ -40,24 +40,6 @@
       "reactivation_action": "verify_state"
     },
     {
-      "id": "notary",
-      "kind": "product",
-      "product_lane": "notary",
-      "action": "serve",
-      "image_identity": "example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "image_platform": "linux-amd64",
-      "immutable_inputs": ["notary-bundle", "notary-anchor"],
-      "mount_roles": ["bundle", "anchor", "anti-rollback-state", "secret", "audit"],
-      "secret_consumers": ["notary-relay-workload-credential", "notary-signing-key"],
-      "state_roles": ["notary-anti-rollback", "notary-audit"],
-      "endpoint_classes": ["public-application", "administration", "posture"],
-      "network_relationships": ["runtime"],
-      "dependencies": ["relay-consultation", "postgresql-state-plane"],
-      "health_semantics": "notary-health",
-      "restart_action": "restart",
-      "reactivation_action": "verify_state"
-    },
-    {
       "id": "postgresql-state-plane",
       "kind": "supporting",
       "recipe": "postgresql_state_plane",
@@ -77,24 +59,19 @@
     {"id": "bootstrap-postgresql-state-plane", "workload": "postgresql-state-plane", "action": "bootstrap_state_plane"},
     {"id": "prepare-relay-public-state", "workload": "relay-public", "action": "prepare_state_store"},
     {"id": "prepare-relay-consultation-state", "workload": "relay-consultation", "action": "prepare_state_store"},
-    {"id": "prepare-notary-state", "workload": "notary", "action": "prepare_state_store"},
     {"id": "initialize-relay-public", "workload": "relay-public", "action": "initialize_state"},
     {"id": "initialize-relay-consultation", "workload": "relay-consultation", "action": "initialize_state"},
-    {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"},
     {"id": "preview-relay-public-state", "workload": "relay-public", "action": "preview_state"},
     {"id": "preview-relay-consultation-state", "workload": "relay-consultation", "action": "preview_state"},
-    {"id": "preview-notary-state", "workload": "notary", "action": "preview_state"},
     {"id": "accept-relay-public-state", "workload": "relay-public", "action": "accept_state"},
     {"id": "accept-relay-consultation-state", "workload": "relay-consultation", "action": "accept_state"},
-    {"id": "accept-notary-state", "workload": "notary", "action": "accept_state"},
     {"id": "verify-relay-public-state", "workload": "relay-public", "action": "verify_state"},
-    {"id": "verify-relay-consultation-state", "workload": "relay-consultation", "action": "verify_state"},
-    {"id": "verify-notary-state", "workload": "notary", "action": "verify_state"}
+    {"id": "verify-relay-consultation-state", "workload": "relay-consultation", "action": "verify_state"}
   ],
   "recovery_consistency_groups": [
     {
       "id": "consultation-state",
-      "members": ["relay-consultation", "notary", "postgresql-state-plane"]
+      "members": ["relay-consultation", "postgresql-state-plane"]
     },
     {
       "id": "relay-public-state",
@@ -104,7 +81,6 @@
   "exposure_requirements": [
     {"endpoint_class": "public-application", "exposure": "operator-bound"},
     {"endpoint_class": "private-application", "exposure": "private-network-only"},
-    {"endpoint_class": "administration", "exposure": "private-network-only"},
     {"endpoint_class": "posture", "exposure": "private-network-only"}
   ]
 }

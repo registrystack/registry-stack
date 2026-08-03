@@ -37,11 +37,7 @@ const ENTITY_SCHEMA: &str = include_str!("../../schemas/project-authoring/entity
 const KNOWLEDGE_ASSET: &str = include_str!("../../schemas/project-authoring/parity-coverage.json");
 const RELAY_RUNTIME_INTENT_ASSET: &str =
     include_str!("../../../registry-relay/config/documentation-intent.json");
-const NOTARY_RUNTIME_INTENT_ASSET: &str =
-    include_str!("../../../registry-notary-core/config/documentation-intent.json");
 const RELAY_RUNTIME_INTENT_SOURCE: &str = "crates/registry-relay/config/documentation-intent.json";
-const NOTARY_RUNTIME_INTENT_SOURCE: &str =
-    "crates/registry-notary-core/config/documentation-intent.json";
 
 const CONSTRAINT_KEYWORDS: [&str; 21] = [
     "const",
@@ -270,7 +266,6 @@ pub enum ConfigurationSchemaKind {
     Fixture,
     Entity,
     Relay,
-    Notary,
 }
 
 impl fmt::Display for ConfigurationSchemaKind {
@@ -282,7 +277,6 @@ impl fmt::Display for ConfigurationSchemaKind {
             Self::Fixture => "fixture",
             Self::Entity => "entity",
             Self::Relay => "relay",
-            Self::Notary => "notary",
         })
     }
 }
@@ -1000,13 +994,8 @@ fn prepare_runtime_intent<'a>(
             "runtime intent must identify the strict v1 intent contract",
         ));
     }
-    if !matches!(
-        intent.runtime_schema,
-        ConfigurationSchemaKind::Relay | ConfigurationSchemaKind::Notary
-    ) {
-        return Err(documentation_error(
-            "runtime intent schema must be relay or notary",
-        ));
+    if !matches!(intent.runtime_schema, ConfigurationSchemaKind::Relay) {
+        return Err(documentation_error("runtime intent schema must be relay"));
     }
     if document.get("$id").and_then(Value::as_str) != Some(intent.schema_id.as_str()) {
         return Err(documentation_error(format!(
@@ -1251,15 +1240,6 @@ fn validate_runtime_profile(
                 GeneratedArtifact::RelayConfig,
                 ReviewClass::Relay,
             ),
-            ConfigurationSchemaKind::Notary => (
-                "notary_",
-                SemanticOwner::NotaryRuntime,
-                HumanOwner::NotaryMaintainers,
-                Product::Notary,
-                Consumer::RegistryNotary,
-                GeneratedArtifact::NotaryConfig,
-                ReviewClass::Notary,
-            ),
             _ => {
                 return Err(documentation_error(
                     "runtime profile validation requires a product runtime schema",
@@ -1285,7 +1265,6 @@ fn validate_runtime_profile(
     } else {
         let product_prefix = match schema {
             ConfigurationSchemaKind::Relay => "registry.relay.config.",
-            ConfigurationSchemaKind::Notary => "registry.notary.config.",
             _ => unreachable!("runtime profile schema was restricted above"),
         };
         let suffix = profile
@@ -1888,52 +1867,29 @@ fn embedded_seven_domain_fields() -> Result<
 > {
     let authored = with_embedded_inputs(generate_configuration_reference)?;
     let relay_document = registry_relay::config::schema::document();
-    let notary_document = registry_notary_core::config::schema::document();
     let relay_intent: RuntimeIntentCatalog = serde_json::from_str(RELAY_RUNTIME_INTENT_ASSET)
         .map_err(|error| documentation_error(format!("embedded Relay runtime intent: {error}")))?;
-    let notary_intent: RuntimeIntentCatalog = serde_json::from_str(NOTARY_RUNTIME_INTENT_ASSET)
-        .map_err(|error| documentation_error(format!("embedded Notary runtime intent: {error}")))?;
     validate_embedded_runtime_identity(
         &relay_intent,
         ConfigurationSchemaKind::Relay,
         "registry-relay.config.schema.json",
     )?;
-    validate_embedded_runtime_identity(
-        &notary_intent,
-        ConfigurationSchemaKind::Notary,
-        "registry-notary.config.schema.json",
-    )?;
     let relay_required =
         runtime_schema_paths(ConfigurationSchemaKind::Relay, &relay_document)?.len();
-    let notary_required =
-        runtime_schema_paths(ConfigurationSchemaKind::Notary, &notary_document)?.len();
     let mut missing = runtime_configuration_intent_gaps(&relay_document, &relay_intent)?;
-    let notary_missing = runtime_configuration_intent_gaps(&notary_document, &notary_intent)?;
     let relay_fields = if missing.is_empty() {
         generate_runtime_configuration_fields(&relay_document, &relay_intent)?
     } else {
         runtime_configuration_fields(&relay_document, &relay_intent)?.0
-    };
-    let notary_fields = if notary_missing.is_empty() {
-        generate_runtime_configuration_fields(&notary_document, &notary_intent)?
-    } else {
-        runtime_configuration_fields(&notary_document, &notary_intent)?.0
     };
     if relay_fields.len() + missing.len() != relay_required {
         return Err(documentation_error(
             "Relay runtime reference coverage does not match its authoritative schema paths",
         ));
     }
-    if notary_fields.len() + notary_missing.len() != notary_required {
-        return Err(documentation_error(
-            "Notary runtime reference coverage does not match its authoritative schema paths",
-        ));
-    }
-    missing.extend(notary_missing);
     missing.sort();
     let mut fields = authored.fields;
     fields.extend(relay_fields);
-    fields.extend(notary_fields);
     fields.sort_by(|left, right| left.address.cmp(&right.address));
     if fields
         .windows(2)
@@ -1968,7 +1924,6 @@ fn combined_source_contract() -> ReferenceSourceContract {
             ConfigurationSchemaKind::Fixture,
             ConfigurationSchemaKind::Entity,
             ConfigurationSchemaKind::Relay,
-            ConfigurationSchemaKind::Notary,
         ],
         schema_sources: vec![
             "project.schema.json".to_owned(),
@@ -1977,11 +1932,10 @@ fn combined_source_contract() -> ReferenceSourceContract {
             "fixture.schema.json".to_owned(),
             "entity.schema.json".to_owned(),
             "registry-relay.config.schema.json".to_owned(),
-            "registry-notary.config.schema.json".to_owned(),
         ],
         field_knowledge: "schemas/project-authoring/parity-coverage.json#field_knowledge",
         human_intent: "schemas/project-authoring/documentation-intent.json",
-        runtime_intent: vec![RELAY_RUNTIME_INTENT_SOURCE, NOTARY_RUNTIME_INTENT_SOURCE],
+        runtime_intent: vec![RELAY_RUNTIME_INTENT_SOURCE],
         reads_country_workspaces: false,
         reads_runtime_configuration: false,
     }
@@ -2855,7 +2809,7 @@ mod tests {
             .expect("embedded reference coverage is readable");
         assert!(!coverage.source_contract.reads_country_workspaces);
         assert!(!coverage.source_contract.reads_runtime_configuration);
-        assert_eq!(coverage.coverage.path_count, 702);
+        assert_eq!(coverage.coverage.path_count, 562);
     }
 
     #[test]

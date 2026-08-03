@@ -1,6 +1,6 @@
 ---
 name: registry-stack-single-node-deploy
-description: Use when a user wants a self-hosted single-node Registry Relay, Registry Notary, or Relay plus Notary deployment using registryctl-generated project layout or equivalent local Compose wiring.
+description: Use when a user wants a self-hosted single-node Registry Relay deployment using registryctl-generated project layout or equivalent local Compose wiring.
 ---
 
 # Registry Stack Single-Node Deploy
@@ -9,7 +9,7 @@ Use this skill to help a user create, validate, and troubleshoot a single-node R
 
 ## Workflow
 
-1. Identify the mode: Relay only, Notary only, or Relay plus Notary.
+1. Identify whether the project exposes the public Relay lane, the consultation Relay lane, or both.
 2. Establish the deployment profile: `local`, `hosted_lab`, `production`, or `evidence_grade`. Prefer product configs declaring `deployment.profile`; use `registryctl doctor --profile` only as a temporary review override.
 3. Generate or edit the smallest necessary project files.
 4. Run product-owned validation through registryctl:
@@ -24,12 +24,12 @@ Use this skill to help a user create, validate, and troubleshoot a single-node R
    registryctl doctor --profile local --format json
    ```
 
-5. Treat the merged JSON report as orchestration evidence only. Relay findings belong to `registry-relay`; Notary findings belong to `registry-notary`.
+5. Treat the merged JSON report as orchestration evidence only. Relay findings belong to `registry-relay`.
 6. Start containers and run smoke checks only when the user asks for a runnable deployment or provides controlled test targets.
 
 ## Redaction Rules
 
-Never print raw env-file values, API keys, bearer tokens, source tokens, Redis URLs, private JWKs, SD-JWT disclosures, source rows, claim values, or full environment dumps.
+Never print raw env-file values, API keys, bearer tokens, source tokens, Redis URLs, private JWKs, source rows, or full environment dumps.
 
 ## Output
 

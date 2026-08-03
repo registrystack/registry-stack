@@ -443,8 +443,8 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                     "--command=\"SELECT ssl FROM pg_stat_ssl "
                     "WHERE pid=pg_backend_pid(); "
                     "SELECT datname || ':' || pg_get_userbyid(datdba) "
-                    "FROM pg_database WHERE datname IN "
-                    "('registry_relay','registry_notary') ORDER BY datname; "
+                    "FROM pg_database WHERE datname LIKE 'registry_%' "
+                    "ORDER BY datname; "
                     "SELECT rolname || ':' || rolcanlogin || ':' || rolsuper "
                     "FROM pg_roles WHERE rolname LIKE 'registry_%' "
                     "ORDER BY rolname;\""
@@ -464,8 +464,10 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                 )
                 lines = {line.strip() for line in query.splitlines() if line.strip()}
                 self.assertIn("t", lines)
-                self.assertIn("registry_notary:registry_notary_owner", lines)
                 self.assertIn("registry_relay:registry_relay_owner", lines)
+                self.assertFalse(
+                    any(line.startswith("registry_notary") for line in lines)
+                )
                 expected_roles = {
                     "registry_stack_bootstrap:true:true",
                     "registry_relay_owner:false:false",
@@ -473,11 +475,6 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                     "registry_relay_runtime:true:false",
                     "registry_relay_maintenance:true:false",
                     "registry_relay_reader:true:false",
-                    "registry_notary_owner:false:false",
-                    "registry_notary_migrator:true:false",
-                    "registry_notary_runtime:true:false",
-                    "registry_notary_maintenance:true:false",
-                    "registry_notary_reader:true:false",
                 }
                 self.assertFalse(
                     expected_roles - lines,

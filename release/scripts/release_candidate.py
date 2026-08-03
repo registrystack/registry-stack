@@ -46,7 +46,9 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-IMAGE_NAMES = {"registry-notary", "registry-relay"}
+LEGACY_IMAGE_NAMES = {"registry-notary", "registry-relay"}
+CURRENT_IMAGE_NAMES = {"registry-relay"}
+NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-a",
     "registry-stack-candidate-macos-arm64",
@@ -108,19 +110,21 @@ SECURITY_EVIDENCE_DIRECTORIES = {
     "syft",
     "grype",
 }
-SECURITY_EVIDENCE_REQUIRED_FILES = {
+SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
     "images/postgresql.digest",
-    "image-sbom/registry-notary.spdx.json",
-    "image-sbom/registry-relay.spdx.json",
     "image-sbom/postgresql.spdx.json",
-    "syft/registry-notary.syft.json",
-    "syft/registry-relay.syft.json",
     "syft/postgresql.syft.json",
-    "grype/registry-notary.grype.json",
-    "grype/registry-relay.grype.json",
     "grype/postgresql.grype.json",
     "grype/grype-db-status.json",
     "advisory-verdict.json",
+}
+SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
+    f"{directory}/registry-relay.{suffix}.json"
+    for directory, suffix in (
+        ("image-sbom", "spdx"),
+        ("syft", "syft"),
+        ("grype", "grype"),
+    )
 }
 POSTGRESQL_DIGEST_REF = re.compile(
     r"^docker\.io/library/postgres@sha256:[0-9a-f]{64}$"
@@ -129,6 +133,28 @@ POSTGRESQL_DIGEST_REF = re.compile(
 
 class CandidateError(ValueError):
     """A candidate cannot be trusted for promotion."""
+
+
+def _candidate_image_names(version: str) -> set[str]:
+    parsed = tuple(int(part) for part in version.split("."))
+    if parsed >= NOTARY_RETIREMENT_MINIMUM_VERSION:
+        return CURRENT_IMAGE_NAMES
+    return LEGACY_IMAGE_NAMES
+
+
+def _security_evidence_required_files(
+    product_image_names: Iterable[str],
+) -> set[str]:
+    required = set(SECURITY_EVIDENCE_COMMON_REQUIRED_FILES)
+    for image in product_image_names:
+        required.update(
+            {
+                f"image-sbom/{image}.spdx.json",
+                f"syft/{image}.syft.json",
+                f"grype/{image}.grype.json",
+            }
+        )
+    return required
 
 
 def read_json(path: Path) -> Any:
@@ -729,6 +755,7 @@ def validate_security_evidence_archive(
     ):
         raise CandidateError("security evidence archive size exceeds its bound")
 
+    required_files = _security_evidence_required_files(product_image_refs)
     seen: set[str] = set()
     top_level: set[str] = set()
     contents: dict[str, bytes] = {}
@@ -773,7 +800,7 @@ def validate_security_evidence_archive(
                     raise CandidateError(
                         f"security evidence archive has non-regular entry {name!r}"
                     )
-                if name not in SECURITY_EVIDENCE_REQUIRED_FILES:
+                if name not in required_files:
                     raise CandidateError(
                         f"security evidence archive has unexpected member {name!r}"
                     )
@@ -806,7 +833,7 @@ def validate_security_evidence_archive(
             f"cannot inspect security evidence archive: {exc}"
         ) from exc
 
-    missing = SECURITY_EVIDENCE_REQUIRED_FILES - set(contents)
+    missing = required_files - set(contents)
     if missing:
         raise CandidateError(
             f"security evidence archive is incomplete: missing {sorted(missing)!r}"
@@ -906,11 +933,8 @@ def validate_security_evidence_archive(
         raise CandidateError("security evidence Grype database status is empty")
 
     advisory = _security_evidence_json(contents, "advisory-verdict.json")
-    expected_subjects = {
-        "registry-notary-image",
-        "registry-relay-image",
-        "postgresql-runtime",
-    }
+    expected_subjects = {"postgresql-runtime"}
+    expected_subjects.update(f"{name}-image" for name in product_image_refs)
     subjects = advisory.get("subjects")
     if (
         advisory.get("schema_version") != "registry-stack.advisory-verdict.v2"
@@ -1140,9 +1164,10 @@ def validate_candidate_manifest(
         candidate_refs.add(candidate_ref)
         final_refs.add(final_ref)
         product_image_refs[name] = candidate_ref
-    if image_names != IMAGE_NAMES:
+    expected_image_names = _candidate_image_names(version)
+    if image_names != expected_image_names:
         raise CandidateError(
-            f"image inventory must be exactly {sorted(IMAGE_NAMES)!r}"
+            f"image inventory must be exactly {sorted(expected_image_names)!r}"
         )
 
     for kind in ("docs", "sbom"):
@@ -1538,7 +1563,7 @@ def _validate_images(
             },
         )
         name = require_nonempty_string(image["name"], f"{label}.name")
-        if name not in IMAGE_NAMES or name in seen:
+        if name not in LEGACY_IMAGE_NAMES or name in seen:
             raise CandidateError(f"{label}.name is unexpected or duplicated: {name!r}")
         seen.add(name)
         expected_repository = f"ghcr.io/registrystack/{name}-candidate"
@@ -1691,8 +1716,10 @@ def _validate_images(
             raise CandidateError(
                 f"{label}.comparison does not match the candidate build mode"
             )
-    if seen != IMAGE_NAMES:
-        raise CandidateError(f"image inventory must be exactly {sorted(IMAGE_NAMES)!r}")
+    if seen != LEGACY_IMAGE_NAMES:
+        raise CandidateError(
+            f"image inventory must be exactly {sorted(LEGACY_IMAGE_NAMES)!r}"
+        )
 
 
 def validate_receipt(
@@ -2047,7 +2074,7 @@ def validate_promotion_state(
     public_images = require_object(
         state["public_images"],
         "promotion state.public_images",
-        IMAGE_NAMES,
+        LEGACY_IMAGE_NAMES,
     )
     expected_digests = {
         image["name"]: image["index_digest"] for image in receipt["images"]
@@ -2100,7 +2127,7 @@ def validate_promotion_state(
 
     if phase == "prewrite":
         if release_state["exists"] or any(
-            public_images[name] is not None for name in IMAGE_NAMES
+            public_images[name] is not None for name in LEGACY_IMAGE_NAMES
         ):
             raise CandidateError(
                 "prewrite promotion state is not empty; partial publication or replay "

@@ -13,7 +13,7 @@
       "installed_evidence": "embedded_compiler",
       "project_declaration": "declared",
       "environment_enablement": "enabled",
-      "used_by": {"services": 1, "consultations": 1, "claims": 0, "total": 2},
+      "used_by": {"services": 1, "consultations": 1, "total": 2},
       "disposition": "used"
     },
     {
@@ -26,7 +26,7 @@
       "installed_evidence": "embedded_compiler",
       "project_declaration": "declared",
       "environment_enablement": "enabled",
-      "used_by": {"services": 0, "consultations": 1, "claims": 1, "total": 2},
+      "used_by": {"services": 0, "consultations": 1, "total": 1},
       "disposition": "used"
     },
     {
@@ -39,7 +39,7 @@
       "installed_evidence": "embedded_compiler",
       "project_declaration": "declared",
       "environment_enablement": "not_enabled",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
+      "used_by": {"services": 0, "consultations": 0, "total": 0},
       "disposition": "declared_inactive"
     },
     {
@@ -52,7 +52,7 @@
       "installed_evidence": "linked_crate",
       "project_declaration": "not_applicable",
       "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 1, "claims": 1, "total": 2},
+      "used_by": {"services": 0, "consultations": 1, "total": 1},
       "disposition": "used"
     },
     {
@@ -65,7 +65,7 @@
       "installed_evidence": "linked_crate",
       "project_declaration": "not_applicable",
       "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 1, "claims": 1, "total": 2},
+      "used_by": {"services": 0, "consultations": 1, "total": 1},
       "disposition": "used"
     },
     {
@@ -78,20 +78,7 @@
       "installed_evidence": "linked_crate",
       "project_declaration": "declared",
       "environment_enablement": "enabled",
-      "used_by": {"services": 1, "consultations": 2, "claims": 0, "total": 3},
-      "disposition": "used"
-    },
-    {
-      "capability": "registry_notary_product",
-      "kind": "product",
-      "owner": "registry_notary",
-      "maturity": "release_gated",
-      "supported_versions": ["registry_notary_config_v1"],
-      "installed_release": "compiled",
-      "installed_evidence": "linked_crate",
-      "project_declaration": "declared",
-      "environment_enablement": "enabled",
-      "used_by": {"services": 0, "consultations": 0, "claims": 1, "total": 1},
+      "used_by": {"services": 1, "consultations": 2, "total": 3},
       "disposition": "used"
     },
     {
@@ -104,20 +91,7 @@
       "installed_evidence": "linked_product_validator",
       "project_declaration": "not_applicable",
       "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
-      "disposition": "installed_unused"
-    },
-    {
-      "capability": "registry_notary_validator",
-      "kind": "product_validator",
-      "owner": "registry_notary",
-      "maturity": "release_gated",
-      "supported_versions": ["registry_notary_config_v1"],
-      "installed_release": "compiled",
-      "installed_evidence": "linked_product_validator",
-      "project_declaration": "not_applicable",
-      "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
+      "used_by": {"services": 0, "consultations": 0, "total": 0},
       "disposition": "installed_unused"
     },
     {
@@ -130,7 +104,7 @@
       "installed_evidence": "embedded_schema",
       "project_declaration": "not_applicable",
       "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
+      "used_by": {"services": 0, "consultations": 0, "total": 0},
       "disposition": "installed_unused"
     },
     {
@@ -143,20 +117,7 @@
       "installed_evidence": "embedded_schema",
       "project_declaration": "not_applicable",
       "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
-      "disposition": "installed_unused"
-    },
-    {
-      "capability": "registry_notary_config_schema",
-      "kind": "schema",
-      "owner": "registry_notary",
-      "maturity": "release_gated",
-      "supported_versions": ["registry_notary_config_v1"],
-      "installed_release": "compiled",
-      "installed_evidence": "embedded_schema",
-      "project_declaration": "not_applicable",
-      "environment_enablement": "not_applicable",
-      "used_by": {"services": 0, "consultations": 0, "claims": 0, "total": 0},
+      "used_by": {"services": 0, "consultations": 0, "total": 0},
       "disposition": "installed_unused"
     }
   ],
@@ -166,15 +127,11 @@
     {"component": "snapshot_materialization_worker", "kind": "worker", "owner": "registry_relay", "state": "missing", "evidence": "explicitly_missing", "required_by": ["source_snapshot"]},
     {"component": "rhai_xw_protocol_helper", "kind": "protocol_helper", "owner": "registry_relay", "state": "available", "evidence": "linked_crate", "required_by": ["source_script", "rhai_abi"]},
     {"component": "registry_relay_product", "kind": "product", "owner": "registry_relay", "state": "available", "evidence": "linked_crate", "required_by": ["source_http", "source_script", "source_snapshot", "registry_relay_product"]},
-    {"component": "registry_notary_product", "kind": "product", "owner": "registry_notary", "state": "available", "evidence": "linked_crate", "required_by": ["registry_notary_product"]},
     {"component": "registry_relay_validator", "kind": "product_validator", "owner": "registry_relay", "state": "available", "evidence": "linked_product_validator", "required_by": ["registry_relay_product"]},
-    {"component": "registry_notary_validator", "kind": "product_validator", "owner": "registry_notary", "state": "available", "evidence": "linked_product_validator", "required_by": ["registry_notary_product"]},
     {"component": "project_authoring_schema", "kind": "schema", "owner": "registryctl", "state": "available", "evidence": "embedded_schema", "required_by": ["source_http", "source_script", "source_snapshot"]},
     {"component": "registry_relay_config_schema", "kind": "schema", "owner": "registry_relay", "state": "available", "evidence": "embedded_schema", "required_by": ["registry_relay_product"]},
-    {"component": "registry_notary_config_schema", "kind": "schema", "owner": "registry_notary", "state": "available", "evidence": "embedded_schema", "required_by": ["registry_notary_product"]},
     {"component": "registryctl_distribution", "kind": "distribution", "owner": "release_engineering", "state": "available", "evidence": "release_metadata", "required_by": ["source_http", "source_script", "source_snapshot", "project_authoring_schemas"]},
-    {"component": "registry_relay_image", "kind": "image", "owner": "release_engineering", "state": "not_evaluated", "evidence": "no_evidence", "required_by": ["registry_relay_product"]},
-    {"component": "registry_notary_image", "kind": "image", "owner": "release_engineering", "state": "not_evaluated", "evidence": "no_evidence", "required_by": ["registry_notary_product"]}
+    {"component": "registry_relay_image", "kind": "image", "owner": "release_engineering", "state": "not_evaluated", "evidence": "no_evidence", "required_by": ["registry_relay_product"]}
   ],
   "missing_support": [
     {"component": "snapshot_materialization_worker", "kind": "worker", "state": "missing", "required_by": ["source_snapshot"]}

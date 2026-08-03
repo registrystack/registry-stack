@@ -519,7 +519,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
 
 class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
-    def test_smoke_builds_both_release_dockerfiles_via_shared_wrapper(self) -> None:
+    def test_smoke_builds_relay_release_dockerfile_via_shared_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fake_bin = Path(temporary) / "bin"
             fake_bin.mkdir()
@@ -601,7 +601,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             build_calls = [
                 call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
             ]
-            self.assertEqual(6, len(build_calls))
+            self.assertEqual(4, len(build_calls))
             dockerfiles = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
@@ -626,16 +626,9 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
 
             self.assertEqual(
                 {
-                    str(ROOT / "release/docker/Dockerfile.registry-notary"),
                     str(ROOT / "release/docker/Dockerfile.registry-relay"),
                 },
                 set(dockerfiles),
-            )
-            self.assertEqual(
-                2,
-                dockerfiles.count(
-                    str(ROOT / "release/docker/Dockerfile.registry-notary")
-                ),
             )
             self.assertEqual(
                 4,
@@ -653,7 +646,6 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 {
-                    "correct-registry-notary-first",
                     "correct-registry-relay-first",
                 },
                 {
@@ -681,7 +673,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 for call in python_calls
                 if call and call[0].endswith("compare-release-image-layouts.py")
             ]
-            self.assertEqual(3, len(comparisons))
+            self.assertEqual(2, len(comparisons))
             self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 

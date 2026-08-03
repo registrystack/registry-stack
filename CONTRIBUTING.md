@@ -55,10 +55,10 @@ Every pull request should make the review path clear:
   check was skipped and why.
 - Include tests for major functionality and bug fixes. If a test cannot be
   added, explain why in the pull request.
-- Treat changes to authentication, authorization, credential issuance, signing,
-  audit integrity, release provenance, deployment defaults, or data minimization
-  as security-sensitive. These changes need explicit maintainer review notes,
-  even when the maintainer is also the author.
+- Treat changes to authentication, authorization, assertion evaluation or
+  signing, audit integrity, release provenance, deployment defaults, or data
+  minimization as security-sensitive. These changes need explicit maintainer
+  review notes, even when the maintainer is also the author.
 
 ## Dependency Changes
 
@@ -129,7 +129,6 @@ cargo check --locked --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo deny check
-(cd products/notary && just openapi-check)
 (cd crates/registry-relay && just openapi-contract)
 ```
 
@@ -144,8 +143,7 @@ These checks require Python 3.11 or later.
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-python3 -m unittest release/scripts/test_openid_conformance_runner.py
-release/scripts/registry-release validate release/manifests/registry-stack-beta-17.yaml
+release/scripts/registry-release validate release/manifests/registry-stack-beta-27.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -183,6 +181,7 @@ same source can reproduce it exactly.
 
 ## Security Reports
 
-Do not open public issues or pull requests for suspected credential disclosure,
-auth bypass, audit redaction failure, source connector data leakage, signing key
-handling bugs, or other vulnerabilities. Follow [SECURITY.md](SECURITY.md).
+Do not open public issues or pull requests for suspected minimum-disclosure
+failure, auth bypass, audit redaction failure, source connector data leakage,
+signing key handling bugs, or other vulnerabilities. Follow
+[SECURITY.md](SECURITY.md).

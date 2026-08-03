@@ -159,7 +159,6 @@ pub struct ProjectFixtureReport {
     pub inputs: Vec<String>,
     pub calls: Vec<String>,
     pub outputs: Vec<String>,
-    pub claims: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,7 +377,6 @@ pub struct ProjectSchemaRef {
 pub enum ImpactConsumer {
     RegistryctlAuthoring,
     RegistryRelay,
-    RegistryNotary,
     EditorTooling,
     DocsGenerator,
     BundleSigner,
@@ -396,7 +394,6 @@ pub enum ImpactReviewClass {
     Privacy,
     Security,
     Relay,
-    Notary,
     Compatibility,
     Documentation,
     Testing,
@@ -501,22 +498,18 @@ impl ProjectSemanticImpactReportV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticDimension {
-    Claim,
     Integration,
     ServicePolicy,
     OperatorSecurity,
-    Disclosure,
     Compiler,
 }
 
 impl SemanticDimension {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Claim => "claim",
             Self::Integration => "integration",
             Self::ServicePolicy => "service_policy",
             Self::OperatorSecurity => "operator_security",
-            Self::Disclosure => "disclosure",
             Self::Compiler => "compiler",
         }
     }
@@ -670,8 +663,6 @@ pub enum AffectedSubjectKind {
     Fixture,
     ServicePolicy,
     Consultation,
-    Claim,
-    Disclosure,
     ProductInput,
     GeneratedArtifact,
 }
@@ -688,7 +679,6 @@ pub struct AffectedSubject {
 pub enum ProjectProduct {
     Registryctl,
     Relay,
-    Notary,
     Editor,
     Docs,
 }
@@ -781,7 +771,6 @@ pub enum ArtifactClass {
     RuntimeConfig,
     ConsultationContract,
     SourcePlan,
-    ClaimConfiguration,
     DeploymentInput,
     ReviewRecord,
     Documentation,
@@ -855,7 +844,6 @@ pub enum ArtifactAction {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactConsumer {
     RegistryRelay,
-    RegistryNotary,
     BundleSigner,
     DeploymentTooling,
     ProjectDocumentation,

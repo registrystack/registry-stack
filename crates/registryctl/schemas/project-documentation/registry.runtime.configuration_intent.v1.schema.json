@@ -118,77 +118,11 @@
           }
         }
       }
-    },
-    {
-      "if": {
-        "properties": {
-          "runtime_schema": {
-            "const": "notary"
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "profiles": {
-            "type": "array",
-            "items": {
-              "allOf": [
-                {
-                  "$ref": "#/$defs/profile"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "semantic_owner": {
-                      "const": "notary_runtime"
-                    },
-                    "human_owner": {
-                      "const": "notary_maintainers"
-                    },
-                    "products": {
-                      "const": [
-                        "notary",
-                        "docs"
-                      ]
-                    },
-                    "consumers": {
-                      "const": [
-                        "registry_notary",
-                        "docs_generator"
-                      ]
-                    },
-                    "generated_artifacts": {
-                      "const": [
-                        "notary_config",
-                        "field_reference"
-                      ]
-                    },
-                    "diagnostic": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "pattern": "^(registry\\.notary\\.config|config)\\.[a-z0-9_.]+$"
-                        },
-                        {
-                          "$ref": "#/$defs/prose"
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      }
     }
   ],
   "$defs": {
     "runtimeSchema": {
-      "enum": [
-        "relay",
-        "notary"
-      ]
+      "const": "relay"
     },
     "pathKind": {
       "enum": [
@@ -238,16 +172,10 @@
           "$ref": "#/$defs/prose"
         },
         "semantic_owner": {
-          "enum": [
-            "relay_runtime",
-            "notary_runtime"
-          ]
+          "const": "relay_runtime"
         },
         "human_owner": {
-          "enum": [
-            "relay_maintainers",
-            "notary_maintainers"
-          ]
+          "const": "relay_maintainers"
         },
         "scope": {
           "$ref": "#/$defs/prose"
@@ -277,7 +205,6 @@
           "items": {
             "enum": [
               "relay",
-              "notary",
               "docs"
             ]
           }
@@ -307,7 +234,7 @@
           "anyOf": [
             {
               "type": "string",
-              "pattern": "^(registry\\.(relay|notary)\\.config|config)\\.[a-z0-9_.]+$"
+              "pattern": "^(registry\\.relay\\.config|config)\\.[a-z0-9_.]+$"
             },
             {
               "$ref": "#/$defs/prose"
@@ -334,7 +261,6 @@
           "items": {
             "enum": [
               "registry_relay",
-              "registry_notary",
               "docs_generator"
             ]
           }
@@ -346,7 +272,6 @@
           "items": {
             "enum": [
               "relay_config",
-              "notary_config",
               "field_reference"
             ]
           }
@@ -361,7 +286,6 @@
               "security",
               "privacy",
               "relay",
-              "notary",
               "compatibility",
               "documentation"
             ]

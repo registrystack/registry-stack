@@ -10,7 +10,7 @@ import {
   validateAuthoringReference,
 } from './generate-authoring-reference.mjs';
 
-const schemas = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay', 'notary'];
+const schemas = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay'];
 const sourceContract = {
   schemas,
   schema_sources: [
@@ -20,14 +20,10 @@ const sourceContract = {
     'fixture.schema.json',
     'entity.schema.json',
     'registry-relay.config.schema.json',
-    'registry-notary.config.schema.json',
   ],
   field_knowledge: 'schemas/project-authoring/parity-coverage.json#field_knowledge',
   human_intent: 'schemas/project-authoring/documentation-intent.json',
-  runtime_intent: [
-    'crates/registry-relay/config/documentation-intent.json',
-    'crates/registry-notary-core/config/documentation-intent.json',
-  ],
+  runtime_intent: ['crates/registry-relay/config/documentation-intent.json'],
   reads_country_workspaces: false,
   reads_runtime_configuration: false,
 };
@@ -39,12 +35,12 @@ const referenceBaseline = {
   compared_releases: [],
 };
 const counts = {
-  schema_count: 7,
-  path_count: 7,
+  schema_count: schemas.length,
+  path_count: schemas.length,
   reference_count: 0,
   by_schema: Object.fromEntries(schemas.map((schema) => [schema, 1])),
   by_path_kind: {
-    root: 7,
+    root: schemas.length,
     property: 0,
     map_key: 0,
     map_value: 0,
@@ -52,10 +48,10 @@ const counts = {
     branch: 0,
   },
   by_sensitivity: {
-    structural: 7,
+    structural: schemas.length,
   },
   by_intent_source: {
-    schema_description: 7,
+    schema_description: schemas.length,
   },
   by_intent_profile: {},
 };
@@ -69,9 +65,9 @@ function fixtureData() {
     reference_baseline: referenceBaseline,
     source_contract: sourceContract,
     coverage: counts,
-    reviewed_intent_assignment_required_count: 7,
-    reviewed_intent_assignment_covered_count: 7,
-    distinct_reviewed_intent_count: 7,
+    reviewed_intent_assignment_required_count: schemas.length,
+    reviewed_intent_assignment_covered_count: schemas.length,
+    distinct_reviewed_intent_count: schemas.length,
     distinct_reviewed_intents_reused_count: 0,
     reviewed_intent_assignments_using_reused_intent_count: 0,
     missing_intent: [],
@@ -87,13 +83,11 @@ function fixtureData() {
       address: {
         schema,
         pointer: '',
-        ...(schema === 'relay' || schema === 'notary' ? { key_path: '' } : {}),
+        ...(schema === 'relay' ? { key_path: '' } : {}),
         path_kind: 'root',
       },
       purpose: `Documents the reviewed ${schema} configuration contract root and its exact operational intent.`,
-      ...(schema === 'relay' || schema === 'notary'
-        ? { intent_profile: `${schema}_runtime_root` }
-        : {}),
+      ...(schema === 'relay' ? { intent_profile: `${schema}_runtime_root` } : {}),
       default: { behavior: 'not_applicable' },
       history_status: 'not_verified',
       introduced_in: null,
@@ -103,7 +97,6 @@ function fixtureData() {
   };
   reference.coverage.by_intent_profile = {
     relay_runtime_root: 1,
-    notary_runtime_root: 1,
   };
   coverage.coverage.by_intent_profile = reference.coverage.by_intent_profile;
   return { reference, coverage };
@@ -216,7 +209,7 @@ test('rejects fabricated field history and inconsistent intent-reuse counts', ()
   );
 
   const falseUniqueness = fixtureData();
-  falseUniqueness.coverage.distinct_reviewed_intent_count = 6;
+  falseUniqueness.coverage.distinct_reviewed_intent_count = schemas.length - 1;
   assert.throws(
     () =>
       validateAuthoringReference(
@@ -255,7 +248,7 @@ test('rejects runtime paths without exact profiles or with exposed default value
 
   const exposedDefault = fixtureData();
   exposedDefault.reference.fields.find(
-    (field) => field.address.schema === 'notary',
+    (field) => field.address.schema === 'relay',
   ).default.schema_value = 'COUNTRY_VALUE_SENTINEL';
   assert.throws(
     () => validateAuthoringReference(exposedDefault.reference, exposedDefault.coverage),
@@ -284,7 +277,7 @@ test('keeps JSON Schema pointers distinct from runtime configuration key paths',
 
   const dottedPointer = fixtureData();
   dottedPointer.reference.fields.find(
-    (field) => field.address.schema === 'notary',
+    (field) => field.address.schema === 'relay',
   ).address.pointer = 'auth.api_keys[]';
   assert.throws(
     () => validateAuthoringReference(dottedPointer.reference, dottedPointer.coverage),

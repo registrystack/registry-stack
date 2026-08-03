@@ -20,7 +20,7 @@ import yaml
 
 from registryctl_image_lock import (
     PLATFORM as IMAGE_LOCK_PLATFORM,
-    PRODUCT_IMAGE_REPOSITORIES,
+    repositories_for_schema,
     schema_for_release_version,
     validate_images,
 )
@@ -33,7 +33,6 @@ RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 IMAGE_LOCK_FILE = re.compile(
     r"^registryctl-(v[A-Za-z0-9][A-Za-z0-9._+-]*)-image-lock\.json$"
 )
-IMAGE_REPOSITORIES = PRODUCT_IMAGE_REPOSITORIES
 CAPSULE_REPOSITORY = "registrystack/registry-stack"
 SLSA_SOURCE_URI = "github.com/registrystack/registry-stack"
 RELEASE_WORKFLOW = (
@@ -594,18 +593,19 @@ def _load_candidate_snapshot(
         raise CandidateError(
             "release manifest does not identify one immutable candidate"
         )
+    try:
+        expected_image_lock_schema = schema_for_release_version(version)
+        image_repositories = repositories_for_schema(expected_image_lock_schema)
+    except ValueError as exc:
+        raise CandidateError(str(exc)) from None
+    product_components = set(image_repositories) - {"postgresql"}
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict) or any(
-        artifacts.get(component) != version for component in IMAGE_REPOSITORIES
+        artifacts.get(component) != version for component in product_components
     ):
         raise CandidateError(
             "release manifest product artifacts do not match its version"
         )
-
-    try:
-        expected_image_lock_schema = schema_for_release_version(version)
-    except ValueError as exc:
-        raise CandidateError(str(exc)) from None
     if (
         not isinstance(lock, dict)
         or image_lock_path.name != f"registryctl-v{version}-image-lock.json"
@@ -645,7 +645,7 @@ def _load_candidate_snapshot(
             raise CandidateError("Solmara topology requires one exact source commit")
     elif topology != "release-owned" or solmara_source_ref is not None:
         raise CandidateError("Solmara must be explicitly selected and commit-pinned")
-    return {
+    candidate = {
         "release_id": release_id,
         "version": version,
         "source_repo": stack["source_repo"],
@@ -656,11 +656,13 @@ def _load_candidate_snapshot(
         "manifest_sha256": f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}",
         "image_lock_sha256": f"sha256:{image_lock_sha256}",
         "release_capsule_sha256": f"sha256:{capsule_sha256}",
-        "notary_image": images["registry-notary"],
         "relay_image": images["registry-relay"],
         "topology": topology,
         "solmara_source_ref": solmara_source_ref,
     }
+    if "registry-notary" in images:
+        candidate["notary_image"] = images["registry-notary"]
+    return candidate
 
 
 def load_candidate(

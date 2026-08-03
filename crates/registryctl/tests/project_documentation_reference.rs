@@ -312,7 +312,7 @@ fn human_intent_sidecar_and_documentation_contracts_are_strict_schemas() {
     let intent_schema = compile_schema(&intent_schema_document);
     let intent = read_json(schema_root.join("project-authoring/documentation-intent.json"));
     assert_valid(&intent_schema, &intent, "documentation intent sidecar");
-    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 205);
+    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 164);
 
     for file in [
         "registry.project.configuration_reference.v1.schema.json",
@@ -344,35 +344,26 @@ fn human_intent_sidecar_and_documentation_contracts_are_strict_schemas() {
             .join("project-documentation")
             .join("registry.runtime.configuration_intent.v1.schema.json"),
     ));
-    for path in [
-        crate_root().join("../registry-relay/config/documentation-intent.json"),
-        crate_root().join("../registry-notary-core/config/documentation-intent.json"),
-    ] {
-        let runtime_intent = read_json(path);
-        assert_valid(
-            &runtime_intent_schema,
-            &runtime_intent,
-            "product-owned runtime intent",
-        );
-        let mut cross_product = runtime_intent.clone();
-        cross_product["profiles"][0]["semantic_owner"] =
-            if cross_product["runtime_schema"] == "relay" {
-                json!("notary_runtime")
-            } else {
-                json!("relay_runtime")
-            };
-        assert!(
-            runtime_intent_schema.validate(&cross_product).is_err(),
-            "the strict runtime intent schema rejects cross-product profile ownership"
-        );
-        let mut unknown_assignment = runtime_intent;
-        unknown_assignment["assignments"][0]["unexpected"] = json!(true);
-        assert!(runtime_intent_schema.validate(&unknown_assignment).is_err());
-        assert!(
-            serde_json::from_value::<RuntimeIntentCatalog>(unknown_assignment).is_err(),
-            "the runtime intent DTO rejects unknown assignment fields"
-        );
-    }
+    let runtime_intent =
+        read_json(crate_root().join("../registry-relay/config/documentation-intent.json"));
+    assert_valid(
+        &runtime_intent_schema,
+        &runtime_intent,
+        "product-owned runtime intent",
+    );
+    let mut cross_product = runtime_intent.clone();
+    cross_product["profiles"][0]["semantic_owner"] = json!("authoring_contract");
+    assert!(
+        runtime_intent_schema.validate(&cross_product).is_err(),
+        "the strict runtime intent schema rejects cross-product profile ownership"
+    );
+    let mut unknown_assignment = runtime_intent;
+    unknown_assignment["assignments"][0]["unexpected"] = json!(true);
+    assert!(runtime_intent_schema.validate(&unknown_assignment).is_err());
+    assert!(
+        serde_json::from_value::<RuntimeIntentCatalog>(unknown_assignment).is_err(),
+        "the runtime intent DTO rejects unknown assignment fields"
+    );
 }
 
 #[test]
@@ -436,18 +427,17 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         coverage.schema_id,
         CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID
     );
-    assert_eq!(coverage.coverage.schema_count, 7);
-    assert_eq!(coverage.coverage.path_count, 1829);
+    assert_eq!(coverage.coverage.schema_count, 6);
+    assert_eq!(coverage.coverage.path_count, 1155);
     assert_eq!(
         coverage.coverage.by_schema,
         [
-            (ConfigurationSchemaKind::Project, 220),
-            (ConfigurationSchemaKind::Environment, 213),
+            (ConfigurationSchemaKind::Project, 191),
+            (ConfigurationSchemaKind::Environment, 126),
             (ConfigurationSchemaKind::Integration, 171),
-            (ConfigurationSchemaKind::Fixture, 63),
+            (ConfigurationSchemaKind::Fixture, 39),
             (ConfigurationSchemaKind::Entity, 35),
             (ConfigurationSchemaKind::Relay, 593),
-            (ConfigurationSchemaKind::Notary, 534),
         ]
         .into_iter()
         .collect()
@@ -455,23 +445,23 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
     assert_eq!(
         coverage.coverage.by_path_kind,
         [
-            (FieldPathKind::Root, 7),
-            (FieldPathKind::Property, 1_458),
-            (FieldPathKind::MapKey, 26),
-            (FieldPathKind::MapValue, 48),
-            (FieldPathKind::ArrayItem, 178),
-            (FieldPathKind::Branch, 112),
+            (FieldPathKind::Root, 6),
+            (FieldPathKind::Property, 903),
+            (FieldPathKind::MapKey, 22),
+            (FieldPathKind::MapValue, 34),
+            (FieldPathKind::ArrayItem, 102),
+            (FieldPathKind::Branch, 88),
         ]
         .into_iter()
         .collect(),
         "the exact reviewed structural taxonomy remains release-gated"
     );
-    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1829);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1155);
     assert_eq!(
         coverage.reviewed_intent_assignment_covered_count + coverage.missing_intent.len(),
         coverage.reviewed_intent_assignment_required_count
     );
-    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1829);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1155);
     assert!(
         coverage.distinct_reviewed_intent_count < coverage.reviewed_intent_assignment_covered_count,
         "assignment coverage must not imply one unique explanation per path"
@@ -488,13 +478,13 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             coverage.distinct_reviewed_intents_reused_count,
             coverage.reviewed_intent_assignments_using_reused_intent_count,
         ),
-        (629, 86, 1_286),
+        (490, 62, 727),
         "the exact intent-text reuse baseline must change intentionally with reviewed documentation"
     );
     assert_eq!(
         coverage.coverage.by_intent_profile.values().sum::<usize>(),
-        1127,
-        "every Relay and Notary path, including both roots, records its exact reviewed profile"
+        593,
+        "every Relay path, including its root, records its exact reviewed profile"
     );
     assert_eq!(
         coverage.missing_intent.len(),
@@ -636,7 +626,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
                 })
                 .count(),
         ),
-        (528, 315, 0, 986),
+        (260, 259, 0, 636),
         "the exact empty-string semantic coverage prevents constrained strings from regressing to allowed"
     );
     assert_eq!(
@@ -654,7 +644,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
                     })
             })
             .count(),
-        214,
+        179,
         "schema semantics must retain rejections that the former minLength-only heuristic missed"
     );
     let intent_counts =
@@ -762,10 +752,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
     );
     assert!(
         reference.fields.iter().all(|field| {
-            let runtime = matches!(
-                field.address.schema,
-                ConfigurationSchemaKind::Relay | ConfigurationSchemaKind::Notary
-            );
+            let runtime = matches!(field.address.schema, ConfigurationSchemaKind::Relay);
             runtime == field.address.key_path.is_some()
                 && (field.address.pointer.is_empty() || field.address.pointer.starts_with('/'))
         }),
@@ -994,13 +981,6 @@ fn runtime_intent_requires_exact_assignments_and_new_paths_cannot_inherit_profil
             .contains("unknown profile")
     );
 
-    let mut wrong_schema = intent.clone();
-    wrong_schema.assignments[0].schema = ConfigurationSchemaKind::Notary;
-    assert!(runtime_configuration_intent_gaps(&document, &wrong_schema)
-        .expect_err("wrong runtime schema identity fails closed")
-        .to_string()
-        .contains("wrong product schema"));
-
     let mut stale_key_path = intent.clone();
     stale_key_path.assignments[0].key_path = "unreviewed_runtime_field".to_owned();
     assert!(
@@ -1034,15 +1014,6 @@ fn runtime_intent_requires_exact_assignments_and_new_paths_cannot_inherit_profil
             .expect_err("open map without exact extension semantics fails closed")
             .to_string()
             .contains("lacks exact extension semantics")
-    );
-
-    let mut cross_product_diagnostic = intent.clone();
-    cross_product_diagnostic.profiles[0].diagnostic = "registry.notary.config.invalid".to_owned();
-    assert!(
-        runtime_configuration_intent_gaps(&document, &cross_product_diagnostic)
-            .expect_err("cross-product diagnostic code fails closed")
-            .to_string()
-            .contains("cross-product diagnostic code")
     );
 
     let mut wrong_kind = intent;

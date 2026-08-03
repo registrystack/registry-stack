@@ -4,7 +4,7 @@
 //! Coverage is reported per integration target. Evidence contains only stable
 //! identifiers, content digests, bounded counts, closed outcomes, and closed
 //! safe error classes. Fixture values, request material, source observations,
-//! paths, origins, outputs, claims, and secrets have no representation here.
+//! paths, origins, outputs, and secrets have no representation here.
 
 use std::collections::BTreeSet;
 
@@ -19,7 +19,6 @@ pub(crate) const MAX_FIXTURE_COVERAGE_AUTHORED_RECORDS: usize = 1_024;
 pub(crate) const MAX_FIXTURE_COVERAGE_GENERATED_RECORDS: usize =
     MAX_FIXTURE_COVERAGE_AUTHORED_RECORDS * GeneratorRecipeId::ALL.len();
 pub(crate) const MAX_FIXTURE_COVERAGE_PLATFORM_RECORDS: usize = PlatformGeneratedCaseId::ALL.len();
-pub(crate) const MAX_FIXTURE_COVERAGE_CONSULTATIONS: usize = 512;
 
 const INVALID_REPORT: &str = "fixture coverage report violates the closed v1 invariants";
 const INVALID_COMPARISON: &str =
@@ -47,14 +46,6 @@ pub enum FixtureCompatibilityClaim {
 #[serde(rename_all = "snake_case")]
 pub enum LiveCompatibilityEvaluation {
     NotEvaluated,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GovernedRequestEvidence {
-    /// Proof method only. Per-target requirement state remains authoritative
-    /// about whether every reachable consultation has a passing witness.
-    PerConsultationAuthoredRequestWitnessEvaluation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -89,8 +80,6 @@ pub enum FixtureSemanticOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum FixtureSafeCode {
-    #[serde(rename = "authorization.denied")]
-    AuthorizationDenied,
     #[serde(rename = "failure.subject_mismatch")]
     FailureSubjectMismatch,
     #[serde(rename = "fixture.execution_contract_invalid")]
@@ -128,7 +117,6 @@ pub enum FixtureSafeCode {
 impl FixtureSafeCode {
     pub(crate) fn from_runtime_code(code: &str) -> Self {
         match code {
-            "authorization.denied" => Self::AuthorizationDenied,
             "failure.subject_mismatch" => Self::FailureSubjectMismatch,
             "fixture.execution_contract_invalid" => Self::FixtureExecutionContractInvalid,
             "fixture.profile_not_found" => Self::FixtureProfileNotFound,
@@ -175,14 +163,6 @@ pub enum FixturePassState {
     Passed,
     Failed,
     NotExecuted,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FixtureDisclosureMode {
-    Predicate,
-    Redacted,
-    Value,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -248,38 +228,9 @@ pub struct AuthoredSemanticFixtureCoverage {
     pub interaction_count: u32,
     pub input_ids: Vec<String>,
     pub output_ids: Vec<String>,
-    pub claim_ids: Vec<String>,
     pub exercised_status_mappings: Vec<FixtureStatusMapping>,
     pub classification: FixtureCoverageClassification,
     pub pass_state: FixturePassState,
-    pub request_to_consultation_binding: FixtureRequestBindingCoverage,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FixtureRequestBindingState {
-    NotAuthored,
-    NotExecuted,
-    Passed,
-    Failed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FixtureRequestBindingCoverage {
-    pub state: FixtureRequestBindingState,
-    /// Safe authored identities selected by a passing production Notary plan.
-    /// Values, selectors, and rendered requests never enter this report.
-    pub consultations: Vec<FixtureConsultationIdentity>,
-    pub actual_relay_consultations: Option<u32>,
-    pub safe_error_code: Option<FixtureSafeCode>,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FixtureConsultationIdentity {
-    pub service_id: String,
-    pub consultation_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -292,12 +243,11 @@ pub enum GeneratorRecipeId {
     ByteCeiling,
     Timeout,
     ProtocolVerification,
-    AuthorizationBeforeSource,
     OutputMinimization,
 }
 
 impl GeneratorRecipeId {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::RequestAuthority,
         Self::RequestOrder,
         Self::StatusRejection,
@@ -305,7 +255,6 @@ impl GeneratorRecipeId {
         Self::ByteCeiling,
         Self::Timeout,
         Self::ProtocolVerification,
-        Self::AuthorizationBeforeSource,
         Self::OutputMinimization,
     ];
 
@@ -318,7 +267,6 @@ impl GeneratorRecipeId {
             Self::ByteCeiling => FixtureMutationTargetClass::DeclaredResponseByteCount,
             Self::Timeout => FixtureMutationTargetClass::SourceDeadline,
             Self::ProtocolVerification => FixtureMutationTargetClass::ProtocolResponseEnvelope,
-            Self::AuthorizationBeforeSource => FixtureMutationTargetClass::AuthorizationGate,
             Self::OutputMinimization => FixtureMutationTargetClass::UnselectedResponseMember,
         }
     }
@@ -334,7 +282,6 @@ impl GeneratorRecipeId {
             }
             Self::ByteCeiling => Some(FixtureSafeCode::SourceResponseTooLarge),
             Self::Timeout => Some(FixtureSafeCode::SourceDeadlineExceeded),
-            Self::AuthorizationBeforeSource => Some(FixtureSafeCode::AuthorizationDenied),
             Self::OutputMinimization => None,
         }
     }
@@ -363,7 +310,6 @@ pub enum FixtureMutationTargetClass {
     DeclaredResponseByteCount,
     SourceDeadline,
     ProtocolResponseEnvelope,
-    AuthorizationGate,
     UnselectedResponseMember,
     SourceCallBudget,
 }
@@ -377,7 +323,6 @@ pub enum GeneratedNotApplicableReason {
     NoDistinguishableRequestPair,
     NoGeneratedRequestMatcher,
     FinalResponseIsNotJsonObject,
-    IntegrationHasNoProductClaims,
     SnapshotUsesClosedMaterialization,
     ProtocolMatcherOwnsResponseMutation,
 }
@@ -391,7 +336,6 @@ pub enum CoverageInvariant {
     OrderMutationRequiresDistinguishableSourceInteractions,
     ProtocolMutationRequiresGeneratedRequestMatcher,
     MutationRequiresFinalJsonObjectResponse,
-    AuthorizationCheckRequiresProductClaimEvaluation,
     SnapshotOutputUsesClosedMaterializationProjection,
     ProtocolMatcherFixtureUsesProtocolVerificationInstead,
 }
@@ -413,20 +357,6 @@ pub struct GeneratedSourceFixture {
     pub fixture_digest: Sha256Digest,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceCallExpectation {
-    Zero,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceAccessAssertion {
-    pub expected_source_calls: SourceCallExpectation,
-    pub actual_source_calls: Option<u32>,
-    pub passed: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedFixtureCoverage {
@@ -438,7 +368,6 @@ pub struct GeneratedFixtureCoverage {
     pub expected_safe_code: Option<FixtureSafeCode>,
     pub actual_safe_code: Option<FixtureSafeCode>,
     pub pass_state: FixturePassState,
-    pub source_access_assertion: Option<SourceAccessAssertion>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -475,8 +404,6 @@ pub struct PlatformGeneratedFixtureCoverage {
 pub struct FixtureCoverageDimensions {
     pub input_ids: Vec<String>,
     pub output_ids: Vec<String>,
-    pub claim_ids: Vec<String>,
-    pub disclosure_modes: Vec<FixtureDisclosureMode>,
     pub status_mappings: Vec<FixtureStatusMapping>,
     pub protocol_helpers: Vec<FixtureProtocolHelper>,
     pub limits: Vec<FixtureLimit>,
@@ -506,10 +433,6 @@ pub struct FixtureCoverageTargetContract {
     /// operation cardinality, not a source endpoint or authored path.
     pub source_operation_count: Option<u32>,
     pub reviewed_not_applicable: Vec<FixtureCoverageReviewedNotApplicable>,
-    /// Every registry-backed consultation reachable through claims for this
-    /// integration. Coverage must include an independently authored passing
-    /// request for each identity, not merely any passing fixture.
-    pub registry_backed_consultations: Vec<FixtureConsultationIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -520,22 +443,16 @@ pub enum RequiredFixtureCoverageRequirement {
     SemanticAmbiguity,
     SubjectMismatch,
     SemanticNull,
-    AuthorizationDenial,
     SourceFailure,
     RequestRendering,
-    RequestToConsultationBinding,
     ExpectedSourceInteractions,
     SourceInteractionOrder,
     OutputFields,
-    Claims,
-    DeclaredDisclosureModes,
-    ExercisedDisclosureModes,
     ScriptBranches,
     PaginationAndContinuation,
     StatusMappings,
     ProtocolHelpers,
     ProtocolVerification,
-    AuthorizationBeforeSource,
     MalformedDecoding,
     StructuralLimits,
     RequestBytes,
@@ -548,33 +465,26 @@ pub enum RequiredFixtureCoverageRequirement {
     OutputMinimization,
     ChangedInputAffectedFixtures,
     ChangedOutputAffectedFixtures,
-    ChangedClaimAffectedFixtures,
     ChangedSourceContractAffectedFixtures,
 }
 
 impl RequiredFixtureCoverageRequirement {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 28] = [
         Self::SemanticMatch,
         Self::SemanticNoMatch,
         Self::SemanticAmbiguity,
         Self::SubjectMismatch,
         Self::SemanticNull,
-        Self::AuthorizationDenial,
         Self::SourceFailure,
         Self::RequestRendering,
-        Self::RequestToConsultationBinding,
         Self::ExpectedSourceInteractions,
         Self::SourceInteractionOrder,
         Self::OutputFields,
-        Self::Claims,
-        Self::DeclaredDisclosureModes,
-        Self::ExercisedDisclosureModes,
         Self::ScriptBranches,
         Self::PaginationAndContinuation,
         Self::StatusMappings,
         Self::ProtocolHelpers,
         Self::ProtocolVerification,
-        Self::AuthorizationBeforeSource,
         Self::MalformedDecoding,
         Self::StructuralLimits,
         Self::RequestBytes,
@@ -587,7 +497,6 @@ impl RequiredFixtureCoverageRequirement {
         Self::OutputMinimization,
         Self::ChangedInputAffectedFixtures,
         Self::ChangedOutputAffectedFixtures,
-        Self::ChangedClaimAffectedFixtures,
         Self::ChangedSourceContractAffectedFixtures,
     ];
 }
@@ -597,7 +506,6 @@ impl RequiredFixtureCoverageRequirement {
 pub enum FixtureCoverageGapReason {
     RequiredEvidenceMissing,
     TargetHasNoFixtures,
-    RuntimeDimensionNotObserved,
     NumericBoundaryNotExercised,
     ScriptBranchContractNotDeclared,
 }
@@ -605,7 +513,6 @@ pub enum FixtureCoverageGapReason {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FixtureCoverageNotApplicableReason {
-    NoProductClaimsDeclared,
     NoProtocolHelpersDeclared,
     NoVerificationProtocolDeclared,
     NoContinuationProtocolDeclared,
@@ -694,15 +601,13 @@ pub enum FixtureCoverageRequirementState {
 pub enum FixtureCoverageChangeKind {
     ChangedInput,
     ChangedOutput,
-    ChangedClaim,
     ChangedSourceContract,
 }
 
 impl FixtureCoverageChangeKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 3] = [
         Self::ChangedInput,
         Self::ChangedOutput,
-        Self::ChangedClaim,
         Self::ChangedSourceContract,
     ];
 
@@ -712,7 +617,6 @@ impl FixtureCoverageChangeKind {
             Self::ChangedOutput => {
                 RequiredFixtureCoverageRequirement::ChangedOutputAffectedFixtures
             }
-            Self::ChangedClaim => RequiredFixtureCoverageRequirement::ChangedClaimAffectedFixtures,
             Self::ChangedSourceContract => {
                 RequiredFixtureCoverageRequirement::ChangedSourceContractAffectedFixtures
             }
@@ -798,7 +702,6 @@ pub struct ProjectFixtureCoverageReportV1 {
     pub evidence_scope: FixtureEvidenceScope,
     pub compatibility_claim: FixtureCompatibilityClaim,
     pub live_compatibility: LiveCompatibilityEvaluation,
-    pub governed_request_evidence: GovernedRequestEvidence,
     pub targets: Vec<FixtureCoverageTarget>,
     pub summary: FixtureCoverageSummary,
 }
@@ -812,7 +715,6 @@ struct UncheckedProjectFixtureCoverageReportV1 {
     evidence_scope: FixtureEvidenceScope,
     compatibility_claim: FixtureCompatibilityClaim,
     live_compatibility: LiveCompatibilityEvaluation,
-    governed_request_evidence: GovernedRequestEvidence,
     targets: Vec<FixtureCoverageTarget>,
     summary: FixtureCoverageSummary,
 }
@@ -831,15 +733,13 @@ impl ProjectFixtureCoverageReportV1 {
             evidence_scope: FixtureEvidenceScope::OfflineSynthetic,
             compatibility_claim: FixtureCompatibilityClaim::None,
             live_compatibility: LiveCompatibilityEvaluation::NotEvaluated,
-            governed_request_evidence:
-                GovernedRequestEvidence::PerConsultationAuthoredRequestWitnessEvaluation,
             targets,
             summary,
         };
         Self::try_from(unchecked)
     }
 
-    /// Adds a closed semantic comparison and recomputes the four affected
+    /// Adds a closed semantic comparison and recomputes the three affected
     /// fixture requirements for every target. Selection is deliberately based
     /// only on declared fixture member identifiers. Generated cases are a
     /// different evidence class and can never become affected authored
@@ -880,7 +780,6 @@ impl ProjectFixtureCoverageReportV1 {
             evidence_scope: self.evidence_scope,
             compatibility_claim: self.compatibility_claim,
             live_compatibility: self.live_compatibility,
-            governed_request_evidence: self.governed_request_evidence,
             targets: self.targets,
             summary: self.summary,
         };
@@ -900,7 +799,6 @@ impl TryFrom<UncheckedProjectFixtureCoverageReportV1> for ProjectFixtureCoverage
             evidence_scope: value.evidence_scope,
             compatibility_claim: value.compatibility_claim,
             live_compatibility: value.live_compatibility,
-            governed_request_evidence: value.governed_request_evidence,
             targets: value.targets,
             summary: value.summary,
         })
@@ -922,7 +820,6 @@ pub struct FixtureCoverageTargetComparisonInput {
     pub integration: String,
     pub changed_input_ids: Vec<String>,
     pub changed_output_ids: Vec<String>,
-    pub changed_claim_ids: Vec<String>,
     pub source_contract_changed: bool,
 }
 
@@ -964,7 +861,6 @@ fn validate_comparison_input_targets(
             !is_report_identifier(&target.integration)
                 || !is_sorted_unique_identifiers(&target.changed_input_ids)
                 || !is_sorted_unique_identifiers(&target.changed_output_ids)
-                || !is_sorted_unique_identifiers(&target.changed_claim_ids)
         })
     {
         return Err(INVALID_COMPARISON);
@@ -1018,7 +914,6 @@ fn build_target_comparison(
         let changed_member_ids = match kind {
             FixtureCoverageChangeKind::ChangedInput => input.changed_input_ids.clone(),
             FixtureCoverageChangeKind::ChangedOutput => input.changed_output_ids.clone(),
-            FixtureCoverageChangeKind::ChangedClaim => input.changed_claim_ids.clone(),
             FixtureCoverageChangeKind::ChangedSourceContract if input.source_contract_changed => {
                 vec!["source-contract".to_owned()]
             }
@@ -1033,9 +928,6 @@ fn build_target_comparison(
                 }
                 FixtureCoverageChangeKind::ChangedOutput => {
                     slices_intersect(&fixture.output_ids, &changed_member_ids)
-                }
-                FixtureCoverageChangeKind::ChangedClaim => {
-                    slices_intersect(&fixture.claim_ids, &changed_member_ids)
                 }
                 FixtureCoverageChangeKind::ChangedSourceContract => input.source_contract_changed,
             })
@@ -1260,7 +1152,6 @@ fn validate_authored_fixture(
         && fixture.interaction_count <= 16
         && is_sorted_unique_identifiers(&fixture.input_ids)
         && is_sorted_unique_identifiers(&fixture.output_ids)
-        && is_sorted_unique_identifiers(&fixture.claim_ids)
         && valid_status_mappings(&fixture.exercised_status_mappings)
         && fixture.exercised_status_mappings.iter().all(|mapping| {
             target.declared.status_mappings.iter().any(|declared| {
@@ -1275,10 +1166,6 @@ fn validate_authored_fixture(
                 target.identity.integration, fixture.fixture_id
             )
         && fixture.evidence.digest == fixture.fixture_digest
-        && valid_request_binding(
-            &fixture.request_to_consultation_binding,
-            &target.contract.registry_backed_consultations,
-        )
 }
 
 fn valid_target_contract(
@@ -1289,49 +1176,12 @@ fn valid_target_contract(
         .reviewed_not_applicable
         .windows(2)
         .all(|pair| pair[0] < pair[1])
-        && valid_consultation_identities(&contract.registry_backed_consultations)
         && match identity.capability {
             FixtureCapability::DeclarativeHttp => contract.source_operation_count.is_some(),
             FixtureCapability::Script | FixtureCapability::Snapshot => {
                 contract.source_operation_count.is_none()
             }
         }
-}
-
-fn valid_request_binding(
-    binding: &FixtureRequestBindingCoverage,
-    declared: &[FixtureConsultationIdentity],
-) -> bool {
-    valid_consultation_identities(&binding.consultations)
-        && slice_is_subset(&binding.consultations, declared)
-        && match binding.state {
-            FixtureRequestBindingState::NotAuthored | FixtureRequestBindingState::NotExecuted => {
-                binding.consultations.is_empty()
-                    && binding.actual_relay_consultations.is_none()
-                    && binding.safe_error_code.is_none()
-            }
-            FixtureRequestBindingState::Passed => {
-                !binding.consultations.is_empty()
-                    && binding
-                        .actual_relay_consultations
-                        .is_some_and(|count| count > 0)
-                    && binding.safe_error_code.is_none()
-            }
-            FixtureRequestBindingState::Failed => {
-                binding.consultations.is_empty()
-                    && binding.actual_relay_consultations.is_some()
-                    && binding.safe_error_code.is_some()
-            }
-        }
-}
-
-fn valid_consultation_identities(identities: &[FixtureConsultationIdentity]) -> bool {
-    identities.len() <= MAX_FIXTURE_COVERAGE_CONSULTATIONS
-        && identities.windows(2).all(|pair| pair[0] < pair[1])
-        && identities.iter().all(|identity| {
-            is_report_identifier(&identity.service_id)
-                && is_report_identifier(&identity.consultation_id)
-        })
 }
 
 fn validate_generated_case(
@@ -1361,8 +1211,7 @@ fn validate_generated_case(
             .is_none_or(|fixture| fixture.fixture_digest != case.source_fixture.fixture_digest)
         || (!applicable
             && (case.pass_state != FixturePassState::NotExecuted
-                || case.actual_safe_code.is_some()
-                || case.source_access_assertion.is_some()))
+                || case.actual_safe_code.is_some()))
         || (applicable
             && case.pass_state == FixturePassState::Passed
             && case.actual_safe_code != case.expected_safe_code)
@@ -1374,16 +1223,7 @@ fn validate_generated_case(
             return false;
         }
     }
-    if case.recipe.id == GeneratorRecipeId::AuthorizationBeforeSource && applicable {
-        case.source_access_assertion
-            .as_ref()
-            .is_some_and(|assertion| {
-                assertion.expected_source_calls == SourceCallExpectation::Zero
-                    && assertion.passed == (assertion.actual_source_calls == Some(0))
-            })
-    } else {
-        case.source_access_assertion.is_none()
-    }
+    true
 }
 
 fn validate_platform_case(
@@ -1459,9 +1299,6 @@ fn validate_comparison(
                 }
                 FixtureCoverageChangeKind::ChangedOutput => {
                     slices_intersect(&fixture.output_ids, &impact.changed_member_ids)
-                }
-                FixtureCoverageChangeKind::ChangedClaim => {
-                    slices_intersect(&fixture.claim_ids, &impact.changed_member_ids)
                 }
                 FixtureCoverageChangeKind::ChangedSourceContract => {
                     impact.changed_member_ids == ["source-contract"]
@@ -1604,22 +1441,6 @@ fn derive_fixture_coverage_requirement(
             authored(|fixture| fixture.semantic_null),
             fixture_gap,
         ),
-        Requirement::AuthorizationDenial => {
-            if target.declared.claim_ids.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                covered_or_missing(
-                    requirement,
-                    authored(|fixture| {
-                        fixture.expectation
-                            == FixtureSemanticExpectation::SafeErrorCode {
-                                code: FixtureSafeCode::AuthorizationDenied,
-                            }
-                    }),
-                    fixture_gap,
-                )
-            }
-        }
         Requirement::SourceFailure => {
             if target.identity.capability == FixtureCapability::Snapshot {
                 no_remote_not_applicable(target, requirement)
@@ -1647,40 +1468,6 @@ fn derive_fixture_coverage_requirement(
                     GeneratorRecipeId::RequestAuthority,
                     fixture_gap,
                 )
-            }
-        }
-        Requirement::RequestToConsultationBinding => {
-            let required = &target.contract.registry_backed_consultations;
-            if required.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                let passing = target
-                    .fixture_inventory
-                    .iter()
-                    .filter(|fixture| {
-                        fixture.pass_state == FixturePassState::Passed
-                            && fixture.request_to_consultation_binding.state
-                                == FixtureRequestBindingState::Passed
-                    })
-                    .collect::<Vec<_>>();
-                let covered_consultations = passing
-                    .iter()
-                    .flat_map(|fixture| {
-                        fixture.request_to_consultation_binding.consultations.iter()
-                    })
-                    .collect::<BTreeSet<_>>();
-                let evidence = passing
-                    .into_iter()
-                    .map(|fixture| fixture.evidence.clone())
-                    .collect::<Vec<_>>();
-                if required
-                    .iter()
-                    .all(|consultation| covered_consultations.contains(consultation))
-                {
-                    covered(requirement, evidence)
-                } else {
-                    missing(requirement, fixture_gap, evidence)
-                }
             }
         }
         Requirement::ExpectedSourceInteractions => {
@@ -1724,36 +1511,6 @@ fn derive_fixture_coverage_requirement(
                 covered(requirement, evidence)
             } else {
                 missing(requirement, fixture_gap, evidence)
-            }
-        }
-        Requirement::Claims => {
-            if target.declared.claim_ids.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                let evidence = authored(|fixture| !fixture.claim_ids.is_empty());
-                if target.exercised.claim_ids == target.declared.claim_ids && !evidence.is_empty() {
-                    covered(requirement, evidence)
-                } else {
-                    missing(requirement, fixture_gap, evidence)
-                }
-            }
-        }
-        Requirement::DeclaredDisclosureModes => {
-            if target.declared.claim_ids.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                covered(requirement, vec![target.compiled_contract.clone()])
-            }
-        }
-        Requirement::ExercisedDisclosureModes => {
-            if target.declared.claim_ids.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                missing(
-                    requirement,
-                    FixtureCoverageGapReason::RuntimeDimensionNotObserved,
-                    Vec::new(),
-                )
             }
         }
         Requirement::ScriptBranches => {
@@ -1837,18 +1594,6 @@ fn derive_fixture_coverage_requirement(
                     target,
                     requirement,
                     GeneratorRecipeId::ProtocolVerification,
-                    fixture_gap,
-                )
-            }
-        }
-        Requirement::AuthorizationBeforeSource => {
-            if target.declared.claim_ids.is_empty() {
-                no_claims_not_applicable(target, requirement)
-            } else {
-                generated_requirement(
-                    target,
-                    requirement,
-                    GeneratorRecipeId::AuthorizationBeforeSource,
                     fixture_gap,
                 )
             }
@@ -1973,7 +1718,6 @@ fn derive_fixture_coverage_requirement(
         }
         Requirement::ChangedInputAffectedFixtures
         | Requirement::ChangedOutputAffectedFixtures
-        | Requirement::ChangedClaimAffectedFixtures
         | Requirement::ChangedSourceContractAffectedFixtures => {
             comparison_requirement(target, requirement, comparison_reason)
         }
@@ -2020,13 +1764,7 @@ fn generated_recipe_evidence(
         .collect::<Vec<_>>();
     let evidence = applicable
         .iter()
-        .filter(|case| {
-            case.pass_state == FixturePassState::Passed
-                && case
-                    .source_access_assertion
-                    .as_ref()
-                    .is_none_or(|assertion| assertion.passed)
-        })
+        .filter(|case| case.pass_state == FixturePassState::Passed)
         .map(|case| case.evidence.clone())
         .collect::<Vec<_>>();
     (
@@ -2079,17 +1817,6 @@ fn comparison_requirement(
             evidence,
         )
     }
-}
-
-fn no_claims_not_applicable(
-    target: &FixtureCoverageTarget,
-    requirement: RequiredFixtureCoverageRequirement,
-) -> FixtureRequirementCoverage {
-    not_applicable(
-        requirement,
-        FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-        vec![target.compiled_contract.clone()],
-    )
 }
 
 fn no_remote_not_applicable(
@@ -2158,11 +1885,6 @@ fn not_applicable(
 fn valid_dimensions(dimensions: &FixtureCoverageDimensions) -> bool {
     is_sorted_unique_identifiers(&dimensions.input_ids)
         && is_sorted_unique_identifiers(&dimensions.output_ids)
-        && is_sorted_unique_identifiers(&dimensions.claim_ids)
-        && dimensions
-            .disclosure_modes
-            .windows(2)
-            .all(|pair| pair[0] < pair[1])
         && valid_status_mappings(&dimensions.status_mappings)
         && dimensions
             .protocol_helpers
@@ -2189,12 +1911,6 @@ fn dimensions_subset_error(
     }
     if !slice_is_subset(&exercised.output_ids, &declared.output_ids) {
         return Some("fixture coverage exercised outputs exceed declarations");
-    }
-    if !slice_is_subset(&exercised.claim_ids, &declared.claim_ids) {
-        return Some("fixture coverage exercised claims exceed declarations");
-    }
-    if !slice_is_subset(&exercised.disclosure_modes, &declared.disclosure_modes) {
-        return Some("fixture coverage exercised disclosure modes exceed declarations");
     }
     if !exercised.status_mappings.iter().all(|mapping| {
         declared.status_mappings.iter().any(|declared_mapping| {
@@ -2319,10 +2035,6 @@ fn generated_not_applicable_is_valid(
             GeneratorRecipeId::ProtocolVerification | GeneratorRecipeId::OutputMinimization
         ),
         (
-            GeneratedNotApplicableReason::IntegrationHasNoProductClaims,
-            CoverageInvariant::AuthorizationCheckRequiresProductClaimEvaluation,
-        ) => recipe == GeneratorRecipeId::AuthorizationBeforeSource,
-        (
             GeneratedNotApplicableReason::SnapshotUsesClosedMaterialization,
             CoverageInvariant::SnapshotOutputUsesClosedMaterializationProjection,
         )
@@ -2343,7 +2055,6 @@ pub(crate) const fn recipe_suffix(recipe: GeneratorRecipeId) -> &'static str {
         GeneratorRecipeId::ByteCeiling => "byte_ceiling",
         GeneratorRecipeId::Timeout => "timeout",
         GeneratorRecipeId::ProtocolVerification => "protocol_verification",
-        GeneratorRecipeId::AuthorizationBeforeSource => "authorization_before_source",
         GeneratorRecipeId::OutputMinimization => "output_minimization",
     }
 }
@@ -2352,7 +2063,6 @@ pub(crate) const fn change_suffix(kind: FixtureCoverageChangeKind) -> &'static s
     match kind {
         FixtureCoverageChangeKind::ChangedInput => "changed-input",
         FixtureCoverageChangeKind::ChangedOutput => "changed-output",
-        FixtureCoverageChangeKind::ChangedClaim => "changed-claim",
         FixtureCoverageChangeKind::ChangedSourceContract => "changed-source-contract",
     }
 }
@@ -2388,15 +2098,4 @@ pub(crate) struct GeneratedFixtureObservation {
     pub recipe_id: GeneratorRecipeId,
     pub actual_safe_code: Option<FixtureSafeCode>,
     pub pass_state: FixturePassState,
-    pub actual_source_calls: Option<u32>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct AuthoredRequestBindingObservation {
-    pub integration: String,
-    pub source_fixture_id: String,
-    pub pass_state: FixturePassState,
-    pub consultations: Vec<FixtureConsultationIdentity>,
-    pub actual_safe_code: Option<FixtureSafeCode>,
-    pub actual_relay_consultations: Option<u32>,
 }

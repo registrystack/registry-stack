@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 pub enum RequiredProductAction {
     RelayPublic,
     RelayConsultation,
-    Notary,
 }
 
 #[cfg(test)]
@@ -24,10 +23,9 @@ mod tests {
             serde_json::to_value([
                 RequiredProductAction::RelayPublic,
                 RequiredProductAction::RelayConsultation,
-                RequiredProductAction::Notary,
             ])
             .expect("product action lanes serialize"),
-            serde_json::json!(["relay-public", "relay-consultation", "notary"])
+            serde_json::json!(["relay-public", "relay-consultation"])
         );
     }
 }

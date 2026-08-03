@@ -14,12 +14,9 @@ This crate is test-only. It fails to compile unless callers enable the
 - `assert_chain_integrity` for internally consistent audit envelope assertions.
 - `assert_json_absent_strings` for focused audit non-leak checks over JSON
   records.
-- `assert_replay_duplicate_rejected` for reusable replay-store duplicate checks.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
-- Federation fixture helpers for building signed Notary request/response JWTs.
 - Provider-backed Ed25519 signer and JWKS helpers for tests that exercise the
   production signing abstraction.
-- `sign_openid4vci_proof_jwt` for building OID4VCI holder proof JWTs in tests.
 
 ## Typical Use
 
@@ -76,12 +73,6 @@ Also tracks request body size (used by `assert_max_request_bytes`).
 Type alias for `registry_platform_audit::ChainVerificationError`. Exported here
 so test code only needs to import from this crate.
 
-### `ReplayAssertionError`
-
-Error type returned by `assert_replay_duplicate_rejected`. It lets downstream
-integration tests assert a `ReplayStore` accepts the first scoped key and rejects
-the duplicate with `AlreadySeen`.
-
 ### JWT signing helpers
 
 - `sign_ed25519_compact_jwt(private_jwk, typ, kid, claims)` — parse a JWK
@@ -96,34 +87,6 @@ the duplicate with `AlreadySeen`.
   metadata, without private JWK members.
 - `fixtures::ed25519_signer()` — return a `LocalJwkSigner` backed by the
   primary Ed25519 fixture key.
-- `sign_openid4vci_proof_jwt(private_jwk, audience, nonce, now_unix_seconds)` —
-  build an OID4VCI holder proof JWT (`typ = openid4vci-proof+jwt`) with the
-  holder's `did:jwk` inline in the `jwk` header. For use in credential endpoint
-  tests; **not** for production.
-
-### Federation fixture helpers
-
-These helpers produce deterministic JWT claim sets matching the
-`registry-notary-federation/v0.1` protocol. They are intended for Notary federation tests only; the domain knowledge is isolated here so callers don't
-have to re-implement the claim layout.
-
-- `federation_request_fixture_claims(issuer, subject_node_id, audience_node_id, now)` —
-  claims for a federation evaluate request JWT.
-- `federation_response_fixture_claims(issuer, subject_node_id, audience_node_id, request_jti, now)` —
-  claims for a federation evaluate response JWT.
-
-### Federation constants
-
-| Constant | Value | Use |
-|---|---|---|
-| `FEDERATION_PROTOCOL` | `"registry-notary-federation/v0.1"` | `"protocol"` claim value |
-| `FEDERATION_REQUEST_JWT_TYPE` | `"registry-notary-request+jwt"` | `"typ"` header for request JWTs |
-| `FEDERATION_RESPONSE_JWT_TYPE` | `"registry-notary-response+jwt"` | `"typ"` header for response JWTs |
-| `FEDERATION_EVALUATE_ACTION` | `"evaluate"` | `"action"` claim value |
-| `FEDERATION_REQUEST_FIXTURE_JTI` | (fixed ULID string) | Deterministic `"jti"` for request fixtures |
-| `FEDERATION_RESPONSE_FIXTURE_JTI` | (fixed ULID string) | Deterministic `"jti"` for response fixtures |
-| `FEDERATION_FIXTURE_PROFILE` | `"disability_status_predicate"` | `"profile"` claim value |
-| `FEDERATION_FIXTURE_PURPOSE` | (URL string) | `"purpose"` claim value |
 
 ## Fixture Notes
 

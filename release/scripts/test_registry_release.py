@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -312,6 +314,10 @@ class RegistryReleaseTest(TestCase):
             image_lock.SCHEMA_V2,
             image_lock.schema_for_release_version("0.14.0"),
         )
+        self.assertEqual(
+            image_lock.SCHEMA_V3,
+            image_lock.schema_for_release_version("0.17.0"),
+        )
 
     def test_registryctl_image_lock_validates_v1_and_reviewed_v2_images(
         self,
@@ -338,6 +344,15 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(
             v2_images,
             image_lock.validate_images(image_lock.SCHEMA_V2, v2_images),
+        )
+
+        v3_images = {
+            "registry-relay": product_images["registry-relay"],
+            "postgresql": image_lock.reviewed_postgresql_image_ref(),
+        }
+        self.assertEqual(
+            v3_images,
+            image_lock.validate_images(image_lock.SCHEMA_V3, v3_images),
         )
 
         without_postgresql = dict(v2_images)
@@ -447,7 +462,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-policy",
                 "rust-quality",
                 "rust-tests",
-                "notary-contracts",
+                "evidence-contracts",
                 "relay-contracts",
             },
             set(rust_result["needs"]),
@@ -645,7 +660,6 @@ class RegistryReleaseTest(TestCase):
             encoding="utf-8"
         )
         release_dockerfiles = [
-            "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
         ]
 
@@ -1410,40 +1424,23 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
-    def test_notary_packaging_includes_dedicated_cel_worker(self) -> None:
+    def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
-        worker = "registry-notary-cel-worker"
-
-        product_dockerfile = (ROOT / "products/notary/Dockerfile").read_text(
+        image_recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn(worker, product_dockerfile)
-
-        self.assertIn(
-            f'"dist/bin/{worker}-${{RELEASE_TAG}}-linux-amd64"',
-            binary_recipe,
+        self.assertNotIn("registry-notary", binary_recipe)
+        self.assertNotIn("registry-notary", image_recipe)
+        self.assertFalse(
+            (ROOT / "release/docker/Dockerfile.registry-notary").exists()
         )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
-        self.assertIn(
-            f"--bin {worker}",
-            binary_recipe,
-        )
-        release_dockerfile = (
-            ROOT / "release/docker/Dockerfile.registry-notary"
-        ).read_text(encoding="utf-8")
-        self.assertIn(
-            f"install -m 0755 /workspace/image-bin/{worker} "
-            f"/workspace/runtime-root/usr/local/bin/{worker}",
-            release_dockerfile,
-        )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
     def test_release_product_images_preown_managed_audit_and_state_directories(
         self,
     ) -> None:
-        for product in ("relay", "notary"):
+        for product in ("relay",):
             dockerfile = (
                 ROOT / f"release/docker/Dockerfile.registry-{product}"
             ).read_text(encoding="utf-8")
@@ -2295,6 +2292,40 @@ class RegistryReleaseTest(TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_validate_accepts_post_notary_v0_17_artifact_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+                include_retired_notary=False,
+            )
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["artifacts"]["registry-notary"] = "0.17.0"
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("unexpected registry-notary", rejected.stderr)
+
+    def test_beta_27_manifest_is_the_notary_free_current_inventory(self) -> None:
+        manifest = ROOT / "release/manifests/registry-stack-beta-27.yaml"
+        result = run_tool("validate", str(manifest))
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("beta-27", data["stack"]["release"])
+        self.assertEqual("0.17.0", data["stack"]["version"])
+        self.assertNotIn("registry-notary", data["artifacts"])
+        self.assertNotIn("registry-notary-cel-worker", data["artifacts"])
+        self.assertTrue(
+            {"registry-relay", "evidence", "evidencectl", "mint"}
+            <= set(data["artifacts"])
+        )
+
     def test_validate_still_rejects_unknown_artifacts_beside_the_evidence_toolset(
         self,
     ) -> None:
@@ -2355,6 +2386,69 @@ class RegistryReleaseTest(TestCase):
             },
             document,
         )
+
+    def test_render_post_notary_v3_image_lock_without_notary_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(
+                root,
+                version="0.17.0",
+                include_evidence_toolset=True,
+                include_retired_notary=False,
+            )
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"].pop("source_ref")
+            data["stack"].pop("status")
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            relay_digest = root / "registry-relay.digest"
+            relay_ref = f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}"
+            relay_digest.write_text(f"{relay_ref}\n", encoding="utf-8")
+            output = root / "registryctl-v0.17.0-image-lock.json"
+
+            rendered = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--postgresql-ref-file",
+                str(ROOT / "release/registryctl-postgresql-image.ref"),
+                "--tag-target",
+                "b" * 40,
+                "--source-sha",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+            notary_digest = root / "registry-notary.digest"
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            rejected = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--postgresql-ref-file",
+                str(ROOT / "release/registryctl-postgresql-image.ref"),
+                "--tag-target",
+                "b" * 40,
+                "--source-sha",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+
+        self.assertEqual(0, rendered.returncode, rendered.stderr)
+        self.assertEqual("registryctl.release_image_lock.v3", document["schema_version"])
+        self.assertEqual({"postgresql", "registry-relay"}, set(document["images"]))
+        self.assertEqual(relay_ref, document["images"]["registry-relay"])
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("does not accept --notary-digest", rejected.stderr)
 
     def test_active_manifest_validates_and_renders_image_lock_from_explicit_source(
         self,
@@ -2550,7 +2644,7 @@ class RegistryReleaseTest(TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("v2 requires --postgresql-ref-file", result.stderr)
+        self.assertIn("v2 or later requires --postgresql-ref-file", result.stderr)
 
     def test_render_registryctl_image_lock_rejects_pre_0_9_release(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3715,6 +3809,89 @@ class RegistryReleaseTest(TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing release asset registry-relay.digest", result.stderr)
 
+    def test_stage_capsule_backfill_assets_excludes_retired_notary_from_v0_17(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for include_retired_assets in (False, True):
+            with (
+                self.subTest(include_retired_assets=include_retired_assets),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                asset_dir = write_release_asset_fixture(
+                    root,
+                    tag="v0.17.0",
+                    include_image_lock=True,
+                )
+                if not include_retired_assets:
+                    for retired_name in (
+                        "registry-notary-v0.17.0-linux-amd64",
+                        "registry-notary-cel-worker-v0.17.0-linux-amd64",
+                        "registry-notary.digest",
+                    ):
+                        (asset_dir / retired_name).unlink()
+                binary_dir = root / "staged-bin"
+                image_dir = root / "staged-images"
+
+                with redirect_stdout(io.StringIO()):
+                    result = registry_release.stage_capsule_backfill_assets(
+                        asset_dir,
+                        "v0.17.0",
+                        binary_dir,
+                        image_dir,
+                    )
+
+                self.assertEqual(0, result)
+                self.assertTrue(
+                    (
+                        binary_dir / "registry-relay-rhai-worker-v0.17.0-linux-amd64"
+                    ).is_file()
+                )
+                self.assertTrue((image_dir / "registry-relay.digest").is_file())
+                self.assertFalse(
+                    (binary_dir / "registry-notary-v0.17.0-linux-amd64").exists()
+                )
+                self.assertFalse(
+                    (
+                        binary_dir / "registry-notary-cel-worker-v0.17.0-linux-amd64"
+                    ).exists()
+                )
+                self.assertFalse((image_dir / "registry-notary.digest").exists())
+
+    def test_stage_capsule_backfill_assets_keeps_beta_26_notary_requirements(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for missing_name in (
+            "registry-notary-v0.16.3-linux-amd64",
+            "registry-notary-cel-worker-v0.16.3-linux-amd64",
+            "registry-notary.digest",
+        ):
+            with (
+                self.subTest(missing_name=missing_name),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                asset_dir = write_release_asset_fixture(
+                    root,
+                    tag="v0.16.3",
+                    include_image_lock=True,
+                )
+                (asset_dir / missing_name).unlink()
+
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    result = registry_release.stage_capsule_backfill_assets(
+                        asset_dir,
+                        "v0.16.3",
+                        root / "staged-bin",
+                        root / "staged-images",
+                    )
+
+                self.assertEqual(1, result)
+                self.assertIn(f"missing release asset {missing_name}", error.getvalue())
+
     def test_bind_spdx_subject_adds_digest_bound_described_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3855,6 +4032,7 @@ def write_manifest(
     include_registryctl_image_lock: bool | None = None,
     include_registryctl_installer: bool | None = None,
     include_evidence_toolset: bool = False,
+    include_retired_notary: bool | None = None,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
@@ -3890,6 +4068,11 @@ def write_manifest(
         artifacts["evidencectl"] = version
         artifacts["mint"] = version
         artifacts["evidencectl-installer"] = version
+    if include_retired_notary is None:
+        include_retired_notary = version_tuple < (0, 17, 0)
+    if not include_retired_notary:
+        artifacts.pop("registry-notary", None)
+        artifacts.pop("registry-notary-cel-worker", None)
     manifest = {
         "stack": {
             "release": "beta-6",

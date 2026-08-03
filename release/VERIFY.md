@@ -90,16 +90,17 @@ identity and immutable digest references:
 image_lock="registryctl-${tag}-image-lock.json"
 
 jq -e --arg tag "${tag}" '
-  .schema_version == "registryctl.release_image_lock.v1" and
+  .schema_version == "registryctl.release_image_lock.v3" and
   .release_tag == $tag and
   .platform == "linux/amd64" and
+  ((.images | keys) == ["postgresql", "registry-relay"]) and
   (.images["registry-relay"] |
     test("^ghcr\\.io/registrystack/registry-relay@sha256:[0-9a-f]{64}$")) and
-  (.images["registry-notary"] |
-    test("^ghcr\\.io/registrystack/registry-notary@sha256:[0-9a-f]{64}$"))
+  (.images["postgresql"] |
+    test("^docker\\.io/library/postgres@sha256:[0-9a-f]{64}$"))
 ' "${image_lock}"
 
-for name in registry-notary registry-relay; do
+for name in registry-relay postgresql; do
   ref="$(jq -er --arg name "${name}" '.images[$name]' "${image_lock}")"
   expected="${ref##*@}"
   test "$(crane digest "${ref}")" = "${expected}"

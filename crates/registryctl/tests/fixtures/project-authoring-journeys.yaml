@@ -5,7 +5,7 @@ workspaces:
     summary: One fixed bounded HTTP request with a closed response projection.
     source: crates/registryctl/assets/project-starters/bounded-http
     classification: maintained
-    topology: combined
+    topology: relay-only
     starter: http
     project_dir: registry-project
     focused_fixture_file: active.yaml
@@ -15,10 +15,10 @@ workspaces:
 
   - id: custom-system
     label: Custom HTTP conformance workspace
-    summary: Combined HTTP acquisition and registry-backed evidence coverage.
+    summary: Bounded HTTP acquisition and registry-backed consultation coverage.
     source: crates/registryctl/tests/fixtures/project-authoring/custom-system
     classification: maintained
-    topology: combined
+    topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/custom-system
     focused_fixture_file: source-approved.yaml
     steps: [trace, watch, test, check, build]
@@ -30,7 +30,7 @@ workspaces:
     summary: Conformance coverage for the bounded Script adapter surface.
     source: crates/registryctl/tests/fixtures/project-authoring/dhis2-script
     classification: conformance-only
-    topology: combined
+    topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/dhis2-script
     steps: [test, check, build]
     environment: local
@@ -38,10 +38,10 @@ workspaces:
 
   - id: dhis2-tracker
     label: DHIS2 Tracker
-    summary: Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for consumer-owned decisions.
+    summary: Bounded DHIS2 Tracker acquisition normalized into reusable consultation outputs for consumer-owned decisions.
     source: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker
     classification: maintained
-    topology: combined
+    topology: relay-only
     starter: dhis2-tracker
     project_dir: dhis2-project
     focused_fixture_file: match.yaml
@@ -54,7 +54,7 @@ workspaces:
     summary: A product-neutral script adapter with bounded FHIR R4 search-set parsing.
     source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
     classification: maintained
-    topology: combined
+    topology: relay-only
     starter: fhir-r4
     project_dir: fhir-project
     focused_fixture_file: match.yaml
@@ -70,7 +70,7 @@ workspaces:
     focus: solmara
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release
-    steps: [check]
+    steps: [check, build]
     environment: local
     check_explain: true
 
@@ -79,7 +79,7 @@ workspaces:
     summary: A product-neutral script adapter with the signed DCI search verification profile.
     source: crates/registryctl/tests/fixtures/project-authoring/opencrvs
     classification: maintained
-    topology: combined
+    topology: relay-only
     starter: opencrvs-dci
     project_dir: opencrvs-project
     focused_fixture_file: match.yaml
@@ -92,7 +92,7 @@ workspaces:
     summary: A maintained synthetic case study for a bounded Events API-shaped search using generic OAuth client credentials and Rhai.
     source: crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api
     classification: maintained
-    topology: combined
+    topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/opencrvs-events-api
     focused_fixture_file: match.yaml
     steps: [trace, watch, test, check, build]
@@ -104,7 +104,7 @@ workspaces:
     summary: Country-owned DCI mapping coverage for match, no-match, and ambiguity.
     source: crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant
     classification: maintained
-    topology: combined
+    topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant
     focused_fixture_file: match.yaml
     steps: [trace, watch, test, check, build]
@@ -116,7 +116,7 @@ workspaces:
     summary: Offline fixture, configuration validation, and build coverage for a synthetic OpenSPP exact lookup.
     source: crates/registryctl/tests/fixtures/project-authoring/openspp-exact
     classification: maintained
-    topology: combined
+    topology: relay-only
     evidence: offline-fixture-validation
     project_dir: crates/registryctl/tests/fixtures/project-authoring/openspp-exact
     focused_fixture_file: match.yaml
@@ -131,18 +131,18 @@ workspaces:
     classification: maintained
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization
-    steps: [test, check]
+    steps: [test, check, build]
     environment: local
     check_explain: true
 
   - id: relay-only-records
     label: Relay-only records API
-    summary: Fixtureless Relay records configuration with no Notary inputs.
+    summary: Fixtureless Relay records configuration with no consultation inputs.
     source: crates/registryctl/tests/fixtures/project-authoring/relay-only-records
     classification: maintained
     topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/relay-only-records
-    steps: [test, check]
+    steps: [test, check, build]
     environment: local
     check_explain: true
 
@@ -151,7 +151,7 @@ workspaces:
     summary: An exact lookup over one immutable local materialization.
     source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact
     classification: maintained
-    topology: combined
+    topology: relay-only
     starter: snapshot
     project_dir: snapshot-project
     focused_fixture_file: match.yaml
@@ -161,10 +161,10 @@ workspaces:
 
   - id: snapshot-with-records
     label: Snapshot with records API
-    summary: Match and no-match evidence sharing one authorized Relay materialization with records.
+    summary: Match and no-match consultations sharing one authorized Relay materialization with records.
     source: crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records
     classification: maintained
-    topology: combined
+    topology: relay-only
     project_dir: crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records
     focused_fixture_file: match.yaml
     steps: [trace, watch, test, check, build]

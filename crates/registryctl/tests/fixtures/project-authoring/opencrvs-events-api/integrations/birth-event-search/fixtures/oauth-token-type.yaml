@@ -13,4 +13,4 @@ interactions:
       body:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: bearer
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }

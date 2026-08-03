@@ -1,6 +1,6 @@
 ---
 name: registryctl-local-project-troubleshoot
-description: Use when a user has a registryctl-generated local project and doctor, dev smoke, dev status, dev logs, Relay, or Notary checks fail.
+description: Use when a user has a registryctl-generated local project and doctor, dev smoke, dev status, dev logs, or Relay checks fail.
 ---
 
 # registryctl Local Project Troubleshoot
@@ -28,7 +28,7 @@ Use this skill to troubleshoot generated local Registry projects without duplica
 
 ## Redaction Rules
 
-Do not print raw env-file values, API keys, source tokens, Redis URLs, private JWKs, request bodies, source rows, claim values, or SD-JWT disclosures. Summarize redacted stdout/stderr only.
+Do not print raw env-file values, API keys, source tokens, Redis URLs, private JWKs, request bodies, or source rows. Summarize redacted stdout/stderr only.
 
 ## Output
 

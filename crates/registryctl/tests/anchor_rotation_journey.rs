@@ -153,15 +153,6 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         &current_public_key,
         &current_private_key,
     );
-    let notary = create_initial_lane(
-        "notary",
-        &signing_inputs,
-        &anchors,
-        &handoff,
-        &current_public_key,
-        &current_private_key,
-    );
-
     let approved_one = handoff.join("approved-one.json");
     successful(vec![
         "-C".to_string(),
@@ -175,8 +166,6 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         relay_public.display().to_string(),
         "--relay-consultation".to_string(),
         relay_consultation.display().to_string(),
-        "--notary".to_string(),
-        notary.display().to_string(),
         "--output-file".to_string(),
         approved_one.display().to_string(),
     ]);
@@ -190,33 +179,33 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         "--against".to_string(),
         approved_one.display().to_string(),
         "--rotate-anchor".to_string(),
-        "notary".to_string(),
+        "relay-consultation".to_string(),
     ]);
-    let rotated_input = signing_inputs.join("notary");
+    let rotated_input = signing_inputs.join("relay-consultation");
     assert!(rotated_input.is_dir());
     assert!(!signing_inputs.join("relay-public").exists());
-    assert!(!signing_inputs.join("relay-consultation").exists());
     assert_eq!(
-        fs::read(rotated_input.join("config/notary.yaml")).expect("rotated input config reads"),
-        fs::read(notary.join("bundle/config/notary.yaml")).expect("preceding config reads"),
+        fs::read(rotated_input.join("config/relay.yaml")).expect("rotated input config reads"),
+        fs::read(relay_consultation.join("bundle/config/relay.yaml"))
+            .expect("preceding config reads"),
         "an anchor-only build must not manufacture a configuration change"
     );
     for reviewed_file in ["approval/review.json", "approval/project-state.json"] {
         assert_eq!(
             fs::read(rotated_input.join(reviewed_file)).expect("rotated reviewed input reads"),
-            fs::read(notary.join("bundle").join(reviewed_file))
+            fs::read(relay_consultation.join("bundle").join(reviewed_file))
                 .expect("preceding reviewed input reads"),
             "an anchor-only build must retain the signed {reviewed_file}"
         );
     }
 
-    let rotation = handoff.join("notary-rotation");
+    let rotation = handoff.join("relay-consultation-rotation");
     successful(vec![
         "trust".to_string(),
         "anchor".to_string(),
         "rotate".to_string(),
         "--current-anchor".to_string(),
-        notary.join("anchor.json").display().to_string(),
+        relay_consultation.join("anchor.json").display().to_string(),
         "--next-public-key".to_string(),
         current_public_key.display().to_string(),
         "--next-public-key".to_string(),
@@ -229,17 +218,17 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         rotation.display().to_string(),
     ]);
 
-    let same_anchor = handoff.join("notary-same-anchor");
+    let same_anchor = handoff.join("relay-consultation-same-anchor");
     successful(vec![
         "trust".to_string(),
         "bundle".to_string(),
         "sign".to_string(),
         "--lane".to_string(),
-        "notary".to_string(),
+        "relay-consultation".to_string(),
         "--input".to_string(),
         rotated_input.display().to_string(),
         "--anchor".to_string(),
-        notary.join("anchor.json").display().to_string(),
+        relay_consultation.join("anchor.json").display().to_string(),
         "--against".to_string(),
         approved_one.display().to_string(),
         "--key".to_string(),
@@ -258,7 +247,7 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
             "local".to_string(),
             "--from".to_string(),
             approved_one.display().to_string(),
-            "--notary".to_string(),
+            "--relay-consultation".to_string(),
             same_anchor.display().to_string(),
             "--output-file".to_string(),
             handoff
@@ -269,13 +258,13 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         "retained its preceding anchor",
     );
 
-    let rotated_notary = handoff.join("notary-rotated");
+    let rotated_consultation = handoff.join("relay-consultation-rotated");
     successful(vec![
         "trust".to_string(),
         "bundle".to_string(),
         "sign".to_string(),
         "--lane".to_string(),
-        "notary".to_string(),
+        "relay-consultation".to_string(),
         "--input".to_string(),
         rotated_input.display().to_string(),
         "--anchor".to_string(),
@@ -285,7 +274,7 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         "--key".to_string(),
         format!("file:{}", next_private_key.display()),
         "--output-dir".to_string(),
-        rotated_notary.display().to_string(),
+        rotated_consultation.display().to_string(),
     ]);
     let approved_two = handoff.join("approved-two.json");
     successful(vec![
@@ -298,26 +287,31 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         "local".to_string(),
         "--from".to_string(),
         approved_one.display().to_string(),
-        "--notary".to_string(),
-        rotated_notary.display().to_string(),
+        "--relay-consultation".to_string(),
+        rotated_consultation.display().to_string(),
         "--output-file".to_string(),
         approved_two.display().to_string(),
     ]);
 
-    let verified_one =
-        verify_config_bundle(notary.join("bundle"), notary.join("anchor.json")).unwrap();
+    let verified_one = verify_config_bundle(
+        relay_consultation.join("bundle"),
+        relay_consultation.join("anchor.json"),
+    )
+    .unwrap();
     let verified_two = verify_config_bundle(
-        rotated_notary.join("bundle"),
-        rotated_notary.join("anchor.json"),
+        rotated_consultation.join("bundle"),
+        rotated_consultation.join("anchor.json"),
     )
     .unwrap();
     let candidate_one = VerifiedAcceptanceStateV1::from_verified_bundle(&verified_one).unwrap();
     let candidate_two = VerifiedAcceptanceStateV1::from_verified_bundle(&verified_two).unwrap();
-    let current_anchor = load_trust_anchor(&notary.join("anchor.json")).unwrap();
+    let current_anchor = load_trust_anchor(&relay_consultation.join("anchor.json")).unwrap();
     let transition =
-        load_anchor_transition(&rotated_notary.join("anchor-history/0000.transition.json"))
+        load_anchor_transition(&rotated_consultation.join("anchor-history/0000.transition.json"))
             .unwrap();
-    let state_path = temporary.path().join("notary-anti-rollback.json");
+    let state_path = temporary
+        .path()
+        .join("relay-consultation-anti-rollback.json");
     let store = FileAntiRollbackStore::new(&state_path);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -353,15 +347,15 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
         "--against".to_string(),
         approved_two.display().to_string(),
         "--rotate-anchor".to_string(),
-        "notary".to_string(),
+        "relay-consultation".to_string(),
     ]);
-    let stale_rotation = handoff.join("notary-stale-rotation");
+    let stale_rotation = handoff.join("relay-consultation-stale-rotation");
     successful(vec![
         "trust".to_string(),
         "anchor".to_string(),
         "rotate".to_string(),
         "--current-anchor".to_string(),
-        notary.join("anchor.json").display().to_string(),
+        relay_consultation.join("anchor.json").display().to_string(),
         "--next-public-key".to_string(),
         current_public_key.display().to_string(),
         "--next-threshold".to_string(),
@@ -377,7 +371,7 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
             "bundle".to_string(),
             "sign".to_string(),
             "--lane".to_string(),
-            "notary".to_string(),
+            "relay-consultation".to_string(),
             "--input".to_string(),
             rotated_input.display().to_string(),
             "--anchor".to_string(),
@@ -387,7 +381,10 @@ fn unchanged_anchor_rotation_is_explicit_authenticated_and_runtime_acceptable() 
             "--key".to_string(),
             format!("file:{}", current_private_key.display()),
             "--output-dir".to_string(),
-            handoff.join("notary-rejected-next").display().to_string(),
+            handoff
+                .join("relay-consultation-rejected-next")
+                .display()
+                .to_string(),
         ],
         "selected lane anchor is not the next authenticated anchor",
     );

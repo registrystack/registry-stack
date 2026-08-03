@@ -269,7 +269,6 @@
       "enum": [
         "registryctl_authoring",
         "registry_relay",
-        "registry_notary",
         "editor_tooling",
         "docs_generator"
       ]
@@ -280,7 +279,6 @@
         "security",
         "privacy",
         "relay",
-        "notary",
         "compatibility",
         "documentation",
         "testing"
@@ -314,7 +312,8 @@
             "deployment_security",
             "integration_contract",
             "fixture_harness",
-            "entity_contract"
+            "entity_contract",
+            "relay_runtime"
           ]
         },
         "human_owner": {
@@ -323,7 +322,8 @@
             "security_maintainers",
             "integration_maintainers",
             "test_maintainers",
-            "data_model_maintainers"
+            "data_model_maintainers",
+            "relay_maintainers"
           ]
         },
         "sensitivity": {
@@ -340,7 +340,7 @@
         "products": {
           "type": "array",
           "items": {
-            "enum": ["registryctl", "relay", "notary", "editor", "docs"]
+            "enum": ["registryctl", "relay", "editor", "docs"]
           }
         },
         "introduced_in": {
@@ -374,7 +374,6 @@
               "editor_schemas",
               "project_build",
               "relay_config",
-              "notary_config",
               "fixture_report",
               "field_reference"
             ]

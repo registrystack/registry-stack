@@ -360,17 +360,17 @@ export function assertProjectReports(
       'project-record-snapshot.match outputs must be exactly ["status"]',
     );
     invariant(
-      JSON.stringify(snapshotResult.claims) ===
-        JSON.stringify(['project-record-exists', 'project-status-accepted']),
-      'project-record-snapshot.match claims must be exactly the two documented predicate claims',
+      JSON.stringify(snapshotResult.claims) === JSON.stringify([]),
+      'project-record-snapshot.match claims must be empty for the Relay-only starter',
     );
   }
 
   const affectedLanes = buildEnvelope.affected_lanes;
   invariant(Array.isArray(affectedLanes), 'build affected_lanes must be an array');
-  for (const lane of ['relay-public', 'relay-consultation', 'notary']) {
-    invariant(affectedLanes.includes(lane), `build does not include ${lane}`);
-  }
+  invariant(
+    JSON.stringify(affectedLanes) === JSON.stringify(['relay-public', 'relay-consultation']),
+    'build affected_lanes must contain only the two Relay lanes',
+  );
 }
 
 export function writeEvidenceManifest(
@@ -413,7 +413,6 @@ export function writeEvidenceManifest(
         covers: [
           'starter',
           'adapted-workbook',
-          'evidence-rule-change',
           'offline-fixtures',
           'reviewed-build',
         ],
@@ -430,32 +429,18 @@ export function writeEvidenceManifest(
           'spreadsheet-adapted/test.json',
           'spreadsheet-adapted/check.json',
           'spreadsheet-adapted/build.json',
-          'spreadsheet-evidence/before-trace.txt',
-          'spreadsheet-evidence/after-trace.txt',
-          'spreadsheet-evidence/test.txt',
-          'spreadsheet-evidence/test.json',
-          'spreadsheet-evidence/check.json',
-          'spreadsheet-evidence/build.json',
           ...(mode === 'sealed'
             ? [
                 'spreadsheet/runtime/dev-start.txt',
                 'spreadsheet/runtime/records-denied.json',
                 'spreadsheet/runtime/records-request.json',
-                'spreadsheet/runtime/evidence-request.json',
                 'spreadsheet/runtime/dev-smoke.txt',
                 'spreadsheet/runtime/dev-down.txt',
                 'spreadsheet-adapted/runtime/dev-start.txt',
                 'spreadsheet-adapted/runtime/records-denied.json',
                 'spreadsheet-adapted/runtime/records-request.json',
-                'spreadsheet-adapted/runtime/evidence-request.json',
                 'spreadsheet-adapted/runtime/dev-smoke.txt',
                 'spreadsheet-adapted/runtime/dev-down.txt',
-                'spreadsheet-evidence/runtime/dev-start.txt',
-                'spreadsheet-evidence/runtime/records-denied.json',
-                'spreadsheet-evidence/runtime/records-request.json',
-                'spreadsheet-evidence/runtime/evidence-request.json',
-                'spreadsheet-evidence/runtime/dev-smoke.txt',
-                'spreadsheet-evidence/runtime/dev-down.txt',
               ]
             : []),
         ],

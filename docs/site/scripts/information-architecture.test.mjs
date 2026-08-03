@@ -89,10 +89,7 @@ test('starts with the spreadsheet registry and keeps HTTP under existing registr
     start,
     /label: 'Use your own spreadsheet', slug: 'tutorials\/use-your-spreadsheet'/,
   );
-  assert.match(
-    start,
-    /label: 'Expose spreadsheet evidence', slug: 'tutorials\/verify-claim-registry-api'/,
-  );
+  assert.doesNotMatch(start, /verify-claim-registry-api/);
   assert.match(
     start,
     /label: 'Pre-1.0 cutover', slug: 'start\/pre-1\.0-cutover'/,
@@ -112,30 +109,19 @@ test('starts with the spreadsheet registry and keeps HTTP under existing registr
     /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
   );
   assert.match(homepageSource, /\]\(tutorials\/author-registry-project\/\)/);
-  assert.match(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
   assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/);
-  assert.match(
-    quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/,
-  );
+  assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
+  assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
   assert.match(homepageSource, /\]\(start\/pre-1\.0-cutover\/\)/);
 });
 
-test('gives Evidence a lane on both front doors, ahead of the retiring Notary path', () => {
+test('gives Evidence a lane on both front doors without a retired Notary path', () => {
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /\]\(tutorials\/first-evidence-assertion\/\)/);
   assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
   assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/first-evidence-assertion\/\)/);
-  assertOrdered(
-    homepageSource,
-    ['tutorials/first-evidence-assertion/', 'tutorials/verify-claim-registry-api/'],
-    'homepage lane',
-  );
-  assertOrdered(
-    quickstartSource,
-    ['tutorials/first-evidence-assertion/', 'tutorials/verify-claim-registry-api/'],
-    'quickstart lane',
-  );
+  assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
+  assert.doesNotMatch(quickstartSource, /Expose Notary|verify-claim-registry-api/);
 });
 
 test('ends the onboarding spine on Evidence answering over a Relay-protected API', () => {
@@ -147,7 +133,6 @@ test('ends the onboarding spine on Evidence answering over a Relay-protected API
     quickstartSource,
     [
       'tutorials/first-evidence-assertion/',
-      'tutorials/verify-claim-registry-api/',
       'tutorials/first-run-with-solmara-lab/',
     ],
     'quickstart lane',
@@ -218,8 +203,9 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.doesNotMatch(
     configSource,
-    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet|verify-claim-registry-api)\/':/,
+    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet)\/':/,
   );
+  assert.match(configSource, /buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
 });
 
 test('keeps source-assurance artifacts out of the adopter navigation', () => {

@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 16,
-      "maxItems": 16,
+      "minItems": 15,
+      "maxItems": 15,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/entry"
@@ -22,7 +22,6 @@
   "$defs": {
     "code": {
       "enum": [
-        "authorization.denied",
         "failure.subject_mismatch",
         "fixture.execution_contract_invalid",
         "fixture.profile_not_found",

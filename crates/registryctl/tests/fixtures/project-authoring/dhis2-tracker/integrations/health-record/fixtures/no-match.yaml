@@ -13,16 +13,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims:
-    tracked-entity-first-name: null
-    tracked-entity-last-name: null
-    child-program-active: null
-    child-age-band: null
-    programme-code: null
-    reconciliation-reference: redacted
-    maternal-postnatal-care-active: null
-    child-health-visit-recorded: null
-    tb-program-active: null
-    bcg-birth-dose-recorded: null
-    opv-birth-dose-recorded: null
-    measles-dose-recorded: null

@@ -80,23 +80,6 @@ docker run --rm \
     cp target/release/registry-relay-rhai-worker dist/image-bin/registry-relay-rhai-worker
 
     cargo build --release --locked \
-      -p registry-notary \
-      --features registry-notary/registry-notary-cel
-    cp target/release/registry-notary "dist/bin/registry-notary-${RELEASE_TAG}-linux-amd64"
-
-    cargo build --release --locked \
-      -p registry-notary \
-      --features registry-notary/registry-notary-cel,registry-notary/pkcs11
-    cp target/release/registry-notary dist/image-bin/registry-notary
-
-    cargo build --release --locked \
-      -p registry-notary-server \
-      --bin registry-notary-cel-worker \
-      --features registry-notary-server/registry-notary-cel
-    cp target/release/registry-notary-cel-worker "dist/bin/registry-notary-cel-worker-${RELEASE_TAG}-linux-amd64"
-    cp target/release/registry-notary-cel-worker dist/image-bin/registry-notary-cel-worker
-
-    cargo build --release --locked \
       -p registry-evidence \
       -p registry-evidencectl \
       -p registry-mint
@@ -111,13 +94,9 @@ chmod 0755 \
   "${repo_root}/dist/bin/registry-manifest-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/registry-relay-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/registry-relay-rhai-worker-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/registry-notary-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/registry-notary-cel-worker-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidence-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
-  "${repo_root}/dist/image-bin/registry-notary" \
-  "${repo_root}/dist/image-bin/registry-notary-cel-worker" \
   "${repo_root}/dist/image-bin/registry-relay" \
   "${repo_root}/dist/image-bin/registry-relay-rhai-worker"
 
@@ -128,8 +107,6 @@ chmod 0755 \
     "evidencectl-${tag}-linux-amd64" \
     "mint-${tag}-linux-amd64" \
     "registry-manifest-${tag}-linux-amd64" \
-    "registry-notary-${tag}-linux-amd64" \
-    "registry-notary-cel-worker-${tag}-linux-amd64" \
     "registry-relay-${tag}-linux-amd64" \
     "registry-relay-rhai-worker-${tag}-linux-amd64" \
     "registryctl-${tag}-linux-amd64" \
@@ -139,8 +116,6 @@ chmod 0755 \
   cd -- "${repo_root}/dist/image-bin"
   sha256sum -- \
     RELEASE_BUILDER_IMAGE \
-    registry-notary \
-    registry-notary-cel-worker \
     registry-relay \
     registry-relay-rhai-worker \
     > SHA256SUMS

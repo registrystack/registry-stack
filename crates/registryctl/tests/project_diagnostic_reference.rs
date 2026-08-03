@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use registry_notary_server::NOTARY_ACTIVATION_CODE_DEFINITIONS;
 use registry_platform_ops::BUNDLE_VERIFICATION_CODE_DEFINITIONS;
 use registry_relay::consultation::consultation_service_activation_definitions;
 use registry_relay::process_startup::PROCESS_STARTUP_CODE_DEFINITIONS;
@@ -47,8 +46,8 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
     validate_operator_error_reference(&operator).expect("operator reference is exact");
 
     assert_eq!(authoring.entries.len(), 17);
-    assert_eq!(fixture.entries.len(), 16);
-    assert_eq!(operator.entries.len(), 60);
+    assert_eq!(fixture.entries.len(), 15);
+    assert_eq!(operator.entries.len(), 42);
     assert!(
         operator.omissions.is_empty(),
         "all operator catalogs now expose complete product-owned metadata"
@@ -65,7 +64,6 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
         family_counts,
         BTreeMap::from([
             ("bundle_verification", 4),
-            ("notary_activation", 18),
             ("operator_preflight", 11),
             ("relay_activation", 9),
             ("relay_process_startup", 18),
@@ -157,27 +155,6 @@ fn operator_projection_is_exact_to_all_product_owned_metadata() {
             )
         );
     }
-    for definition in &NOTARY_ACTIVATION_CODE_DEFINITIONS {
-        let entry = entry_for(
-            &operator.entries,
-            ErrorReferenceFamily::NotaryActivation,
-            ErrorReferenceProduct::RegistryNotary,
-            definition.code.as_str(),
-        );
-        assert_eq!(entry.phase, definition.phase);
-        assert_eq!(entry.safe_meaning, definition.meaning);
-        assert_eq!(entry.rule, definition.rule);
-        assert_eq!(entry.safe_remediation, definition.remediation);
-        assert_eq!(entry.evidence_scope, definition.evidence_scope);
-        assert_eq!(entry.evidence_limitation, definition.evidence_limitation);
-        assert_eq!(
-            entry.docs_anchor,
-            format!(
-                "/reference/diagnostics/operator/#registry_notary--{}",
-                definition.docs_slug
-            )
-        );
-    }
 }
 
 #[test]
@@ -229,8 +206,8 @@ fn strict_validation_rejects_missing_duplicate_reordered_stale_and_drifted_data(
 
     let mut operator = operator_error_reference();
     operator.omissions.push(OperatorErrorOmission {
-        family: OperatorErrorOmissionFamily::NotaryActivation,
-        product: ErrorReferenceProduct::RegistryNotary,
+        family: OperatorErrorOmissionFamily::RelayActivation,
+        product: ErrorReferenceProduct::RegistryRelay,
         reason: OperatorErrorOmissionReason::NoCompletePublicCodeCatalog,
         evidence: "stale omission".to_string(),
         required_action: "remove it".to_string(),
@@ -281,7 +258,7 @@ fn operator_schema_accepts_exact_catalog_and_rejects_open_values() {
         .compile(&schema)
         .unwrap();
     let canonical = serde_json::to_value(operator_error_reference()).unwrap();
-    assert_eq!(canonical["entries"].as_array().unwrap().len(), 60);
+    assert_eq!(canonical["entries"].as_array().unwrap().len(), 42);
     assert!(validator.is_valid(&canonical));
 
     let mut open_code = canonical.clone();
@@ -293,12 +270,38 @@ fn operator_schema_accepts_exact_catalog_and_rejects_open_values() {
         .unwrap()["code"] = Value::String("relay.startup.unregistered_open_value".to_string());
     assert!(!validator.is_valid(&open_code));
 
+    for (field, stale_value) in [
+        ("family", "notary_activation"),
+        ("owner", "registry_notary"),
+        ("product", "registry_notary"),
+    ] {
+        let mut stale = canonical.clone();
+        stale["entries"][0][field] = Value::String(stale_value.to_string());
+        assert!(!validator.is_valid(&stale));
+    }
+
     let mut open_field = canonical;
     open_field["entries"][0]
         .as_object_mut()
         .unwrap()
         .insert("runtime_value".to_string(), Value::Bool(true));
     assert!(!validator.is_valid(&open_field));
+}
+
+#[test]
+fn fixture_schema_rejects_retired_authorization_diagnostic() {
+    let schema: Value = serde_json::from_str(FIXTURE_SCHEMA).unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let canonical = serde_json::to_value(fixture_error_reference()).unwrap();
+    assert_eq!(canonical["entries"].as_array().unwrap().len(), 15);
+    assert!(validator.is_valid(&canonical));
+
+    let mut stale = canonical;
+    stale["entries"][0]["code"] = Value::String("authorization.denied".to_string());
+    assert!(!validator.is_valid(&stale));
 }
 
 fn entry_for<'a>(

@@ -198,7 +198,7 @@ test('accepts matching test, check, and build reports with derived security evid
   const buildReport = JSON.stringify({
     schema_version: 'registryctl.reviewed_project_build_report.v1',
     build: { ...common, status: 'built' },
-    affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+    affected_lanes: ['relay-public', 'relay-consultation'],
   });
 
   assert.doesNotThrow(() =>
@@ -212,15 +212,15 @@ test('accepts matching test, check, and build reports with derived security evid
         JSON.stringify({
           schema_version: 'registryctl.reviewed_project_build_report.v1',
           build: { ...common, status: 'built' },
-          affected_lanes: ['relay-consultation', 'notary'],
+          affected_lanes: ['relay-consultation'],
         }),
         'fictional-registry',
       ),
-    /relay-public/,
+    /two Relay lanes/,
   );
 });
 
-test('accepts snapshot reports with explicit minimized outputs and claims', () => {
+test('accepts snapshot reports with explicit minimized outputs and no claims', () => {
   const authorization = {
     integration: 'project-record-snapshot',
     fixture: 'match::derived/authorization_before_source',
@@ -233,7 +233,7 @@ test('accepts snapshot reports with explicit minimized outputs and claims', () =
     fixture: 'match',
     outcome: 'match',
     outputs: ['status'],
-    claims: ['project-record-exists', 'project-status-accepted'],
+    claims: [],
     passed: true,
   };
   const common = {
@@ -247,7 +247,7 @@ test('accepts snapshot reports with explicit minimized outputs and claims', () =
   const buildReport = JSON.stringify({
     schema_version: 'registryctl.reviewed_project_build_report.v1',
     build: { ...common, status: 'built' },
-    affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+    affected_lanes: ['relay-public', 'relay-consultation'],
   });
 
   assert.doesNotThrow(() =>
@@ -286,7 +286,7 @@ test('accepts snapshot reports with explicit minimized outputs and claims', () =
             status: 'built',
             fixtures: [extraOutput, authorization],
           },
-          affected_lanes: ['relay-public', 'relay-consultation', 'notary'],
+          affected_lanes: ['relay-public', 'relay-consultation'],
         }),
         'fictional-public-works-registry',
         'snapshot',
@@ -315,22 +315,17 @@ test('evidence manifest keeps three adopter outcomes and their runtime variants'
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/runtime/dev-smoke.txt'),
+      .reports.includes('spreadsheet/runtime/dev-smoke.txt'),
   );
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/runtime/records-denied.json'),
+      .reports.includes('spreadsheet/runtime/records-denied.json'),
   );
   assert.ok(
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/runtime/records-request.json'),
-  );
-  assert.ok(
-    manifest.projects
-      .find((project) => project.id === 'spreadsheet')
-      .reports.includes('spreadsheet-evidence/runtime/evidence-request.json'),
+      .reports.includes('spreadsheet/runtime/records-request.json'),
   );
   assert.ok(
     manifest.projects
@@ -341,6 +336,12 @@ test('evidence manifest keeps three adopter outcomes and their runtime variants'
     manifest.projects
       .find((project) => project.id === 'spreadsheet')
       .covers.includes('adapted-workbook'),
+  );
+  assert.equal(
+    manifest.projects
+      .find((project) => project.id === 'spreadsheet')
+      .reports.some((report) => report.includes('spreadsheet-evidence') || report.includes('evidence-request')),
+    false,
   );
   assert.ok(
     manifest.projects
@@ -354,7 +355,7 @@ test('evidence manifest keeps three adopter outcomes and their runtime variants'
   );
 });
 
-test('reader gate executes the evidence change and limits development runtime to sealed mode', () => {
+test('reader gate executes Relay-only journeys and limits development runtime to sealed mode', () => {
   const script = read('scripts/check-registryctl-tutorials.sh');
   const spreadsheet = extractFencedBlocks(
     read('src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
@@ -389,7 +390,6 @@ test('reader gate executes the evidence change and limits development runtime to
   assert.ok(spreadsheetFence('Test the starter', 'text', 1));
   assert.ok(spreadsheetFence('Inspect the contract you own', 'text', 1));
   assert.ok(spreadsheetFence('Build the review inputs', 'text', 1));
-  assert.match(script, /Spreadsheet evidence-change reader journey: PASS/);
   assert.match(script, /if \[\[ "\$RUNNER_MODE" != "sealed" \]\]; then/);
   assert.match(script, /run_spreadsheet_runtime/);
   assert.match(script, /run_synthetic_runtime/);
@@ -399,11 +399,7 @@ test('reader gate executes the evidence change and limits development runtime to
   assert.match(script, /anonymous records request returned HTTP/);
   assert.match(script, /auth\.missing_credential/);
   assert.match(script, /assert-json-subset "\$report_directory\/records-request\.json"/);
-  assert.match(script, /assert-json-subset "\$report_directory\/evidence-request\.json"/);
-  assert.match(script, /assert-json-subset "\$evidence_body"/);
-  assert.match(script, /\n\tPW-002 \\\n\tcentral-02 \\\n\thealth \\\n\tplanned\n/);
   assert.match(script, /north-01/);
-  assert.match(script, /'planned'/);
   assert.match(script, /dev smoke/);
   assert.match(script, /dev down/);
   assert.match(script, /--environment local/);
@@ -420,14 +416,16 @@ test('reader gate executes the evidence change and limits development runtime to
   assert.match(script, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
   assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/author-registry-project\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/publish-spreadsheet-secured-registry-api\.md/);
-  assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/verify-claim-registry-api\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/configure\/oauth-client-credentials\.md/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/opencrvs-events-api-overlay-v1\.sh/);
   assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/);
   assert.match(script, /OPENCRVS_PROJECT="\$\{RETAINED_OAUTH_PROJECT:-\$WORK_ROOT\/opencrvs-reader\}"/);
   assert.match(script, /HTTP_PROJECT="\$\{RETAINED_PROJECT:-\$WORK_ROOT\/http-reader\}"/);
   assert.match(script, /SPREADSHEET_PROJECT="\$WORK_ROOT\/spreadsheet-reader"/);
-  assert.match(script, /EVIDENCE_PROJECT="\$SPREADSHEET_PROJECT"/);
+  assert.doesNotMatch(
+    script,
+    /EVIDENCE_TUTORIAL|EVIDENCE_PROJECT|spreadsheet-evidence|evidence-request\.json|Evidence API|Evidence request/,
+  );
   assert.match(script, /"\$RETAINED_OAUTH_PROJECT"/);
   assert.match(script, /disposable runtime runs only with an explicitly installed sealed binary/);
   assert.doesNotMatch(

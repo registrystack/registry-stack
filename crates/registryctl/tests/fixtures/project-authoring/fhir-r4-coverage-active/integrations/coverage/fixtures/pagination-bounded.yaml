@@ -32,4 +32,4 @@ interactions:
               id: patient-1
               birthDate: 2018-05-12
               name: [{ family: Example, given: [Ada] }]
-expect: { outcome: ambiguous, outputs: {}, claims: {} }
+expect: { outcome: ambiguous, outputs: {} }

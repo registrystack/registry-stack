@@ -59,9 +59,9 @@ use std::path::Path;
 
 use anyhow::Result;
 use approved_set::{
-    ApprovedLaneEntryV1, ApprovedLaneLocatorsV1, ApprovedLaneV1, CrossLaneInterfaceDigestsV1,
-    LaneVerificationRequestV1, LaneVerificationSourceV1, PortableArtifactLocator,
-    ReviewedLaneBindingV1, VerifiedApprovedLaneV1,
+    ApprovedLaneEntryV1, ApprovedLaneLocatorsV1, ApprovedLaneV1, LaneVerificationRequestV1,
+    LaneVerificationSourceV1, PortableArtifactLocator, ReviewedLaneBindingV1,
+    VerifiedApprovedLaneV1,
 };
 use registry_platform_config::{
     ProductAcceptanceIdentityV1, ProductAcceptanceProductV1, ProductTrustDomainV1,
@@ -80,7 +80,6 @@ pub fn entry(
     generation: &str,
     reviewed_digest: char,
     signing_digest: char,
-    interface_digest: Option<char>,
 ) -> ApprovedLaneEntryV1 {
     let lane_name = lane.to_string();
     let root = format!("{generation}/{lane_name}");
@@ -94,23 +93,17 @@ pub fn entry(
         signed_manifest_digest: digest(match lane {
             ApprovedLaneV1::RelayPublic => '1',
             ApprovedLaneV1::RelayConsultation => '2',
-            ApprovedLaneV1::Notary => '3',
         }),
         bundle_digest: digest(match lane {
             ApprovedLaneV1::RelayPublic => '4',
             ApprovedLaneV1::RelayConsultation => '5',
-            ApprovedLaneV1::Notary => '6',
         }),
         anchor_digest: digest(match lane {
             ApprovedLaneV1::RelayPublic => '7',
             ApprovedLaneV1::RelayConsultation => '8',
-            ApprovedLaneV1::Notary => '9',
         }),
         lane_scoped_reviewed_input_digest: digest(reviewed_digest),
         signing_input_closure_digest: digest(signing_digest),
-        interfaces: CrossLaneInterfaceDigestsV1 {
-            consultation_relay_notary: interface_digest.map(digest),
-        },
     }
 }
 
@@ -120,12 +113,7 @@ pub fn identity(lane: ApprovedLaneV1, project: &str) -> ProductAcceptanceIdentit
         project: project.to_string(),
         environment: "production".to_string(),
         lane: lane.acceptance_lane(),
-        product: match lane {
-            ApprovedLaneV1::RelayPublic | ApprovedLaneV1::RelayConsultation => {
-                ProductAcceptanceProductV1::RegistryRelay
-            }
-            ApprovedLaneV1::Notary => ProductAcceptanceProductV1::RegistryNotary,
-        },
+        product: ProductAcceptanceProductV1::RegistryRelay,
         stream: format!("{project}-stream"),
         instance: format!("{project}-{lane}"),
     }
@@ -141,7 +129,6 @@ pub fn verified(
     previous_config_digest: Option<char>,
     reviewed_digest: char,
     signing_digest: char,
-    interface_digest: Option<char>,
 ) -> VerifiedApprovedLaneV1 {
     VerifiedApprovedLaneV1::from_independent_verification(
         lane,
@@ -149,22 +136,15 @@ pub fn verified(
         sequence,
         digest(config_digest),
         previous_config_digest.map(digest),
-        entry(
-            lane,
-            generation,
-            reviewed_digest,
-            signing_digest,
-            interface_digest,
-        ),
+        entry(lane, generation, reviewed_digest, signing_digest),
     )
     .expect("test lane evidence is structurally verified")
 }
 
 pub fn initial_lane(lane: ApprovedLaneV1) -> VerifiedApprovedLaneV1 {
-    let (reviewed, signing, interface) = match lane {
-        ApprovedLaneV1::RelayPublic => ('a', 'd', None),
-        ApprovedLaneV1::RelayConsultation => ('b', 'e', Some('c')),
-        ApprovedLaneV1::Notary => ('c', 'f', Some('c')),
+    let (reviewed, signing) = match lane {
+        ApprovedLaneV1::RelayPublic => ('a', 'd'),
+        ApprovedLaneV1::RelayConsultation => ('b', 'e'),
     };
     verified(
         lane,
@@ -174,20 +154,17 @@ pub fn initial_lane(lane: ApprovedLaneV1) -> VerifiedApprovedLaneV1 {
         match lane {
             ApprovedLaneV1::RelayPublic => 'a',
             ApprovedLaneV1::RelayConsultation => 'b',
-            ApprovedLaneV1::Notary => 'c',
         },
         None,
         reviewed,
         signing,
-        interface,
     )
 }
 
 pub fn replacement_lane(lane: ApprovedLaneV1) -> VerifiedApprovedLaneV1 {
-    let (reviewed, signing, interface, previous) = match lane {
-        ApprovedLaneV1::RelayPublic => ('7', '8', None, 'a'),
-        ApprovedLaneV1::RelayConsultation => ('7', '8', Some('9'), 'b'),
-        ApprovedLaneV1::Notary => ('8', '9', Some('9'), 'c'),
+    let (reviewed, signing, previous) = match lane {
+        ApprovedLaneV1::RelayPublic => ('7', '8', 'a'),
+        ApprovedLaneV1::RelayConsultation => ('8', '9', 'b'),
     };
     verified(
         lane,
@@ -197,12 +174,10 @@ pub fn replacement_lane(lane: ApprovedLaneV1) -> VerifiedApprovedLaneV1 {
         match lane {
             ApprovedLaneV1::RelayPublic => 'd',
             ApprovedLaneV1::RelayConsultation => 'e',
-            ApprovedLaneV1::Notary => 'f',
         },
         Some(previous),
         reviewed,
         signing,
-        interface,
     )
 }
 
@@ -222,6 +197,5 @@ pub fn path_set(root: &Path) -> approved_set::InitialApprovedSetInputs {
     approved_set::InitialApprovedSetInputs {
         relay_public: root.join("relay-public"),
         relay_consultation: root.join("relay-consultation"),
-        notary: root.join("notary"),
     }
 }
