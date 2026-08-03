@@ -48,13 +48,13 @@ gates for its area (see Verification), and committed.
 
 ### A. Composition proof (Evidence over Relay)
 
-- [ ] A1. Token topology verified and recorded: establish whether Relay
+- [x] A1. Token topology verified and recorded: establish whether Relay
       embeds a client-credentials token endpoint (`registry-platform-sts`)
       that Evidence's `SourceAuthentication::Oauth2ClientCredentials` can
       target, or whether IdP-less deployments need Mint to issue for Relay
       (a security-sensitive Relay change requiring review). Record the
       outcome in the status log below.
-- [ ] A2. An ordinary sanitized Relay-shaped mock test in
+- [x] A2. An ordinary sanitized Relay-shaped mock test in
       `crates/registry-evidence` proves a full signed assertion over an
       OAuth client-credentials source, with zero production-code changes.
 - [ ] A3. A reference deployment-project example for the Relay-backed
@@ -62,16 +62,16 @@ gates for its area (see Verification), and committed.
 
 ### B. Evidence onboarding (docs site, evidencectl, CI)
 
-- [ ] B1. Site plumbing: `openapi-sources.yaml` entry for the generated
+- [x] B1. Site plumbing: `openapi-sources.yaml` entry for the generated
       Evidence OpenAPI with a Redoc reference page; contracts wired into the
       data-driven reference; Operate content from `OPERATOR-CONTRACT.md`;
       Security content from the invariant matrix and test traceability;
       a "Registry Evidence" Configure group.
-- [ ] B2. The Evidence OpenAPI is drift-checked in root CI (confirm an
+- [x] B2. The Evidence OpenAPI is drift-checked in root CI (confirm an
       existing gate or add one).
-- [ ] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
+- [x] B3. `spec/rs-pr-evidence` exists in the spec series, generated from or
       tightly linked to the frozen contracts so it cannot drift.
-- [ ] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
+- [x] B4. Tutorial gate: an evidencectl-fixtures-driven check with a CI job
       that runs each Evidence tutorial from a clean container with only the
       prerequisites the tutorial itself documents; Evidence tutorials must
       pass it to merge.
@@ -82,9 +82,9 @@ gates for its area (see Verification), and committed.
       verify an assertion as a consumer. Adopter outcome for E1: a fresh
       machine completes it in 15 minutes or less using released binaries
       installed via F1 (the released-binary form of this gate needs F3).
-- [ ] B6. Tutorial E6 (move Evidence to production signing) published,
+- [x] B6. Tutorial E6 (move Evidence to production signing) published,
       derived from `OPERATOR-CONTRACT.md`.
-- [ ] B7. Mint has real docs presence: a Configure page and a reference page.
+- [x] B7. Mint has real docs presence: a Configure page and a reference page.
 - [ ] B8. Onboarding spine: glossary disambiguates Evidence (product) from
       the retired Notary evidence credentials; `start/when-to-use` presents
       the two doors; the quickstart ends in an Evidence assertion over the
@@ -148,12 +148,12 @@ builder image, and `crates/registryctl/install.sh` is already published as
 the `registryctl-<tag>-install.sh` release asset. Evidence rides that
 channel; it does not get a parallel one.
 
-- [ ] F1. `crates/registry-evidencectl/install.sh` exists, mirroring the
+- [x] F1. `crates/registry-evidencectl/install.sh` exists, mirroring the
       registryctl installer conventions: installs `evidence`, `evidencectl`,
       and `mint` from a release, verifies every artifact against SHA256SUMS,
       refuses unverified installs, has offline tests, and passes shellcheck
       and shfmt.
-- [ ] F2. The three binaries and the installer asset enter the release
+- [x] F2. The three binaries and the installer asset enter the release
       channel: `build-release-binaries.sh` builds and checksums them, the
       candidate workflow stages `evidencectl-<tag>-install.sh`, and the
       artifact inventory in `release/scripts/registry-release` accepts them
@@ -163,16 +163,16 @@ channel; it does not get a parallel one.
       the published assets installs working binaries. Then flip the
       inventory entries from optional to required at a minimum version, the
       way `registryctl-installer` did at v0.14.0.
-- [ ] F4. Platform coverage decision recorded: linux-amd64 is the
+- [x] F4. Platform coverage decision recorded: linux-amd64 is the
       reproducible baseline; registryctl already publishes optional
       macos-arm64 and linux-arm64 assets; decide and record the same
       optional set for the Evidence binaries.
 - [ ] F5. Personas named on the docs site (assertion provider, data
       publisher, consumer/verifier, operator) and every tutorial labeled
       with whose it is.
-- [ ] F6. An Evidence errors and problems reference page exists for
+- [x] F6. An Evidence errors and problems reference page exists for
       adopters: what each public problem means and what to do about it.
-- [ ] F7. An evaluate-stage page exists: what Evidence costs to run
+- [x] F7. An evaluate-stage page exists: what Evidence costs to run
       (footprint, dependencies, operational burden, support window).
 
 ### Global gates (checked at the end, not per item)
@@ -223,3 +223,101 @@ is parallel; B has no upstream dependencies and is the standing priority
   and registryctl already ships an installer asset. F was rewritten to
   extend that channel (evidence, evidencectl, mint were simply missing
   from it) instead of inventing a parallel one. F1 and F2 in progress.
+- 2026-08-03: F1 done. The evidencectl installer mirrors the registryctl
+  conventions (toolset all-or-nothing install, SHA256SUMS verification,
+  asset-dir mode, staged install with rollback) with 11 offline tests;
+  shellcheck and shfmt clean. Found in passing: the rust-result shard
+  test in release/scripts/test_registry_release.py is stale on main
+  (ci.yml gained evidence-contracts); flagged separately, not fixed here.
+- 2026-08-03: F2 done. build-release-binaries.sh builds and checksums
+  evidence, evidencectl, and mint in the pinned builder; the candidate
+  workflow stages evidencectl-<tag>-install.sh beside the registryctl
+  installer; the registry-release inventory accepts the four artifacts
+  as optional (flip to required at a minimum version is F3), with two
+  new unit tests. Historical manifests still validate (beta-26 checked).
+  The product README documents installation. Next in F: F3 needs a real
+  release; F4-F7 are open.
+- 2026-08-03: B2 confirmed done with no new code. Root CI's
+  evidence-contracts job (.github/workflows/ci.yml) runs
+  products/evidence/scripts/check-contracts.sh, which regenerates every
+  Evidence contract including registry-evidence.openapi.json and
+  byte-diffs against products/evidence/generated/. The classifier
+  (.github/scripts/ci_changes.py) fires it for registry-evidence,
+  registry-evidencectl, and products/evidence/ changes.
+- 2026-08-03: F4 decided and implemented. Platform coverage matches
+  registryctl exactly: linux-amd64 is the required reproducible
+  baseline from the pinned builder; linux-arm64 and macos-arm64 ship
+  as optional native-runner assets from the candidate workflow's
+  build-platforms matrix, which now also builds evidence, evidencectl,
+  and mint. The assemble step and the F2 inventory already accept the
+  per-platform names generically.
+- 2026-08-03: Docs wave landed. B1 done: repo-docs mirrors seven Evidence
+  product pages, the latest docset registers the product, the generated
+  OpenAPI flows through fetch-openapi into a Redoc operations section
+  plus a narrative API page, security content comes from the invariant
+  matrix and test traceability (security/evidence.mdx), Operate content
+  is the mirrored operator contract, and the sidebar gains an "Answer
+  with Evidence" flow (the plan's "Registry Evidence Configure group"
+  exists as that flow plus the Registry Evidence product group; rename
+  if the exact label matters). B3 done: RS-PR-EVIDENCE with 56
+  requirements, every one citing its frozen contract file. B7 done:
+  Mint configure and reference pages, config fields cited to source
+  lines. F6 done: all nine public problem types documented from the
+  problem contract. F7 done: evaluate-stage page; writing it surfaced
+  stale PERFORMANCE.md group-commit claims, reconciled in their own
+  commit. B8 partial: two-door when-to-use, personas (F5 partial), and
+  glossary disambiguation are in; the quickstart flip still waits on A
+  and D. E1 (first-assertion tutorial) is published with commands
+  verified against the built binaries, but B5 stays open: E2-E5 and the
+  B4 gate are not built. Archived-docset design decision: a product
+  absent from an archived docset is filtered before docset pinning and
+  its OpenAPI rides the current shell; the Evidence product group
+  splices optionally (v0.15.2 verified past the Evidence throw; its
+  remaining sync failure is a pre-existing Notary allowlist gap on
+  main, flagged separately, as is the stale rust-result shard test).
+  Site suite 267 tests green. Full `npm run check` still pending.
+- 2026-08-03: Session-limit note: three authoring subagents died mid
+  wave (configure page recovered by hand, E1 rewritten by hand, E6 not
+  written). Next unblocked items: B4 gate, E6, then E2-E5.
+- 2026-08-03: B4 done. check-evidence-tutorials.sh drift-checks and
+  replays the first-assertion tutorial's fences verbatim (executed
+  green locally end to end); its dry-run joins npm run check; a
+  path-gated evidence-tutorials CI job builds the toolset and executes
+  the tutorial inside the repo's pinned builder-image digest with the
+  repo mounted read-only, counted by the required-results job. Caveat
+  recorded: that image is a full builder userland reused for its pinned
+  digest; a slimmer pinned base can replace it later. The
+  release-download fences stay unexecuted until F3. B6 done: the
+  production-signing tutorial restates OPERATOR-CONTRACT.md (key
+  generation, JWKS retention window, offline validation, readiness,
+  rotation, signature limits). Extending the executable gate to E6 and
+  the future E2-E5 belongs to B5. Full npm run check passed after the
+  docs wave; one Vale error it surfaced (typographic quotes in the
+  operator contract lead) fixed at the source.
+- 2026-08-03: A1 verified and recorded. Relay embeds no token issuance:
+  registry-platform-sts is Notary-bound token exchange with zero
+  consumers in the workspace (add it to the C4 orphan candidates).
+  Relay authenticates inbound callers through configured OIDC (issuer,
+  audiences, algorithm allowlist, JWKS cache in
+  crates/registry-relay/src/auth/oidc/, with EdDSA-verifying tests),
+  and Mint issues EdDSA tokens with configured audiences and serves a
+  JWKS. IdP-less Evidence-over-Relay therefore points Relay's verifier
+  configuration at Mint's issuer: deployment configuration, no
+  security-sensitive Relay change, so the reserved Mint-for-Relay code
+  branch is not triggered. Open question for A2 and D: whether Mint's
+  Evidence-shaped claim set satisfies Relay's authorization model, or
+  whether Mint (not Relay, not Evidence) needs a claim addition.
+- 2026-08-03: A2 done, zero production-code changes needed. The new
+  crates/registry-evidence/tests/relay_shaped_source.rs mirrors the
+  Relay OpenAPI's household-record read (path, bearer, Data-Purpose,
+  entity response shape) by hand in a wiremock, drives OAuth client
+  credentials through the frozen runtime's public API to a signed
+  flattened JWS, verifies it against the deployment JWKS under the full
+  relying policy, and proves minimum disclosure with canaries: the raw
+  record id, the untouched field, and even the raw region code never
+  appear in the assertion payload. Composition components all existed
+  in the frozen V1 runtime. Next in A: A3, the Relay-backed reference
+  deployment project. E2's open design question for Jeremi: what tool
+  tutorial readers use to build the RFC 7523 client assertion for Mint
+  (the demo uses a Python walkthrough; an evidencectl helper would be
+  new CLI surface outside the frozen runtime contract).

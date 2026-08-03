@@ -285,8 +285,12 @@ cases:
         - trackedEntity: Tei00000001
           attributes: []
           enrollments: []
-        - trackedEntity: Tei00000002
-          attributes: []
+        # The second record carries no reference of its own, only the lists
+        # the projection insists on. The pager decides this page before any
+        # record is read, so a response shape that demanded a complete record
+        # here would turn an ordinary ambiguous lookup into a source-protocol
+        # failure.
+        - attributes: []
           enrollments: []
     expected:
       lookup: ambiguous

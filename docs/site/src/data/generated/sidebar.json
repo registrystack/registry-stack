@@ -194,5 +194,39 @@
         "slug": "products/registry-manifest/reference"
       }
     ]
+  },
+  {
+    "label": "Evidence",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "products/registry-evidence"
+      },
+      {
+        "label": "Product concept",
+        "slug": "products/registry-evidence/concept"
+      },
+      {
+        "label": "First server curl",
+        "slug": "products/registry-evidence/first-curl-test"
+      },
+      {
+        "label": "Source testing",
+        "slug": "products/registry-evidence/source-testing"
+      },
+      {
+        "label": "SD-JWT VC demo",
+        "slug": "products/registry-evidence/sd-jwt-vc-demo"
+      },
+      {
+        "label": "Operator contract",
+        "slug": "products/registry-evidence/operator-contract"
+      },
+      {
+        "label": "Performance",
+        "slug": "products/registry-evidence/performance"
+      }
+    ]
   }
 ]

@@ -86,6 +86,48 @@ re-implements evaluation, signing, or verification. It must not depend on
 `registry-notary*`, and its source and scaffold templates are covered by the
 same source-product and domain neutrality checks as the runtime.
 
+`evidencectl source suggest` drafts one source from an OpenAPI description:
+it derives a closed response schema, an extraction script, and the facts schema
+from the chosen operation, the projection the operator selects, and an optional
+sample response, leaving an explicit `TODO` wherever a bound cannot be derived
+so `evidence check` rejects the draft until a human resolves it.
+
+```bash
+evidencectl source suggest --openapi ./api.yaml --project ./deployment-project
+```
+
+## Installing the toolset
+
+Releases that include the Evidence toolset publish reproducible bare binaries
+named `<bin>-<tag>-<os>-<arch>` (for example `evidence-v1.2.0-linux-amd64`)
+plus a `SHA256SUMS` file that is cosign-signed at promotion. Older releases do
+not carry these assets. For a release that does, install the pinned installer
+asset directly:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/download/<tag>/evidencectl-<tag>-install.sh | bash
+```
+
+The installer installs the three-binary Evidence toolset, the `evidence`
+runtime, `evidencectl` adopter tooling, and the `mint` token issuer, together
+or not at all, verifying every asset against `SHA256SUMS` before anything
+reaches the install directory. It supports Linux amd64, Linux arm64, and
+macOS arm64. It checks integrity, not authenticity: for a higher-assurance
+install, follow [`release/VERIFY.md`](../../release/VERIFY.md) for the pinned
+tag, then rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at that
+verified directory.
+
+Three environment variables configure the installer: `EVIDENCECTL_VERSION`
+pins a `vMAJOR.MINOR.PATCH` tag, `EVIDENCECTL_INSTALL_DIR` sets the install
+directory (default `~/.local/bin`), and `EVIDENCECTL_ASSET_DIR` installs from
+a locally verified asset directory instead of downloading.
+
+To build the toolset from source instead:
+
+```sh
+cargo build --release --locked -p registry-evidence -p registry-evidencectl -p registry-mint
+```
+
 ## Discovering available evidence
 
 An authenticated caller lists the complete Evidence request shapes it can

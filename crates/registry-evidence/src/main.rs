@@ -294,10 +294,6 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CliError {
         RuntimeInitializationError::Secrets => CliError("runtime secret initialization failed"),
         RuntimeInitializationError::Audit => CliError("runtime audit initialization failed"),
         RuntimeInitializationError::Signing => CliError("runtime signing initialization failed"),
-        RuntimeInitializationError::SigningActiveKeyId => CliError(
-            "runtime signing initialization failed: the signing key identifier does not match \
-             signing.activeKeyId",
-        ),
         RuntimeInitializationError::Source => CliError("runtime source initialization failed"),
         RuntimeInitializationError::RateLimit => {
             CliError("runtime rate-limit initialization failed")

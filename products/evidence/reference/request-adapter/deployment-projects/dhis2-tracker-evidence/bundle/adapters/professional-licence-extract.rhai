@@ -73,6 +73,15 @@ fn extract(source_response, parameters) {
     if records.len != 1 { throw("source_protocol_error"); }
 
     let record = records[0];
+    // The shape cannot require this of every record, because the ambiguous
+    // page is decided from the pager before any record is read. A single
+    // matched record with no reference of its own is a source this adapter
+    // does not understand. attributes needs no check: it carries projected
+    // children, so a record without it never survives projection.
+    if is_missing(record["trackedEntity"]) {
+        throw("source_protocol_error");
+    }
+
     // The validity attributes are named by adapter parameters, and a register
     // that reports one of them twice has no single value to read, so this loop
     // stays.

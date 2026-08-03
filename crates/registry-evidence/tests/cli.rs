@@ -313,8 +313,7 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         SecretFailureCase {
             label: "signing key kid differs from the bundle's activeKeyId",
             break_secrets: |deployment| deployment.write_mismatched_signing_key(),
-            expected: "evidence: runtime signing initialization failed: the signing key \
-                       identifier does not match signing.activeKeyId\n",
+            expected: "evidence: runtime signing initialization failed\n",
         },
         SecretFailureCase {
             label: "audit hash key below the minimum length",

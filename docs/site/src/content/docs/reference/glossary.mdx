@@ -105,6 +105,15 @@ Product names are always in English, including on future translated pages.
   <dt>environment</dt>
   <dd>Private bindings and operational settings for one Registry Stack project deployment target. An environment does not change the project's stable intent.</dd>
 
+  <dt>Evidence (product)</dt>
+  <dd>The minimum-disclosure assertion service in this monorepo. Crate: `crates/registry-evidence`; product material: `products/evidence/`. Given authenticated authority, an authorized purpose, and a predefined requirement, Evidence serves a signed assertion that answers the requirement, not the source record, plus an SD-JWT VC serialization of that same stateless assertion under a frozen Version 1 profile. The SD-JWT VC format is never a credential lifecycle: no issuance session, holder-binding ceremony, status list, or revocation. Evidence is not a Registry Notary mode, rewrite, or reduced configuration and does not inherit the Notary product model.</dd>
+
+  <dt>evidence credential (Registry Notary)</dt>
+  <dd>Registry Notary usage of "evidence": in the Evidence Gateway runtime, a Notary claim evaluation can result in credential issuance, governed by a credential profile and delivered through OID4VCI and SD-JWT VC. This Notary-scoped meaning is distinct from Evidence (product): Registry Notary evidence names a credential with an issuance lifecycle, while Evidence names a stateless signed assertion with none.</dd>
+
+  <dt>Evidence toolset</dt>
+  <dd>The three released binaries `evidence`, `evidencectl`, and `mint`. Releases that include the toolset publish reproducible binaries alongside a cosign-signed `SHA256SUMS` file, and the installer installs all three together or not at all after verifying every asset. `evidencectl` shells out to `evidence` for every Evidence semantic decision and never re-implements evaluation, signing, or verification. `mint`, built from the `registry-mint` crate, issues the access tokens `evidence` verifies.</dd>
+
   <dt>Evidence Gateway</dt>
   <dd>Governed runtime path for evidence responses. A Relay read or consultation and a Notary claim evaluation pass trusted request and evidence context through configured authorization and disclosure policy before returning or denying a response. Registry-backed Notary claims consume compiler-pinned Relay results.</dd>
 
@@ -208,7 +217,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>
 
   <dt>registry stack</dt>
-  <dd>The four formal stack products: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, and <a href="../../products/registry-notary/">Registry Notary</a>. Use lowercase when referring to the concept.</dd>
+  <dd>The formal stack products: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, <a href="../../products/registry-notary/">Registry Notary</a>, and Evidence, with Registry Mint as supporting token issuance. Use lowercase when referring to the concept.</dd>
 
   <dt>purpose-bound request</dt>
   <dd>Registry Stack product term for a request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. Relay records the `Data-Purpose` header in audit records where present.</dd>
@@ -224,6 +233,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
+
+  <dt>Registry Mint</dt>
+  <dd>Small supporting service, not a fourth registry stack pattern, that issues short-lived, audience-bound access tokens to registered machine clients using the `client_credentials` grant with `private_key_jwt` client authentication, so a resource server such as Evidence can require signed tokens without standing up a general-purpose identity provider. The client registry binds each client id to its own keys and to the authority Registry Mint asserts for it. Registry Mint's tests drive Evidence's authenticator; the dependency runs one way only, and Evidence does not depend on Registry Mint. Crate: `crates/registry-mint`; binary: `mint`.</dd>
 
   <dt id="registry-platform">Registry Platform</dt>
   <dd>Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Repo slug: `registry-platform`.</dd>
@@ -315,8 +327,8 @@ Product names are always in English, including on future translated pages.
 
 ## Style notes
 
-- Formal product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary) and the adopter demo name (Solmara Lab) are always title case.
-- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `solmara-lab`) are always lowercase and monospace.
+- Formal product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary, Registry Mint) and the adopter demo name (Solmara Lab) are always title case. The assertion product's name is Evidence, capitalized as a proper noun.
+- Repo slugs and crate names (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `registry-evidence`, `registry-mint`, `solmara-lab`) are always lowercase and monospace.
 - Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields.
 - The glossary provides a reference for standards acronyms but does not replace per-page first-use expansion.
 

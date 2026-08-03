@@ -423,8 +423,8 @@ fn report(root: &Path, secret_root: &Path, with_mint: bool) {
         "  # obtain the source system's own bearer token and write it to {},",
         secret_root.join("source-bearer-token").display()
     );
-    println!("  # mode 0600. check and the fixtures pass without it by design: readiness");
-    println!("  # owns source credentials, so bundle review comes before source onboarding.");
+    println!("  # mode 0600. check, the fixtures and startup all pass without it; the");
+    println!("  # first live request is where a missing token is discovered.");
     println!(
         "  chmod -R a-w {} && chmod 444 {}",
         root.join(BUNDLE_DIRECTORY).display(),
@@ -438,13 +438,6 @@ fn report(root: &Path, secret_root: &Path, with_mint: bool) {
         "  evidence evaluate --runtime {} --fixture fixtures/cases.yaml",
         root.join(RUNTIME_FILE).display()
     );
-    println!(
-        "  evidence serve --runtime {}",
-        root.join(RUNTIME_FILE).display()
-    );
-    println!("  # then confirm GET /ready answers 200 before first use. /health is liveness");
-    println!("  # only and answers 200 even when a source credential is missing; /ready is");
-    println!("  # the fail-closed gate and answers 503 until every credential resolves.");
     if with_mint {
         println!();
         println!("Next steps for the paired Registry Mint deployment:");

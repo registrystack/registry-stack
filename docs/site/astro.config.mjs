@@ -101,6 +101,13 @@ function generatedProduct(label) {
   if (!group) throw new Error(`generated sidebar group "${label}" not found`);
   return group;
 }
+
+// A product absent from this docset's generated sidebar (a product newer than
+// an archived docset) yields no group instead of failing the build.
+/** @param {string} label */
+function optionalGeneratedProduct(label) {
+  return productSidebar.find((/** @type {{ label: string }} */ entry) => entry.label === label) ?? null;
+}
 const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
@@ -255,6 +262,11 @@ export default defineConfig({
             schema: './openapi/registry-notary.openapi.json',
             sidebar: { label: 'Notary API operations', collapsed: true },
           },
+          {
+            base: 'reference/apis/evidence',
+            schema: './openapi/registry-evidence.openapi.json',
+            sidebar: { label: 'Evidence API operations', collapsed: true },
+          },
         ]),
       ],
       defaultLocale: 'root',
@@ -296,6 +308,7 @@ export default defineConfig({
             { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
             { label: 'Expose spreadsheet evidence', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
+            { label: 'Evaluate Evidence', slug: 'start/evaluate-evidence' },
             { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
           ],
         },
@@ -309,6 +322,15 @@ export default defineConfig({
             { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
             { label: 'Configuration fields', slug: 'reference/project-configuration' },
+          ],
+        },
+        {
+          label: 'Answer with Evidence',
+          items: [
+            { label: 'Get a first assertion', slug: 'tutorials/first-evidence-assertion' },
+            { label: 'Configure Evidence', slug: 'configure/evidence' },
+            { label: 'Configure Registry Mint', slug: 'configure/mint' },
+            { label: 'Move to production signing', slug: 'tutorials/move-evidence-to-production-signing' },
           ],
         },
         {
@@ -332,6 +354,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'security' },
+            { label: 'Evidence security model', slug: 'security/evidence' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
             { label: 'Release trust', slug: 'security/openssf-evidence' },
@@ -353,11 +376,14 @@ export default defineConfig({
                 { label: 'Overview', slug: 'reference/apis' },
                 { label: 'Relay (narrative)', slug: 'reference/apis/registry-relay' },
                 { label: 'Notary (narrative)', slug: 'reference/apis/registry-notary' },
+                { label: 'Evidence (narrative)', slug: 'reference/apis/registry-evidence' },
                 // Generated operation pages for each schema (theme-aware, searchable).
                 ...openAPISidebarGroups,
               ],
             },
             { label: 'Errors and status codes', slug: 'reference/errors' },
+            { label: 'Evidence problems', slug: 'reference/evidence-problems' },
+            { label: 'Registry Mint', slug: 'reference/mint' },
             {
               label: 'Diagnostic catalogs',
               collapsed: true,
@@ -387,6 +413,20 @@ export default defineConfig({
                   collapsed: true,
                   items: generatedProduct('Manifest').items,
                 },
+                // Evidence entered the product docset after every archived
+                // docset was sealed, so its group is optional: absent when an
+                // archived docset's generated sidebar has no Evidence product.
+                // generate-sidebar.test.mjs pins its presence for the current
+                // docset, keeping the loud-failure property there.
+                ...(optionalGeneratedProduct('Evidence')
+                  ? [
+                      {
+                        label: 'Registry Evidence',
+                        collapsed: true,
+                        items: generatedProduct('Evidence').items,
+                      },
+                    ]
+                  : []),
               ],
             },
             { label: 'Contracts', slug: 'reference/contracts' },
@@ -419,6 +459,7 @@ export default defineConfig({
                 { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
                 { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
                 { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
+                { label: 'RS-PR-EVIDENCE · Evidence protocol', slug: 'spec/rs-pr-evidence' },
                 { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
                 { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
                 { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },

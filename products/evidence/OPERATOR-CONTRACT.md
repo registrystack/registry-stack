@@ -82,7 +82,7 @@ unsafe bundle safe.
 
 ## Discovery of available evidence
 
-Evidence Version 1 answers “what may this caller request?” with authenticated
+Evidence Version 1 answers "what may this caller request?" with authenticated
 `GET /v1/evidence-definitions`. Availability is requester-relative: the
 definition must exist in the exact deployed bundle and exactly one authority
 path must match the verified token, requirement, purpose, audience, complete
@@ -682,7 +682,7 @@ Before production exposure, the operator runs:
 
 ```sh
 evidence check
-evidence evaluate --fixture <path>
+evidence evaluate --fixture "<path>"
 ```
 
 All commands accept `--runtime <absolute-path>`. The same path may be supplied

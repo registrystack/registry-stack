@@ -27,6 +27,10 @@
         "registry-manifest": {
           "version": "main source (unreleased)",
           "ref": "HEAD"
+        },
+        "registry-evidence": {
+          "version": "main source (unreleased)",
+          "ref": "HEAD"
         }
       }
     },

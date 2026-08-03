@@ -508,6 +508,24 @@ def classify(
         or bool(affected & TUTORIAL_PACKAGES)
     )
 
+    evidence_tutorial = (
+        complete
+        or any(
+            path
+            in {
+                "Cargo.lock",
+                "Cargo.toml",
+                "docs/site/package-lock.json",
+                "docs/site/package.json",
+                "docs/site/scripts/check-evidence-tutorials.sh",
+                "docs/site/scripts/check-evidence-tutorials.test.mjs",
+                "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+            }
+            for path in paths
+        )
+        or bool(affected & EVIDENCE_PACKAGES)
+    )
+
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
         selected = sorted(affected.intersection(shard_packages))
@@ -536,6 +554,7 @@ def classify(
         "docs_archives": docs_archives,
         "editors": editors,
         "registryctl_tutorial": registryctl_tutorial,
+        "evidence_tutorial": evidence_tutorial,
     }
 
 

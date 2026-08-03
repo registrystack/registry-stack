@@ -1,15 +1,17 @@
 # Evidence Performance
 
-Status: Measured baseline and deferred work, not a Version 1 contract
-Date: 2026-08-02
+Status: Measured, with group commit implemented; not a Version 1 contract
+Date: 2026-08-03
 
 ## Purpose
 
 Evidence trades request throughput for audit durability. This file records what
-that trade costs, how it was measured, and the one change that would recover
-most of the cost without weakening the guarantee. Nothing here is a Version 1
-commitment. Throughput is not a Definition of Done row and is not a `CONCEPT.md`
-non-goal; it is ordinary engineering work that has been deliberately deferred.
+that trade costs, how it was measured, and the change that recovered most of
+the cost without weakening the guarantee: group commit in the audit sink,
+implemented in `crates/registry-evidence/src/audit.rs`. The current end-to-end
+measurement lives in `OPERATOR-CONTRACT.md` under "Measured throughput".
+Nothing here is a Version 1 commitment. Throughput is not a Definition of Done
+row and is not a `CONCEPT.md` non-goal.
 
 ## The guarantee that sets the ceiling
 
@@ -27,11 +29,14 @@ call `sync_all`, so their records sit in the page cache and are lost on power
 failure. Evidence is the only one of the three that survives that failure, and
 the ceiling below is the price of it.
 
-## Measured baseline
+## Measured baseline before group commit
 
-Measured with `soak_reports_request_throughput_against_the_audit_ceiling` in
+This section records the measurement that motivated group commit and is kept
+as the before-figure. Measured with
+`soak_reports_request_throughput_against_the_audit_ceiling` in
 `crates/registry-evidence/src/runtime_tests.rs`. Two release-profile runs, 512
-requests at 32 concurrent, against a local mock source:
+requests at 32 concurrent, against a local mock source, with each append
+taking its own barrier:
 
 | | run 1 | run 2 |
 |---|---|---|
@@ -66,38 +71,37 @@ audit path. Nothing else is shared between requests. N processes with N distinct
 audit paths therefore give N times the throughput with no code change. Only
 vertical throughput is capped.
 
-## Deferred work: group commit
+## Group commit
 
 The lever for vertical throughput is batching the barrier, not removing it.
+The audit sink in `crates/registry-evidence/src/audit.rs` implements this:
+appends that arrive while a durable write is in flight form the next batch,
+and one `fsync` covers the whole batch. There is no timer and no configured
+window; a batch is exactly what queued behind the in-flight barrier, so the
+sink degrades to one barrier per append when requests do not overlap.
 
-Today each append takes the chain mutex, writes, and fsyncs alone. Under
-concurrency the appends already queue, so the records that queue behind an
-in-flight barrier could be written and covered by a single subsequent barrier.
-One fsync would then serve many records instead of one.
-
-Properties that must survive the change:
+Properties that survived the change, each held by tests in `audit.rs`:
 
 - durability before release: an append resolves only after the barrier that
   covers its own bytes has completed, so no caller receives evidence ahead of
   its durable record;
 - chain ordering: records are hash-linked in the order they were chained, and
-  the on-disk order matches;
+  the on-disk order matches; batching must not drop or duplicate a record;
 - fail-closed: a failed barrier fails every append it covers, and none of them
   may report success;
 - fork detection: the pinned-path, fingerprint, and tail checks in
-  `DurableJsonlSink::write` still bracket the batched write.
+  `DurableJsonlSink::write` still bracket the batched write, and a batch that
+  crosses the segment bound is split so each segment stays self-consistent.
 
-Expected gain is roughly the batch size, bounded by concurrent arrivals, so it
-scales with load rather than helping a single idle request.
+The gain scales with concurrent arrivals rather than helping a single idle
+request. With group commit in place, the end-to-end measurement in
+`OPERATOR-CONTRACT.md` under "Measured throughput" sustained 7057
+requests/second at 128 concurrent on the same host class that measured the
+baseline rows in this file, with both durable audit appends per request kept.
 
-### Preconditions
-
-1. Re-measure on the target Linux host. If the Linux ceiling already clears the
-   deployment's required rate, do not do this work.
-2. Treat it as a security-sensitive change to audit integrity. It needs explicit
-   review notes and focused negative tests for each property above, per the
-   root `AGENTS.md` rules and the phase-3 invariant discipline in
-   `products/evidence/AGENTS.md`.
+The macOS caveat still applies to every figure in this file and in
+`OPERATOR-CONTRACT.md`: re-measure on the target Linux host before quoting
+production numbers.
 
 ## Regression baseline
 

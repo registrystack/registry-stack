@@ -33,9 +33,14 @@ properties:
     items:
       type: object
       additionalProperties: false
-      # enrollments is optional because a tracked entity may hold none, which
-      # the script reads as a record carrying no licence state.
-      required: [trackedEntity, attributes]
+      # No projected leaf can be required of every record. Projection drops a
+      # leaf the record did not carry, and an ambiguous page is decided from
+      # the pager before any record is read, so a record on that page need not
+      # be complete. attributes and enrollments are not listed either, for a
+      # different reason: projection rejects a record missing an intermediate
+      # its children hang from, so saying so here would only repeat the
+      # projection.
+      required: []
       properties:
         trackedEntity:
           type: string
