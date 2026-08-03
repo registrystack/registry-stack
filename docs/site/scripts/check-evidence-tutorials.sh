@@ -45,7 +45,7 @@ REQUIRED_LITERALS=(
 	'evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1'
 	'chmod -R a-w bundle && chmod 444 runtime.yaml'
 	'evidencectl fixtures run --project .'
-	'2 passed, 0 failed'
+	'2 passed, 0 failed (12 cases evaluated)'
 )
 
 DRY_RUN=0
@@ -129,6 +129,14 @@ if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" ]]; then
 	EVIDENCECTL_BIN="$TARGET_DIR/$profile_dir/evidencectl"
 fi
 for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN"; do
+	# Absoluteness first: the reader journey runs from its own directory and
+	# reaches the binaries through symlinks, so a relative path resolves against
+	# the wrong directory and would otherwise surface much later, mid-journey,
+	# as "command not found".
+	if [[ "$bin" != /* ]]; then
+		printf 'toolset binary path must be absolute: %s\n' "$bin" >&2
+		exit 1
+	fi
 	if [[ ! -x "$bin" ]]; then
 		printf 'toolset binary not executable: %s\n' "$bin" >&2
 		exit 1
@@ -161,7 +169,10 @@ if ! (cd "$READER_DIR" && PATH="$SHIM_DIR:$PATH" bash "$RUN_SCRIPT") 2>&1 |
 	exit 1
 fi
 
-for expected in 'PASS: check' 'PASS: fixtures/cases.yaml' '2 passed, 0 failed'; do
+for expected in \
+	'PASS: check' \
+	'PASS: fixtures/cases.yaml (12 cases)' \
+	'2 passed, 0 failed (12 cases evaluated)'; do
 	if ! grep -F -q -- "$expected" "$RUN_LOG"; then
 		printf 'tutorial output drift: expected "%s" in the fixtures run output\n' \
 			"$expected" >&2

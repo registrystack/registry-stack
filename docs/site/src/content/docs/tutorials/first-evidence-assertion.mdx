@@ -74,11 +74,13 @@ cd hello-evidence
 ```
 
 The scaffold prints where everything went and the exact commands that come next. It creates
-`bundle/` (the governed deployment contract: acceptance definitions, adapters, derivations,
-schemas, fixtures, codelists), `runtime.yaml` (process-local paths and the listener), `secrets/`
-(empty, owner-only), `audit/`, and a project `README.md`. The bundle's one acceptance definition
-is a neutral residence-region example; `evidencectl new --help` also documents `--with-mint`,
-which pairs a Registry Mint configuration for the tutorial that serves assertions over HTTP.
+`bundle/` (the governed deployment contract: `evidence.yaml` plus the adapters, derivations,
+schemas, and fixtures it references), `runtime.yaml` (process-local paths and the listener),
+`secrets/` (empty, owner-only), `audit/`, and a project `README.md`. The bundle's one acceptance
+definition is deliberately abstract: it answers whether a recorded event date is at least a
+reviewed number of years in the past, which is the shape of an adult-status question with the
+jurisdiction left out. `evidencectl new --help` also documents `--with-mint`, which pairs a
+Registry Mint configuration for the tutorial that serves assertions over HTTP.
 
 ## Generate key material
 
@@ -128,15 +130,15 @@ Expected output:
 
 ```text
 PASS: check
-PASS: fixtures/cases.yaml
-2 passed, 0 failed
+PASS: fixtures/cases.yaml (12 cases)
+2 passed, 0 failed (12 cases evaluated)
 ```
 
 Two things passed. `check` loaded, compiled, and validated the complete project: every selector,
 role, and source binding resolves, every script compiles, and the key material you generated
-parses. Then the bundle's synthetic fixture cases replayed through the real evaluation pipeline:
-request preparation, extraction, and the residence-region derivation, with no source system and
-no network. That is your first passing Evidence assertion run.
+parses. Then the bundle's twelve synthetic fixture cases replayed through the real evaluation
+pipeline: request preparation, extraction, and the derivation, with no source system and no
+network. That is your first passing Evidence assertion run.
 
 ## Cleanup
 

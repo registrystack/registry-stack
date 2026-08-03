@@ -15,9 +15,9 @@ const tutorial = resolve(
   '../src/content/docs/tutorials/first-evidence-assertion.mdx',
 );
 
-async function runGate(env = {}) {
+async function runGate(env = {}, args = ['--dry-run']) {
   try {
-    const { stdout, stderr } = await execFileAsync('bash', [gate, '--dry-run'], {
+    const { stdout, stderr } = await execFileAsync('bash', [gate, ...args], {
       env: { ...process.env, ...env },
     });
     return { code: 0, output: `${stdout}${stderr}` };
@@ -49,6 +49,18 @@ test('removing a documented command block fails the drift check', async () => {
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+});
+
+test('a relative toolset binary path is refused before anything runs', async () => {
+  // The journey runs from its own directory and reaches the binaries through
+  // symlinks, so a relative path would resolve against the wrong directory and
+  // surface much later as "command not found".
+  const { code, output } = await runGate(
+    { EVIDENCE_BIN: 'bin/evidence', EVIDENCECTL_BIN: 'bin/evidencectl' },
+    [],
+  );
+  assert.notEqual(code, 0, 'a relative binary path must fail the gate');
+  assert.match(output, /toolset binary path must be absolute/u);
 });
 
 test('changing the fence count fails the drift check', async () => {
