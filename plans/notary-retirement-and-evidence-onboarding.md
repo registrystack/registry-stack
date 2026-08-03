@@ -116,7 +116,7 @@ gates for its area (see Verification), and committed.
       every removed URL redirects to its Evidence equivalent or the
       retirement page; retirement page published; site description updated.
       Ships with or after B1, in the same release as the code-pin advance.
-- [ ] C8. Repo docs updated: `AGENTS.md` (Evidence boundary section
+- [x] C8. Repo docs updated: `AGENTS.md` (Evidence boundary section
       simplified), `CONTRIBUTING.md`, `README.md`.
 
 ### D. solmara-lab rebuild (separate repo: registrystack/solmara-lab)
@@ -533,3 +533,14 @@ is parallel; B has no upstream dependencies and is the standing priority
   current plus historical-base stable-surface checks. Evidence artifacts stay
   optional until F3; C6 does not claim that separate workstream complete. Next
   in C: C3 approval, then C5 can complete against the deleted workspace graph.
+- 2026-08-03: C8 done. Root `AGENTS.md`, `CONTRIBUTING.md`, and `README.md`
+  now describe the two maintained runtime patterns, Relay and Evidence, plus
+  their optional composition and Mint's supporting role. Current crate maps,
+  verification commands, security-review language, architecture diagram, and
+  onboarding links no longer present Notary as an available product; release
+  validation points at the C6 beta-27 manifest and the retired OpenID command
+  is absent. Historical decision, changelog, and release evidence were not
+  rewritten, and no docs-site or solmara-lab file changed. The focused
+  deployment-documentation tests, offline link check, stale-surface scan,
+  beta-27 validation, and diff check passed. Next in C: the mandatory C3
+  approval, then C3/C4 and prepared C5.

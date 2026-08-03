@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Registry Stack helps institutions build registry-facing services over data they
-already hold: protected read APIs, governed evidence responses, credentials, and
+already hold: protected read APIs, signed minimum-disclosure assertions, and
 audit records, without turning the registry into a shared database.
 
 This repository is the monorepo source of truth for Registry Stack product code,
@@ -25,6 +25,7 @@ release manifests, and docs.
 |---|---|
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
+| Get a first minimum-disclosure assertion | [Evidence quickstart](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
 | Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |
 | Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/dev/start/pre-1.0-cutover/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
@@ -34,48 +35,45 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack contains three independent runtime patterns:
+Registry Stack contains two independent runtime patterns:
 
 - **Protected Registry APIs:** scoped, read-only HTTP APIs over existing files,
   extracts, databases, or legacy registry systems. Registry Relay implements
   this surface.
-- **Evidence Gateway:** governed evidence responses, claim evaluation,
-  credential issuance, disclosure policy, and audit provenance. Registry Notary
-  implements claim evaluation and credential issuance; governed Registry Relay
-  routes use the same Policy Decision Point pattern for protected reads.
-- **Evidence:** a small service that returns signed,
-  minimum-disclosure assertion evidence from fixed authoritative-source
-  requests. Evidence is not a Registry Notary mode or rewrite. Its first
-  version excludes credentials, documents, federation, and a general policy
+- **Evidence:** a small service that returns signed, minimum-disclosure
+  assertions from fixed authoritative-source requests. Its first version
+  excludes credential lifecycles, documents, federation, and a general policy
   engine.
 
-The stack also includes Registry Manifest for portable metadata, Registry
-Platform shared primitives, `registryctl` adopter tooling, and release tooling
-for validating the public source model.
+Evidence can use a Relay-protected API as one of its fixed sources. The stack
+also includes Registry Mint for short-lived access tokens, Registry Manifest
+for portable metadata, Registry Platform shared primitives, `registryctl` and
+`evidencectl` adopter tooling, and release tooling for validating the public
+source model.
 
 ```mermaid
 flowchart LR
     source["Existing registry source<br/>file, extract, database, platform"]
     manifest["Registry Manifest<br/>describe"]
     relay["Registry Relay<br/>expose protected reads"]
-    notary["Registry Notary<br/>certify evidence"]
     evidence["Evidence<br/>minimum-disclosure assertions"]
-    caller["Approved service, verifier, or wallet"]
+    mint["Registry Mint<br/>issue short-lived tokens"]
+    caller["Approved service or verifier"]
 
     source --> relay
     manifest --> relay
     relay --> caller
-    relay --> notary
-    notary --> caller
     source -. fixed request .-> evidence
+    relay -. protected fixed request .-> evidence
     evidence -. signed assertion .-> caller
+    mint -. access token .-> caller
 ```
 
 ## Repository Layout
 
-- `crates/`: Rust crates and runnable binaries for Platform, Manifest, Notary,
-  Relay, Evidence, `registryctl`, and shared release tooling. Evidence lives in
-  one `crates/registry-evidence` crate with one `evidence` binary.
+- `crates/`: Rust crates and runnable binaries for Platform, Manifest, Relay,
+  Evidence, Mint, `registryctl`, and `evidencectl`. Evidence lives in one
+  `crates/registry-evidence` crate with one `evidence` binary.
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
@@ -107,8 +105,7 @@ Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-python3 -m unittest release/scripts/test_openid_conformance_runner.py
-release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
+release/scripts/registry-release validate release/manifests/registry-stack-beta-27.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -167,8 +164,8 @@ described in [CONTRIBUTING.md](CONTRIBUTING.md#issue-labels).
 ## Security
 
 Report vulnerabilities privately. See [SECURITY.md](SECURITY.md) before opening
-a public issue for suspected credential disclosure, auth bypass, audit redaction
-failure, source connector data leakage, or signing key handling bugs.
+a public issue for suspected minimum-disclosure failure, auth bypass, audit
+redaction failure, source connector data leakage, or signing key handling bugs.
 
 ## License
 
