@@ -424,3 +424,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   variants and `disclosure` is the eighth, reachable only on the SD-JWT VC
   path. The released-binary form of the E1 adopter outcome still needs F3,
   the same caveat B4 carries.
+- 2026-08-03: Tutorial track repaired as one path. Auditing E1-E6 end to end
+  found that no sequence of in-page Next clicks reached all six:
+  author-an-acceptance-definition offered no tutorial link at all and was a
+  hard dead end, connect-an-institution-source pointed backward to the page
+  the reader had just left, and the new E5 never mentioned E6. Every first
+  Next bullet now follows the sidebar order, first-evidence-assertion to
+  author-an-acceptance-definition to connect-an-institution-source to
+  serve-assertions-over-http to verify-an-assertion-as-a-consumer to
+  move-evidence-to-production-signing. That is the order readers already see
+  in the sidebar and a working difficulty ramp: stay offline while learning
+  the shape of a definition and a source, then go over HTTP with a real
+  token, then verify what you were handed, then take key material to
+  production. E6's prerequisite also asked for a deployment project from the
+  first-assertion tutorial, which nothing between them tells the reader to
+  keep and which E2 replaces with a fresh scaffold anyway; it now asks for
+  any scaffolded project, which is what its placeholder commands actually
+  need.
