@@ -74,6 +74,8 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/check-evidence-tutorials.sh",
         "docs/site/scripts/check-evidence-tutorials.test.mjs",
         "docs/site/scripts/registryctl-tutorial.mjs",
+        "docs/site/src/content/docs/tutorials/author-an-acceptance-definition.mdx",
+        "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
     }
 )
