@@ -24,7 +24,13 @@ use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use serde::{Deserialize, Serialize};
 
 pub const APPROVED_BASELINE_SET_SCHEMA_ID: &str = "registry.stack.approved_baseline_set";
-pub const APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "1.0";
+pub const APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "2.0";
+/// The schema version issued while Registry Notary was still a governed lane.
+///
+/// Documents at this version bind a Notary lane and cross-lane interface
+/// digests that this reader no longer verifies. They are refused by name so an
+/// operator reads the retirement rather than an unknown-field decoding error.
+const PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "1.0";
 pub const MAX_APPROVED_BASELINE_SET_BYTES: u64 = 1024 * 1024;
 const MAX_PORTABLE_LOCATOR_BYTES: usize = 1024;
 const MAX_ANCHOR_TRANSITIONS: usize = 64;
@@ -191,7 +197,7 @@ pub struct ReviewedLaneBindingV1 {
 }
 
 impl ReviewedLaneBindingV1 {
-    fn validate_for_lane(&self, _lane: ApprovedLaneV1) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         validate_sha256_digest(
             &self.lane_scoped_reviewed_input_digest,
             "lane-scoped reviewed-input digest",
@@ -223,12 +229,12 @@ impl ApprovedLaneEntryV1 {
         }
     }
 
-    fn validate_for_lane(&self, lane: ApprovedLaneV1) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         self.locators.validate()?;
         validate_sha256_digest(&self.signed_manifest_digest, "signed manifest digest")?;
         validate_sha256_digest(&self.bundle_digest, "bundle digest")?;
         validate_sha256_digest(&self.anchor_digest, "anchor digest")?;
-        self.reviewed_binding().validate_for_lane(lane)
+        self.reviewed_binding().validate()
     }
 }
 
@@ -251,7 +257,7 @@ impl ApprovedBaselineLanesV1 {
 
     fn validate(&self) -> Result<()> {
         for lane in ApprovedLaneV1::ALL {
-            self.get(lane).validate_for_lane(lane)?;
+            self.get(lane).validate()?;
         }
 
         let bundle_locators =
@@ -285,6 +291,9 @@ impl ApprovedBaselineSetV1 {
     pub fn validate(&self) -> Result<()> {
         if self.schema_id != APPROVED_BASELINE_SET_SCHEMA_ID {
             bail!("approved-set schema_id is unsupported");
+        }
+        if self.schema_version == PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION {
+            return Err(pre_notary_retirement_approved_set_error());
         }
         if self.schema_version != APPROVED_BASELINE_SET_SCHEMA_VERSION {
             bail!("approved-set schema_version is unsupported");
@@ -350,7 +359,7 @@ impl VerifiedApprovedLaneV1 {
         if let Some(previous) = &previous_config_hash {
             validate_sha256_digest(previous, "verified lane previous configuration hash")?;
         }
-        entry.validate_for_lane(lane)?;
+        entry.validate()?;
         let terminal_anchor_digest = entry.anchor_digest.clone();
         Ok(Self {
             lane,
@@ -490,7 +499,7 @@ impl ReviewedBuildUpdateV1 {
     pub(crate) fn validate_bindings(&self) -> Result<()> {
         for lane in ApprovedLaneV1::ALL {
             if let Some(binding) = self.get(lane) {
-                binding.validate_for_lane(lane)?;
+                binding.validate()?;
             }
         }
         Ok(())
@@ -808,10 +817,50 @@ fn load_approved_baseline_set_document(path: &Path) -> Result<ApprovedBaselineSe
     let bytes = read_bounded_regular_file_no_follow(path, MAX_APPROVED_BASELINE_SET_BYTES)
         .context("failed to read bounded approved-set input")?;
     let value = parse_json_strict(&bytes).context("approved set is not strict JSON")?;
+    reject_pre_notary_retirement_approved_set(&value)?;
     let approved_set: ApprovedBaselineSetV1 =
         serde_json::from_value(value).context("approved set does not match its closed schema")?;
     approved_set.validate()?;
     Ok(approved_set)
+}
+
+/// Refuses an approved set issued before Registry Notary was retired.
+///
+/// The removed lane entry `interfaces` field carried a SHA-256 interface digest
+/// this reader verified on load. Decoding such a document now would either fail
+/// as an unknown field or, if the field were tolerated, honor a signed approval
+/// whose integrity claim is no longer enforced. Both retired shapes are named
+/// here so the refusal states the remedy instead.
+fn reject_pre_notary_retirement_approved_set(value: &serde_json::Value) -> Result<()> {
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        == Some(PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION)
+    {
+        return Err(pre_notary_retirement_approved_set_error());
+    }
+    let Some(lanes) = value.get("lanes").and_then(serde_json::Value::as_object) else {
+        return Ok(());
+    };
+    if lanes.contains_key("notary")
+        || lanes
+            .values()
+            .any(|entry| entry.get("interfaces").is_some())
+    {
+        return Err(pre_notary_retirement_approved_set_error());
+    }
+    Ok(())
+}
+
+fn pre_notary_retirement_approved_set_error() -> anyhow::Error {
+    anyhow!(
+        "approved set predates the Registry Notary retirement: Registry Notary is retired, so a \
+         schema version {PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION} approved \
+         set, its notary lane, and the cross-lane interface digests it binds are no longer \
+         verified; this reader refuses the document rather than honor an approval whose \
+         integrity claim is no longer enforced, so re-approve the baseline to issue a schema \
+         version {APPROVED_BASELINE_SET_SCHEMA_VERSION} approved set"
+    )
 }
 
 #[cfg(test)]
@@ -1263,7 +1312,7 @@ fn validate_verifier_lane(
         .acceptance_identity
         .validate()
         .context("verified lane acceptance identity is invalid")?;
-    verified.entry.validate_for_lane(selected)
+    verified.entry.validate()
 }
 
 fn validate_identity_set(verified: &[VerifiedApprovedLaneV1]) -> Result<()> {

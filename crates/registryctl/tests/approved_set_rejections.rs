@@ -7,7 +7,7 @@ use approved_set_support::approved_set::{
     assemble_initial_approved_set, assemble_updated_approved_set,
     load_approved_baseline_set_structure, AffectedLaneReplacements, ApprovedLaneV1,
     LaneVerificationSourceV1, PortableArtifactLocator, ReviewedBuildUpdateV1,
-    VerifiedApprovedLaneV1,
+    VerifiedApprovedLaneV1, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 use approved_set_support::{
     digest, entry, identity, initial_lane, path_set, replacement_lane, reviewed_binding, verified,
@@ -301,6 +301,92 @@ fn assembly_preserves_an_existing_output_file() {
         std::fs::read(&output).expect("existing output reads"),
         b"operator-owned"
     );
+}
+
+/// The approved-set schema version issued before Registry Notary was retired.
+const PRE_RETIREMENT_SCHEMA_VERSION: &str = "1.0";
+
+/// The exact refusal an operator holding a pre-retirement approved set reads.
+const PRE_RETIREMENT_REFUSAL: &str = "approved set predates the Registry Notary retirement: Registry Notary is retired, so a schema version 1.0 approved set, its notary lane, and the cross-lane interface digests it binds are no longer verified; this reader refuses the document rather than honor an approval whose integrity claim is no longer enforced, so re-approve the baseline to issue a schema version 2.0 approved set";
+
+fn write_test_json(path: &std::path::Path, value: &serde_json::Value) {
+    std::fs::write(
+        path,
+        serde_json::to_vec(value).expect("test JSON serializes"),
+    )
+    .expect("test file writes");
+}
+
+#[test]
+fn reader_refuses_a_pre_retirement_approved_set_with_an_actionable_message() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let (_, approved_set) = initial_set(&temporary);
+    let mut value = serde_json::to_value(&approved_set).expect("set serializes");
+    value["schema_version"] = serde_json::json!(PRE_RETIREMENT_SCHEMA_VERSION);
+    let pre_retirement = temporary.path().join("pre-retirement.json");
+    write_test_json(&pre_retirement, &value);
+
+    let error = load_approved_baseline_set_structure(&pre_retirement)
+        .expect_err("a pre-retirement approved set must be refused");
+    assert_eq!(format!("{error:#}"), PRE_RETIREMENT_REFUSAL);
+}
+
+#[test]
+fn reader_refuses_retired_notary_material_rather_than_reporting_an_unknown_field() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let (_, approved_set) = initial_set(&temporary);
+
+    let mut with_interfaces = serde_json::to_value(&approved_set).expect("set serializes");
+    with_interfaces["lanes"]["relay-consultation"]["interfaces"] =
+        serde_json::json!({ "consultation_relay_notary": digest('a') });
+    let interfaces_file = temporary.path().join("interfaces.json");
+    write_test_json(&interfaces_file, &with_interfaces);
+    let error = load_approved_baseline_set_structure(&interfaces_file)
+        .expect_err("a retired interface digest binding must be refused");
+    let message = format!("{error:#}");
+    assert_eq!(message, PRE_RETIREMENT_REFUSAL);
+    assert!(!message.contains("unknown field"), "{message}");
+
+    let mut with_notary_lane = serde_json::to_value(&approved_set).expect("set serializes");
+    with_notary_lane["lanes"]["notary"] = with_notary_lane["lanes"]["relay-public"].clone();
+    let notary_file = temporary.path().join("notary-lane.json");
+    write_test_json(&notary_file, &with_notary_lane);
+    let error = load_approved_baseline_set_structure(&notary_file)
+        .expect_err("a retired notary lane must be refused");
+    let message = format!("{error:#}");
+    assert_eq!(message, PRE_RETIREMENT_REFUSAL);
+    assert!(!message.contains("unknown field"), "{message}");
+}
+
+#[test]
+fn in_memory_validation_names_the_retirement_for_the_pre_retirement_version() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let (_, mut approved_set) = initial_set(&temporary);
+    approved_set.schema_version = PRE_RETIREMENT_SCHEMA_VERSION.to_string();
+
+    let error = approved_set
+        .validate()
+        .expect_err("the pre-retirement schema version must be refused");
+    assert_eq!(error.to_string(), PRE_RETIREMENT_REFUSAL);
+}
+
+#[test]
+fn a_current_approved_set_still_round_trips_and_validates() {
+    let temporary = tempfile::tempdir().expect("temporary directory creates");
+    let (approved_file, approved_set) = initial_set(&temporary);
+
+    assert_ne!(
+        APPROVED_BASELINE_SET_SCHEMA_VERSION, PRE_RETIREMENT_SCHEMA_VERSION,
+        "the retirement must not reuse the schema version it invalidated"
+    );
+    assert_eq!(
+        approved_set.schema_version,
+        APPROVED_BASELINE_SET_SCHEMA_VERSION
+    );
+    let loaded =
+        load_approved_baseline_set_structure(&approved_file).expect("a current approved set loads");
+    assert_eq!(loaded, approved_set);
+    loaded.validate().expect("a current approved set validates");
 }
 
 #[cfg(unix)]
