@@ -286,7 +286,7 @@ repos:
         nav_order: 0
         doc_type: explanation
         last_reviewed: unreviewed
-        standards_referenced: [openapi, json-schema, sd-jwt-vc, oid4vci]
+        standards_referenced: [openapi, json-schema, sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         description: Operator and integrator documentation for Evidence, the minimum-disclosure assertion service.
       - src: products/evidence/CONCEPT.md
@@ -295,7 +295,7 @@ repos:
         nav_order: 10
         doc_type: explanation
         last_reviewed: unreviewed
-        standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc, oid4vci]
+        standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         description: Approved Version 1 product concept covering the boundary, data model, trust and privacy invariants, native API, and acceptance set.
       - src: products/evidence/FIRST-CURL-TEST.md

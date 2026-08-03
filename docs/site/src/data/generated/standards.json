@@ -652,41 +652,6 @@
     "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. The adapter and standards-CEL mapping are experimental, feature-frozen, and outside the 1.0 compatibility promise. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Relay is the only Registry Stack surface that connects to a DCI source; a consumer receives the consultation result instead."
   },
   {
-    "id": "oid4vci",
-    "name": "OpenID for Verifiable Credential Issuance",
-    "standards_body": "OpenID Foundation",
-    "official_url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html",
-    "version_or_profile": "Profiled issuer subset using `dc+sd-jwt`, issuer-initiated pre-authorized code, and `openid4vci.support: not_full_issuer`",
-    "status": "used",
-    "claim_level": "emits",
-    "adoption_mode": "profiled",
-    "used_by": [],
-    "surfaces": [
-      "issuer-initiated offer start and authenticated callback",
-      "pre-authorized token endpoint with transaction-bound proof nonce",
-      "credential issuance endpoint",
-      "SD-JWT VC Type Metadata",
-      "issuer metadata at `/.well-known/openid-credential-issuer`",
-      "registry-backed holder-wallet issuance"
-    ],
-    "evidence_docs": [
-      {
-        "label": "Registry Notary OID4VCI routes",
-        "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/api.rs"
-      },
-      {
-        "label": "Registry Platform OID4VCI crate",
-        "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-oid4vci"
-      },
-      {
-        "label": "Registry Notary wallet facade specification",
-        "url": "https://github.com/registrystack/registry-stack/blob/37ce044567f05f8b3088b54f5bd4dbf389fd2ddb/products/notary/specs/openid4vci-wallet-facade-spec.md"
-      }
-    ],
-    "last_checked": "2026-07-19",
-    "notes": "No Registry Stack component issues credentials over OID4VCI. Registry Notary exposed the registry-backed, issuer-initiated pre-authorized code flow described here and is retired, and the shared `registry-platform-oid4vci` crate was removed with it, so the surfaces above and the pinned links are the record of a retired product. In that profile the identity provider's authorization code was an internal input and not a wallet grant; metadata advertised `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm; a transaction code was required by default, with an explicit no-PIN profile capped at a 300-second bearer-offer window; and caller-provided or identity-token data could not become claim evidence. The profile made no claim for a public nonce endpoint, response next nonce, wallet-facing authorization code, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation. External wallet, verifier, and OpenID conformance evidence remains candidate-only, and none of it was ever captured from a frozen release artifact."
-  },
-  {
     "id": "w3c-did",
     "name": "W3C Decentralized Identifiers (DID Core)",
     "standards_body": "W3C",

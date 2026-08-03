@@ -103,7 +103,7 @@ test('registryctl changelog tracks the latest stack release', () => {
   );
 });
 
-test('a hosted-held release keeps external OID4VCI evidence candidate-only', () => {
+test('a hosted-held release claims no external OID4VCI evidence', () => {
   const manifest = latestStackManifest();
   const hostedHeld = manifest.warnings?.some(
     (warning) => warning.code === 'hosted-publication-held',
@@ -121,8 +121,18 @@ test('a hosted-held release keeps external OID4VCI evidence candidate-only', () 
     publicEvidenceData,
     /Solmara Lab[^\n]*(?:checks|passes|conformance evidence)/,
   );
-  assert.match(
-    publicEvidenceData,
-    /External wallet[\s\S]*candidate-only[\s\S]*frozen (?:artifact|release artifact)/,
-  );
+  // The register carried an OID4VCI entry until the Registry Notary retirement
+  // deleted it. Either shape is honest while publication is held: no entry at
+  // all, or an entry that marks the external evidence candidate-only. What must
+  // never appear is an entry claiming external evidence outright.
+  const oid4vciEntries = publicEvidenceData
+    .split(/^- id: /m)
+    .filter((entry) => /oid4vci/i.test(entry));
+  for (const entry of oid4vciEntries) {
+    assert.match(
+      entry,
+      /candidate-only[\s\S]*frozen (?:artifact|release artifact)/,
+      'a published OID4VCI entry must mark its external evidence candidate-only',
+    );
+  }
 });

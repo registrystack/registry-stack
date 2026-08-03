@@ -7,7 +7,6 @@
     "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
     "owns": [
       "Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.",
-      "OID4VCI pre-authorized offer, token request, credential request, issuer metadata, and replay-bound holder-proof primitives via the `registry-platform-oid4vci` crate.",
       "Cross-service crate APIs that must behave consistently in Relay, Evidence, and other registry services.",
       "Shared Rust hygiene templates and supported integration-test fixtures."
     ],

@@ -834,3 +834,20 @@ is parallel; B has no upstream dependencies and is the standing priority
   `cargo clippy` on the four crates with `-D warnings` clean,
   `cargo check --locked --workspace --all-targets` clean, and the four crates'
   suites green (16 targets, 0 failures).
+
+- 2026-08-03: Deleted the `oid4vci` row from the docs standards register. It
+  claimed `status: used`, `claim_level: emits`, and `adoption_mode: profiled`
+  for a standard no maintained runtime implements: the profiled issuer subset
+  belonged to Registry Notary and retired with it, and OID4VCI is a frozen
+  Evidence Version 1 non-goal. Removing the row cascaded to the five page
+  frontmatters and two `repo-docs.yaml` entries that referenced the id, and to
+  the stale `registry-platform-oid4vci` ownership bullet in `projects.yaml`
+  (that crate was deleted in C4). Generated data reproduced with
+  `node scripts/generate-data.mjs`. The glossary prose entry is deliberately
+  kept: it is now the surviving record that the subset existed and is retired.
+  The `a hosted-held release keeps external OID4VCI evidence candidate-only`
+  guard asserted the candidate-only disclaimer that lived inside the deleted
+  row, so it was rewritten to check the honest invariant instead: no published
+  OID4VCI entry may claim external evidence outright, satisfied by an entry
+  marked candidate-only or by no entry at all. Gates: `npm test` 294 passed, 0
+  failed; `npm run check` clean, including 31741 built links.
