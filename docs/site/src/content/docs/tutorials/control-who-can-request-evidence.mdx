@@ -1,7 +1,7 @@
 ---
 title: Control who can request Evidence
 description: Define access policies, add a client without restarting Evidence, and observe allowed and refused access.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -18,11 +18,6 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 Give two applications different access to the same Evidence service. You will add one while the
 service is running and prove that a valid access token does not let its client ask every configured
 question.
-
-:::note[UX design draft]
-This tutorial defines the intended adopter experience. The `evidencectl access` commands and the
-`request prepare --client` option are not implemented yet.
-:::
 
 <QuickstartMeta
   outcome="Two applications receive different policies, with live onboarding, refusal, and revocation."
@@ -59,11 +54,11 @@ part of Registry Mint's reloadable registry:
 
 | Change | Runtime effect |
 | --- | --- |
-| Add, reassign, or revoke a client | Registry Mint reloads; Evidence does not restart |
+| Add or revoke a client | Registry Mint receives a reload request; Evidence does not restart |
 | Add a question or change an access policy | Start a new Evidence generation |
 
-A client change affects tokens issued after Registry Mint reloads. A token issued before a policy
-is removed or a client is revoked remains valid until its short expiry.
+A client change affects tokens issued after Registry Mint reloads. A token issued before a client
+is revoked remains valid for up to 300 seconds.
 
 ## Restart the registry
 
@@ -99,6 +94,11 @@ evidencectl access policy add age-checks --question adult-status
 evidencectl access policy add service-routing --question age-bracket
 ```
 
+```text
+Added access policy age-checks for adult-status.
+Added access policy service-routing for age-bracket.
+```
+
 Review the governed policies before starting Evidence:
 
 ```sh
@@ -106,11 +106,13 @@ evidencectl access policy list
 ```
 
 ```text
-POLICY           QUESTION       PURPOSE
-age-checks       adult-status   age-check
-service-routing  age-bracket    service-path-selection
+POLICY           QUESTIONS
+age-checks       adult-status
+service-routing  age-bracket
 ```
 
+The commands write the reviewable policy documents to `access/policies/age-checks.yaml` and
+`access/policies/service-routing.yaml`.
 Many clients can share one policy. A client can also belong to several policies without creating
 client-specific Evidence configuration. Adding a question to either policy later changes the
 governed authorization boundary and requires a new Evidence generation.
@@ -126,18 +128,14 @@ evidencectl access client add age-checker \
 ```
 
 ```text
-Registered local client: age-checker
-Policy: age-checks
-Private key: .evidence/clients/age-checker/private.jwk
+Added client age-checker with policy age-checks.
 ```
 
 `--generate-local-key` keeps this tutorial self-contained. The private key represents the
-application's identity and remains owner-only under `.evidence/`. In a deployed environment, the
-application generates and retains its private key; the Evidence operator registers only its
-public key.
-
-The project records the client registration and policy membership. It does not record the private
-key in either document.
+application's identity and remains owner-only at
+`.evidence/clients/age-checker/private.jwk`. The reviewable registration at
+`access/clients/age-checker.yaml` contains the policy membership and public key, never the private
+key.
 
 ## Start the protected service
 
@@ -216,16 +214,15 @@ evidencectl access client add service-router \
 ```
 
 ```text
-Registered local client: service-router
-Policy: service-routing
-Registry Mint reloaded 2 clients.
-Private key: .evidence/clients/service-router/private.jwk
+Added client service-router with policy service-routing.
+Registry Mint reload requested.
 ```
 
-The command writes the registration atomically and asks Registry Mint to reload its complete
-client registry. If any registration is invalid, Registry Mint keeps the previous registry active.
-Evidence does not restart because both access policies were already part of its governed
-configuration.
+The command writes the public registration to `access/clients/service-router.yaml`, keeps the
+private key under `.evidence/clients/`, and asks Registry Mint to reload its complete client
+registry. The message confirms that the reload was requested, not that Registry Mint accepted the
+new registry. The next token exchange provides that functional proof. Evidence does not restart
+because both access policies were already part of its governed configuration.
 
 Review the active client assignments:
 
@@ -234,9 +231,9 @@ evidencectl access client list
 ```
 
 ```text
-CLIENT          POLICY           STATUS
-age-checker     age-checks       active
-service-router  service-routing  active
+CLIENT          STATUS  POLICIES
+age-checker     active  age-checks
+service-router  active  service-routing
 ```
 
 ## Try a question the application was not granted
@@ -281,10 +278,11 @@ python3 -m json.tool age-checker-refused.json
 
 ```json
 {
-  "type": "urn:registrystack:evidence:problem:not-authorized",
-  "title": "Request not authorized",
+  "type": "https://registrystack.org/problems/evidence/not_authorized",
+  "title": "Request is not authorized",
   "status": 403,
-  "operationId": "<opaque-operation-id>"
+  "code": "not_authorized",
+  "operation": "<opaque-operation-id>"
 }
 ```
 
@@ -340,13 +338,13 @@ evidencectl access client revoke age-checker
 ```
 
 ```text
-Revoked client: age-checker
-New token requests are refused.
-Existing tokens expire within 5 minutes.
+Revoked client age-checker.
+Registry Mint reload requested.
 ```
 
-Registry Mint reloads the client registry without restarting Evidence. Revocation cannot erase a
-stateless access token already issued to the application. Short token lifetimes bound that window.
+The command updates `access/clients/age-checker.yaml` and requests another Registry Mint reload
+without restarting Evidence. Revocation cannot erase a stateless access token already issued to
+the application. That token remains valid for up to 300 seconds.
 
 Try to prepare a fresh request as the revoked client:
 
@@ -359,11 +357,12 @@ evidencectl request prepare adult-status \
 ```
 
 ```text
-evidencectl: Registry Mint refused a token for client age-checker
+evidencectl: unknown or revoked active client age-checker
 ```
 
-Preparation publishes no request artifacts when token acquisition fails. `service-router` remains
-registered and keeps its `service-routing` membership.
+`evidencectl` rejects an unknown or revoked named client locally, before contacting Registry Mint
+or publishing request artifacts. `service-router` remains registered and keeps its
+`service-routing` membership.
 
 ## Inspect the final audit operation
 
@@ -380,8 +379,9 @@ DISCLOSURE RELEASED age_bracket
 ```
 
 The audit distinguishes requester pseudonyms without writing client identifiers, tokens, subject
-selectors, or returned values. The earlier refused request remains an authorization decision, not
-a source access.
+selectors, or returned values. The earlier entitlement refusal is not retained in the durable
+Evidence audit. Evidence currently returns that refusal before appending an access-audit event.
+The revoked-client preparation also has no Evidence audit event because no HTTP request was sent.
 
 ## Clean up
 
@@ -398,10 +398,14 @@ Return to the registry terminal and press `Ctrl+C`.
 
 - Authentication identifies the calling application but grants no question by itself.
 - Many applications can share a governed access policy without client-specific Evidence config.
-- Adding and revoking clients reloads Registry Mint without restarting Evidence.
+- A client added while the services run can obtain a token without restarting Evidence or
+  Registry Mint.
 - Each application receives only the questions included in its assigned policies.
 - Evidence refuses unauthorized questions before reading the source.
-- Client membership changes affect new tokens while existing short-lived tokens age out.
+- Revoking a local client requests a Registry Mint reload and prevents new local request
+  preparation.
+- Client membership changes affect new tokens while existing tokens remain valid for up to 300
+  seconds.
 - Adding a question or changing an access policy requires a new Evidence generation.
 - Source authentication and consumer trust remain separate from caller access.
 
