@@ -3408,15 +3408,13 @@ fn validation_requires_https_endpoints_for_registry_evidence_access() {
     assert!(
         errors
             .iter()
-            .any(|error| error.path
-                == "datasets[0].evidence_offerings[0].access.endpoint_url"),
+            .any(|error| error.path == "datasets[0].evidence_offerings[0].access.endpoint_url"),
         "expected an endpoint_url error, got: {errors:?}"
     );
     assert!(
         errors
             .iter()
-            .any(|error| error.path
-                == "datasets[0].evidence_offerings[0].access.discovery_url"),
+            .any(|error| error.path == "datasets[0].evidence_offerings[0].access.discovery_url"),
         "expected a discovery_url error, got: {errors:?}"
     );
 }

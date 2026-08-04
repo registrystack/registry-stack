@@ -258,7 +258,7 @@ channel; it does not get a parallel one.
 
 ### Global gates (checked at the end, not per item)
 
-- [ ] G1. Full verification suite green: `cargo fmt --check`, `cargo check
+- [x] G1. Full verification suite green: `cargo fmt --check`, `cargo check
       --locked --workspace --all-targets`, `cargo clippy --workspace
       --all-targets -- -D warnings`, `cargo test --locked --workspace`,
       `cargo deny check`, both Evidence scripts, release unit tests plus
@@ -1067,3 +1067,38 @@ is parallel; B has no upstream dependencies and is the standing priority
   Worth knowing outside this item: the machine's disk hit 100% mid-run. Docker
   holds about 192GB with roughly 122GB reclaimable (273 images, 895 volumes,
   38GB build cache). Pruning is not this plan's call.
+- 2026-08-04: G1 done. Ran the full suite and it caught one real regression:
+  `cargo fmt --check` failed on the manifest-core `metadata_core.rs` tests
+  at the two C10 cases
+  `validation_requires_https_endpoints_for_registry_evidence_access` and its
+  declared-endpoints sibling. C10 was verified with check, clippy, tests and
+  the docs gates but not with `fmt`, so the drift reached main. Fixed with
+  `cargo fmt`; the change is whitespace only and touches nothing but those two
+  assertions. Every G1 gate then passed with a recorded exit status of 0:
+  `cargo fmt --check`, `cargo check --locked --workspace --all-targets`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+  --locked --workspace` (3652 passed, 0 failed, 20 ignored across 171 result
+  lines, no clippy warnings), `cargo deny check` (advisories, bans, licenses
+  and sources all ok), `products/evidence/scripts/check-contracts.sh`
+  (generated contracts reproduce exactly) and `check-source-neutrality.sh`,
+  `python3 -m unittest release/scripts/test_registry_release.py` (71 tests),
+  `release/scripts/registry-release validate
+  release/manifests/registry-stack-beta-27.yaml`
+  (beta-27 0.17.0), `check-release-source-model.sh` in monorepo mode,
+  `test_check_release_source_model.py` (13 tests), `just openapi-contract`
+  from `crates/registry-relay` with the committed document left unchanged,
+  and from `docs/site/` `npm test` (296/296) and `npm run check` (check-llms
+  166 passed, SEO over 333 files, 31735 built internal links).
+  Method note for future runs: this shell is zsh, where the bash idiom
+  `${PIPESTATUS[0]}` silently expands to nothing, so a gate piped into `tail`
+  reports no exit status at all. An earlier pass in this session read as green
+  on that basis while `fmt` was in fact failing. Gate exit codes here were
+  captured by redirecting to a file and reading `$?` directly, never through a
+  pipe.
+  Local `cargo-deny` is 0.19.7 while CI pins 0.19.8. The `deny.toml` parses
+  and the check passes on both, but they are not the same binary.
+  Two global gates in this section remain and are independent of G1: G2
+  (removed docs URLs redirect, no product-surface page describes Notary as
+  current) and G5 (review notes for every security-sensitive change). G3
+  (tutorial CI gates) is likewise still open. G4 stays reserved for Jeremi and
+  F3 stays blocked on a published release cut.
