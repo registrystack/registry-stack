@@ -194,13 +194,15 @@ mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.evidencectl-install.XXXXXX")"
 install_started=0
 install_complete=0
-declare -A had_previous=()
+# The saved copy under $tmpdir is itself the record that a binary was already
+# installed, so rollback needs no parallel bookkeeping. Stock macOS bash is 3.2
+# and has no associative array to keep that bookkeeping in.
 rollback_install() {
 	set +e
 	if [ "$install_started" -eq 1 ] && [ "$install_complete" -eq 0 ]; then
 		local binary
 		for binary in "${binaries[@]}"; do
-			if [ "${had_previous[$binary]:-0}" -eq 1 ]; then
+			if [ -f "$tmpdir/${binary}.previous" ]; then
 				cp -p "$tmpdir/${binary}.previous" "$install_dir/$binary"
 			else
 				rm -f "$install_dir/$binary"
@@ -218,7 +220,6 @@ for binary in "${binaries[@]}"; do
 	chmod 0755 "$stage_dir/$binary"
 	if [ -e "$install_dir/$binary" ]; then
 		cp -p "$install_dir/$binary" "$tmpdir/${binary}.previous"
-		had_previous[$binary]=1
 	fi
 done
 

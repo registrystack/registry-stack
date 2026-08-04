@@ -208,6 +208,64 @@ fn partial_replacement_rolls_back_the_previous_toolset() {
     fixture.assert_previous_toolset_intact();
 }
 
+// macOS ships bash 3.2, so `/usr/bin/env bash` finds a shell without
+// associative arrays, `mapfile`, or case conversion on any Mac that has no
+// newer bash installed. The installer advertises macOS arm64, and the runners
+// that execute this suite carry bash 5, so the portable-construct guard has to
+// be a property of the source text rather than of the interpreter under test.
+#[cfg(unix)]
+#[test]
+fn installer_avoids_shell_constructs_stock_macos_bash_cannot_parse() {
+    let source = fs::read_to_string(installer_path()).unwrap();
+    for (construct, describe) in [
+        ("declare -A", "associative arrays"),
+        ("local -A", "associative arrays"),
+        ("mapfile", "mapfile"),
+        ("readarray", "readarray"),
+        ("${!", "indirect or key expansion"),
+        (",,}", "lowercase expansion"),
+        ("^^}", "uppercase expansion"),
+    ] {
+        assert!(
+            !source.contains(construct),
+            "install.sh uses {describe} ('{construct}'), which bash 3.2 cannot parse"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn installer_installs_under_stock_macos_bash() {
+    let Some(bash) = stock_macos_bash() else {
+        // Linux runners have no bash 3.2 to borrow. The construct guard above
+        // is what protects this path there.
+        return;
+    };
+    let fixture = InstallerFixture::new();
+    let output = reinterpret(fixture.command(), &bash).output().unwrap();
+    assert!(
+        output.status.success(),
+        "bash 3.2 install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn stock_macos_bash_rollback_restores_the_previous_toolset() {
+    let Some(bash) = stock_macos_bash() else {
+        return;
+    };
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_previous_toolset();
+    let output = reinterpret(fixture.mv_failure_command(), &bash)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    fixture.assert_previous_toolset_intact();
+}
+
 #[cfg(unix)]
 struct InstallerFixture {
     _temp: TempDir,
@@ -349,6 +407,10 @@ esac
     }
 
     fn run_with_second_mv_failure(&self) -> std::process::Output {
+        self.mv_failure_command().output().unwrap()
+    }
+
+    fn mv_failure_command(&self) -> Command {
         write_executable(
             &self.fake_bin.join("mv"),
             r#"#!/usr/bin/env bash
@@ -369,7 +431,7 @@ exec "$REAL_MV" "$@"
         command
             .env("FAKE_MV_COUNT_FILE", self._temp.path().join("mv-count"))
             .env("REAL_MV", "/bin/mv");
-        command.output().unwrap()
+        command
     }
 
     fn fake_curl_log(&self) -> PathBuf {
@@ -419,6 +481,31 @@ exec "$REAL_MV" "$@"
 #[cfg(unix)]
 fn installer_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh")
+}
+
+/// `/bin/bash` when it is the bash 3.2 macOS ships, which is the interpreter a
+/// Mac without Homebrew bash resolves `/usr/bin/env bash` to.
+#[cfg(unix)]
+fn stock_macos_bash() -> Option<PathBuf> {
+    let path = PathBuf::from("/bin/bash");
+    let output = Command::new(&path).arg("--version").output().ok()?;
+    let banner = String::from_utf8_lossy(&output.stdout);
+    banner.contains("version 3.").then_some(path)
+}
+
+/// Rebuild a prepared fixture command against a different shell, keeping its
+/// arguments and environment.
+#[cfg(unix)]
+fn reinterpret(source: Command, shell: &Path) -> Command {
+    let mut command = Command::new(shell);
+    command.args(source.get_args());
+    for (key, value) in source.get_envs() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+    command
 }
 
 #[cfg(unix)]
