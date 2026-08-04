@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -35,8 +35,9 @@ The `registry-mint` crate at `crates/registry-mint/` is the source of truth for 
 this page. Configuration parsing and validation live in `crates/registry-mint/src/config.rs` and
 `crates/registry-mint/src/clients.rs`, the HTTP surface in
 `crates/registry-mint/src/server.rs`, token minting in `crates/registry-mint/src/token.rs`, and
-the public error shape in `crates/registry-mint/src/error.rs`. `crates/registry-mint/README.md`
-covers the same surface in prose. Where this page and the crate disagree, the crate wins.
+the keyed audit boundary in `crates/registry-mint/src/audit.rs`. The public error shape lives in
+`crates/registry-mint/src/error.rs`. `crates/registry-mint/README.md` covers the same surface in
+prose. Where this page and the crate disagree, the crate wins.
 
 ## Configuration reference
 
@@ -52,6 +53,7 @@ following tables group the surface by the struct that owns each field.
 | `issuer` | string (URL) | required | Must be `https`, have a host, and carry no credentials, query, or fragment. |
 | `listener` | object | required | See [Listener](#listener). |
 | `signing` | object | required | See [Signing](#signing). |
+| `audit` | object | required | See [Audit](#audit). |
 | `accessTokens` | object | required | See [Access tokens](#access-tokens). |
 | `clientAssertion` | object | required | See [Client assertion](#client-assertion). |
 | `clients` | object | required | See [Clients](#clients). |
@@ -74,6 +76,27 @@ following tables group the surface by the struct that owns each field.
 | `activeKeyFile` | path | required | Private JWK. Must be a regular, owner-only, single-link file. |
 | `retiredPublicJwkFiles` | list of paths | `[]` | Public JWKs of keys that no longer sign but may still have live tokens. |
 | `jwksPath` | string | `/.well-known/jwks.json` | Must start with `/`. |
+
+### Audit
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `path` | path | required | One keyed JSONL chain. The parent directory and existing chain must be owner-only. |
+| `hashKeyFile` | path | required | At least 32 bytes in a regular, owner-only, single-link file. Must differ from signing and audit paths. |
+| `hashKeyVersion` | integer (`u32`) | required | Must be non-zero. Labels keyed pseudonyms so an operator can identify the correlating key generation. |
+
+Mint takes a single-writer lock, verifies the active chain at startup, and synchronizes the chain
+and its parent directory for each append. It has no automatic audit rotation or deletion, so the
+operator owns capacity, backup, and retention for `audit.path`. Verify retained records with:
+
+```sh
+mint verify-audit --config /etc/mint/mint.yaml
+```
+
+The chain stores a random operation id for every decision. Successful release records add the
+token `jti`, signing key id, expiry, delegated status, and keyed pseudonyms for correlation.
+Denial records carry only a value-free error category. Raw assertions, access tokens, client ids,
+principals, authority values, actors, and subject values are not stored.
 
 ### Access tokens
 
@@ -163,7 +186,9 @@ configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
 `access_token` is a compact JWS with header `{"alg": "<signing.algorithm>", "typ": "at+jwt",
 "kid": "<signing.activeKeyId>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
 `exp`, `jti`, `client_id`, and `sub` (the principal), plus the authority claims named under
-`accessTokens.claims`. `expires_in` equals `accessTokens.lifetimeSeconds`.
+`accessTokens.claims`. `expires_in` equals `accessTokens.lifetimeSeconds`. Mint durably appends
+the matching token-release audit record before sending this response. If that append fails, the
+token is not released.
 
 ### Errors
 
@@ -175,7 +200,7 @@ Every response body is `{"error": "<code>"}`, from
 | `invalid_request` | `400` | A required form field is missing or duplicated, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` is a missing field and lands here, not below. |
 | `unsupported_grant_type` | `400` | `grant_type` is present but is not `client_credentials`. |
 | `invalid_client` | `401` | Every client authentication failure: unknown client id, bad signature, replayed `jti`, expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. Carries a `WWW-Authenticate: Bearer error="invalid_client"` header. |
-| `server_error` | `500` | An internal failure, such as a misconfigured delegation the startup check is meant to catch. |
+| `server_error` | `500` | An internal failure, including failure to durably audit the token decision. |
 
 ### Other endpoints
 
@@ -184,7 +209,7 @@ Every response body is `{"error": "<code>"}`, from
 | `GET <signing.jwksPath>` (default `/.well-known/jwks.json`) | Public keys for verifying minted tokens, `application/jwk-set+json`. |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and the key set. |
 | `GET /health` | Liveness. |
-| `GET /ready` | Readiness. Returns `503` while no client is registered. |
+| `GET /ready` | Readiness. Returns `503` while no client is registered or after an audit write failure poisons the writer. |
 
 ## How a client, Registry Mint, and Evidence interact
 
@@ -205,6 +230,7 @@ sequenceDiagram
     C->>C: Sign an assertion with<br/>the client's own private key
     C->>M: POST /token<br/>client_credentials + assertion
     M->>M: Verify against that client's<br/>registered keys, refuse a used jti
+    M->>M: Durably append the keyed<br/>token-release audit record
     M-->>C: Access token, authority written<br/>from the registry
 
     C->>E: POST /v1/evidence<br/>Bearer access token
@@ -216,23 +242,23 @@ sequenceDiagram
     E-->>C: Signed assertion
 ```
 
-Steps 1 to 4 are the whole of Registry Mint's job. It never sees the source, the acceptance
-definition, or the assertion. Steps 5 to 11 are Evidence's, and Evidence's only knowledge of
-Registry Mint is a URL and a key set: it reads the token by the claim names in its own
+Everything through the access-token return is the whole of Registry Mint's job. It never sees the
+source, the acceptance definition, or the assertion. The remaining exchanges are Evidence's, and
+Evidence's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
+names in its own
 configuration, so any issuer writing those claims would serve equally well.
 
 The exact wire shapes the diagram abbreviates are given in full below:
-[Token endpoint contract](#token-endpoint-contract) for the assertion and token at steps 2 and 4,
-[Other endpoints](#other-endpoints) for the key set path at step 6, and
-[How Evidence verifies these tokens](#how-evidence-verifies-these-tokens) for the claim names at
-step 8.
+[Token endpoint contract](#token-endpoint-contract) for the assertion and token,
+[Other endpoints](#other-endpoints) for the key set path, and
+[How Evidence verifies these tokens](#how-evidence-verifies-these-tokens) for the claim names.
 
-Two failures collapse deliberately and are worth reading beside the diagram. A failure at step 3
-returns `401 invalid_client` whatever went wrong, so the token endpoint cannot be used to probe
-which client ids are registered. A failure at step 6 never opens step 8: with no key set ever
-retrieved, every request is rejected until one can be, and with a key set already held, that
-held set keeps being accepted only until its allowance runs out. Evidence names the outage in
-either case rather than failing silently.
+Two failures collapse deliberately and are worth reading beside the diagram. A client
+authentication failure returns `401 invalid_client` whatever went wrong, so the token endpoint
+cannot be used to probe which client ids are registered. A key-set retrieval failure prevents
+Evidence from verifying a token: with no key set ever retrieved, every request is rejected until
+one can be, and with a key set already held, that held set keeps being accepted only until its
+allowance runs out. Evidence names the outage in either case rather than failing silently.
 
 ## How Evidence verifies these tokens
 

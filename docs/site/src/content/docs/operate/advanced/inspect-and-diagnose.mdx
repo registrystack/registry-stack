@@ -9,7 +9,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -37,7 +37,7 @@ operators.
 Relay, Evidence, and Registry Mint each write their own audit or operational records and keep
 their own keys separate: Relay's redacted posture and audit sink, Evidence's keyed JSONL audit
 chain (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data), and Registry Mint's
-operational logs.
+keyed JSONL token-decision chain.
 
 No deployment exposes a cross-product posture view: each product reports only its own.
 
@@ -59,9 +59,9 @@ Inspect each surface for its own purpose:
 | Surface | Use | Boundary |
 | --- | --- | --- |
 | `GET /healthz` (Relay) or `GET /health` (Evidence, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence's `/ready` also confirms signing, audit, subject-binding, and source-credential readiness |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist and its audit writer is healthy |
 | `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence and Registry Mint have no equivalent admin posture endpoint |
-| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; `evidence verify-audit` covers only Evidence's own chain |
+| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence and `mint verify-audit` for Mint |
 | `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence's is the released generated artifact, unauthenticated and independent of the deployed bundle |
 | Evidence `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
 
@@ -208,6 +208,8 @@ Retain:
 - Product, environment, stream, instance, and bundle sequence for Relay.
 - Evidence's `operation` identifier from the problem response or `X-Request-Id` header, and the
   output of `evidence verify-audit` when a signing or audit failure is suspected.
+- Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
+  when a token-decision audit failure is suspected. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
 - The traffic-admission, quarantine, or escalation decision.
 

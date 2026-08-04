@@ -8,14 +8,14 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Registry Relay and Evidence enforce authentication, authorization, key publication, and audit as
-software controls (see [Security overview](../)).
+Registry Stack runtimes enforce their own authentication, authorization, key publication, and
+audit boundaries as software controls (see [Security overview](../)).
 [RS-SEC-G](../../spec/rs-sec-g/) Section 9 draws a line at the deployment: secret and key
 provisioning, key custody and rotation, audit retention and storage, tenant isolation, transport
 termination and certificate management, edge rate limiting, deployment configuration, and incident
@@ -42,6 +42,8 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 - Have `evidence check` runnable against the exact revision you intend to serve. Evidence has no
   posture endpoint, no profile declaration, and no admin surface: its equivalent of a gate finding
   is a startup or readiness failure, so the offline commands are where you find problems first.
+- When the deployment runs Registry Mint, have `mint check` and `mint verify-audit` runnable
+  against the exact configuration and retained chain you intend to serve.
 
 ## Keys and custody
 
@@ -75,6 +77,9 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   non-symlink file, and treat `clients.directory` as key material rather than configuration. Any
   file written there registers a client and the authority Registry Mint will assert for it, and a
   running process re-reads the directory on `SIGHUP` without a restart.
+- Registry Mint: generate its audit HMAC key independently from its signing key, give it at least
+  32 bytes of random material, and keep it in a separate owner-only, non-symlink file. Retain the
+  key for as long as its audit chain must remain verifiable.
 
 ## Freeze the Evidence deployment project
 
@@ -120,6 +125,14 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 - Evidence: run `evidence verify-audit` over the whole audit directory during backup, restore, and
   incident procedures, and on whatever cadence your retention policy requires. Startup verifies
   only the active segment, so this pass is what proves sealed history was not tampered with.
+- Registry Mint: put `audit.path` on durable storage whose permissions, capacity, backup, restore,
+  and retention you own. Mint synchronizes the token-release record before returning a token and
+  fails closed when that write fails. It writes one unrotated file and never deletes records, so
+  monitor capacity and perform retention only through a reviewed stop, archive, verify, and
+  restart procedure.
+- Registry Mint: run one process per `audit.path`. Mint verifies the retained chain and takes an
+  exclusive lock at startup. Run `mint verify-audit` during backup, restore, incident procedures,
+  and on the cadence your retention policy requires.
 - Relay: configure a durable audit sink (`file` or `syslog`, not bare `stdout`) before you declare
   `production` or `evidence_grade`. A missing durable sink trips `relay.audit.sink_missing`, which
   fails startup at `evidence_grade`.
@@ -130,7 +143,7 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   exception accepts best-effort audit durability under `availability_first`. `fail_closed` means a
   request whose audit record cannot be written returns `503 audit.write_failed` instead of a
   success (REQ-SEC-G-009).
-- If you rotate an audit hash secret in either service, retain the old secret under your audit
+- If you rotate an audit hash secret in any service, retain the old secret under your audit
   retention controls for any period during which older records must remain comparable to new ones,
   or accept that new records will not match old audit handles.
 - Hash-chained envelopes detect ordering gaps and accidental corruption inside the retained set,
@@ -248,7 +261,8 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 - Preserve the audit trail for post-incident review. For Evidence, take the whole audit directory
   including sealed segments and run `evidence verify-audit` over it before and after moving it;
   for Relay, hash-chained, fail-closed audit records are the record a deployment reconstructs a
-  request timeline from (REQ-SEC-G-008, REQ-SEC-G-009).
+  request timeline from (REQ-SEC-G-008, REQ-SEC-G-009). For Registry Mint, preserve the chain and
+  matching HMAC key, then run `mint verify-audit` before and after moving it.
 - Expect a `403` from Evidence to tell you nothing. Every authorization refusal collapses to one
   generic `not_authorized` problem, deliberately, so it is not an oracle for which check failed.
   Debug it from trusted local state in this order: the bearer principal is in the deployed
@@ -269,6 +283,9 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   provider, the pinned audit sink, and every source credential, including a bounded OAuth token
   bootstrap where a source uses client credentials. Readiness sends no evidence-data request and
   probes no source data endpoint, so a passing probe is not proof that a source returns data.
+- Registry Mint: confirm `GET /ready` succeeds with at least one registered client, issue one
+  synthetic token, and run `mint verify-audit` to confirm its token-release record joined the
+  retained chain. A passing readiness probe does not prove off-host receipt or retention.
 - Send a request that should be audited and confirm a corresponding record lands in your
   configured sink, not only `stdout`.
 - Evidence: request an assertion and verify the stored response offline with
@@ -286,6 +303,8 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 | Relay posture reports `deployment.waiver_expired` | A waiver's `expires` date passed | Re-review the finding and either fix it or issue a new waiver with a new expiry |
 | Evidence refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, or a captured artifact is writable by the service process | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`) and restart |
 | A second Evidence process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
+| A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |
+| Registry Mint returns `500 server_error` and then fails readiness | The process could not durably append a token decision and poisoned its audit writer | Stop traffic, preserve and verify the chain, restore writable durable storage, and restart Mint; the failed request did not receive a token |
 | Evidence returns `403 not_authorized` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
 
 ## Next

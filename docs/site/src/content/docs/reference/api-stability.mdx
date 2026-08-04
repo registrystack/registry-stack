@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -120,10 +120,11 @@ The reverse is not promised. Registry Relay, Evidence, and Registry Mint all par
 `deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
 on an older binary. Pin your config to the release you deploy.
 
-Evidence and Registry Mint have no migrated state to upgrade. Evidence's only persistence is the
-append-only audit log named by `auditStorage` in its runtime file, and Registry Mint keeps its
-client registry on disk and its client-assertion replay cache in memory, so both start clean
-against a newer binary.
+Evidence and Registry Mint have no migrated state to upgrade. Evidence persists the append-only
+audit log named by `auditStorage` in its runtime file. Registry Mint persists its client registry
+and the keyed append-only chain named by `audit.path`, while its client-assertion replay cache
+remains in memory. A newer binary must be checked against these retained audit formats before
+deployment even though neither product has a migration command.
 
 ## Defaults are part of the contract
 
