@@ -266,7 +266,7 @@ channel; it does not get a parallel one.
       `npm run check`.
 - [x] G2. Every removed docs URL redirects; no product-surface page
       describes Notary as current.
-- [ ] G3. All tutorials pass their CI gates.
+- [x] G3. All tutorials pass their CI gates.
 - [ ] G4. Frozen Evidence V1 contracts are byte-identical to the state at
       plan creation, or a re-approval is recorded here.
 - [x] G5. Review notes exist for every security-sensitive change. See
@@ -1470,3 +1470,8 @@ owed and is recorded here in full.
   source` job is green, which is the only run that proves it.
   `docs/site/scripts/registryctl-tutorial.mjs` is untouched: the registryctl
   gate runs on the host, where Node is part of the contract.
+- 2026-08-04: G3 re-ticked, this time on the run that proves it. The pull
+  request's `Evidence tutorials from source` job passed in 2m15s with every
+  step green, including `Execute the Evidence tutorials in a clean container`,
+  the step that failed before the port. The tick now rests on the container
+  replay rather than on a host stand-in for it.
