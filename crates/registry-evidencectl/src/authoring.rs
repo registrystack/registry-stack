@@ -18,6 +18,12 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
 
+use crate::suggest::{
+    narrow,
+    openapi::Spec,
+    types::{BoundKind, BoundValues, OperationKey},
+};
+
 const OPENAPI_FILE: &str = "source.openapi.yaml";
 const QUESTIONS_DIRECTORY: &str = "questions";
 const DERIVATIONS_DIRECTORY: &str = "derivations";
@@ -128,7 +134,24 @@ struct QuestionSubject {
 #[serde(deny_unknown_fields)]
 struct QuestionSource {
     operation: String,
-    facts: Vec<String>,
+    facts: Vec<QuestionFact>,
+    #[serde(rename = "collectionBounds")]
+    collection_bounds: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuestionFact {
+    name: String,
+    path: String,
+    combine: FactCombination,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum FactCombination {
+    ExactlyOne,
+    Collect,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +223,12 @@ struct ConceptPlan {
     concept_form: CompiledConceptForm,
     constraints: Value,
     codelist: Option<(String, Value)>,
+}
+
+struct CompiledFacts {
+    response_schema: Value,
+    fact_schema: Value,
+    extract_script: String,
 }
 
 struct BundleRequirement<'a> {
@@ -454,17 +483,52 @@ fn validate_question(question: &Question) -> Result<()> {
         }
         validate_answer(answer)?;
     }
-    if question.source.facts.is_empty()
-        || question.source.facts.len() > 16
+    if question.source.facts.is_empty() || question.source.facts.len() > 16 {
+        bail!("source.facts must contain 1..=16 authored fact selections");
+    }
+    let mut names = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for fact in &question.source.facts {
+        if !valid_field_name(&fact.name) || !names.insert(fact.name.as_str()) {
+            bail!("source fact names must be unique lowercase local identifiers");
+        }
+        if fact.path.is_empty()
+            || fact.path.len() > 256
+            || !fact.path.starts_with('/')
+            || fact.path.chars().any(char::is_control)
+            || !paths.insert(fact.path.as_str())
+        {
+            bail!("source fact paths must be unique bounded extended JSON Pointers");
+        }
+        let repeated = fact.path.split('/').any(|segment| segment == "*");
+        match (repeated, fact.combine) {
+            (false, FactCombination::ExactlyOne) | (true, FactCombination::Collect) => {}
+            (false, FactCombination::Collect) => {
+                bail!(
+                    "source fact `{}` uses `collect` but its path visits no collection",
+                    fact.name
+                )
+            }
+            (true, FactCombination::ExactlyOne) => bail!(
+                "source fact `{}` visits a collection and must explicitly use `combine: collect`",
+                fact.name
+            ),
+        }
+    }
+    if question.source.collection_bounds.len() > 16
         || question
             .source
-            .facts
+            .collection_bounds
             .iter()
-            .any(|fact| !valid_field_name(fact))
-        || question.source.facts.iter().collect::<BTreeSet<_>>().len()
-            != question.source.facts.len()
+            .any(|(pointer, maximum)| {
+                pointer.is_empty()
+                    || pointer.len() > 256
+                    || !pointer.starts_with('/')
+                    || pointer.chars().any(char::is_control)
+                    || !(1..=256).contains(maximum)
+            })
     {
-        bail!("source.facts must contain unique top-level field names");
+        bail!("source.collectionBounds must contain bounded array pointers with values in 1..=256");
     }
     let allowed = question
         .disclosure
@@ -557,16 +621,22 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
             .openapi
             .as_object()
             .ok_or_else(|| anyhow!("retained OpenAPI document must be an object"))?,
-        &["openapi", "info", "servers", "paths"],
+        &["openapi", "info", "servers", "paths", "components"],
         "OpenAPI document",
     )?;
     if inputs.openapi.get("security").is_some() {
         bail!("the local tutorial source must omit top-level OpenAPI security");
     }
+    let spec = Spec::from_value(inputs.openapi.clone(), "retained OpenAPI document")?;
     let base_url = exact_loopback_server(&inputs.openapi)?;
     let mut questions = Vec::with_capacity(inputs.questions.len());
     for authored in inputs.questions {
-        questions.push(compile_question_plan(&inputs.openapi, &base_url, authored)?);
+        questions.push(compile_question_plan(
+            &inputs.openapi,
+            &spec,
+            &base_url,
+            authored,
+        )?);
     }
     let bundle = render_bundle(&questions);
     Ok(CompilePlan { questions, bundle })
@@ -574,6 +644,7 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
 
 fn compile_question_plan(
     openapi: &Value,
+    spec: &Spec,
     base_url: &str,
     authored: AuthoredQuestion,
 ) -> Result<QuestionPlan> {
@@ -601,7 +672,7 @@ fn compile_question_plan(
     )?;
 
     exact_path_selector(&operation, &question.subject.selector)?;
-    let fact_properties = selected_fact_schemas(&operation, &question.source.facts)?;
+    let compiled_facts = compile_facts(spec, &operation, &question.source)?;
     let requirement_uri = local_uri(&format!("requirement:{}", question.id));
     let concepts = question
         .answers
@@ -615,8 +686,8 @@ fn compile_question_plan(
             "information-requirement"
         };
 
-    let response_schema = closed_object_schema(&question.source.facts, &fact_properties);
-    let fact_schema = response_schema.clone();
+    let response_schema = compiled_facts.response_schema;
+    let fact_schema = compiled_facts.fact_schema;
     let adapter_parameters_schema = json!({
         "type": "object",
         "additionalProperties": false,
@@ -628,7 +699,7 @@ fn compile_question_plan(
 
     let prepare_script =
         "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
-    let extract_script = render_extract_script(&question.source.facts);
+    let extract_script = compiled_facts.extract_script;
     let derivation_script = render_derivation(&authored.derivation, &concepts);
     let selector_profile = local_selector_profile_id(&question.id);
     let source_id = local_source_id(&question.id);
@@ -866,137 +937,452 @@ fn exact_path_selector(operation: &Operation<'_>, expected: &str) -> Result<()> 
     Ok(())
 }
 
-fn selected_fact_schemas(
+fn compile_facts(
+    spec: &Spec,
     operation: &Operation<'_>,
-    selected: &[String],
-) -> Result<BTreeMap<String, Value>> {
-    let responses = operation
-        .operation
-        .get("responses")
-        .and_then(Value::as_object)
-        .filter(|responses| responses.len() == 1)
-        .ok_or_else(|| anyhow!("the local tutorial operation must declare exactly one response"))?;
-    let response = responses
-        .get("200")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            anyhow!("the local tutorial operation must declare an exact 200 response")
-        })?;
-    if response.contains_key("$ref") {
-        bail!("response references are outside the local tutorial subset");
+    source: &QuestionSource,
+) -> Result<CompiledFacts> {
+    let operation_key = OperationKey {
+        method: operation.method.to_ascii_uppercase(),
+        path: operation.path.to_owned(),
+    };
+    let resolved = spec.response_schema(&operation_key, "200", "application/json")?;
+    for fact in &source.facts {
+        validate_selected_schema_path(&resolved.schema.0, &fact.path)?;
     }
-    reject_unsupported_keys(response, &["description", "content"], "200 response")?;
-    let content = response
-        .get("content")
-        .and_then(Value::as_object)
-        .filter(|content| content.len() == 1)
-        .ok_or_else(|| anyhow!("the 200 response must declare exactly one JSON media type"))?;
-    let media = content
-        .get("application/json")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("the 200 response must declare an application/json media type"))?;
-    reject_unsupported_keys(media, &["schema"], "application/json media type")?;
-    let schema = media
-        .get("schema")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            anyhow!("the 200 response must declare an application/json object schema")
-        })?;
-    reject_unsupported_keys(
-        schema,
-        &["type", "required", "properties", "additionalProperties"],
-        "200 JSON response schema",
-    )?;
-    if schema.get("type").and_then(Value::as_str) != Some("object")
-        || !matches!(
-            schema.get("additionalProperties"),
-            None | Some(Value::Bool(false))
-        )
-    {
-        bail!("the 200 JSON response schema must be an exact object");
-    }
-    let properties = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("the 200 JSON object must declare properties"))?;
-    let required_values = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("the 200 JSON object must declare required properties"))?;
-    let required = required_values
+    let (candidate_leaves, _) = crate::suggest::flatten::candidate_leaves(&resolved.schema);
+    let offered = candidate_leaves
         .iter()
-        .map(Value::as_str)
-        .collect::<Option<BTreeSet<_>>>()
-        .ok_or_else(|| anyhow!("the 200 JSON object required list is invalid"))?;
-    if required.len() != required_values.len() {
-        bail!("the 200 JSON object required list contains duplicates");
+        .map(|leaf| leaf.pointer.as_str())
+        .collect::<BTreeSet<_>>();
+    for fact in &source.facts {
+        if !offered.contains(fact.path.as_str()) {
+            bail!(
+                "source fact `{}` path `{}` is not a selectable scalar leaf in the 200 application/json response",
+                fact.name,
+                fact.path
+            );
+        }
     }
 
-    let mut facts = BTreeMap::new();
-    for name in selected {
-        if !required.contains(name.as_str()) {
-            bail!("selected fact `{name}` is not required by the 200 response schema");
-        }
-        let property = properties
-            .get(name)
-            .and_then(Value::as_object)
-            .ok_or_else(|| anyhow!("selected fact `{name}` is not a top-level scalar"))?;
-        facts.insert(name.clone(), local_scalar_schema(name, property)?);
+    let projection = source
+        .facts
+        .iter()
+        .map(|fact| fact.path.clone())
+        .collect::<Vec<_>>();
+    let used_collections = source
+        .facts
+        .iter()
+        .flat_map(|fact| collection_pointers(&fact.path))
+        .collect::<BTreeSet<_>>();
+    let declared_collections = source
+        .collection_bounds
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if used_collections != declared_collections {
+        let missing = used_collections
+            .difference(&declared_collections)
+            .cloned()
+            .collect::<Vec<_>>();
+        let unused = declared_collections
+            .difference(&used_collections)
+            .cloned()
+            .collect::<Vec<_>>();
+        bail!(
+            "source.collectionBounds must exactly name every selected collection (missing: {}; unused: {})",
+            display_list(&missing),
+            display_list(&unused)
+        );
     }
-    Ok(facts)
+
+    let plan = narrow::plan_advisories(
+        &resolved.schema,
+        &projection,
+        &crate::suggest::types::Observations::default(),
+    )?;
+    if let Some(advisory) = plan.advisories.first() {
+        bail!(
+            "selected source schema needs adopter review: {}",
+            advisory.message()
+        );
+    }
+    let mut resolutions = BTreeMap::new();
+    for need in &plan.needs {
+        match need.kind {
+            BoundKind::ArrayMaxItems => {
+                let maximum = source.collection_bounds.get(&need.pointer).ok_or_else(|| {
+                    anyhow!(
+                        "selected collection `{}` is unbounded; declare it in source.collectionBounds",
+                        need.pointer
+                    )
+                })?;
+                resolutions.insert(
+                    (need.pointer.clone(), BoundKind::ArrayMaxItems),
+                    BoundValues::MaxItems(*maximum),
+                );
+            }
+            BoundKind::IntegerRange | BoundKind::StringLength => bail!(
+                "selected fact schema at `{}` is unbounded; add its closed bounds to the retained OpenAPI document",
+                need.pointer
+            ),
+        }
+    }
+    let mut response_schema = narrow::apply(&resolved.schema, &projection, &resolutions)?.schema;
+    close_selected_response(&mut response_schema, &projection, &source.collection_bounds)?;
+
+    let mut fact_properties = Map::new();
+    for fact in &source.facts {
+        let leaf = schema_at_extended_pointer(&response_schema, &fact.path)?.clone();
+        let property = match fact.combine {
+            FactCombination::ExactlyOne => leaf,
+            FactCombination::Collect => {
+                let maximum = collection_pointers(&fact.path)
+                    .iter()
+                    .try_fold(1_u64, |product, pointer| {
+                        product.checked_mul(source.collection_bounds[pointer])
+                    })
+                    .ok_or_else(|| {
+                        anyhow!("source fact `{}` collection bound overflows", fact.name)
+                    })?;
+                if maximum > 256 {
+                    bail!(
+                        "source fact `{}` can collect {maximum} values; reduce collection bounds so the product is at most 256",
+                        fact.name
+                    );
+                }
+                json!({
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": maximum,
+                    "items": leaf,
+                })
+            }
+        };
+        fact_properties.insert(fact.name.clone(), property);
+    }
+    let required = source
+        .facts
+        .iter()
+        .map(|fact| Value::String(fact.name.clone()))
+        .collect::<Vec<_>>();
+    let fact_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": fact_properties,
+    });
+
+    Ok(CompiledFacts {
+        response_schema,
+        fact_schema,
+        extract_script: render_fact_extraction(&source.facts),
+    })
 }
 
-fn local_scalar_schema(name: &str, property: &Map<String, Value>) -> Result<Value> {
-    let value_type = property.get("type").and_then(Value::as_str);
-    match value_type {
-        Some("boolean") => {
-            reject_unsupported_keys(property, &["type"], &format!("selected fact `{name}`"))?;
-            Ok(json!({"type": "boolean"}))
+fn validate_selected_schema_path(schema: &Value, pointer: &str) -> Result<()> {
+    let segments = parse_extended_pointer(pointer)?;
+    validate_selected_schema_node(schema, &segments, "")
+}
+
+fn validate_selected_schema_node(
+    node: &Value,
+    segments: &[ExtendedSegment],
+    pointer: &str,
+) -> Result<()> {
+    let object = node
+        .as_object()
+        .ok_or_else(|| anyhow!("selected OpenAPI schema node at `{pointer}` is not an object"))?;
+    let primary_type = match object.get("type") {
+        Some(Value::String(value)) => value.as_str(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|value| *value != "null")
+            .ok_or_else(|| {
+                anyhow!("selected OpenAPI schema node at `{pointer}` has no value type")
+            })?,
+        _ => bail!("selected OpenAPI schema node at `{pointer}` has no closed type"),
+    };
+    let mut allowed = vec![
+        "type",
+        "description",
+        "title",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "example",
+        "examples",
+    ];
+    allowed.extend(match primary_type {
+        "object" => &["properties", "required", "additionalProperties"][..],
+        "array" => &["items", "minItems", "maxItems", "uniqueItems", "const"][..],
+        "string" => &["format", "minLength", "maxLength", "enum", "const"][..],
+        "integer" => &["minimum", "maximum", "enum", "const"][..],
+        "boolean" => &["enum", "const"][..],
+        other => {
+            bail!("selected OpenAPI schema node at `{pointer}` has unsupported type `{other}`")
         }
-        Some("integer") => {
-            reject_unsupported_keys(
-                property,
-                &["type", "minimum", "maximum"],
-                &format!("selected fact `{name}`"),
-            )?;
-            let minimum =
-                optional_i64(property, "minimum", name)?.unwrap_or(-9_007_199_254_740_991);
-            let maximum = optional_i64(property, "maximum", name)?.unwrap_or(9_007_199_254_740_991);
-            if minimum > maximum {
-                bail!("selected integer fact `{name}` has inconsistent bounds");
-            }
-            Ok(json!({"type": "integer", "minimum": minimum, "maximum": maximum}))
+    });
+    reject_unsupported_keys(
+        object,
+        &allowed,
+        &format!("selected OpenAPI schema at `{pointer}`"),
+    )?;
+
+    let Some((segment, rest)) = segments.split_first() else {
+        return Ok(());
+    };
+    match (primary_type, segment) {
+        ("object", ExtendedSegment::Key(key)) => {
+            let child = object
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(key))
+                .ok_or_else(|| {
+                    anyhow!("selected OpenAPI schema at `{pointer}` has no member `{key}`")
+                })?;
+            validate_selected_schema_node(
+                child,
+                rest,
+                &format!("{pointer}/{}", escape_pointer_segment(key)),
+            )
         }
-        Some("string") => {
-            reject_unsupported_keys(
-                property,
-                &["type", "format", "minLength", "maxLength"],
-                &format!("selected fact `{name}`"),
-            )?;
-            let format = match property.get("format") {
-                Some(Value::String(format)) => Some(format.as_str()),
-                Some(_) => bail!("selected string fact `{name}` has an invalid format"),
-                None => None,
-            };
-            if format.is_some_and(|format| !matches!(format, "date" | "date-time")) {
-                bail!("selected string fact `{name}` uses an unsupported format");
-            }
-            let maximum = optional_u64(property, "maxLength", name)?.unwrap_or(16_384);
-            let minimum = optional_u64(property, "minLength", name)?.unwrap_or(0);
-            if maximum == 0 || maximum > 65_536 || minimum > maximum {
-                bail!("selected string fact `{name}` has inconsistent bounds");
-            }
-            let mut schema = Map::from_iter([
-                ("type".to_owned(), Value::String("string".to_owned())),
-                ("minLength".to_owned(), Value::from(minimum)),
-                ("maxLength".to_owned(), Value::from(maximum)),
-            ]);
-            if let Some(format) = format {
-                schema.insert("format".to_owned(), Value::String(format.to_owned()));
-            }
-            Ok(Value::Object(schema))
+        ("array", ExtendedSegment::Wildcard) => {
+            let child = object
+                .get("items")
+                .ok_or_else(|| anyhow!("selected OpenAPI array at `{pointer}` has no items"))?;
+            validate_selected_schema_node(child, rest, &format!("{pointer}/*"))
         }
-        _ => bail!("selected fact `{name}` must be a string, integer, or boolean scalar"),
+        ("object", ExtendedSegment::Wildcard) => {
+            bail!("selected fact path uses `*` at object `{pointer}`")
+        }
+        ("array", ExtendedSegment::Key(_)) => {
+            bail!("selected fact path must use `*` at array `{pointer}`")
+        }
+        _ => bail!("selected fact path continues past scalar `{pointer}`"),
+    }
+}
+
+fn collection_pointers(pointer: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut collections = Vec::new();
+    for segment in pointer.split('/').skip(1) {
+        if segment == "*" {
+            collections.push(format!("/{}", parts.join("/")));
+        }
+        parts.push(segment);
+    }
+    collections
+}
+
+fn display_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_owned()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn close_selected_response(
+    schema: &mut Value,
+    selections: &[String],
+    collection_bounds: &BTreeMap<String, u64>,
+) -> Result<()> {
+    for selection in selections {
+        let segments = parse_extended_pointer(selection)?;
+        close_selected_path(schema, &segments, "", collection_bounds)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+enum ExtendedSegment {
+    Key(String),
+    Wildcard,
+}
+
+fn parse_extended_pointer(pointer: &str) -> Result<Vec<ExtendedSegment>> {
+    if pointer.is_empty() || !pointer.starts_with('/') {
+        bail!("source fact path must be a non-empty extended JSON Pointer");
+    }
+    pointer
+        .split('/')
+        .skip(1)
+        .map(|segment| {
+            if segment == "*" {
+                Ok(ExtendedSegment::Wildcard)
+            } else {
+                decode_pointer_segment(segment).map(ExtendedSegment::Key)
+            }
+        })
+        .collect()
+}
+
+fn decode_pointer_segment(segment: &str) -> Result<String> {
+    let mut decoded = String::new();
+    let mut characters = segment.chars();
+    while let Some(character) = characters.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('0') => decoded.push('~'),
+            Some('1') => decoded.push('/'),
+            _ => bail!("source fact path contains an invalid JSON Pointer escape"),
+        }
+    }
+    Ok(decoded)
+}
+
+fn close_selected_path(
+    node: &mut Value,
+    segments: &[ExtendedSegment],
+    pointer: &str,
+    collection_bounds: &BTreeMap<String, u64>,
+) -> Result<()> {
+    make_non_nullable(node);
+    let Some((segment, rest)) = segments.split_first() else {
+        return Ok(());
+    };
+    let object = node.as_object_mut().ok_or_else(|| {
+        anyhow!("selected response path crosses a non-schema node at `{pointer}`")
+    })?;
+    match segment {
+        ExtendedSegment::Key(key) => {
+            let required = object
+                .get_mut("required")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    anyhow!("selected response object at `{pointer}` has no required list")
+                })?;
+            if !required.iter().any(|value| value.as_str() == Some(key)) {
+                required.push(Value::String(key.clone()));
+            }
+            let properties = object
+                .get_mut("properties")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| {
+                    anyhow!("selected response path expects an object at `{pointer}`")
+                })?;
+            let child = properties
+                .get_mut(key)
+                .ok_or_else(|| anyhow!("selected response path does not declare `{key}`"))?;
+            let child_pointer = format!("{pointer}/{}", escape_pointer_segment(key));
+            close_selected_path(child, rest, &child_pointer, collection_bounds)
+        }
+        ExtendedSegment::Wildcard => {
+            let maximum = collection_bounds.get(pointer).ok_or_else(|| {
+                anyhow!("selected response collection `{pointer}` has no authored bound")
+            })?;
+            let minimum = object.get("minItems").and_then(Value::as_u64).unwrap_or(0);
+            if minimum > *maximum {
+                bail!(
+                    "source.collectionBounds sets `{pointer}` to {maximum}, below its declared minItems {minimum}"
+                );
+            }
+            object.insert("minItems".to_owned(), Value::from(minimum.max(1)));
+            object.insert("maxItems".to_owned(), Value::from(*maximum));
+            let items = object.get_mut("items").ok_or_else(|| {
+                anyhow!("selected response collection `{pointer}` has no items schema")
+            })?;
+            close_selected_path(items, rest, &format!("{pointer}/*"), collection_bounds)
+        }
+    }
+}
+
+fn make_non_nullable(node: &mut Value) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Array(types)) = object.get("type") else {
+        return;
+    };
+    if types.len() == 2 && types.iter().any(|value| value.as_str() == Some("null")) {
+        if let Some(value_type) = types.iter().find(|value| value.as_str() != Some("null")) {
+            object.insert("type".to_owned(), value_type.clone());
+        }
+    }
+}
+
+fn schema_at_extended_pointer<'a>(schema: &'a Value, pointer: &str) -> Result<&'a Value> {
+    let mut node = schema;
+    for segment in parse_extended_pointer(pointer)? {
+        node = match segment {
+            ExtendedSegment::Key(key) => node
+                .get("properties")
+                .and_then(|properties| properties.get(&key))
+                .ok_or_else(|| anyhow!("generated response schema lost selected member `{key}`"))?,
+            ExtendedSegment::Wildcard => node.get("items").ok_or_else(|| {
+                anyhow!("generated response schema lost selected collection items")
+            })?,
+        };
+    }
+    Ok(node)
+}
+
+fn render_fact_extraction(facts: &[QuestionFact]) -> String {
+    let mut rendered =
+        String::from("fn extract(source_response, parameters) {\n    let facts = #{};\n");
+    for (index, fact) in facts.iter().enumerate() {
+        let name = json_string(&fact.name);
+        match fact.combine {
+            FactCombination::ExactlyOne => rendered.push_str(&format!(
+                "    facts[{name}] = required(get_path(source_response, {}), \"source_fact_missing\");\n",
+                json_string(&fact.path)
+            )),
+            FactCombination::Collect => {
+                rendered.push_str(&format!("    let collected_{index} = [];\n"));
+                render_collection_walk(&mut rendered, index, &fact.path);
+                rendered.push_str(&format!("    facts[{name}] = collected_{index};\n"));
+            }
+        }
+    }
+    rendered.push_str("    #{outcome: \"match\", facts: facts}\n}\n");
+    rendered
+}
+
+fn render_collection_walk(rendered: &mut String, fact_index: usize, pointer: &str) {
+    let segments = pointer.split('/').skip(1).collect::<Vec<_>>();
+    let wildcard_count = segments.iter().filter(|segment| **segment == "*").count();
+    let mut cursor = "source_response".to_owned();
+    let mut start = 0;
+    let mut depth = 0;
+    for (position, segment) in segments.iter().enumerate() {
+        if *segment != "*" {
+            continue;
+        }
+        let relative = format!("/{}", segments[start..position].join("/"));
+        let items = format!("items_{fact_index}_{depth}");
+        let item = format!("item_{fact_index}_{depth}");
+        let indent = "    ".repeat(depth + 1);
+        let collection = if relative == "/" {
+            cursor.clone()
+        } else {
+            format!("get_path({cursor}, {})", json_string(&relative))
+        };
+        rendered.push_str(&format!(
+            "{indent}let {items} = required({collection}, \"source_collection_missing\");\n"
+        ));
+        rendered.push_str(&format!("{indent}for {item} in {items} {{\n"));
+        cursor = item;
+        start = position + 1;
+        depth += 1;
+    }
+    debug_assert_eq!(depth, wildcard_count);
+    let tail = segments[start..].join("/");
+    let indent = "    ".repeat(depth + 1);
+    let value = if tail.is_empty() {
+        cursor
+    } else {
+        format!("get_path({cursor}, {})", json_string(&format!("/{tail}")))
+    };
+    rendered.push_str(&format!(
+        "{indent}collected_{fact_index}.push(required({value}, \"source_fact_missing\"));\n"
+    ));
+    for closing_depth in (0..depth).rev() {
+        rendered.push_str(&format!("{}}}\n", "    ".repeat(closing_depth + 1)));
     }
 }
 
@@ -1009,53 +1395,6 @@ fn reject_unsupported_keys(
         bail!("{description} contains unsupported key `{key}`");
     }
     Ok(())
-}
-
-fn optional_i64(object: &Map<String, Value>, key: &str, fact: &str) -> Result<Option<i64>> {
-    match object.get(key) {
-        Some(value) => value
-            .as_i64()
-            .map(Some)
-            .ok_or_else(|| anyhow!("selected integer fact `{fact}` has an invalid `{key}`")),
-        None => Ok(None),
-    }
-}
-
-fn optional_u64(object: &Map<String, Value>, key: &str, fact: &str) -> Result<Option<u64>> {
-    match object.get(key) {
-        Some(value) => value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| anyhow!("selected string fact `{fact}` has an invalid `{key}`")),
-        None => Ok(None),
-    }
-}
-
-fn closed_object_schema(selected: &[String], properties: &BTreeMap<String, Value>) -> Value {
-    let properties = properties
-        .iter()
-        .map(|(name, schema)| (name.clone(), schema.clone()))
-        .collect::<Map<_, _>>();
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": selected,
-        "properties": properties,
-    })
-}
-
-fn render_extract_script(facts: &[String]) -> String {
-    let assignments = facts
-        .iter()
-        .map(|fact| {
-            let key = json_string(fact);
-            format!("    facts[{key}] = source_response[{key}];")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "fn extract(source_response, parameters) {{\n    let facts = #{{}};\n{assignments}\n    #{{outcome: \"match\", facts: facts}}\n}}\n"
-    )
 }
 
 fn render_derivation(authored: &str, concepts: &[ConceptPlan]) -> String {
@@ -1112,7 +1451,7 @@ fn render_question_bundle_parts(
         .source
         .facts
         .iter()
-        .map(|fact| Value::String(format!("/{}", escape_pointer_segment(fact))))
+        .map(|fact| Value::String(fact.path.clone()))
         .collect::<Vec<_>>();
 
     let selector_profile_value = json!({
@@ -1542,7 +1881,7 @@ paths:
                 properties:
                   person_id: {type: string}
                   name: {type: string}
-                  date_of_birth: {type: string}
+                  date_of_birth: {type: string, format: date}
 "#;
 
     const QUESTION: &str = r#"id: adult-status
@@ -1553,7 +1892,11 @@ subject:
   selector: person_id
 source:
   operation: getPerson
-  facts: [date_of_birth]
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
 answers:
   - concept: is_adult
     type: boolean
@@ -1577,7 +1920,11 @@ subject:
   selector: person_id
 source:
   operation: getPerson
-  facts: [date_of_birth]
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
 answers:
   - concept: age_bracket
     type: controlled-category
@@ -1609,7 +1956,11 @@ subject:
   selector: person_id
 source:
   operation: getPerson
-  facts: [dose_count]
+  facts:
+    - name: dose_count
+      path: /dose_count
+      combine: exactly-one
+  collectionBounds: {}
 answers:
   - concept: schedule_complete
     type: boolean
@@ -1627,6 +1978,81 @@ disclosure:
     #{schedule_complete: dose_count >= 3, dose_count: dose_count}
 }
 "#;
+
+    const MULTI_EVENT_OPENAPI: &str = r#"openapi: 3.1.0
+info: {title: Sanitized tracker API, version: 1.0.0}
+servers: [{url: 'http://127.0.0.1:8000'}]
+paths:
+  /records/{record_id}/events:
+    get:
+      operationId: listRecordEvents
+      parameters:
+        - name: record_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Bounded event history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventPage'
+components:
+  schemas:
+    EventPage:
+      type: object
+      additionalProperties: false
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+    Event:
+      type: object
+      additionalProperties: false
+      properties:
+        event: {type: string, minLength: 1, maxLength: 64}
+        status: {type: string, minLength: 1, maxLength: 32}
+        occurredAt: {type: string, format: date-time}
+"#;
+
+    const MULTI_EVENT_QUESTION: &str = r#"id: event-history
+question: Did the bounded event history satisfy the reviewed rule?
+purpose: history-review
+subject:
+  role: record
+  selector: record_id
+source:
+  operation: listRecordEvents
+  facts:
+    - name: event_statuses
+      path: /events/*/status
+      combine: collect
+    - name: event_times
+      path: /events/*/occurredAt
+      combine: collect
+  collectionBounds:
+    /events: 4
+answers:
+  - concept: history_satisfies_rule
+    type: boolean
+derivation: derivations/event-history.rhai
+disclosure:
+  allow: [history_satisfies_rule]
+"#;
+
+    const MULTI_EVENT_ANSWER: &str = r#"fn answer(facts, selectors, context) {
+    #{history_satisfies_rule: len(required(facts.event_statuses, "event_statuses_missing")) > 0}
+}
+"#;
+
+    const MULTI_EVENT_RESPONSE: &str = r#"{
+  "events": [
+    {"event": "evt-001", "status": "completed", "occurredAt": "2026-07-01T08:00:00Z"},
+    {"event": "evt-002", "status": "cancelled", "occurredAt": "2026-07-02T09:00:00Z"}
+  ]
+}"#;
 
     #[test]
     fn compiles_only_the_canonical_private_local_generation() {
@@ -1766,8 +2192,8 @@ disclosure:
                 "required: [person_id, name, date_of_birth, dose_count]",
             )
             .replace(
-                "                  date_of_birth: {type: string}",
-                "                  date_of_birth: {type: string}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
+                "                  date_of_birth: {type: string, format: date}",
+                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
             );
         let fixture = Fixture::new(&openapi, IMMUNIZATION_QUESTION, IMMUNIZATION_ANSWER, true);
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
@@ -1853,15 +2279,117 @@ disclosure:
     }
 
     #[test]
+    fn compiles_nested_multi_event_leaves_without_reducing_to_the_first_event() {
+        let fixture = Fixture::new(
+            MULTI_EVENT_OPENAPI,
+            MULTI_EVENT_QUESTION,
+            MULTI_EVENT_ANSWER,
+            true,
+        );
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("nested repeated facts compile");
+
+        let response: Value = serde_norway::from_slice(
+            &fs::read(
+                fixture
+                    .staging
+                    .join("bundle/schemas/event-history-source-response.schema.yaml"),
+            )
+            .expect("response schema"),
+        )
+        .expect("response schema parses");
+        assert_eq!(response["additionalProperties"], false);
+        assert_eq!(response["required"], json!(["events"]));
+        assert_eq!(response["properties"]["events"]["minItems"], 1);
+        assert_eq!(response["properties"]["events"]["maxItems"], 4);
+        assert_eq!(
+            response["properties"]["events"]["items"]["required"],
+            json!(["status", "occurredAt"])
+        );
+
+        let facts: Value = serde_norway::from_slice(
+            &fs::read(
+                fixture
+                    .staging
+                    .join("bundle/schemas/event-history-source-facts.schema.yaml"),
+            )
+            .expect("fact schema"),
+        )
+        .expect("fact schema parses");
+        assert_eq!(facts["additionalProperties"], false);
+        assert_eq!(facts["properties"]["event_statuses"]["minItems"], 1);
+        assert_eq!(facts["properties"]["event_statuses"]["maxItems"], 4);
+
+        let extract = fs::read_to_string(
+            fixture
+                .staging
+                .join("bundle/adapters/event-history-source-extract.rhai"),
+        )
+        .expect("extract script");
+        assert!(extract.contains("for item_0_0 in items_0_0"), "{extract}");
+        assert!(extract.contains("collected_0.push"), "{extract}");
+        assert!(extract.contains("for item_1_0 in items_1_0"), "{extract}");
+        assert!(!extract.contains("/events/0"), "{extract}");
+
+        let sample: Value = serde_json::from_str(MULTI_EVENT_RESPONSE).expect("sanitized sample");
+        assert_eq!(sample["events"].as_array().expect("events").len(), 2);
+        assert_ne!(sample["events"][0]["status"], sample["events"][1]["status"]);
+    }
+
+    #[test]
+    fn repeated_fact_selection_requires_an_explicit_closed_combination_rule_and_bounds() {
+        let cases = [
+            MULTI_EVENT_QUESTION.replace("combine: collect", "combine: exactly-one"),
+            MULTI_EVENT_QUESTION.replace(
+                "  collectionBounds:\n    /events: 4",
+                "  collectionBounds: {}",
+            ),
+            MULTI_EVENT_QUESTION.replace("    /events: 4", "    /events: 257"),
+            MULTI_EVENT_QUESTION.replace("    /events: 4", "    /events: 4\n    /unused: 2"),
+        ];
+        for question in cases {
+            let fixture = Fixture::new(MULTI_EVENT_OPENAPI, &question, MULTI_EVENT_ANSWER, true);
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("unsafe repeated fact selection is rejected");
+            assert!(fixture.staging_is_empty(), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn selected_scalar_leaf_must_have_a_reviewed_closed_bound() {
+        let unbounded = MULTI_EVENT_OPENAPI.replace(
+            "status: {type: string, minLength: 1, maxLength: 32}",
+            "status: {type: string}",
+        );
+        let fixture = Fixture::new(&unbounded, MULTI_EVENT_QUESTION, MULTI_EVENT_ANSWER, true);
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("unbounded selected leaf is rejected");
+        assert!(error.to_string().contains("unbounded"), "{error:#}");
+        assert!(fixture.staging_is_empty());
+    }
+
+    #[test]
+    fn collection_extraction_visits_nested_arrays_and_scalar_array_items() {
+        let extract = render_fact_extraction(&[QuestionFact {
+            name: "observations".to_owned(),
+            path: "/events/*/groups/*/*".to_owned(),
+            combine: FactCombination::Collect,
+        }]);
+        assert!(extract.contains("get_path(source_response, \"/events\")"));
+        assert!(extract.contains("get_path(item_0_0, \"/groups\")"));
+        assert!(extract.contains("let items_0_2 = required(item_0_1"));
+        assert!(extract.contains("collected_0.push(required(item_0_2"));
+        assert!(!extract.contains("/0"));
+    }
+
+    #[test]
     fn question_is_closed_and_disclosure_cannot_be_widened() {
         for mutation in [
             QUESTION.replace("  allow: [is_adult]", "  allow: []"),
             QUESTION.replace("  allow: [is_adult]", "  allow: [is_adult, another_answer]"),
             QUESTION.replace("  allow: [is_adult]", "  allow: [is_adult, is_adult]"),
-            QUESTION.replace(
-                "  facts: [date_of_birth]",
-                "  facts: [date_of_birth, date_of_birth]",
-            ),
+            QUESTION.replace("      path: /date_of_birth", "      path: /missing"),
             format!("{QUESTION}unknown: true\n"),
         ] {
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
@@ -1885,8 +2413,8 @@ disclosure:
                 "required: [person_id, name, date_of_birth, dose_count]",
             )
             .replace(
-                "                  date_of_birth: {type: string}",
-                "                  date_of_birth: {type: string}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
+                "                  date_of_birth: {type: string, format: date}",
+                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
             );
         for question in [
             IMMUNIZATION_QUESTION.replace("    minimum: 0\n", ""),
@@ -1958,7 +2486,7 @@ disclosure:
             OPENAPI.replace("      responses:", "      security: []\n      responses:"),
             OPENAPI.replace("        '200':", "        default:"),
             OPENAPI.replace(
-                "                  date_of_birth: {type: string}",
+                "                  date_of_birth: {type: string, format: date}",
                 "                  date_of_birth: {type: object}",
             ),
         ];
@@ -1975,41 +2503,16 @@ disclosure:
     fn unsupported_openapi_constraints_fail_before_staging() {
         let cases = [
             OPENAPI.replace(
-                "date_of_birth: {type: string}",
-                "date_of_birth: {type: string, enum: ['2000-01-01']}",
+                "date_of_birth: {type: string, format: date}",
+                "date_of_birth: {type: string, maxLength: 32, pattern: '^2000-'}",
             ),
             OPENAPI.replace(
-                "date_of_birth: {type: string}",
-                "date_of_birth: {type: string, pattern: '^2000-'}",
-            ),
-            OPENAPI.replace(
-                "date_of_birth: {type: string}",
+                "date_of_birth: {type: string, format: date}",
                 "date_of_birth: {type: integer, exclusiveMinimum: 0}",
             ),
             OPENAPI.replace(
-                "date_of_birth: {type: string}",
-                "date_of_birth: {type: string, x-extra: true}",
-            ),
-            OPENAPI.replace(
-                "          required: true\n          schema:",
-                "          required: true\n          style: simple\n          schema:",
-            ),
-            OPENAPI.replacen(
-                "schema: {type: string}",
-                "schema: {type: string, pattern: '^person-'}",
-                1,
-            ),
-            OPENAPI.replace(
-                "      operationId: getPerson",
-                "      operationId: getPerson\n      summary: Unsupported metadata",
-            ),
-            OPENAPI.replace(
-                "          description: A person",
-                "          description: A person\n          headers: {}",
-            ),
-            OPENAPI.replace(
-                "            application/json:\n              schema:",
-                "            application/json:\n              example: {}\n              schema:",
+                "date_of_birth: {type: string, format: date}",
+                "date_of_birth: {type: string, format: date, x-extra: true}",
             ),
             OPENAPI.replace(
                 "                type: object\n                required:",
@@ -2040,7 +2543,9 @@ disclosure:
                 .join("bundle/adapters/adult-status-source-extract.rhai"),
         )
         .expect("extract script reads");
-        assert!(extract.contains("facts[\"date-of.birth\"] = source_response[\"date-of.birth\"];"));
+        assert!(extract.contains(
+            "facts[\"date-of.birth\"] = required(get_path(source_response, \"/date-of.birth\")"
+        ));
     }
 
     #[test]
@@ -2104,8 +2609,8 @@ disclosure:
                 "required: [person_id, name, date_of_birth, dose_count]",
             )
             .replace(
-                "                  date_of_birth: {type: string}",
-                "                  date_of_birth: {type: string}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
+                "                  date_of_birth: {type: string, format: date}",
+                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
             );
         let fixture = Fixture::new(&openapi, IMMUNIZATION_QUESTION, IMMUNIZATION_ANSWER, true);
         crate::keygen::generate_scaffold_key_material(
@@ -2125,6 +2630,20 @@ disclosure:
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts safely quoted punctuated names");
+
+        let fixture = Fixture::new(
+            MULTI_EVENT_OPENAPI,
+            MULTI_EVENT_QUESTION,
+            MULTI_EVENT_ANSWER,
+            true,
+        );
+        crate::keygen::generate_scaffold_key_material(
+            &fixture.project.join("secrets"),
+            SIGNING_KEY_ID,
+        )
+        .expect("generate local keys");
+        compile_local_project(&fixture.project, &fixture.staging, &evidence)
+            .expect("real Evidence loader accepts nested repeated fact extraction");
     }
 
     fn punctuated_inputs() -> (String, String, String) {

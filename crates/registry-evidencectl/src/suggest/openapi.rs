@@ -117,6 +117,15 @@ impl Spec {
     fn parse(text: &str, origin: &str) -> Result<Spec> {
         let document: Value = serde_norway::from_str(text)
             .with_context(|| format!("parsing {origin} as YAML or JSON"))?;
+        Self::from_value(document, origin)
+    }
+
+    /// Validate an already parsed, retained OpenAPI document.
+    ///
+    /// Local authoring reads its retained file once with owner and size checks,
+    /// then uses this constructor to share response reference resolution with
+    /// `source suggest` without reopening the file.
+    pub(crate) fn from_value(document: Value, origin: &str) -> Result<Spec> {
         let version = document
             .get("openapi")
             .and_then(Value::as_str)
