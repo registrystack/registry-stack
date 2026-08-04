@@ -35,10 +35,11 @@ OpenCRVS specialization. The compatibility test must fail if either product is
 introduced into production source, Cargo metadata, or generated public
 contracts.
 
-The DHIS2 profile follows the version 2.43 Tracker contract because the first
-public demo target is a stable 2.43 deployment. It requests only configured
-fields and sets a result limit that can distinguish one match from ambiguity.
-It does not follow pages to enumerate people.
+The DHIS2 profile follows the reviewed version 2.43 Tracker contract. A live
+operator selects an approved current instance from the official DHIS2 demo
+catalog rather than relying on a repository-pinned public hostname. The check
+requests only configured fields and sets a result limit that can distinguish
+one match from ambiguity. It does not follow pages to enumerate people.
 
 The OpenCRVS profile follows the documented Event Search flow: acquire a
 short-lived system-client token, then submit one bounded JSON search for an
@@ -174,8 +175,8 @@ test.
 
 ### DHIS2 public demo
 
-Initial target:
-`https://play.im.dhis2.org/stable-2-43-0-1/`
+Select an approved current instance from the official demo catalog:
+`https://dhis2.org/demo/`
 
 The local profile accepts these names, with values supplied outside the
 repository:
