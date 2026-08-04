@@ -26,6 +26,10 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Time allowed for connection setup, including TLS negotiation.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
 
+/// The one host name a cleartext base URL may carry. It is reserved for the
+/// loopback interface, so a credential sent to it cannot leave the host.
+const LOOPBACK_NAME: &str = "localhost";
+
 /// Everything the client needs, decided before the first request.
 pub struct EvidenceClientConfig {
     pub(crate) base_url: Url,
@@ -124,18 +128,23 @@ impl EvidenceClientConfig {
             ));
         }
         // A bearer credential in cleartext is only acceptable when it cannot
-        // leave the host, which is the local development and tutorial case.
+        // leave the host, which is the local development and tutorial case. The
+        // accepted forms are the ones an adopter types: either loopback numeric
+        // family, or the reserved name `localhost`. Any other name is refused,
+        // because a name that happens to resolve to a loopback address is still
+        // resolved off-host, and the answer can change.
         let transport_protects_the_credential = match self.base_url.scheme() {
             "https" => true,
-            "http" => self
-                .base_url
-                .host()
-                .is_some_and(|host| matches!(host, url::Host::Ipv4(ip) if ip.is_loopback())),
+            "http" => self.base_url.host().is_some_and(|host| match host {
+                url::Host::Ipv4(ip) => ip.is_loopback(),
+                url::Host::Ipv6(ip) => ip.is_loopback(),
+                url::Host::Domain(name) => name == LOOPBACK_NAME,
+            }),
             _ => false,
         };
         if !transport_protects_the_credential {
             return Err(EvidenceClientError::configuration(
-                "the base URL must use HTTPS, or HTTP with a numeric loopback host",
+                "the base URL must use HTTPS, or HTTP with a loopback host",
             ));
         }
         if self.max_response_bytes == 0 {
@@ -180,6 +189,7 @@ mod tests {
         )
     }
 
+    /// Every loopback form an adopter or a tutorial actually types.
     #[test]
     fn https_and_loopback_http_are_accepted() {
         for base_url in [
@@ -187,6 +197,11 @@ mod tests {
             "https://evidence.example.org/prefix/",
             "http://127.0.0.1:8080",
             "http://127.0.0.1:8080/",
+            "http://127.0.0.2:8080",
+            "http://[::1]:8080",
+            "http://[::1]:8080/prefix/",
+            "http://localhost:8080",
+            "http://localhost",
         ] {
             config(base_url)
                 .validate()
@@ -198,8 +213,13 @@ mod tests {
     fn a_base_url_that_cannot_protect_the_credential_is_refused() {
         for base_url in [
             "http://evidence.example.org",
-            "http://localhost:8080",
+            "http://example.com",
+            "http://192.168.1.1:8080",
+            "http://[2001:db8::1]:8080",
+            // A name that resolves to a loopback address is still a name, and
+            // the credential would leave the host to be resolved.
             "http://127.0.0.2.nip.io:8080",
+            "http://localhost.evidence.example.org",
             "ftp://evidence.example.org",
         ] {
             assert!(

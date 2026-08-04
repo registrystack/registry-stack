@@ -7,7 +7,10 @@
 //! nonce, all before any byte leaves the process. Verification then compares the
 //! response against a policy the response could not have influenced.
 
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use registry_evidence_verifier::{
     verifier::{
@@ -31,6 +34,12 @@ pub const MAXIMUM_SELECTOR_VALUES: usize = 16;
 pub const MAXIMUM_EXPECTED_OUTPUTS: usize = 16;
 const MAXIMUM_IDENTIFIER_BYTES: usize = 512;
 const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
+/// Smallest selector integer the request contract accepts. The bound is the
+/// range a double represents exactly, so the value survives every JSON reader
+/// between here and the source.
+pub const MINIMUM_SELECTOR_INTEGER: i64 = -9_007_199_254_740_991;
+/// Largest selector integer the request contract accepts.
+pub const MAXIMUM_SELECTOR_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// One requested subject, before the request body exists.
 #[derive(Debug, Clone)]
@@ -118,16 +127,26 @@ impl std::fmt::Debug for SubjectExpectations {
 
 /// A request body and the closed policy that will judge its answer.
 ///
-/// One prepared request is good for exactly one exchange. A nonce reused across
-/// two requests would let an answer to the first satisfy the policy for the
-/// second, so retrying means preparing again.
-#[derive(Clone)]
+/// One prepared request is good for exactly one exchange, and this type enforces
+/// that: the first send attempt claims it, and a second is refused before any
+/// I/O. A nonce reused across two requests would let an answer to the first
+/// satisfy the policy for the second, and a deployment never uniqueness-checks
+/// the nonce, so a resend would silently earn a second source access and a
+/// second audit entry. Retrying means preparing again.
+///
+/// Verifying is separate and unrestricted: it is offline and idempotent, so a
+/// relying party may re-verify a retained response as often as it likes.
+///
+/// This type is deliberately not `Clone`. A clone would carry the same nonce
+/// with its own unclaimed flag, which is exactly the reuse the flag prevents.
 pub struct PreparedEvidenceRequest {
     body: EvidenceRequestBody,
     /// The policy with every expectation except the subject set, which
     /// `subject_expectations` decides.
     policy: EvidenceVerificationPolicyDocument,
     subject_expectations: SubjectExpectations,
+    /// Whether a send attempt has already claimed this request.
+    sent: AtomicBool,
 }
 
 impl PreparedEvidenceRequest {
@@ -181,6 +200,7 @@ impl PreparedEvidenceRequest {
             body,
             policy,
             subject_expectations: spec.subject_expectations,
+            sent: AtomicBool::new(false),
         })
     }
 
@@ -206,6 +226,21 @@ impl PreparedEvidenceRequest {
 
     pub(crate) fn body(&self) -> &EvidenceRequestBody {
         &self.body
+    }
+
+    /// Claim the single send this prepared request is good for.
+    ///
+    /// The claim is taken before any I/O, and an attempt that fails on the wire
+    /// still spends it: the deployment may have answered the request even when
+    /// the relying party never read the answer, and resending the same nonce
+    /// would earn a second source access and a second audit entry there.
+    pub(crate) fn claim_single_send(&self) -> Result<(), EvidenceClientError> {
+        if self.sent.swap(true, Ordering::SeqCst) {
+            return Err(EvidenceClientError::configuration(
+                "a prepared request may be sent once; prepare again for a fresh nonce",
+            ));
+        }
+        Ok(())
     }
 
     /// The same policy with an explicit subject set. This is how first-use
@@ -258,6 +293,12 @@ impl std::fmt::Debug for PreparedEvidenceRequest {
 /// Refuse a specification the deployment would refuse, or one whose policy
 /// could not decide anything.
 fn validate(spec: &EvidenceRequestSpec) -> Result<(), EvidenceClientError> {
+    // Presence and length only. The contract also states `format: uri` for
+    // these identifiers, and the deployment asserts it, so restating it here
+    // would put a second opinion in front of the deciding one: a URL parser and
+    // a JSON Schema `uri` implementation can disagree in either direction, and
+    // either disagreement is a bug the adopter cannot work around. The
+    // deployment's answer stands.
     for identifier in [
         &spec.requirement,
         &spec.audience,
@@ -358,12 +399,22 @@ fn validate_selector_values(
                 "each selector field name must match the request contract's lexical rule and appear once",
             ));
         }
-        if let SelectorValue::String(text) = value {
-            if text.is_empty() || text.len() > MAXIMUM_SELECTOR_STRING_BYTES {
-                return Err(EvidenceClientError::configuration(
-                    "each selector string value must be present and bounded",
-                ));
+        match value {
+            SelectorValue::String(text) => {
+                if text.is_empty() || text.len() > MAXIMUM_SELECTOR_STRING_BYTES {
+                    return Err(EvidenceClientError::configuration(
+                        "each selector string value must be present and bounded",
+                    ));
+                }
             }
+            SelectorValue::Integer(number) => {
+                if !(MINIMUM_SELECTOR_INTEGER..=MAXIMUM_SELECTOR_INTEGER).contains(number) {
+                    return Err(EvidenceClientError::configuration(
+                        "each selector integer value must be within the range a double represents exactly",
+                    ));
+                }
+            }
+            SelectorValue::Boolean(_) => {}
         }
     }
     Ok(())
@@ -624,6 +675,24 @@ mod tests {
                 }),
             ),
             (
+                "a selector integer below the contract's minimum",
+                Box::new(|spec| {
+                    spec.subjects[0].selector_values = Some(vec![(
+                        "record_reference".to_owned(),
+                        SelectorValue::from(MINIMUM_SELECTOR_INTEGER - 1),
+                    )]);
+                }),
+            ),
+            (
+                "a selector integer above the contract's maximum",
+                Box::new(|spec| {
+                    spec.subjects[0].selector_values = Some(vec![(
+                        "record_reference".to_owned(),
+                        SelectorValue::from(MAXIMUM_SELECTOR_INTEGER + 1),
+                    )]);
+                }),
+            ),
+            (
                 "no expected output",
                 Box::new(|spec| spec.expected_outputs.clear()),
             ),
@@ -670,6 +739,37 @@ mod tests {
                 "{description} was accepted"
             );
         }
+    }
+
+    /// The contract's integer bounds are the ones a double can represent
+    /// exactly, and both extremes are inside them.
+    #[test]
+    fn a_selector_integer_at_the_contracts_bounds_is_accepted() {
+        for value in [MINIMUM_SELECTOR_INTEGER, 0, MAXIMUM_SELECTOR_INTEGER] {
+            let mut spec = spec();
+            spec.subjects[0].selector_values = Some(vec![(
+                "record_reference".to_owned(),
+                SelectorValue::from(value),
+            )]);
+            PreparedEvidenceRequest::new(spec)
+                .unwrap_or_else(|error| panic!("{value} was refused: {error}"));
+        }
+    }
+
+    #[test]
+    fn a_prepared_request_is_claimable_exactly_once() {
+        let prepared = PreparedEvidenceRequest::new(spec()).expect("the specification is accepted");
+        prepared
+            .claim_single_send()
+            .expect("the first send may proceed");
+        assert_eq!(
+            prepared
+                .claim_single_send()
+                .expect_err("the second send is refused"),
+            EvidenceClientError::configuration(
+                "a prepared request may be sent once; prepare again for a fresh nonce"
+            )
+        );
     }
 
     #[test]

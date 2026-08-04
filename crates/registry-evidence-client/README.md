@@ -56,9 +56,14 @@ async fn accept(
   uses the key set pinned at construction. Nothing here fetches keys at
   verification time, because a key set taken from the same origin as the
   response it would verify establishes nothing about that response.
-- One prepared request is one exchange. Neither this crate nor its HTTP client
-  retries anything: a second attempt is a second `prepare` with a fresh nonce,
-  because a policy accepts exactly the answer to the request it was closed for.
+- One prepared request is one exchange, enforced rather than advised. Neither this
+  crate nor its HTTP client retries anything, and a second `send` with the same
+  prepared request fails locally before any I/O: a second attempt is a second
+  `prepare` with a fresh nonce, because a policy accepts exactly the answer to the
+  request it was closed for, and a deployment never uniqueness-checks a nonce, so
+  a resend would earn a second source access and a second audit entry there.
+  Verifying is exempt: it is offline and idempotent, so a retained response may be
+  re-verified as often as the relying party likes.
 - Subject bindings are keyed values the deployment computes with a secret only it
   holds, so a relying party cannot derive the binding for a subject it has never
   seen. `SubjectExpectations::Pinned` is the only setting under which a verified

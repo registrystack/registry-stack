@@ -166,6 +166,7 @@ impl EvidenceClient {
             status: StatusCode::OK.as_u16(),
             code: None,
             operation: body.operation,
+            retry_after_seconds: None,
         })
     }
 
@@ -188,6 +189,7 @@ impl EvidenceClient {
             status: StatusCode::OK.as_u16(),
             code: None,
             operation: body.operation,
+            retry_after_seconds: None,
         })
     }
 
@@ -198,10 +200,17 @@ impl EvidenceClient {
     /// a second attempt has to be a second [`EvidenceClient::prepare`] with a
     /// fresh nonce. Retrying the same bytes would let a stale answer satisfy a
     /// policy that was closed for a different exchange.
+    ///
+    /// This is enforced, not merely advised: `prepared` allows exactly one send,
+    /// and a second call with the same prepared request returns a configuration
+    /// failure without reaching the deployment. The deployment never
+    /// uniqueness-checks a nonce, so a resend would earn a second source access
+    /// and a second audit entry there for one relying-party decision.
     pub async fn send(
         &self,
         prepared: &PreparedEvidenceRequest,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
+        prepared.claim_single_send()?;
         let url = self.endpoint(EVIDENCE_PATH)?;
         let body = serialize_request(prepared.body())?;
         let request = self
@@ -217,6 +226,11 @@ impl EvidenceClient {
     /// Verify a signed response against the policy its request closed.
     ///
     /// The trusted key set is the one pinned at construction, always.
+    ///
+    /// Unlike sending, verifying is unrestricted. It is offline, idempotent, and
+    /// reaches no deployment, so a relying party may re-verify a retained
+    /// response against its retained prepared request as often as it likes,
+    /// including after the single send has been spent.
     pub fn verify(
         &self,
         prepared: &PreparedEvidenceRequest,
@@ -226,6 +240,10 @@ impl EvidenceClient {
     }
 
     /// Request evidence and verify it, in one step.
+    ///
+    /// This spends the single send `prepared` allows, exactly as
+    /// [`EvidenceClient::send`] does, so calling it twice with one prepared
+    /// request fails locally on the second call.
     pub async fn request_and_verify(
         &self,
         prepared: &PreparedEvidenceRequest,
@@ -353,6 +371,7 @@ impl EvidenceClient {
                 media_type.as_deref(),
                 &body,
                 retry_after_seconds,
+                operation.as_deref(),
             ));
         }
         if status != StatusCode::OK.as_u16()
@@ -362,6 +381,7 @@ impl EvidenceClient {
                 status,
                 code: None,
                 operation,
+                retry_after_seconds: None,
             });
         }
         Ok(RawEvidenceResponse { body, operation })
@@ -479,6 +499,7 @@ mod tests {
         AssuranceProfile,
     };
     use std::sync::Arc;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClient {
         EvidenceClient::new(EvidenceClientConfig::new(
@@ -770,6 +791,86 @@ mod tests {
                 .verify_at(&prepared, &raw(body), fixture.now)
                 .is_err());
         }
+    }
+
+    /// A prepared request is a single-use capability. The second send is refused
+    /// locally, so a deployment never sees one nonce twice and never repeats the
+    /// source access and audit entries a single request earns.
+    #[tokio::test]
+    async fn a_prepared_request_reaches_the_deployment_at_most_once() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/evidence"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                fixture.sign(prepared.request_nonce()),
+                EVIDENCE_JWS_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .send(&prepared)
+            .await
+            .expect("the first send happens");
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("the second send is refused"),
+            EvidenceClientError::configuration(
+                "a prepared request may be sent once; prepare again for a fresh nonce"
+            )
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("the stub records what it received")
+                .len(),
+            1,
+            "the refused send must not reach the deployment"
+        );
+    }
+
+    /// A body the problem contract does not cover leaves the client with nothing
+    /// to say about the failure, which is exactly when the deployment's own
+    /// identifier for the exchange matters.
+    #[tokio::test]
+    async fn a_failure_carries_the_correlation_identifier_even_with_an_unreadable_body() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/evidence"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .insert_header(CORRELATION_HEADER, "01JQ0QZ8YHZ0000000000000AB")
+                    .set_body_raw(b"<html>a gateway wrote this</html>".to_vec(), "text/html"),
+            )
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("a body outside the contract is a protocol failure"),
+            EvidenceClientError::Protocol {
+                status: 400,
+                code: None,
+                operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+                retry_after_seconds: None,
+            }
+        );
     }
 
     #[test]

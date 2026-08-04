@@ -57,6 +57,10 @@ pub enum EvidenceClientError {
         status: u16,
         code: Option<String>,
         operation: Option<String>,
+        /// Present only when the deployment reported a bounded transient
+        /// failure and asked for a wait. A relying party that honors it must
+        /// still prepare a fresh request before trying again.
+        retry_after_seconds: Option<u64>,
     },
 
     /// Verification refused the response. The cause is the verifier's own
