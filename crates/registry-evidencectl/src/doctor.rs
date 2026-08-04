@@ -360,11 +360,7 @@ fn check_mint_compatibility(
 
     // This is the route Mint publishes in its metadata. It is concatenation,
     // not URL joining: path-bearing issuers are part of Mint's contract.
-    let mint_jwks_uri = format!(
-        "{}{}",
-        mint.issuer.trim_end_matches('/'),
-        mint.signing.jwks_path
-    );
+    let mint_jwks_uri = format!("{}{}", mint.issuer, mint.signing.jwks_path);
     if evidence.jwks_uri != mint_jwks_uri {
         run.refuse(
             bundle_config_path,

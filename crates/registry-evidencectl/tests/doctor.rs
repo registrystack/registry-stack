@@ -474,7 +474,7 @@ fn doctor_accepts_set_order_supersets_custom_jwks_and_matching_actor() {
     rewrite_bundle(
         &project,
         "jwksUri: https://identity.invalid/.well-known/jwks.json",
-        "jwksUri: https://identity.invalid/custom/jwks.json",
+        "jwksUri: https://identity.invalid//custom/jwks.json",
     );
     add_evidence_actor(&project, "shared_actor");
 
