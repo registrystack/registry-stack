@@ -20,7 +20,10 @@ use registry_platform_crypto::canonicalize_json;
 use serde_json::{json, Map, Value};
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::dev::{self, ReadyDevState};
+use crate::{
+    access,
+    dev::{self, ReadyDevState},
+};
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -50,6 +53,10 @@ pub struct PrepareArgs {
     /// Safe name for this retained request.
     #[arg(long)]
     name: String,
+
+    /// Registered local application used to request authorization.
+    #[arg(long)]
+    client: Option<String>,
 
     /// Response format to request and verify.
     #[arg(long, value_enum, default_value_t = PreparedResponseFormat::SignedJws)]
@@ -91,6 +98,7 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
     let (question, subjects) = validate_closed_inputs(&ready, &args)?;
+    let client = resolve_request_client(&ready, args.client.as_deref())?;
     let evidence = dev::resolve_tool_binary(
         "evidence",
         args.evidence_bin.as_deref(),
@@ -111,7 +119,13 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     let request_path = staging.path().join("request.json");
     write_private_bytes(&request_path, &request)?;
 
-    let token = obtain_token(&mint, &ready)?;
+    let token = obtain_token(
+        &mint,
+        &ready.token_url,
+        &client.client_id,
+        &client.private_key_path,
+        &client.assertion_audience,
+    )?;
     let context_path = staging.path().join("verification.json");
     prepare_context(
         &evidence,
@@ -142,6 +156,43 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
         relative.join("authorization.curl").display()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+struct RequestClient {
+    client_id: String,
+    private_key_path: PathBuf,
+    assertion_audience: String,
+}
+
+fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Result<RequestClient> {
+    match client_id {
+        Some(client_id) => {
+            if ready.access_policies.is_empty() {
+                bail!("--client requires an active generation with explicit access policies");
+            }
+            let policy_tags = ready
+                .access_policies
+                .iter()
+                .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let client = access::resolve_ready_client(&ready.project, client_id, &policy_tags)?;
+            Ok(RequestClient {
+                client_id: client.client_id,
+                private_key_path: client.private_key_path,
+                assertion_audience: ready.token_url.clone(),
+            })
+        }
+        None => {
+            let caller = ready.caller.as_ref().ok_or_else(|| {
+                anyhow!("the active project requires a registered client selected with --client")
+            })?;
+            Ok(RequestClient {
+                client_id: caller.client_id.clone(),
+                private_key_path: caller.private_key_path.clone(),
+                assertion_audience: caller.assertion_audience.clone(),
+            })
+        }
+    }
 }
 
 fn validate_closed_inputs<'a, 'b>(
@@ -250,17 +301,23 @@ fn closed_request(
     canonicalize_json(&request).context("failed to serialize the closed Evidence request")
 }
 
-fn obtain_token(mint: &Path, ready: &ReadyDevState) -> Result<Zeroizing<String>> {
+fn obtain_token(
+    mint: &Path,
+    token_url: &str,
+    client_id: &str,
+    private_key_path: &Path,
+    assertion_audience: &str,
+) -> Result<Zeroizing<String>> {
     let mut child = Command::new(mint)
         .arg("token")
         .arg("--url")
-        .arg(&ready.token_url)
+        .arg(token_url)
         .arg("--client-id")
-        .arg(&ready.caller_id)
+        .arg(client_id)
         .arg("--key")
-        .arg(&ready.caller_private_key_path)
+        .arg(private_key_path)
         .arg("--audience")
-        .arg(&ready.caller_assertion_audience)
+        .arg(assertion_audience)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -276,14 +333,14 @@ fn obtain_token(mint: &Path, ready: &ReadyDevState) -> Result<Zeroizing<String>>
     if read_result.is_err() || stdout.len() > MAX_TOKEN_BYTES + 2 {
         let _ = child.kill();
         let _ = child.wait();
-        bail!("Mint did not issue local authorization");
+        bail!("Registry Mint refused a token for client {client_id}");
     }
     let status = child.wait().context("failed to wait for Mint")?;
     if !status.success() {
-        bail!("Mint did not issue local authorization");
+        bail!("Registry Mint refused a token for client {client_id}");
     }
     if std::str::from_utf8(&stdout).is_err() {
-        bail!("Mint did not issue local authorization");
+        bail!("Registry Mint refused a token for client {client_id}");
     }
     let mut token = Zeroizing::new(
         String::from_utf8(std::mem::take(&mut stdout)).expect("Mint output was validated as UTF-8"),
@@ -300,7 +357,7 @@ fn obtain_token(mint: &Path, ready: &ReadyDevState) -> Result<Zeroizing<String>>
             .bytes()
             .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
     {
-        bail!("Mint did not issue local authorization");
+        bail!("Registry Mint refused a token for client {client_id}");
     }
     Ok(token)
 }

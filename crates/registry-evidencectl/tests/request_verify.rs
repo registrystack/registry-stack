@@ -15,6 +15,8 @@ const TOKEN: &str = "secret.token-canary";
 const CONTEXT: &str = "{\"schema\":\"context-canary\"}\n";
 const VERIFIED: &str =
     "{\"purpose\":\"age-check\",\"schema\":\"verified-canary\",\"values\":{\"is_adult\":true}}\n";
+const AGE_CHECKS_TAG: &str =
+    "policy-v1-bc8c04f766133dc6ffd6e395caa64f9c3b43301c1d308716668c71b8b839c0dc";
 
 #[test]
 fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
@@ -24,7 +26,14 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         .expect("request help");
     assert_success(&request);
     let request = String::from_utf8_lossy(&request.stdout);
-    for visible in ["<QUESTION>", "--purpose", "--subject", "--name", "--format"] {
+    for visible in [
+        "<QUESTION>",
+        "--purpose",
+        "--subject",
+        "--name",
+        "--client",
+        "--format",
+    ] {
         assert!(request.contains(visible), "missing {visible}: {request}");
     }
     for hidden in ["--project", "--evidence-bin", "--mint-bin"] {
@@ -233,6 +242,115 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     let refused = fixture.verify("verified.json");
     assert!(!refused.status.success());
     assert_eq!(fs::read_to_string(&verified_path).unwrap(), VERIFIED);
+}
+
+#[test]
+fn named_client_prepare_uses_the_registered_identity() {
+    let fixture = Fixture::new();
+    fixture.add_named_client("age-checker", "active", 0o600);
+    fixture.use_explicit_access();
+
+    let prepared = fixture.prepare_as("age-checker", "named-client");
+    assert_success(&prepared);
+    let mint_args = fs::read_to_string(fixture.mint.with_extension("args")).unwrap();
+    assert_eq!(
+        mint_args.lines().collect::<Vec<_>>(),
+        [
+            "token",
+            "--url",
+            "http://127.0.0.1:8081/token",
+            "--client-id",
+            "age-checker",
+            "--key",
+            fs::canonicalize(&fixture.root)
+                .unwrap()
+                .join(".evidence/clients/age-checker/private.jwk")
+                .to_str()
+                .unwrap(),
+            "--audience",
+            "http://127.0.0.1:8081/token",
+        ]
+    );
+    assert!(fixture
+        .root
+        .join(".evidence/requests/named-client/request.json")
+        .is_file());
+}
+
+#[test]
+fn unusable_named_clients_and_mint_refusal_publish_no_request_artifacts() {
+    let unknown = Fixture::new();
+    unknown.add_named_client("other-client", "active", 0o600);
+    unknown.use_explicit_access();
+    let output = unknown.prepare_as("unknown-client", "unknown-client");
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "evidencectl: unknown or revoked active client unknown-client\n"
+    );
+    assert_no_request_artifacts(&unknown.root, "unknown-client");
+
+    let revoked = Fixture::new();
+    revoked.add_named_client("other-client", "active", 0o600);
+    revoked.add_named_client("revoked-client", "revoked", 0o600);
+    revoked.use_explicit_access();
+    let output = revoked.prepare_as("revoked-client", "revoked-client");
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "evidencectl: unknown or revoked active client revoked-client\n"
+    );
+    assert_no_request_artifacts(&revoked.root, "revoked-client");
+
+    let unsafe_key = Fixture::new();
+    unsafe_key.add_named_client("unsafe-client", "active", 0o644);
+    unsafe_key.use_explicit_access();
+    let output = unsafe_key.prepare_as("unsafe-client", "unsafe-client");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&unsafe_key.root, "unsafe-client");
+
+    let refused = Fixture::new();
+    refused.add_named_client("refused-client", "active", 0o600);
+    refused.use_explicit_access();
+    fs::write(refused.mint.with_extension("fail"), b"").unwrap();
+    let output = refused.prepare_as("refused-client", "refused-client");
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "evidencectl: Registry Mint refused a token for client refused-client\n"
+    );
+    assert_no_request_artifacts(&refused.root, "refused-client");
+}
+
+#[test]
+fn selected_clients_require_an_explicit_current_policy_generation() {
+    let implicit = Fixture::new();
+    implicit.add_named_client("age-checker", "active", 0o600);
+    let output = implicit.prepare_as("age-checker", "implicit-client");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&implicit.root, "implicit-client");
+
+    let explicit = Fixture::new();
+    explicit.add_named_client("age-checker", "active", 0o600);
+    explicit.use_explicit_access();
+    let output = explicit.prepare("missing-client");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&explicit.root, "missing-client");
+
+    private_file(
+        &explicit.root.join("questions/age-bracket.yaml"),
+        b"id: age-bracket\n",
+        0o644,
+    );
+    private_file(
+        &explicit.root.join("access/policies/age-checks.yaml"),
+        b"version: 1\nid: age-checks\nquestions: [adult-status, age-bracket]\n",
+        0o644,
+    );
+    let output = explicit.prepare_as("age-checker", "drifted-policy");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&explicit.root, "drifted-policy");
 }
 
 #[test]
@@ -462,7 +580,7 @@ impl Fixture {
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let canonical = fs::canonicalize(&root).unwrap();
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v4",
+            "schema": "registry.evidencectl.dev-state/v5",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -477,6 +595,7 @@ impl Fixture {
                 "evidenceAudience": "urn:registrystack:evidence:local:caller",
                 "requesterTag": "local-caller"
             },
+            "accessPolicies": [],
             "questions": [
                 {
                     "alias": "adult-status",
@@ -591,6 +710,83 @@ impl Fixture {
             .expect("prepare command")
     }
 
+    fn prepare_as(&self, client_id: &str, name: &str) -> Output {
+        self.prepare_with(
+            &[
+                "adult-status",
+                "--purpose",
+                "age-check",
+                "--subject",
+                "person_id=person-123",
+                "--client",
+                client_id,
+            ],
+            name,
+        )
+    }
+
+    fn add_named_client(&self, client_id: &str, status: &str, key_mode: u32) {
+        let questions = self.root.join("questions");
+        fs::create_dir_all(&questions).expect("authored question directory");
+        private_file(
+            &questions.join("adult-status.yaml"),
+            b"id: adult-status\n",
+            0o644,
+        );
+        let policies = self.root.join("access/policies");
+        fs::create_dir_all(&policies).expect("editable policy directory");
+        private_file(
+            &policies.join("age-checks.yaml"),
+            b"version: 1\nid: age-checks\nquestions: [adult-status]\n",
+            0o644,
+        );
+        let clients = self.root.join("access/clients");
+        fs::create_dir_all(&clients).expect("editable client directory");
+        private_file(
+            &clients.join(format!("{client_id}.yaml")),
+            format!(
+                "version: 1\n\
+                 clientId: {client_id}\n\
+                 status: {status}\n\
+                 principal: urn:registrystack:evidence:local:client:{client_id}\n\
+                 evidenceAudience: urn:registrystack:evidence:local:client:{client_id}\n\
+                 policies: [age-checks]\n\
+                 keys:\n\
+                   - {{kty: OKP, crv: Ed25519, kid: {client_id}-key-1, alg: EdDSA, use: sig, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}}\n"
+            )
+            .as_bytes(),
+            0o644,
+        );
+
+        let private_clients = self.root.join(".evidence/clients");
+        if !private_clients.exists() {
+            private_directory(&private_clients);
+        }
+        let private_client = private_clients.join(client_id);
+        private_directory(&private_client);
+        private_file(
+            &private_client.join("private.jwk"),
+            format!(
+                "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{client_id}-key-1\",\"alg\":\"EdDSA\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\",\"d\":\"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A\"}}"
+            )
+            .as_bytes(),
+            key_mode,
+        );
+    }
+
+    fn use_explicit_access(&self) {
+        let path = self.root.join(".evidence/dev/state.json");
+        let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        state["caller"] = Value::Null;
+        state["accessPolicies"] = json!([{
+            "id": "age-checks",
+            "requesterTag": AGE_CHECKS_TAG,
+            "questions": ["adult-status"]
+        }]);
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     fn verify(&self, output: &str) -> Output {
         command()
             .current_dir(&self.root)
@@ -690,6 +886,14 @@ fn sorted_names(path: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn assert_no_request_artifacts(project: &Path, name: &str) {
+    let requests = project.join(".evidence/requests");
+    assert!(!requests.join(name).exists());
+    if requests.exists() {
+        assert_eq!(sorted_names(&requests), Vec::<String>::new());
+    }
 }
 
 fn assert_success(output: &Output) {
