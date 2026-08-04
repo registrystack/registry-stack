@@ -1,5 +1,9 @@
-//! Deployment-project scaffolding. Emits a neutral, tutorial-shaped project
-//! that passes `evidence check` and `evidence evaluate` after one keygen pass.
+//! Minimal OpenAPI-assisted Evidence project authoring.
+//!
+//! OpenAPI can describe a source operation and response shape. It cannot
+//! decide an adopter's evidence question, authorization, disclosure policy,
+//! runtime, or acceptance cases, so this command deliberately emits none of
+//! them.
 
 use std::{
     fs,
@@ -9,493 +13,224 @@ use std::{
 };
 
 use anyhow::{bail, Context as _};
-use clap::Args;
+use clap::{Args, ValueEnum};
 
-/// Governed identifiers the scaffold stamps into the bundle. They are all in
-/// the reserved example namespace so a generated project can never be mistaken
-/// for a governed deployment, and every one of them is meant to be replaced.
-const TRUST_DOMAIN: &str = "urn:example:scaffold:trust-domain";
-const REQUIREMENT_ID: &str = "urn:example:scaffold:requirement:example-flag:v1";
-const FRAMEWORK_ID: &str = "urn:example:scaffold:framework:example-flag:v1";
-const EVIDENCE_TYPE_ID: &str = "urn:example:scaffold:evidence-type:example-flag:v1";
-const CONCEPT_ID: &str = "urn:example:scaffold:concept:example-flag";
-const DISCLOSURE_FAMILY_ID: &str = "urn:example:scaffold:disclosure-family:example-flag";
+use crate::{keygen, suggest};
 
-/// The requester tag the bundle's authority profile admits, and the one a
-/// paired Mint registration mints for its caller.
-const REQUESTER_TAG: &str = "scaffold-agency";
+const SIGNING_KEY_ID: &str = "local-signing-key-1";
 
-/// The signing key identifier the bundle declares. `keygen signing --kid`
-/// takes the same value, so the scaffolded project needs no edit to sign.
-const SIGNING_KEY_ID: &str = "scaffold-signing-key-1";
-
-/// The access-token contract, written into the bundle's `authentication` block
-/// and, when a Mint configuration is rendered beside it, into that document
-/// too. One source for both sides is what stops the pairing drifting.
-const TOKEN_AUDIENCE: &str = "evidence-scaffold";
-const TOKEN_ALGORITHM: &str = "EdDSA";
-const TOKEN_JWKS_PATH: &str = "/.well-known/jwks.json";
-const PRINCIPAL_CLAIM: &str = "sub";
-const REQUESTER_TAGS_CLAIM: &str = "evidence_tags";
-const EVIDENCE_AUDIENCE_CLAIM: &str = "evidence_audience";
-const GRANT_ID_CLAIM: &str = "evidence_grant_id";
-const GRANT_AUTHORITY_CLAIM: &str = "evidence_authority";
-
-/// The token issuer the bundle trusts. A standalone project names a placeholder
-/// identity provider; a paired one names the Mint deployment beside it.
-const IDENTITY_ISSUER: &str = "https://identity.invalid";
-const MINT_ISSUER: &str = "https://mint.invalid";
-
-/// Identifiers a paired Mint deployment is scaffolded with. Like every other
-/// identifier here they are meant to be replaced.
-const MINT_SIGNING_KEY_ID: &str = "scaffold-mint-key-1";
-const MINT_CLIENT_ID: &str = "scaffold-client";
-const MINT_CLIENT_KEY_ID: &str = "scaffold-client-key-1";
-const MINT_CLIENT_PRINCIPAL: &str = "urn:example:scaffold:client";
-const MINT_CLIENT_AUDIENCE: &str = "https://requester.invalid";
-
-/// The comment above the bundle's `authentication` block. It is the one part of
-/// that block whose wording depends on where the tokens come from.
-const AUTHENTICATION_NOTE: &str = "\
-# Requesters present an OIDC access token. Replace the issuer, the JWKS URI and
-# the audience with the identity provider that serves this deployment.";
-const MINT_AUTHENTICATION_NOTE: &str = "\
-# Requesters present an OIDC access token minted by the Registry Mint
-# deployment in mint/. Every value below is mirrored in mint/mint.yaml, and a
-# single-sided edit produces tokens Mint issues and this deployment refuses.";
-
-/// The listener ports the generated documents bind.
-///
-/// Mint's is fixed, because a paired project runs both processes on one host
-/// and the two ports have to differ for either to serve.
-const DEFAULT_LISTENER_PORT: u16 = 8080;
-const MINT_LISTENER_PORT: u16 = 8081;
-
-/// Project-relative locations the scaffold owns.
-const BUNDLE_DIRECTORY: &str = "bundle";
-const SECRET_DIRECTORY: &str = "secrets";
-const AUDIT_DIRECTORY: &str = "audit";
-const AUDIT_FILE: &str = "audit/evidence.jsonl";
-const RUNTIME_FILE: &str = "runtime.yaml";
-const MINT_DIRECTORY: &str = "mint";
-const MINT_CONFIG_FILE: &str = "mint/mint.yaml";
-const MINT_CLIENT_DIRECTORY: &str = "mint/clients";
-const MINT_SECRET_DIRECTORY: &str = "mint/secrets";
-/// The example caller's key, at project root rather than inside `mint/`.
-///
-/// A caller is a different party from the issuer that registers it, and a
-/// scaffold is what adopters copy structure from. Keeping this key under
-/// `mint/` would model a trust boundary that does not exist, and would put the
-/// caller's private key on the Mint host for anyone who promotes `mint/` as a
-/// unit.
-const CALLER_SECRET_DIRECTORY: &str = "caller";
-
-/// One rendered file: where it lands in the project, and its template bytes.
-struct ProjectFile {
-    relative: &'static str,
-    template: &'static str,
+#[derive(Clone, Debug, ValueEnum)]
+pub enum AuthoringProfile {
+    /// Development-only authoring with no deployment assurance claim.
+    Local,
 }
-
-const PROJECT_FILES: [ProjectFile; 11] = [
-    ProjectFile {
-        relative: "README.md",
-        template: include_str!("../templates/README.md"),
-    },
-    ProjectFile {
-        relative: ".gitignore",
-        template: include_str!("../templates/gitignore"),
-    },
-    ProjectFile {
-        relative: RUNTIME_FILE,
-        template: include_str!("../templates/runtime.yaml"),
-    },
-    ProjectFile {
-        relative: "bundle/evidence.yaml",
-        template: include_str!("../templates/bundle/evidence.yaml"),
-    },
-    ProjectFile {
-        relative: "bundle/adapters/source-a-prepare.rhai",
-        template: include_str!("../templates/bundle/adapters/source-a-prepare.rhai"),
-    },
-    ProjectFile {
-        relative: "bundle/adapters/source-a-extract.rhai",
-        template: include_str!("../templates/bundle/adapters/source-a-extract.rhai"),
-    },
-    ProjectFile {
-        relative: "bundle/derivations/example-flag.rhai",
-        template: include_str!("../templates/bundle/derivations/example-flag.rhai"),
-    },
-    ProjectFile {
-        relative: "bundle/schemas/adapter-parameters.schema.yaml",
-        template: include_str!("../templates/bundle/schemas/adapter-parameters.schema.yaml"),
-    },
-    ProjectFile {
-        relative: "bundle/schemas/response.schema.yaml",
-        template: include_str!("../templates/bundle/schemas/response.schema.yaml"),
-    },
-    ProjectFile {
-        relative: "bundle/schemas/facts.schema.yaml",
-        template: include_str!("../templates/bundle/schemas/facts.schema.yaml"),
-    },
-    ProjectFile {
-        relative: "bundle/fixtures/cases.yaml",
-        template: include_str!("../templates/bundle/fixtures/cases.yaml"),
-    },
-];
-
-/// The paired Registry Mint deployment, rendered only for `--with-mint`.
-///
-/// The registration is written under a name Mint's registry loader ignores. It
-/// needs the caller's public key before it can serve, and the scaffold has no
-/// key to put there: it never generates key material.
-const MINT_FILES: [ProjectFile; 2] = [
-    ProjectFile {
-        relative: MINT_CONFIG_FILE,
-        template: include_str!("../templates/mint/mint.yaml"),
-    },
-    ProjectFile {
-        relative: "mint/clients/scaffold-client.yaml.example",
-        template: include_str!("../templates/mint/client.yaml.example"),
-    },
-];
-
-/// Appended to the rendered README when a Mint configuration is rendered.
-const MINT_README_SECTION: &str = include_str!("../templates/mint/README-section.md");
 
 #[derive(Debug, Args)]
 pub struct NewArgs {
-    /// Directory to create the deployment project in.
+    /// New directory to create for the incomplete authoring project.
     pub directory: PathBuf,
 
-    /// Evidence provider identifier stamped into the bundle.
-    #[arg(long, default_value = "urn:example:scaffold:provider")]
-    pub provider_id: String,
-
-    /// Issuing authority identifier stamped into the bundle.
-    #[arg(long, default_value = "urn:example:scaffold:issuer")]
-    pub issuer_id: String,
-
-    /// Port the generated runtime file binds the Evidence listener to.
-    ///
-    /// One machine often carries several scaffolded projects, and the default
-    /// is the same in every one of them. Editing the frozen runtime file to
-    /// move a port means unfreezing it, which is the state the project is
-    /// least safe in.
-    #[arg(long, default_value_t = DEFAULT_LISTENER_PORT)]
-    pub port: u16,
-
-    /// Also render a paired Registry Mint configuration for the project.
+    /// OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL.
     #[arg(long)]
-    pub with_mint: bool,
+    pub openapi: Option<String>,
 
-    /// Scaffold into a non-empty directory.
-    #[arg(long)]
-    pub force: bool,
+    /// Explicit development profile for OpenAPI-assisted authoring.
+    #[arg(long, value_enum, requires = "openapi")]
+    pub profile: Option<AuthoringProfile>,
+
+    /// OpenAPI operation as "METHOD /path/template"; prompted if absent.
+    #[arg(long, requires = "openapi")]
+    pub operation: Option<String>,
+
+    /// Response projection pointer; repeat once per selected field.
+    #[arg(long = "select", requires = "openapi")]
+    pub selection: Vec<String>,
+
+    /// Response status code whose schema is drafted.
+    #[arg(long, default_value = "200", requires = "openapi")]
+    pub status: String,
+
+    /// Response media type whose schema is drafted.
+    #[arg(long, default_value = "application/json", requires = "openapi")]
+    pub media_type: String,
+
+    /// Sample response used only to suggest schema bounds.
+    #[arg(long, requires = "openapi")]
+    pub sample: Option<PathBuf>,
+
+    /// Source identifier for the drafted artifacts.
+    #[arg(long, requires = "openapi")]
+    pub source_id: Option<String>,
+
+    /// Generate disposable, unbound local signing and HMAC material.
+    #[arg(long, requires = "openapi")]
+    pub generate_keys: bool,
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
-    // A paired project is two processes on one host. Rendering both onto one
-    // port produces documents that each look right and cannot both serve, and
-    // the loser of the race is whichever was started second.
-    if args.with_mint && args.port == MINT_LISTENER_PORT {
-        bail!(
-            "--port {MINT_LISTENER_PORT} is the port the paired Mint deployment binds; \
-             choose another port for Evidence"
-        );
+    let openapi = args.openapi.as_ref().context(
+        "`evidencectl new` starts from an API description; pass --openapi <path-or-https-url>",
+    )?;
+    if args.profile.is_none() {
+        bail!("OpenAPI authoring requires the explicit development profile `--profile local`");
     }
 
-    if directory_has_entries(&args.directory)? && !args.force {
-        bail!(
-            "refusing to scaffold into the non-empty directory {}; pass --force to proceed",
-            args.directory.display()
-        );
-    }
-
-    fs::create_dir_all(&args.directory).with_context(|| {
-        format!(
-            "creating the project directory {}",
-            args.directory.display()
-        )
+    validate_new_destination(&args.directory)?;
+    let prepared = suggest::prepare(&suggest::SuggestArgs {
+        openapi: openapi.clone(),
+        operation: args.operation.clone(),
+        status: args.status,
+        media_type: args.media_type,
+        selection: args.selection,
+        sample: args.sample,
+        source_id: args.source_id,
+        project: None,
+        evidence_bin: None,
     })?;
-    // Absolute paths belong in runtime.yaml, so the generated project runs from
-    // any working directory. Canonicalizing after creation resolves symlinked
-    // parents such as a temporary directory on macOS.
-    let root = fs::canonicalize(&args.directory).with_context(|| {
-        format!(
-            "resolving the project directory {}",
-            args.directory.display()
-        )
-    })?;
-    // A rewrite has to clear the immutability the documented freeze applies,
-    // otherwise the read-only bundle from an earlier run rejects every write.
-    restore_writable(&root)?;
 
-    // A rewrite that drops --with-mint must not leave the earlier run's mint/
-    // tree behind: it would keep documenting and registering a token issuer
-    // the freshly rendered bundle no longer pairs with.
-    if !args.with_mint && root.join(MINT_CONFIG_FILE).is_file() {
-        bail!(
-            "{} already has a mint/ tree rendered by an earlier `--with-mint` scaffold; \
-             pass --with-mint to re-render it in sync, or delete mint/ first",
-            root.display()
+    let parent = destination_parent(&args.directory)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".evidencectl-new-")
+        .tempdir_in(parent)
+        .with_context(|| format!("staging the project in {}", parent.display()))?;
+    let staged_root = staging.path();
+
+    write_new_file(
+        &staged_root.join("bundle/evidence.yaml"),
+        render_authoring_bundle(&prepared.artifacts.source_block).as_bytes(),
+        0o644,
+    )?;
+    let written = suggest::emit::write_into_project(staged_root, &prepared.artifacts.files)?;
+
+    if args.generate_keys {
+        write_new_file(&staged_root.join(".gitignore"), b"secrets/\n", 0o644)?;
+        keygen::generate_scaffold_key_material(&staged_root.join("secrets"), SIGNING_KEY_ID)
+            .context("generating unbound local authoring key material")?;
+    }
+
+    fs::set_permissions(staged_root, fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
+    let written = written
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(staged_root)
+                .expect("a drafted artifact is inside the staging project")
+                .to_path_buf()
+        })
+        .collect::<Vec<_>>();
+    publish(staging, &args.directory)?;
+
+    println!(
+        "Created an incomplete OpenAPI authoring project in {}",
+        args.directory.display()
+    );
+    println!(
+        "  source draft: {}",
+        args.directory.join("bundle/evidence.yaml").display()
+    );
+    for relative in written {
+        println!("  artifact: {}", args.directory.join(relative).display());
+    }
+    if args.generate_keys {
+        println!(
+            "  keys: {} (owner-only, disposable, and not bound to this draft)",
+            args.directory.join("secrets").display()
         );
     }
-
-    let placeholders = placeholders(&root, &args)?;
-    for file in &PROJECT_FILES {
-        let path = root.join(file.relative);
-        let mut rendered = render(file.template, &placeholders)
-            .with_context(|| format!("rendering {}", file.relative))?;
-        // The Mint steps are the tail of the README rather than a second file,
-        // so an adopter reads one document either way.
-        if args.with_mint && file.relative == "README.md" {
-            rendered.push_str(
-                &render(MINT_README_SECTION, &placeholders)
-                    .context("rendering the Mint README section")?,
-            );
-        }
-        write_project_file(&path, &rendered)?;
-    }
-
-    let secret_root = root.join(SECRET_DIRECTORY);
-    create_secret_directory(&secret_root)?;
-    let audit_root = root.join(AUDIT_DIRECTORY);
-    fs::create_dir_all(&audit_root)
-        .with_context(|| format!("creating {}", audit_root.display()))?;
-
-    if args.with_mint {
-        for file in &MINT_FILES {
-            let path = root.join(file.relative);
-            let rendered = render(file.template, &placeholders)
-                .with_context(|| format!("rendering {}", file.relative))?;
-            write_project_file(&path, &rendered)?;
-        }
-        create_secret_directory(&root.join(MINT_SECRET_DIRECTORY))?;
-        create_secret_directory(&root.join(CALLER_SECRET_DIRECTORY))?;
-    }
-
-    report(&root, &secret_root, args.with_mint);
+    println!(
+        "This is not a runnable deployment. Define and review the evidence question separately."
+    );
     Ok(ExitCode::SUCCESS)
 }
 
-/// The substitutions every template shares. Values are computed once so the
-/// bundle, the runtime file, the README and any paired Mint configuration
-/// cannot drift from each other.
-fn placeholders(root: &Path, args: &NewArgs) -> anyhow::Result<Vec<(&'static str, String)>> {
-    let token_issuer = if args.with_mint {
-        MINT_ISSUER
-    } else {
-        IDENTITY_ISSUER
-    };
-    let authentication_note = if args.with_mint {
-        MINT_AUTHENTICATION_NOTE
-    } else {
-        AUTHENTICATION_NOTE
-    };
-    Ok(vec![
-        ("project_root", path_string(root)?),
-        (
-            "bundle_directory",
-            path_string(&root.join(BUNDLE_DIRECTORY))?,
+fn validate_new_destination(path: &Path) -> anyhow::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => bail!(
+            "refusing to replace existing project path {}; choose a new directory",
+            path.display()
         ),
-        ("secret_root", path_string(&root.join(SECRET_DIRECTORY))?),
-        ("audit_path", path_string(&root.join(AUDIT_FILE))?),
-        ("provider_id", args.provider_id.clone()),
-        ("issuer_id", args.issuer_id.clone()),
-        ("listener_port", args.port.to_string()),
-        ("mint_listener_port", MINT_LISTENER_PORT.to_string()),
-        ("trust_domain", TRUST_DOMAIN.to_owned()),
-        ("requirement_id", REQUIREMENT_ID.to_owned()),
-        ("framework_id", FRAMEWORK_ID.to_owned()),
-        ("evidence_type_id", EVIDENCE_TYPE_ID.to_owned()),
-        ("concept_id", CONCEPT_ID.to_owned()),
-        ("disclosure_family_id", DISCLOSURE_FAMILY_ID.to_owned()),
-        ("signing_key_id", SIGNING_KEY_ID.to_owned()),
-        ("requester_tag", REQUESTER_TAG.to_owned()),
-        ("authentication_note", authentication_note.to_owned()),
-        ("token_issuer", token_issuer.to_owned()),
-        ("token_audience", TOKEN_AUDIENCE.to_owned()),
-        ("token_algorithm", TOKEN_ALGORITHM.to_owned()),
-        ("token_jwks_path", TOKEN_JWKS_PATH.to_owned()),
-        ("token_jwks_uri", format!("{token_issuer}{TOKEN_JWKS_PATH}")),
-        ("principal_claim", PRINCIPAL_CLAIM.to_owned()),
-        ("requester_tags_claim", REQUESTER_TAGS_CLAIM.to_owned()),
-        (
-            "evidence_audience_claim",
-            EVIDENCE_AUDIENCE_CLAIM.to_owned(),
-        ),
-        ("grant_id_claim", GRANT_ID_CLAIM.to_owned()),
-        ("grant_authority_claim", GRANT_AUTHORITY_CLAIM.to_owned()),
-        (
-            "mint_config_path",
-            path_string(&root.join(MINT_CONFIG_FILE))?,
-        ),
-        (
-            "mint_clients_directory",
-            path_string(&root.join(MINT_CLIENT_DIRECTORY))?,
-        ),
-        (
-            "mint_secret_root",
-            path_string(&root.join(MINT_SECRET_DIRECTORY))?,
-        ),
-        (
-            "caller_secret_root",
-            path_string(&root.join(CALLER_SECRET_DIRECTORY))?,
-        ),
-        ("mint_signing_key_id", MINT_SIGNING_KEY_ID.to_owned()),
-        ("mint_client_id", MINT_CLIENT_ID.to_owned()),
-        ("mint_client_key_id", MINT_CLIENT_KEY_ID.to_owned()),
-        ("mint_client_principal", MINT_CLIENT_PRINCIPAL.to_owned()),
-        ("mint_client_audience", MINT_CLIENT_AUDIENCE.to_owned()),
-        ("mint_token_endpoint", format!("{token_issuer}/token")),
-    ])
-}
-
-/// Substitute every `{{name}}` marker, then refuse output that still holds one.
-/// A silently unrendered marker would produce a project that fails much later,
-/// in `evidence check`, with a far less obvious cause.
-fn render(template: &str, placeholders: &[(&'static str, String)]) -> anyhow::Result<String> {
-    let mut rendered = template.to_owned();
-    for (name, value) in placeholders {
-        rendered = rendered.replace(&format!("{{{{{name}}}}}"), value);
-    }
-    if rendered.contains("{{") {
-        bail!("the template contains a placeholder the scaffold does not define");
-    }
-    Ok(rendered)
-}
-
-fn path_string(path: &Path) -> anyhow::Result<String> {
-    path.to_str()
-        .map(ToOwned::to_owned)
-        .with_context(|| format!("the path {} is not valid UTF-8", path.display()))
-}
-
-fn directory_has_entries(path: &Path) -> anyhow::Result<bool> {
-    match fs::read_dir(path) {
-        Ok(mut entries) => Ok(entries.next().transpose()?.is_some()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => {
-            Err(error).with_context(|| format!("reading the directory {}", path.display()))
+            Err(error).with_context(|| format!("inspecting project path {}", path.display()))
         }
     }
 }
 
-fn write_project_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+fn destination_parent(path: &Path) -> anyhow::Result<&Path> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("inspecting project parent {}", parent.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "project parent {} must be an existing plain directory",
+            parent.display()
+        );
+    }
+    Ok(parent)
+}
+
+fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()> {
+    use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("creating the directory {}", parent.display()))?;
+            .with_context(|| format!("creating directory {}", parent.display()))?;
     }
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("persisting {}", path.display()))
 }
 
-/// Create the secret root the runtime file names, owner-only and empty. Keys
-/// are generated by `evidencectl keygen`, never here.
-fn create_secret_directory(path: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("restricting {} to its owner", path.display()))?;
+fn render_authoring_bundle(source_block: &str) -> String {
+    format!(
+        "# INCOMPLETE AUTHORING DRAFT. OpenAPI supplies only the source operation\n\
+# and response shape. This file is not a runnable Evidence deployment.\n\
+version: 1\n\
+assuranceProfile: local\n\
+{source_block}"
+    )
+}
+
+fn publish(staging: tempfile::TempDir, destination: &Path) -> anyhow::Result<()> {
+    let staged = staging.keep();
+    if let Err(error) = rename_noreplace(&staged, destination) {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(error).with_context(|| {
+            format!(
+                "publishing the project without replacing {}",
+                destination.display()
+            )
+        });
+    }
     Ok(())
 }
 
-/// Give the owner write permission back across an existing project tree.
-fn restore_writable(root: &Path) -> anyhow::Result<()> {
-    let metadata = fs::symlink_metadata(root)
-        .with_context(|| format!("reading the permissions of {}", root.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    let mode = metadata.permissions().mode();
-    if mode & 0o200 == 0 {
-        fs::set_permissions(root, fs::Permissions::from_mode(mode | 0o200))
-            .with_context(|| format!("restoring write permission on {}", root.display()))?;
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    for entry in
-        fs::read_dir(root).with_context(|| format!("reading the directory {}", root.display()))?
-    {
-        let entry = entry.with_context(|| format!("reading the directory {}", root.display()))?;
-        restore_writable(&entry.path())?;
-    }
-    Ok(())
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
 }
 
-/// Report paths only. No key material exists yet, and none is ever printed.
-fn report(root: &Path, secret_root: &Path, with_mint: bool) {
-    println!(
-        "Scaffolded an Evidence deployment project in {}",
-        root.display()
-    );
-    println!("  bundle:   {}", root.join(BUNDLE_DIRECTORY).display());
-    println!("  runtime:  {}", root.join(RUNTIME_FILE).display());
-    println!("  secrets:  {} (empty, owner-only)", secret_root.display());
-    println!("  audit:    {}", root.join(AUDIT_DIRECTORY).display());
-    if with_mint {
-        println!(
-            "  mint:     {} (paired token issuer)",
-            root.join(MINT_DIRECTORY).display()
-        );
-    }
-    println!();
-    println!("Next steps:");
-    println!(
-        "  evidencectl keygen signing --out-dir {} --kid {SIGNING_KEY_ID}",
-        secret_root.display()
-    );
-    println!(
-        "  evidencectl keygen secret --out {}",
-        secret_root.join("audit-hmac-key").display()
-    );
-    println!(
-        "  evidencectl keygen secret --out {}",
-        secret_root.join("subject-binding-hmac-key").display()
-    );
-    println!("  # The source's bearer token. Against a real source it is that system's");
-    println!("  # own token, written to the path below with mode 0600; against a stand-in");
-    println!("  # source, generate one. Not keygen secret: that makes HMAC key material,");
-    println!("  # whose raw bytes an HTTP header value rejects. check, the fixtures and");
-    println!("  # startup all pass without a token; the first live request is where a");
-    println!("  # missing one is discovered.");
-    println!(
-        "  evidencectl keygen token --out {}",
-        secret_root.join("source-bearer-token").display()
-    );
-    println!(
-        "  chmod -R a-w {} && chmod 444 {}",
-        root.join(BUNDLE_DIRECTORY).display(),
-        root.join(RUNTIME_FILE).display()
-    );
-    println!(
-        "  evidence check --runtime {}",
-        root.join(RUNTIME_FILE).display()
-    );
-    println!(
-        "  evidence evaluate --runtime {} --fixture fixtures/cases.yaml",
-        root.join(RUNTIME_FILE).display()
-    );
-    if with_mint {
-        println!();
-        println!("Next steps for the paired Registry Mint deployment:");
-        println!(
-            "  evidencectl keygen signing --out-dir {} --kid {MINT_SIGNING_KEY_ID}",
-            root.join(MINT_SECRET_DIRECTORY).display()
-        );
-        println!(
-            "  evidencectl keygen signing --out-dir {} --kid {MINT_CLIENT_KEY_ID}",
-            root.join(CALLER_SECRET_DIRECTORY).display()
-        );
-        println!(
-            "  # copy the caller public key into {}/{MINT_CLIENT_ID}.yaml.example,",
-            root.join(MINT_CLIENT_DIRECTORY).display()
-        );
-        println!("  # then rename that file to {MINT_CLIENT_ID}.yaml to register the caller");
-        println!(
-            "  mint check --config {}",
-            root.join(MINT_CONFIG_FILE).display()
-        );
-    }
-    println!();
-    println!("{} explains the rest.", root.join("README.md").display());
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace project publication is unsupported on this platform",
+    ))
 }

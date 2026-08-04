@@ -98,6 +98,8 @@ const SIGNING_PRIVATE_FILENAME: &str = "signing-ed25519-private-jwk";
 const SIGNING_PUBLIC_FILENAME: &str = "signing-ed25519-public.jwk.json";
 const HOLDER_PRIVATE_FILENAME: &str = "holder-ed25519-private-jwk";
 const HOLDER_PUBLIC_FILENAME: &str = "holder-ed25519-public.jwk.json";
+const AUDIT_HMAC_FILENAME: &str = "audit-hmac-key";
+const SUBJECT_BINDING_HMAC_FILENAME: &str = "subject-binding-hmac-key";
 
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const PUBLIC_FILE_MODE: u32 = 0o644;
@@ -132,6 +134,35 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
     }
 }
 
+/// Generate the four files needed during local Evidence authoring.
+///
+/// The caller supplies a newly staged, unpublished project. This function
+/// never accepts force and never reports paths, so a collision fails closed
+/// and no private material reaches standard output. Publication of the staged
+/// project makes the complete batch visible at once.
+pub(crate) fn generate_scaffold_key_material(out_dir: &Path, kid: &str) -> Result<()> {
+    ensure_private_dir(out_dir)?;
+    run_keypair_impl(
+        out_dir,
+        Some(kid),
+        None,
+        false,
+        SIGNING_PRIVATE_FILENAME,
+        SIGNING_PUBLIC_FILENAME,
+        false,
+    )?;
+    for filename in [AUDIT_HMAC_FILENAME, SUBJECT_BINDING_HMAC_FILENAME] {
+        run_secret_impl(
+            &SecretArgs {
+                out: out_dir.join(filename),
+                force: false,
+            },
+            false,
+        )?;
+    }
+    Ok(())
+}
+
 fn run_keypair(
     out_dir: &Path,
     kid: Option<&str>,
@@ -139,6 +170,27 @@ fn run_keypair(
     force: bool,
     private_filename: &str,
     public_filename: &str,
+) -> Result<ExitCode> {
+    run_keypair_impl(
+        out_dir,
+        kid,
+        public_out,
+        force,
+        private_filename,
+        public_filename,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_keypair_impl(
+    out_dir: &Path,
+    kid: Option<&str>,
+    public_out: Option<&Path>,
+    force: bool,
+    private_filename: &str,
+    public_filename: &str,
+    report: bool,
 ) -> Result<ExitCode> {
     if let Some(kid) = kid {
         if kid.trim().is_empty() {
@@ -210,14 +262,20 @@ fn run_keypair(
         force,
     )?;
 
-    println!("wrote {}", private_path.display());
-    println!("wrote {}", public_path.display());
-    println!("kid: {kid}");
+    if report {
+        println!("wrote {}", private_path.display());
+        println!("wrote {}", public_path.display());
+        println!("kid: {kid}");
+    }
 
     Ok(ExitCode::SUCCESS)
 }
 
 fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
+    run_secret_impl(args, true)
+}
+
+fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
     reject_existing(&[&args.out], args.force)?;
 
     let secret = generate_secret()?;
@@ -231,7 +289,9 @@ fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
     }
     write_owner_file(&args.out, secret.as_slice(), PRIVATE_FILE_MODE, args.force)?;
 
-    println!("wrote {}", args.out.display());
+    if report {
+        println!("wrote {}", args.out.display());
+    }
 
     Ok(ExitCode::SUCCESS)
 }

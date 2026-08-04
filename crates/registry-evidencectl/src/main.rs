@@ -1,6 +1,7 @@
-//! Evidence adopter tooling: key generation, project scaffolding, fixture
-//! runs. Companion to the frozen `evidence` runtime CLI; it never implements
-//! Evidence semantics itself and shells out to the runtime binary for them.
+//! Evidence adopter tooling: key generation, OpenAPI-assisted authoring, and
+//! fixture runs. Companion to the frozen `evidence` runtime CLI; it never
+//! implements Evidence semantics itself and shells out to the runtime binary
+//! for them.
 
 use std::process::ExitCode;
 
@@ -17,7 +18,7 @@ mod suggest;
 #[command(
     name = "evidencectl",
     version,
-    about = "Evidence adopter tooling: keys, project scaffolds, fixture runs"
+    about = "Evidence adopter tooling: keys, OpenAPI authoring, fixture runs"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -31,7 +32,7 @@ enum Command {
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
     Jwks(jwks::JwksArgs),
-    /// Scaffold a neutral Evidence deployment project.
+    /// Start an incomplete Evidence authoring project from OpenAPI.
     New(scaffold::NewArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]

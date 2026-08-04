@@ -3,11 +3,9 @@
 //! `evidencectl doctor` over a real deployment project.
 //!
 //! Every assertion here is about a mode or an owner the Evidence or Mint
-//! runtime refuses at startup, so the project under test is built with the real
-//! `evidencectl new` and `evidencectl keygen` rather than from hand-written
-//! files: a check that mirrors the runtime is only worth having if it is
-//! measured against what the tooling actually produces. No `evidence` binary is
-//! involved anywhere in this file, which is the other half of the promise:
+//! runtime refuses at startup. The filesystem is intentionally assembled as a
+//! doctor fixture because `evidencectl new` no longer invents a runnable
+//! deployment. No `evidence` binary is involved anywhere in this file:
 //! `doctor` is a filesystem walk, and an adopter who cannot yet start the
 //! service is exactly the one who needs it. Nothing here prints key material.
 
@@ -18,9 +16,9 @@ use std::{
     process::{Command, Output},
 };
 
-const SIGNING_KID: &str = "scaffold-signing-key-1";
-const MINT_KID: &str = "scaffold-mint-key-1";
-const CALLER_KID: &str = "scaffold-client-key-1";
+const SIGNING_KID: &str = "doctor-signing-key-1";
+const MINT_KID: &str = "doctor-mint-key-1";
+const CALLER_KID: &str = "doctor-client-key-1";
 const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
 
 #[test]
@@ -161,14 +159,27 @@ fn doctor_json_puts_one_document_on_stdout_and_the_report_on_stderr() {
     );
 }
 
-/// Scaffold a project with its paired Mint configuration and generate every
-/// key the two runtimes read, exactly as the generated README instructs.
+/// Assemble the smallest filesystem fixture that names every kind of artifact
+/// doctor checks, then generate the private material through the public CLI.
 fn provision(project: &Path) {
-    run_ok(&[
-        "new",
-        "--with-mint",
-        project.to_str().expect("project path"),
-    ]);
+    fs::create_dir_all(project.join("bundle")).expect("bundle directory");
+    fs::create_dir_all(project.join("audit")).expect("audit directory");
+    fs::create_dir_all(project.join("mint")).expect("mint directory");
+    fs::write(
+        project.join("runtime.yaml"),
+        "bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\nauditStorage:\n  path: audit/evidence.jsonl\n",
+    )
+    .expect("runtime fixture");
+    fs::write(
+        project.join("bundle/evidence.yaml"),
+        "signing: secret:file/signing-ed25519-private-jwk\naudit: secret:file/audit-hmac-key\nsubjectBinding: secret:file/subject-binding-hmac-key\nsourceToken: secret:file/source-bearer-token\n",
+    )
+    .expect("bundle fixture");
+    fs::write(
+        project.join("mint/mint.yaml"),
+        "signing:\n  activeKeyFile: secrets/signing-ed25519-private-jwk\n",
+    )
+    .expect("Mint fixture");
 
     let secrets = project.join("secrets");
     run_ok(&[

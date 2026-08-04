@@ -454,7 +454,7 @@ fn get_path_segment_ceiling_is_enforced_and_names_the_pointer() {
 }
 
 #[test]
-fn source_block_parses_and_carries_request_and_review_markers() {
+fn source_block_parses_and_carries_only_mechanical_source_facts() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
     let parsed: serde_norway::Value =
@@ -473,9 +473,6 @@ fn source_block_parses_and_carries_request_and_review_markers() {
         .contains("baseUrl: https://api.example.invalid"));
     assert!(artifacts
         .source_block
-        .contains("# TODO(evidencectl): review authentication"));
-    assert!(artifacts
-        .source_block
         .contains("responseSchema: schemas/search-a-response.schema.yaml"));
     assert!(artifacts
         .source_block
@@ -484,41 +481,43 @@ fn source_block_parses_and_carries_request_and_review_markers() {
         .source_block
         .contains("factSchema: schemas/search-a-facts.schema.yaml"));
 
-    // selectorInputs / prepareScript / adapterParameters are never
-    // fabricated: they show up only as TODO comments, not real keys.
-    assert!(!artifacts.source_block.contains("selectorInputs:"));
-    assert!(!artifacts.source_block.contains("prepareScript: adapters"));
-    assert!(!artifacts.source_block.contains("adapterParameters:"));
+    let source = &parsed["sources"]["search-a"];
+    for governed in [
+        "baseUrl",
+        "posture",
+        "authentication",
+        "selectorInputs",
+        "prepareScript",
+        "adapterParameters",
+        "preparationLimits",
+    ] {
+        assert!(source.get(governed).is_none(), "draft invented {governed}");
+    }
 }
 
-/// The runtime rejects a GET source that does not forbid the JSON body
-/// channel, and rejects any source that forbids both channels, so the pair is
-/// chosen from the method rather than fixed.
+/// OpenAPI establishes the method, but it does not establish the adopter's
+/// bounded preparation policy.
 #[test]
-fn a_get_source_carries_its_request_in_the_query_channel() {
+fn a_get_source_omits_request_channel_policy() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     let block = &artifacts.source_block;
 
-    assert!(block.contains("query: required"), "{block}");
-    assert!(block.contains("jsonBody: forbidden"), "{block}");
-    assert!(!block.contains("jsonBody: required"), "{block}");
-    assert!(block.contains("maximumQueryPairs:"), "{block}");
-    assert!(
-        !block.contains("maximumJsonDepth:"),
-        "a forbidden JSON body needs no JSON limits: {block}"
-    );
+    assert!(block.contains("method: GET"), "{block}");
+    assert!(!block.contains("query:"), "{block}");
+    assert!(!block.contains("jsonBody:"), "{block}");
+    assert!(!block.contains("maximumQueryPairs:"), "{block}");
 }
 
 #[test]
-fn a_post_source_carries_its_request_in_the_json_body() {
+fn a_post_source_omits_request_channel_policy() {
     let mut inputs = base_inputs();
     inputs.operation.method = "POST".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
     let block = &artifacts.source_block;
 
-    assert!(block.contains("query: forbidden"), "{block}");
-    assert!(block.contains("jsonBody: required"), "{block}");
-    assert!(block.contains("maximumJsonDepth:"), "{block}");
+    assert!(block.contains("method: POST"), "{block}");
+    assert!(!block.contains("query:"), "{block}");
+    assert!(!block.contains("jsonBody:"), "{block}");
     assert!(!block.contains("maximumQueryPairs:"), "{block}");
 }
 
@@ -538,10 +537,9 @@ fn a_method_outside_the_runtime_enum_is_refused_by_name() {
 }
 
 /// A templated OpenAPI path cannot be a `path:`, which the runtime rejects on
-/// `{` and `}`. It becomes a `pathTemplate:`, whose placeholders still need
-/// `pathBindings` the tool never invents.
+/// `{` and `}`. It becomes a `pathTemplate:` without inventing bindings.
 #[test]
-fn a_templated_path_becomes_a_path_template_with_a_bindings_todo() {
+fn a_templated_path_becomes_a_path_template_without_bindings() {
     let mut inputs = base_inputs();
     inputs.operation.path = "/v1/records/{id}".to_owned();
     let artifacts = emit::draft(&inputs).expect("draft");
@@ -553,10 +551,7 @@ fn a_templated_path_becomes_a_path_template_with_a_bindings_todo() {
 
     assert!(block.contains("pathTemplate: /v1/records/{id}"), "{block}");
     assert!(!block.contains("path: /v1/records/{id}"), "{block}");
-    assert!(
-        block.contains("# TODO(evidencectl): pathBindings — bind each placeholder"),
-        "{block}"
-    );
+    assert!(!block.contains("pathBindings:"), "{block}");
 }
 
 /// `baseUrl` is validated as an origin: any path the OpenAPI server URL
@@ -604,34 +599,25 @@ fn a_server_url_with_variables_yields_no_base_url_suggestion() {
     assert_eq!(split.path_prefix, "");
 }
 
-/// The acquisition posture describes the pre-projection wire response, and
-/// local projection never upgrades the claim, so the draft states the weakest
-/// one and asks for review.
+/// Acquisition posture is a governed decision that OpenAPI cannot make.
 #[test]
-fn the_drafted_posture_is_the_weakest_claim_with_an_upgrade_todo() {
+fn the_draft_omits_acquisition_posture() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     let block = &artifacts.source_block;
 
-    assert!(block.contains("posture: record-transformed"), "{block}");
-    assert!(!block.contains("posture: field-projected"), "{block}");
-    assert!(
-        block.contains("# TODO(evidencectl): upgrade to field-projected or source-derived only if"),
-        "{block}"
-    );
+    assert!(!block.contains("posture:"), "{block}");
 }
 
 #[test]
-fn source_block_falls_back_to_placeholder_base_url_without_a_suggestion() {
+fn source_block_leaves_base_url_absent_without_a_suggestion() {
     let mut inputs = base_inputs();
     inputs.base_url_suggestion = None;
     let artifacts = emit::draft(&inputs).expect("draft");
 
     assert!(artifacts
         .source_block
-        .contains("baseUrl: https://source.invalid"));
-    assert!(artifacts
-        .source_block
-        .contains("# TODO(evidencectl): replace this placeholder"));
+        .contains("OpenAPI document gives no fixed origin"));
+    assert!(!artifacts.source_block.contains("baseUrl:"));
 }
 
 #[test]
@@ -774,17 +760,14 @@ fn only_an_edited_or_invented_bound_is_reattributed_to_the_operator() {
     );
 }
 
-/// Writing the files leaves the bundle referencing artifacts evidence.yaml
-/// does not declare yet, which `evidence check` reports as an invalid artifact
-/// closure. That message is the remaining to-do list, so the report says so
-/// rather than leaving an operator to read it as breakage.
+/// The report must name the governed decisions absent from a mechanical draft.
 #[test]
-fn the_report_predicts_the_closure_error_that_precedes_pasting_the_block() {
+fn the_report_names_omitted_governed_source_decisions() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     assert!(
         artifacts
             .report
-            .contains("deployment artifact closure is invalid"),
+            .contains("source origin, posture, authentication, selector bindings"),
         "{}",
         artifacts.report
     );
@@ -972,11 +955,10 @@ fn drafted_yaml_escapes_control_characters_in_a_scalar() {
     );
 }
 
-/// The emitted TODOs are read inside an adopter's project, where the scaffold
-/// wrote `bundle/evidence.yaml`. `templates/` is an evidencectl source
-/// directory that does not exist there.
+/// Emitted paths are project-relative and never refer to removed source-tree
+/// templates.
 #[test]
-fn emitted_todos_name_paths_that_exist_in_a_scaffolded_project() {
+fn emitted_paths_are_project_relative() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
     let all = artifacts
         .files
@@ -987,10 +969,8 @@ fn emitted_todos_name_paths_that_exist_in_a_scaffolded_project() {
             text
         });
 
-    assert!(
-        all.contains("bundle/evidence.yaml"),
-        "the guidance must name the scaffolded path:\n{all}"
-    );
+    assert!(all.contains("schemas/search-a-response.schema.yaml"));
+    assert!(all.contains("adapters/search-a-extract.rhai"));
     assert!(
         !all.contains("templates/bundle/"),
         "an evidencectl source path is not a path in the adopter's project:\n{all}"

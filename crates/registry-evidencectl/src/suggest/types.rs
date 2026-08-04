@@ -225,8 +225,8 @@ pub struct DraftFile {
 #[derive(Debug, Clone)]
 pub struct DraftArtifacts {
     pub files: Vec<DraftFile>,
-    /// A `sources.<id>` YAML block the operator pastes into evidence.yaml,
-    /// with review markers on every value the spec could not decide.
+    /// A deliberately incomplete `sources.<id>` YAML block containing only
+    /// facts mechanically established by the OpenAPI selection.
     pub source_block: String,
     /// Human report: what was derived, from where, and what remains.
     pub report: String,

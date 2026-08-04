@@ -32,7 +32,7 @@ use serde_norway::Value as YamlValue;
 /// How a bundle names a secret the file provider resolves.
 const SECRET_REFERENCE_PREFIX: &str = "secret:file/";
 
-/// The paired Mint configuration `evidencectl new --with-mint` renders.
+/// An optional paired Mint configuration inside a deployment project.
 const MINT_CONFIG_FILE: &str = "mint/mint.yaml";
 
 /// The example caller's own signing key, which `mint token --key` reads under

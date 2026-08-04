@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Evidence adopter tooling: key generation, project scaffolding, fixture runs."
+description = "Evidence adopter tooling: key generation, OpenAPI authoring, fixture runs."
 repository.workspace = true
 publish = false
 
@@ -30,6 +30,4 @@ serde_norway.workspace = true
 ureq.workspace = true
 url.workspace = true
 zeroize.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true

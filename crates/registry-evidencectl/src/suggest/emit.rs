@@ -40,8 +40,8 @@ pub struct EmitInputs {
     /// header value in the drafted source block.
     pub media_type: String,
     /// An origin and path prefix derived from the OpenAPI `servers` list, when
-    /// one could be. `None` falls back to a placeholder origin that needs
-    /// review. See [`split_server_url`].
+    /// one could be. The origin is emitted only as a commented review
+    /// suggestion. See [`split_server_url`].
     pub base_url_suggestion: Option<ServerSuggestion>,
     /// Selected projection pointers (extended form), in presentation order.
     pub selection: Vec<String>,
@@ -97,10 +97,8 @@ pub struct ServerSuggestion {
 ///
 /// Returns `None` for anything that does not name one fixed origin: a URL with
 /// `{variables}`, a relative URL, or one carrying a query or fragment. The
-/// caller falls back to the placeholder origin in that case, because a
-/// `baseUrl` the runtime rejects is worse than an obvious placeholder. The
-/// origin is not otherwise validated here: the runtime is the validator, and
-/// the drafted value carries a review TODO either way.
+/// caller leaves the origin absent in that case. The origin is not otherwise
+/// validated here because it remains a review suggestion, not source policy.
 pub fn split_server_url(url: &str) -> Option<ServerSuggestion> {
     if url.contains(['{', '}', '?', '#', ' ']) {
         return None;
@@ -132,21 +130,8 @@ const GET_PATH_MAX_BYTES: usize = 256;
 /// The get_path pointer segment-count ceiling the runtime enforces.
 const GET_PATH_MAX_SEGMENTS: usize = 16;
 
-/// The two methods an Evidence fixed request admits. A GET source must also
-/// forbid the JSON body channel, so the preparation-limit pair below is chosen
-/// from the method rather than fixed.
+/// The two methods an Evidence fixed request admits.
 const ADMITTED_METHODS: [&str; 2] = ["GET", "POST"];
-
-const PREPARATION_LIMITS_MAX_QUERY_PAIRS: u32 = 8;
-const PREPARATION_LIMITS_MAX_QUERY_NAME_BYTES: u32 = 32;
-const PREPARATION_LIMITS_MAX_QUERY_VALUE_BYTES: u32 = 256;
-const PREPARATION_LIMITS_MAX_JSON_DEPTH: u32 = 8;
-const PREPARATION_LIMITS_MAX_COLLECTION_ITEMS: u32 = 16;
-const PREPARATION_LIMITS_MAX_STRING_BYTES: u32 = 256;
-const PREPARATION_LIMITS_MAX_NORMALIZED_BYTES: u32 = 4096;
-const REQUEST_TIMEOUT_MILLISECONDS: u32 = 3000;
-const MAXIMUM_RESPONSE_BYTES: u32 = 65536;
-const CONCURRENCY_LIMIT: u32 = 8;
 
 /// Draft the response schema, extract-script skeleton, facts-schema stub,
 /// pasteable source block, human report, and equivalent command for one
@@ -998,106 +983,37 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
     out
 }
 
+/// Render only facts established mechanically by the selected OpenAPI
+/// operation. Governed source policy remains absent rather than receiving a
+/// plausible-looking default.
 fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     let mut out = String::new();
-    push_line(
-        &mut out,
-        0,
-        "# Paste this block under `sources:` in bundle/evidence.yaml, then resolve",
-    );
-    push_line(
-        &mut out,
-        0,
-        "# every TODO(evidencectl) comment below before running `evidence check`.",
-    );
     push_line(&mut out, 0, "sources:");
     push_line(&mut out, 1, &format!("{}:", render_key(&inputs.source_id)));
     push_line(&mut out, 2, "transport: http-json");
-
     match &inputs.base_url_suggestion {
         Some(server) => {
             push_line(
                 &mut out,
                 2,
-                "# TODO(evidencectl): confirm this base URL against the intended deployment;",
+                "# Review the OpenAPI server origin before adding it to source policy:",
             );
             push_line(
                 &mut out,
                 2,
-                "# derived from the OpenAPI servers list, which states an origin only here",
-            );
-            push_line(
-                &mut out,
-                2,
-                "# and any path prefix on the request path below.",
-            );
-            push_line(
-                &mut out,
-                2,
-                &format!("baseUrl: {}", yaml_scalar_string(&server.base_url)),
+                &format!("# baseUrl: {}", yaml_scalar_string(&server.base_url)),
             );
         }
-        None => {
-            push_line(
-                &mut out,
-                2,
-                "# TODO(evidencectl): replace this placeholder with the source's real origin.",
-            );
-            push_line(&mut out, 2, "baseUrl: https://source.invalid");
-        }
+        None => push_line(
+            &mut out,
+            2,
+            "# Add a reviewed fixed baseUrl; the OpenAPI document gives no fixed origin.",
+        ),
     }
-
-    // The posture describes the response the source puts on the wire, before
-    // this deployment projects anything: a local projection narrows what is
-    // kept, never what was disclosed, so it cannot upgrade the claim. The
-    // weakest posture is therefore the only honest default.
-    push_line(
-        &mut out,
-        2,
-        "# TODO(evidencectl): upgrade to field-projected or source-derived only if the",
-    );
-    push_line(
-        &mut out,
-        2,
-        "# source's pre-projection response really carries no more than this.",
-    );
-    push_line(&mut out, 2, "posture: record-transformed");
-    push_line(
-        &mut out,
-        2,
-        "# TODO(evidencectl): review authentication; static-bearer is a placeholder.",
-    );
-    push_line(
-        &mut out,
-        2,
-        "# See CONFIG.md#source-authentication for the other supported kinds. Do not",
-    );
-    push_line(&mut out, 2, "# map OpenAPI security schemes automatically.");
-    push_line(&mut out, 2, "authentication:");
-    push_line(&mut out, 3, "kind: static-bearer");
-    push_line(
-        &mut out,
-        3,
-        &format!("tokenRef: secret:file/{}-bearer-token", inputs.source_id),
-    );
     push_line(&mut out, 2, "request:");
     push_line(&mut out, 3, &format!("method: {method}"));
     let path = request_path(inputs);
     if path.contains(['{', '}']) {
-        // A `path:` admits no braces, so a templated operation path is a
-        // `pathTemplate:`. Its placeholders need `pathBindings` naming where
-        // each value comes from, which nothing in the document states.
-        push_line(
-            &mut out,
-            3,
-            "# TODO(evidencectl): pathBindings — bind each placeholder in the template",
-        );
-        push_line(
-            &mut out,
-            3,
-            "# below to a selector input or adapter parameter; the runtime requires one",
-        );
-        push_line(&mut out, 3, "# binding per placeholder and no others.");
         push_line(
             &mut out,
             3,
@@ -1113,85 +1029,6 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
         5,
         &format!("value: {}", yaml_scalar_string(&inputs.media_type)),
     );
-    push_line(
-        &mut out,
-        3,
-        "# TODO(evidencectl): selectorInputs — copy the shape from",
-    );
-    push_line(
-        &mut out,
-        3,
-        "# bundle/evidence.yaml (sources.source-a.request.selectorInputs)",
-    );
-    push_line(
-        &mut out,
-        3,
-        "# and name this source's real selector profile and fields.",
-    );
-    push_line(
-        &mut out,
-        3,
-        "# TODO(evidencectl): prepareScript — author this script from",
-    );
-    push_line(&mut out, 3, "# bundle/adapters/source-a-prepare.rhai.");
-    push_line(
-        &mut out,
-        3,
-        "# TODO(evidencectl): adapterParameters and adapterParametersSchema — copy the",
-    );
-    push_line(&mut out, 3, "# shape from bundle/evidence.yaml and");
-    push_line(
-        &mut out,
-        3,
-        "# bundle/schemas/adapter-parameters.schema.yaml.",
-    );
-    // The two channels are chosen from the method, not fixed: the runtime
-    // rejects a GET source whose JSON body channel is anything but forbidden,
-    // and rejects any source that forbids both. Only the limits belonging to
-    // the usable channel are stated.
-    push_line(&mut out, 3, "preparationLimits:");
-    if method == "GET" {
-        push_line(&mut out, 4, "query: required");
-        push_line(&mut out, 4, "jsonBody: forbidden");
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumQueryPairs: {PREPARATION_LIMITS_MAX_QUERY_PAIRS}"),
-        );
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumQueryNameBytes: {PREPARATION_LIMITS_MAX_QUERY_NAME_BYTES}"),
-        );
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumQueryValueBytes: {PREPARATION_LIMITS_MAX_QUERY_VALUE_BYTES}"),
-        );
-    } else {
-        push_line(&mut out, 4, "query: forbidden");
-        push_line(&mut out, 4, "jsonBody: required");
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumJsonDepth: {PREPARATION_LIMITS_MAX_JSON_DEPTH}"),
-        );
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumCollectionItems: {PREPARATION_LIMITS_MAX_COLLECTION_ITEMS}"),
-        );
-        push_line(
-            &mut out,
-            4,
-            &format!("maximumStringBytes: {PREPARATION_LIMITS_MAX_STRING_BYTES}"),
-        );
-    }
-    push_line(
-        &mut out,
-        4,
-        &format!("maximumNormalizedBytes: {PREPARATION_LIMITS_MAX_NORMALIZED_BYTES}"),
-    );
     let selection_values: Vec<Value> = inputs
         .selection
         .iter()
@@ -1202,22 +1039,6 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
         &mut out,
         3,
         &format!("projection: {}", render_flow_list(&selection_values)),
-    );
-    push_line(&mut out, 3, "redirects: deny");
-    push_line(
-        &mut out,
-        3,
-        &format!("timeoutMilliseconds: {REQUEST_TIMEOUT_MILLISECONDS}"),
-    );
-    push_line(
-        &mut out,
-        3,
-        &format!("maximumResponseBytes: {MAXIMUM_RESPONSE_BYTES}"),
-    );
-    push_line(
-        &mut out,
-        3,
-        &format!("concurrencyLimit: {CONCURRENCY_LIMIT}"),
     );
     push_line(
         &mut out,
@@ -1309,27 +1130,16 @@ fn render_report(inputs: &EmitInputs) -> String {
             need.kind.label()
         ));
     }
-    out.push_str("  - TODO(evidencectl): sources.<id>.request selectorInputs, prepareScript,\n");
-    out.push_str(
-        "    adapterParameters, and adapterParametersSchema in the pasted source block.\n",
-    );
-    out.push_str(
-        "  - TODO(evidencectl): review authentication and baseUrl in the pasted source block.\n\n",
-    );
+    out.push_str("  - source origin, posture, authentication, selector bindings, preparation,\n");
+    out.push_str("    and request limits are intentionally absent from the mechanical draft.\n\n");
 
     out.push_str("Next steps:\n");
     out.push_str(&format!(
-        "  1. Resolve every TODO(evidencectl) comment in schemas/{}-response.schema.yaml,\n     adapters/{}-extract.rhai, schemas/{}-facts.schema.yaml, and the pasted source block.\n",
+        "  1. Resolve every TODO(evidencectl) comment in schemas/{}-response.schema.yaml,\n     adapters/{}-extract.rhai, and schemas/{}-facts.schema.yaml.\n",
         inputs.source_id, inputs.source_id, inputs.source_id
     ));
-    out.push_str("  2. Paste the source block under `sources:` in bundle/evidence.yaml.\n");
-    out.push_str("  3. Run `evidence check --runtime <project>/runtime.yaml`.\n");
-    out.push_str(
-        "\nUntil step 2 is done `evidence check` fails, naming every drafted file, with\n\
-         `deployment artifact closure is invalid`: the bundle now carries artifacts\n\
-         evidence.yaml does not declare yet. That error is the remaining to-do list, not a\n\
-         broken draft.\n",
-    );
+    out.push_str("  2. Review the source block and add the governed source decisions it omits.\n");
+    out.push_str("  3. Merge it into a separately authored Evidence project.\n");
     out
 }
 

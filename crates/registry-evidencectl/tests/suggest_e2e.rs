@@ -164,12 +164,11 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "the equivalent command must reproduce the selection, quoted: {stdout}"
     );
 
-    // Pasting the source block is a step the operator still owes, and until it
-    // happens `evidence check` names the drafted files back at them. The report
-    // says so, so that error reads as the to-do list it is.
+    // OpenAPI cannot establish governed source policy. The report must make
+    // that boundary visible instead of presenting generated defaults.
     assert!(
-        stdout.contains("deployment artifact closure is invalid"),
-        "the report must predict the closure error: {stdout}"
+        stdout.contains("source origin, posture, authentication, selector bindings"),
+        "the report must name the omitted decisions: {stdout}"
     );
 
     // Every adopted default is announced with its provenance, so a flag-driven
@@ -455,19 +454,12 @@ fn evidencectl(arguments: &[String]) -> Output {
         .expect("running evidencectl")
 }
 
-/// Scaffold a deployment project to draft into, using the tool's own `new`.
+/// Create the only precondition `source suggest --project` requires: an
+/// existing project directory. `new` is tested separately and now owns the
+/// OpenAPI path itself.
 fn scaffold(root: &Path) -> PathBuf {
     let project = root.join("project");
-    let output = evidencectl(&[
-        "new".to_owned(),
-        path_argument(&project),
-        "--force".to_owned(),
-    ]);
-    assert!(
-        output.status.success(),
-        "evidencectl new failed: {}",
-        stderr_of(&output)
-    );
+    std::fs::create_dir(&project).expect("project directory");
     project
 }
 

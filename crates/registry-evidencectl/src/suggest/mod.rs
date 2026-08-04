@@ -105,7 +105,15 @@ const FALLBACK_SOURCE_ID: &str = "source-a";
 /// are. Both produce the same [`Decisions`], and the printed equivalent
 /// command reproduces either run exactly, because every suggestion is
 /// derived deterministically from the same inputs.
-fn suggest(args: SuggestArgs) -> Result<ExitCode> {
+pub(crate) struct PreparedSuggestion {
+    pub artifacts: DraftArtifacts,
+    flag_driven: bool,
+}
+
+/// Run the shared OpenAPI interpretation pipeline without writing output.
+/// `source suggest` and `new --openapi` differ only in how they deliver this
+/// prepared draft.
+pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
     let source = fetch::spec_source(&args.openapi)?;
     let spec = Spec::open(&source)?;
     let operations = spec.operations();
@@ -125,7 +133,7 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     if args.operation.is_none() && !interactive::is_interactive() {
         bail!(
             "{}\n\nthis document declares:\n{}",
-            missing_flags_message(&args),
+            missing_flags_message(args),
             list_operations(&operations)
         );
     }
@@ -177,7 +185,7 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
         if !interactive::is_interactive() {
             bail!(
                 "{}\n\nthis operation's `{}` `{}` response offers:\n{}",
-                missing_flags_message(&args),
+                missing_flags_message(args),
                 args.status,
                 args.media_type,
                 list_leaves(&leaves)
@@ -254,12 +262,22 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     };
     let artifacts = emit::draft(&inputs)?;
 
+    Ok(PreparedSuggestion {
+        artifacts,
+        flag_driven,
+    })
+}
+
+fn suggest(args: SuggestArgs) -> Result<ExitCode> {
+    let prepared = prepare(&args)?;
+    let artifacts = prepared.artifacts;
+
     let code = match &args.project {
         Some(project) => deliver_into_project(
             project,
             &artifacts,
             args.evidence_bin.as_deref(),
-            flag_driven,
+            prepared.flag_driven,
         )?,
         None => {
             print_draft(&artifacts);
