@@ -1,6 +1,7 @@
 //! Fail-closed native Evidence audit with a durable keyed JSONL chain.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs::{File, TryLockError},
     io::{BufRead as _, BufReader, Error as IoError, ErrorKind, Read as _, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -16,7 +17,8 @@ use registry_platform_audit::{
     verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError, AuditHashSecret,
     AuditKeyHasher, OptionalHashHex,
 };
-use serde::Serialize;
+use registry_platform_crypto::{canonicalize_json, parse_json_strict};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::config::AssuranceProfile;
@@ -28,7 +30,7 @@ const MAX_AUDIT_LINE_BYTES: usize = 1024 * 1024;
 /// `.lock` companion can never be mistaken for a segment.
 const SEGMENT_SEQUENCE_DIGITS: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuditPhase {
     AccessAttempt,
@@ -37,7 +39,7 @@ pub enum AuditPhase {
     TransientFailure,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuditDecision {
     Authorized,
@@ -51,7 +53,7 @@ pub enum AuditDecision {
 }
 
 /// Closed non-secret response-protection mode resolved with authorization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResponseProtection {
     Signed,
@@ -67,7 +69,7 @@ impl ResponseProtection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthorityKind {
     Statutory,
@@ -77,7 +79,7 @@ pub enum AuthorityKind {
     ExplicitRequest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditAuthority {
     pub kind: AuthorityKind,
@@ -85,7 +87,7 @@ pub struct AuditAuthority {
     pub grant_pseudonym: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditSubject {
     pub role: String,
@@ -94,10 +96,10 @@ pub struct AuditSubject {
     pub selector_bundle_pseudonym: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceAuditEvent {
-    pub schema: &'static str,
+    pub schema: String,
     pub assurance_profile: AssuranceProfile,
     pub event_id: String,
     pub occurred_at: String,
@@ -145,7 +147,7 @@ impl EvidenceAuditEvent {
         duration_milliseconds: u64,
     ) -> Self {
         Self {
-            schema: AUDIT_SCHEMA,
+            schema: AUDIT_SCHEMA.to_owned(),
             assurance_profile,
             event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -185,15 +187,129 @@ impl EvidenceAuditEvent {
         if self.signing_key_id.is_some() != signing_key_required {
             return Err(EvidenceAuditError::InvalidEvent);
         }
-        if self.subjects.is_empty()
+        let phase_decision_is_native = matches!(
+            (self.phase, self.decision),
+            (AuditPhase::AccessAttempt, AuditDecision::Authorized)
+                | (AuditPhase::DisclosureRelease, AuditDecision::Released)
+                | (
+                    AuditPhase::Denial,
+                    AuditDecision::NoMatch | AuditDecision::Ambiguous | AuditDecision::FactMissing
+                )
+                | (
+                    AuditPhase::TransientFailure,
+                    AuditDecision::DependencyFailure
+                        | AuditDecision::EvaluationFailure
+                        | AuditDecision::SigningFailure
+                )
+        );
+        let concepts_are_valid = self.disclosed_concepts.as_ref().is_none_or(|concepts| {
+            concepts.len() <= 16
+                && concepts.iter().all(|concept| valid_uri(concept))
+                && concepts.iter().collect::<BTreeSet<_>>().len() == concepts.len()
+        });
+        if self.schema != AUDIT_SCHEMA
+            || !phase_decision_is_native
+            || !valid_uri(&self.event_id)
+            || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
+            || !valid_uri(&self.requirement)
+            || !valid_revision(&self.bundle_revision)
+            || !valid_purpose(&self.purpose, 128)
+            || !valid_pseudonym(&self.requester_pseudonym)
+            || self
+                .actor_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self
+                .authority
+                .grant_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self.subjects.is_empty()
             || self.subjects.len() > 8
             || !(16..=128).contains(&self.operation.len())
+            || self.subjects.iter().any(|subject| {
+                !valid_local_name(&subject.role, 64)
+                    || !valid_local_name(&subject.selector_profile, 128)
+                    || subject
+                        .selector_bundle_pseudonym
+                        .as_ref()
+                        .is_some_and(|value| !valid_pseudonym(value))
+            })
+            || self
+                .source_id
+                .as_ref()
+                .is_some_and(|value| !valid_local_name(value, 128))
+            || self
+                .adapter_id
+                .as_ref()
+                .is_some_and(|value| !valid_local_name(value, 128))
+            || !concepts_are_valid
+            || self
+                .evidence_id
+                .as_ref()
+                .is_some_and(|value| !valid_uri(value))
+            || self.signing_key_id.as_ref().is_some_and(|value| {
+                value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+            })
+            || self
+                .safe_error_category
+                .as_ref()
+                .is_some_and(|value| !valid_local_name(value, 128))
             || self.duration_milliseconds > 86_400_000
         {
             return Err(EvidenceAuditError::InvalidEvent);
         }
         Ok(())
     }
+}
+
+fn valid_uri(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && url::Url::parse(value).is_ok()
+}
+
+fn valid_revision(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
+fn valid_purpose(value: &str, maximum: usize) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= maximum
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
+
+fn valid_local_name(value: &str, maximum: usize) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= maximum
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn valid_pseudonym(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("hmac-sha256:v") else {
+        return false;
+    };
+    let Some((version, digest)) = rest.split_once(':') else {
+        return false;
+    };
+    !version.is_empty()
+        && !version.starts_with('0')
+        && version.bytes().all(|byte| byte.is_ascii_digit())
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 #[derive(Debug, Error)]
@@ -282,6 +398,9 @@ impl EvidenceAuditLog {
             .key_hasher
             .audit_reference_hash(class, scope, &transient)
             .map_err(|_| EvidenceAuditError::InvalidEvent)?;
+        let digest = digest
+            .strip_prefix("hmac-sha256:")
+            .ok_or(EvidenceAuditError::InvalidEvent)?;
         Ok(format!("hmac-sha256:v{}:{digest}", self.key_version))
     }
 
@@ -754,16 +873,32 @@ struct SegmentVerification {
 /// `None` means the segment must start the chain at genesis, which is what the
 /// only segment of an unrotated chain does.
 fn verify_reader(
+    file: File,
+    hasher: &AuditChainHasher,
+    expected_head: Option<[u8; 32]>,
+) -> Result<SegmentVerification, AuditError> {
+    verify_reader_with_envelopes(file, hasher, expected_head, |_| Ok(()))
+}
+
+/// Replay and expose each exact verified envelope to one bounded collector.
+/// The collector runs on the strict parse of the same line whose keyed hash
+/// and chain predecessor were just verified, never on a second file read.
+fn verify_reader_with_envelopes(
     mut file: File,
     hasher: &AuditChainHasher,
     expected_head: Option<[u8; 32]>,
+    mut collect: impl FnMut(AuditEnvelope) -> Result<(), AuditError>,
 ) -> Result<SegmentVerification, AuditError> {
     file.seek(SeekFrom::Start(0)).map_err(AuditError::Io)?;
     let mut reader = BufReader::new(file);
     let mut expected_previous = expected_head;
     let mut records = 0usize;
     while let Some(line) = read_bounded_jsonl_line(&mut reader)? {
-        let verification = verify_jsonl_lines_with_hasher([line.trim_end_matches('\n')], hasher)
+        let exact = line.trim_end_matches('\n');
+        let strict = parse_json_strict(exact.as_bytes()).map_err(|_| invalid_audit_data())?;
+        let envelope: AuditEnvelope =
+            serde_json::from_value(strict).map_err(|_| invalid_audit_data())?;
+        let verification = verify_jsonl_lines_with_hasher([exact], hasher)
             .map_err(AuditError::ChainVerification)?;
         if verification.start_prev_hash != expected_previous {
             return Err(AuditError::ChainForkDetected {
@@ -771,6 +906,7 @@ fn verify_reader(
                 found: OptionalHashHex(verification.start_prev_hash),
             });
         }
+        collect(envelope)?;
         expected_previous = verification.last_hash;
         records += verification.records;
     }
@@ -778,6 +914,13 @@ fn verify_reader(
         head: expected_previous,
         records,
     })
+}
+
+fn invalid_audit_data() -> AuditError {
+    AuditError::Io(IoError::new(
+        ErrorKind::InvalidData,
+        "audit record is invalid",
+    ))
 }
 
 /// A sealed segment and the sequence the next rotation will claim.
@@ -910,6 +1053,13 @@ fn segment_sequence(path: &Path, candidate: &Path) -> Option<u64> {
 /// sequences upward from one, so a missing middle segment shows up as a gap
 /// instead of silently truncating the set to the segments before it.
 fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
+    sealed_segments_bounded(path, usize::MAX)
+}
+
+fn sealed_segments_bounded(
+    path: &Path,
+    maximum_segments: usize,
+) -> Result<Vec<(u64, PathBuf)>, AuditError> {
     let parent = path.parent().ok_or_else(|| {
         AuditError::Io(IoError::new(
             ErrorKind::InvalidInput,
@@ -921,6 +1071,9 @@ fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
         let candidate = entry.map_err(AuditError::Io)?.path();
         if let Some(sequence) = segment_sequence(path, &candidate) {
             sealed.push((sequence, candidate));
+            if sealed.len() > maximum_segments {
+                return Err(file_size_error());
+            }
         }
     }
     sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
@@ -1104,6 +1257,302 @@ pub struct AuditChainSummary {
     /// Whether the active segment was replayed. False when a running writer
     /// holds the chain, in which case only sealed history was proven.
     pub active_verified: bool,
+}
+
+pub const LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1: &str = "registry.evidence.local-audit-operation/v1";
+
+/// Minimized verified view of one native audit operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalAuditOperationView {
+    schema: &'static str,
+    operation: String,
+    events: Vec<LocalAuditOperationEvent>,
+    #[serde(skip)]
+    assurance_profile: AssuranceProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalAuditOperationEvent {
+    occurred_at: String,
+    phase: AuditPhase,
+    decision: AuditDecision,
+    requirement: String,
+    purpose: String,
+    requester_pseudonym: String,
+    response_protection: ResponseProtection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disclosed_concepts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_id: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct LocalAuditInspectionBounds {
+    maximum_segments: usize,
+    maximum_records: usize,
+    maximum_output_bytes: usize,
+}
+
+impl LocalAuditInspectionBounds {
+    const DEFAULT: Self = Self {
+        maximum_segments: 1024,
+        maximum_records: 10_000,
+        maximum_output_bytes: 256 * 1024,
+    };
+}
+
+struct PendingLocalOperation {
+    event: EvidenceAuditEvent,
+    view: LocalAuditOperationEvent,
+}
+
+#[derive(Default)]
+struct LocalAuditCollector {
+    bounds: Option<LocalAuditInspectionBounds>,
+    records: usize,
+    pending: BTreeMap<String, PendingLocalOperation>,
+    completed: BTreeSet<String>,
+    last_operation: Option<String>,
+    last_completed: Option<LocalAuditOperationView>,
+}
+
+impl LocalAuditCollector {
+    fn new(bounds: LocalAuditInspectionBounds) -> Self {
+        Self {
+            bounds: Some(bounds),
+            ..Self::default()
+        }
+    }
+
+    fn collect(&mut self, envelope: AuditEnvelope) -> Result<(), AuditError> {
+        let bounds = self.bounds.ok_or_else(invalid_audit_data)?;
+        self.records = self.records.checked_add(1).ok_or_else(file_size_error)?;
+        if self.records > bounds.maximum_records {
+            return Err(file_size_error());
+        }
+        let event: EvidenceAuditEvent =
+            serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+        event
+            .validate_phase_fields()
+            .map_err(|_| invalid_audit_data())?;
+        let operation = event.operation.clone();
+        self.last_operation = Some(operation.clone());
+        let view = LocalAuditOperationEvent::from(&event);
+
+        if event.phase == AuditPhase::AccessAttempt {
+            if self.completed.contains(&operation)
+                || self
+                    .pending
+                    .insert(operation, PendingLocalOperation { event, view })
+                    .is_some()
+            {
+                return Err(invalid_audit_data());
+            }
+            return Ok(());
+        }
+
+        let access = self
+            .pending
+            .remove(&operation)
+            .ok_or_else(invalid_audit_data)?;
+        if !coherent_operation_pair(&access.event, &event)
+            || !self.completed.insert(operation.clone())
+        {
+            return Err(invalid_audit_data());
+        }
+        self.last_completed = Some(LocalAuditOperationView {
+            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+            operation,
+            events: vec![access.view, view],
+            assurance_profile: access.event.assurance_profile,
+        });
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<LocalAuditOperationView, EvidenceAuditError> {
+        let bounds = self.bounds.take().ok_or(EvidenceAuditError::InvalidEvent)?;
+        let last = self
+            .last_operation
+            .take()
+            .ok_or(EvidenceAuditError::InvalidEvent)?;
+        let view = if let Some(pending) = self.pending.remove(&last) {
+            LocalAuditOperationView {
+                schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+                operation: last,
+                events: vec![pending.view],
+                assurance_profile: pending.event.assurance_profile,
+            }
+        } else {
+            self.last_completed
+                .take()
+                .filter(|completed| completed.operation == last)
+                .ok_or(EvidenceAuditError::InvalidEvent)?
+        };
+        if view.events.first().is_none_or(|event| {
+            event.phase != AuditPhase::AccessAttempt || event.decision != AuditDecision::Authorized
+        }) || view.assurance_profile != AssuranceProfile::Local
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        let serialized = serde_json::to_value(&view).map_err(AuditError::Json)?;
+        if canonicalize_json(&serialized)
+            .map_err(|_| invalid_audit_data())?
+            .len()
+            > bounds.maximum_output_bytes
+        {
+            return Err(EvidenceAuditError::Configuration);
+        }
+        Ok(view)
+    }
+}
+
+impl From<&EvidenceAuditEvent> for LocalAuditOperationEvent {
+    fn from(event: &EvidenceAuditEvent) -> Self {
+        Self {
+            occurred_at: event.occurred_at.clone(),
+            phase: event.phase,
+            decision: event.decision,
+            requirement: event.requirement.clone(),
+            purpose: event.purpose.clone(),
+            requester_pseudonym: event.requester_pseudonym.clone(),
+            response_protection: event.response_protection,
+            disclosed_concepts: event.disclosed_concepts.clone(),
+            evidence_id: event.evidence_id.clone(),
+        }
+    }
+}
+
+fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAuditEvent) -> bool {
+    let occurred_in_order = chrono::DateTime::parse_from_rfc3339(&access.occurred_at)
+        .ok()
+        .zip(chrono::DateTime::parse_from_rfc3339(&terminal.occurred_at).ok())
+        .is_some_and(|(access, terminal)| access <= terminal);
+    occurred_in_order
+        && access.operation == terminal.operation
+        && access.assurance_profile == terminal.assurance_profile
+        && access.requirement == terminal.requirement
+        && access.bundle_revision == terminal.bundle_revision
+        && access.purpose == terminal.purpose
+        && access.requester_pseudonym == terminal.requester_pseudonym
+        && access.actor_pseudonym == terminal.actor_pseudonym
+        && access.authority == terminal.authority
+        && access.subjects == terminal.subjects
+        && access.response_protection == terminal.response_protection
+        && access.source_id == terminal.source_id
+        && access.adapter_id == terminal.adapter_id
+}
+
+/// Verify the whole stopped local chain and derive the last operation from the
+/// exact verified envelopes in that one replay.
+pub fn verified_last_local_audit_operation(
+    path: &Path,
+    master_secret: &AuditHashSecret,
+) -> Result<LocalAuditOperationView, EvidenceAuditError> {
+    verified_last_local_audit_operation_with_bounds(
+        path,
+        master_secret,
+        LocalAuditInspectionBounds::DEFAULT,
+    )
+}
+
+fn verified_last_local_audit_operation_with_bounds(
+    path: &Path,
+    master_secret: &AuditHashSecret,
+    bounds: LocalAuditInspectionBounds,
+) -> Result<LocalAuditOperationView, EvidenceAuditError> {
+    if bounds.maximum_segments == 0
+        || bounds.maximum_records == 0
+        || bounds.maximum_output_bytes == 0
+    {
+        return Err(EvidenceAuditError::Configuration);
+    }
+
+    // The guard remains alive through enumeration, replay, active stability
+    // checks, and view construction. A live service therefore fails before any
+    // record is read, and a new writer cannot start midway through inspection.
+    let lock = lock_path(path);
+    let guard = open_lock_nofollow(&lock).map_err(EvidenceAuditError::Audit)?;
+    validate_owner_only_regular_file(&guard).map_err(EvidenceAuditError::Audit)?;
+    match guard.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(EvidenceAuditError::Audit(AuditError::Io(IoError::other(
+                "audit writer is active",
+            ))))
+        }
+        Err(TryLockError::Error(error)) => {
+            return Err(EvidenceAuditError::Audit(AuditError::Io(error)))
+        }
+    }
+
+    let maximum_sealed = bounds.maximum_segments.saturating_sub(1);
+    let sealed =
+        sealed_segments_bounded(path, maximum_sealed).map_err(EvidenceAuditError::Audit)?;
+    for (offset, (sequence, _)) in sealed.iter().enumerate() {
+        let expected = 1u64.saturating_add(offset as u64);
+        if *sequence != expected {
+            return Err(EvidenceAuditError::SegmentMissing { sequence: expected });
+        }
+    }
+
+    let hasher = AuditChainHasher::keyed(master_secret.clone());
+    let mut collector = LocalAuditCollector::new(bounds);
+    let mut head = None;
+    for (_, segment) in &sealed {
+        let file = open_sealed_segment(segment).map_err(EvidenceAuditError::Audit)?;
+        let before = file_fingerprint(&file).map_err(EvidenceAuditError::Audit)?;
+        let verification = verify_reader_with_envelopes(
+            file.try_clone().map_err(AuditError::Io)?,
+            &hasher,
+            head,
+            |envelope| collector.collect(envelope),
+        )
+        .map_err(EvidenceAuditError::Audit)?;
+        validate_stable_segment(segment, &file, before, false)
+            .map_err(EvidenceAuditError::Audit)?;
+        head = verification.head;
+    }
+
+    let active = open_read_nofollow(path).map_err(EvidenceAuditError::Audit)?;
+    validate_owner_only_regular_file(&active).map_err(EvidenceAuditError::Audit)?;
+    let before = file_fingerprint(&active).map_err(EvidenceAuditError::Audit)?;
+    verify_reader_with_envelopes(
+        active.try_clone().map_err(AuditError::Io)?,
+        &hasher,
+        head,
+        |envelope| collector.collect(envelope),
+    )
+    .map_err(EvidenceAuditError::Audit)?;
+    validate_stable_segment(path, &active, before, true).map_err(EvidenceAuditError::Audit)?;
+    validate_pinned_path(&lock, &guard).map_err(EvidenceAuditError::Audit)?;
+    collector.finish()
+}
+
+fn validate_stable_segment(
+    path: &Path,
+    pinned: &File,
+    before: FileFingerprint,
+    active: bool,
+) -> Result<(), AuditError> {
+    let candidate = open_read_nofollow(path)?;
+    if active {
+        validate_owner_only_regular_file(&candidate)?;
+        validate_owner_only_regular_file(pinned)?;
+    } else {
+        validate_owner_only_readable_file(&candidate)?;
+        validate_owner_only_readable_file(pinned)?;
+    }
+    if !same_file(pinned, &candidate)?
+        || file_fingerprint(pinned)? != before
+        || file_fingerprint(&candidate)? != before
+    {
+        return Err(AuditError::Io(IoError::other(
+            "audit segment changed during verification",
+        )));
+    }
+    Ok(())
 }
 
 /// Verify every segment of an audit chain, sealed history included.
@@ -1451,7 +1900,7 @@ mod tests {
         assert_eq!(fixture["synthetic_only"], serde_json::json!(true));
 
         let access = EvidenceAuditEvent {
-            schema: AUDIT_SCHEMA,
+            schema: AUDIT_SCHEMA.to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             event_id: "urn:example:fixture:audit:access-001".to_owned(),
             occurred_at: "2026-08-02T00:00:00Z".to_owned(),
@@ -1608,6 +2057,7 @@ mod tests {
         assert!(!contents.contains("principal-canary"));
         assert!(!contents.contains("selector-canary"));
         assert!(contents.contains("hmac-sha256:v1:"));
+        assert!(!contents.contains("hmac-sha256:v1:hmac-sha256:"));
         assert!(contents.ends_with('\n'));
 
         std::fs::OpenOptions::new()
@@ -1944,6 +2394,386 @@ mod tests {
     fn audit_secret() -> AuditHashSecret {
         AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
             .expect("audit secret builds")
+    }
+
+    fn local_access(log: &EvidenceAuditLog, operation: &str) -> EvidenceAuditEvent {
+        let mut event = EvidenceAuditEvent::new(
+            AssuranceProfile::Local,
+            operation.to_owned(),
+            AuditPhase::AccessAttempt,
+            "urn:example:requirement:age-bracket:v1".to_owned(),
+            format!("sha256:{}", "a".repeat(64)),
+            "benefit:eligibility".to_owned(),
+            log.pseudonym(
+                "requester-v1",
+                "urn:example:trust",
+                b"raw-requester-token-canary",
+            )
+            .expect("requester pseudonym builds"),
+            AuditAuthority {
+                kind: AuthorityKind::Delegated,
+                grant_pseudonym: Some(
+                    log.pseudonym("grant-v1", "urn:example:trust", b"raw-grant-token-canary")
+                        .expect("grant pseudonym builds"),
+                ),
+            },
+            vec![AuditSubject {
+                role: "subject".to_owned(),
+                selector_profile: "person-v1".to_owned(),
+                selector_bundle_pseudonym: Some(
+                    log.pseudonym(
+                        "subject-v1",
+                        "benefit:eligibility",
+                        b"person-id-raw-selector-canary",
+                    )
+                    .expect("subject pseudonym builds"),
+                ),
+            }],
+            ResponseProtection::Signed,
+            AuditDecision::Authorized,
+            4,
+        );
+        event.actor_pseudonym = Some(
+            log.pseudonym("actor-v1", "urn:example:trust", b"raw-actor-token-canary")
+                .expect("actor pseudonym builds"),
+        );
+        event.source_id = Some("source-private-canary".to_owned());
+        event.adapter_id = Some("adapter-private-canary".to_owned());
+        event
+    }
+
+    fn local_release(access: &EvidenceAuditEvent) -> EvidenceAuditEvent {
+        let mut release = access.clone();
+        release.event_id = format!("urn:ulid:{}", ulid::Ulid::new());
+        release.occurred_at = chrono::Utc::now()
+            .checked_add_signed(chrono::Duration::milliseconds(1))
+            .expect("timestamp advances")
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        release.phase = AuditPhase::DisclosureRelease;
+        release.decision = AuditDecision::Released;
+        release.disclosed_concepts = Some(vec!["urn:example:concept:age-bracket".to_owned()]);
+        release.evidence_id = Some(format!("urn:example:evidence:{}", ulid::Ulid::new()));
+        release.signing_key_id = Some("local-signing-key-1".to_owned());
+        release.duration_milliseconds = 19;
+        release
+    }
+
+    async fn append_local_operation(log: &EvidenceAuditLog, operation: &str) {
+        let access = local_access(log, operation);
+        let release = local_release(&access);
+        log.append(access).await.expect("access event appends");
+        log.append(release).await.expect("release event appends");
+    }
+
+    #[tokio::test]
+    async fn local_inspection_returns_one_closed_two_phase_view() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        let operation = "local-operation-0000000000000001";
+        append_local_operation(&log, operation).await;
+        drop(log);
+
+        let view = verified_last_local_audit_operation(&path, &audit_secret())
+            .expect("stopped local chain verifies");
+        let value = serde_json::to_value(view).expect("view serializes");
+        assert_eq!(
+            value
+                .as_object()
+                .expect("view is an object")
+                .keys()
+                .collect::<Vec<_>>(),
+            ["events", "operation", "schema"]
+        );
+        assert_eq!(
+            value["schema"],
+            serde_json::json!(LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1)
+        );
+        assert_eq!(value["operation"], serde_json::json!(operation));
+        let events = value["events"].as_array().expect("events are an array");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0]
+                .as_object()
+                .expect("access is an object")
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "decision",
+                "occurredAt",
+                "phase",
+                "purpose",
+                "requesterPseudonym",
+                "requirement",
+                "responseProtection",
+            ]
+        );
+        assert_eq!(events[0]["phase"], serde_json::json!("access-attempt"));
+        assert_eq!(events[0]["decision"], serde_json::json!("authorized"));
+        assert_eq!(
+            events[1]
+                .as_object()
+                .expect("release is an object")
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "decision",
+                "disclosedConcepts",
+                "evidenceId",
+                "occurredAt",
+                "phase",
+                "purpose",
+                "requesterPseudonym",
+                "requirement",
+                "responseProtection",
+            ]
+        );
+        assert_eq!(events[1]["phase"], serde_json::json!("disclosure-release"));
+        assert_eq!(events[1]["decision"], serde_json::json!("released"));
+
+        let rendered = serde_json::to_string(&value).expect("view renders");
+        for forbidden in [
+            "assuranceProfile",
+            "actorPseudonym",
+            "grantPseudonym",
+            "subjects",
+            "selectorProfile",
+            "selectorBundlePseudonym",
+            "sourceId",
+            "adapterId",
+            "durationMilliseconds",
+            "signingKeyId",
+            "bundleRevision",
+            "raw-requester-token-canary",
+            "raw-grant-token-canary",
+            "raw-actor-token-canary",
+            "person-id-raw-selector-canary",
+            "source-private-canary",
+            "adapter-private-canary",
+        ] {
+            assert!(!rendered.contains(forbidden), "view disclosed {forbidden}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_selects_the_last_verified_native_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+
+        let value = serde_json::to_value(
+            verified_last_local_audit_operation(&path, &audit_secret())
+                .expect("stopped local chain verifies"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000002")
+        );
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn local_inspection_verifies_the_full_rotated_keyed_chain() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            4096,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        for index in 0..12 {
+            append_local_operation(&log, &format!("local-operation-{index:016}")).await;
+        }
+        drop(log);
+        assert!(
+            audit_segment_paths(&path)
+                .expect("segments enumerate")
+                .len()
+                > 2,
+            "fixture rotates through sealed history"
+        );
+
+        let value = serde_json::to_value(
+            verified_last_local_audit_operation(&path, &audit_secret())
+                .expect("the full keyed chain verifies"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000011")
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_rejects_tampering_wrong_secret_and_live_writer() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let live_path = directory.path().join("live.jsonl");
+        let live = EvidenceAuditLog::initialize(
+            &live_path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        append_local_operation(&live, "local-operation-0000000000000001").await;
+        assert!(
+            verified_last_local_audit_operation(&live_path, &audit_secret()).is_err(),
+            "a live writer fails rather than yielding a partial view"
+        );
+        drop(live);
+
+        let wrong = AuditHashSecret::new(b"abcdef0123456789abcdef0123456789".to_vec())
+            .expect("wrong secret builds");
+        assert!(
+            verified_last_local_audit_operation(&live_path, &wrong).is_err(),
+            "a wrong secret yields no view"
+        );
+
+        rewrite_segment_line(&live_path, 0, corrupt_line);
+        assert!(
+            verified_last_local_audit_operation(&live_path, &audit_secret()).is_err(),
+            "tampered keyed history yields no view"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_rejects_missing_history_and_active_segment() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            4096,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        for index in 0..12 {
+            append_local_operation(&log, &format!("local-operation-{index:016}")).await;
+        }
+        drop(log);
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        assert!(segments.len() > 3, "fixture has a middle sealed segment");
+        std::fs::remove_file(&segments[1]).expect("middle segment is removed");
+        assert!(matches!(
+            verified_last_local_audit_operation(&path, &audit_secret()),
+            Err(EvidenceAuditError::SegmentMissing { sequence: 2 })
+        ));
+
+        let active_path = directory.path().join("missing-active.jsonl");
+        let active = EvidenceAuditLog::initialize(
+            &active_path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        append_local_operation(&active, "local-operation-0000000000000001").await;
+        drop(active);
+        std::fs::remove_file(&active_path).expect("active segment is removed");
+        assert!(
+            verified_last_local_audit_operation(&active_path, &audit_secret()).is_err(),
+            "an absent active segment yields no view"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_rejects_a_keyed_but_invalid_native_event() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &directory.path().join("pseudonyms.jsonl"),
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("pseudonym helper initializes");
+        let mut invalid = local_access(&log, "local-operation-0000000000000001");
+        invalid.decision = AuditDecision::Released;
+        drop(log);
+        let hasher = AuditChainHasher::keyed(audit_secret());
+        let envelope = AuditEnvelope::new_with_hasher(
+            serde_json::to_value(invalid).expect("invalid event serializes"),
+            None,
+            &hasher,
+        )
+        .expect("invalid native event is still keyed");
+        std::fs::write(&path, envelope.to_jsonl().expect("envelope renders"))
+            .expect("audit writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("audit mode is owner-only");
+        }
+
+        assert!(
+            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            "a valid chain hash cannot bless a non-native event"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_fails_instead_of_truncating_at_any_bound() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            4096,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        for index in 0..4 {
+            append_local_operation(&log, &format!("local-operation-{index:016}")).await;
+        }
+        drop(log);
+        let defaults = LocalAuditInspectionBounds::DEFAULT;
+        for bounds in [
+            LocalAuditInspectionBounds {
+                maximum_segments: 1,
+                ..defaults
+            },
+            LocalAuditInspectionBounds {
+                maximum_records: 1,
+                ..defaults
+            },
+            LocalAuditInspectionBounds {
+                maximum_output_bytes: 1,
+                ..defaults
+            },
+        ] {
+            assert!(
+                verified_last_local_audit_operation_with_bounds(&path, &audit_secret(), bounds)
+                    .is_err(),
+                "a bound failure yields no truncated view"
+            );
+        }
     }
 
     /// Change one byte of a record without changing its length, so the record

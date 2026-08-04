@@ -17,9 +17,12 @@ use clap::{ArgGroup, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
-    audit::{verify_audit_chain, AuditChainSummary, EvidenceAuditError},
+    audit::{
+        verified_last_local_audit_operation, verify_audit_chain, AuditChainSummary,
+        EvidenceAuditError,
+    },
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
-    config::{ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
+    config::{AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
@@ -139,6 +142,9 @@ enum Command {
         #[arg(long)]
         response: PathBuf,
     },
+    /// Internal stopped-service audit inspection seam.
+    #[command(hide = true)]
+    LocalAuditLastOperation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,6 +302,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::VerifyLocalResponse { context, response } => {
             verify_local_response_command(&context, &response)
         }
+        Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
 }
 
@@ -452,6 +459,7 @@ const NOT_CURRENT_EXIT_CODE: u8 = 3;
 const VERIFY_MALFORMED: CliError = CliError("stored response verification failed (malformed)");
 const LOCAL_CONTEXT_FAILED: CliError = CliError("local verification context preparation failed");
 const LOCAL_RESPONSE_FAILED: CliError = CliError("local response verification failed");
+const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
 
 /// Prepare one closed context from trusted deployment state and a retained
 /// request. The bearer is read only from stdin and is never echoed.
@@ -588,6 +596,35 @@ fn write_canonical_json_line<T: serde::Serialize>(
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(&bytes).map_err(|_| failure)?;
     stdout.write_all(b"\n").map_err(|_| failure)
+}
+
+/// Inspect the last local audit operation only after the writer has stopped.
+///
+/// Every failure is deliberately collapsed to one value-free class. The view
+/// is written only after the entire retained chain and its native events have
+/// verified, so stdout can never contain a partial or unverified operation.
+fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, CommandError> {
+    let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_AUDIT_FAILED)?;
+    if deployment.bundle.config.assurance_profile != AssuranceProfile::Local {
+        return Err(LOCAL_AUDIT_FAILED.into());
+    }
+    let secrets = SecretResolver::new(
+        [SecretProvider::File],
+        &deployment.runtime.config.secret_providers.file.root,
+    )
+    .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let audit_secret = secrets
+        .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
+        .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
+        .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let view = verified_last_local_audit_operation(
+        Path::new(&deployment.runtime.config.audit_storage.path),
+        &master_secret,
+    )
+    .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    write_canonical_json_line(&view, LOCAL_AUDIT_FAILED)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// The one stored response an operator named, and the format its bytes are
@@ -2609,6 +2646,7 @@ mod tests {
         for name in [
             "prepare-local-verification-context",
             "verify-local-response",
+            "local-audit-last-operation",
         ] {
             assert!(
                 command
