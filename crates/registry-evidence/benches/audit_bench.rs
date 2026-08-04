@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Microbenchmarks for the durable Evidence audit chain.
 //!
-//! These measure the real filesystem path through `DurableJsonlSink`, because
-//! the cost that decides service throughput is the per-record `fsync` issued
-//! while the chain-state mutex is held, not the chain hashing.
+//! These measure the real filesystem path through the shared
+//! `DurableSegmentedAuditLog`, because the cost that decides service throughput
+//! is the durable `fsync` that covers each append, not the chain hashing.
 //!
 //! Covers:
 //! - one sequential append, the latency floor a request pays per audit record;

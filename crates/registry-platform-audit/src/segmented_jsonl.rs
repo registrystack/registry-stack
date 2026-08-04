@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -40,6 +40,182 @@ pub struct SegmentedAuditSummary {
     pub active_verified: bool,
 }
 
+/// A keyed segmented audit log with serialized chain positions and group
+/// commit for concurrent appends.
+///
+/// The file engine remains [`DurableSegmentedJsonlSink`]. This coordinator
+/// owns the keyed chain head and lets records arriving during one durable write
+/// share the next write and `fsync` without weakening per-record durability.
+pub struct DurableSegmentedAuditLog {
+    sink: DurableSegmentedJsonlSink,
+    hasher: AuditChainHasher,
+    state: tokio::sync::Mutex<LogState>,
+    flush: tokio::sync::Mutex<()>,
+    durable: AtomicU64,
+    durable_writes: AtomicU64,
+    startup_verifications: AtomicU64,
+}
+
+struct LogState {
+    verified: bool,
+    tail_hash: Option<[u8; 32]>,
+    pending: Vec<String>,
+    enqueued: u64,
+    poison: Option<String>,
+}
+
+impl LogState {
+    fn check_writable(&self) -> Result<(), AuditError> {
+        if let Some(reason) = &self.poison {
+            return Err(AuditError::Io(io::Error::other(format!(
+                "audit sink stopped after a failed durable write: {reason}"
+            ))));
+        }
+        if !self.verified {
+            return Err(AuditError::Io(io::Error::other(
+                "audit chain was not verified at startup",
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for DurableSegmentedAuditLog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DurableSegmentedAuditLog")
+            .field("path", &self.sink.path)
+            .field("maximum_file_bytes", &self.sink.maximum_file_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DurableSegmentedAuditLog {
+    /// Open the single-writer sink and establish the authenticated active head.
+    pub async fn initialize(
+        path: impl Into<PathBuf>,
+        maximum_file_bytes: u64,
+        hasher: AuditChainHasher,
+    ) -> Result<Self, AuditError> {
+        let sink = DurableSegmentedJsonlSink::open_with_policy(
+            path.into(),
+            maximum_file_bytes,
+            DirectoryPolicy::OwnerControlled,
+        )?;
+        let log = Self {
+            sink,
+            hasher,
+            state: tokio::sync::Mutex::new(LogState {
+                verified: false,
+                tail_hash: None,
+                pending: Vec::new(),
+                enqueued: 0,
+                poison: None,
+            }),
+            flush: tokio::sync::Mutex::new(()),
+            durable: AtomicU64::new(0),
+            durable_writes: AtomicU64::new(0),
+            startup_verifications: AtomicU64::new(0),
+        };
+        log.verify_startup().await?;
+        Ok(log)
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.sink.path()
+    }
+
+    /// Build one keyed envelope, enqueue it, and return after it is durable.
+    pub async fn append_record(
+        &self,
+        record: serde_json::Value,
+    ) -> Result<AuditEnvelope, AuditError> {
+        let (envelope, position) = {
+            let mut state = self.state.lock().await;
+            state.check_writable()?;
+            let envelope = AuditEnvelope::new_with_hasher(record, state.tail_hash, &self.hasher)?;
+            let line = envelope.to_jsonl()?;
+            let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
+            if incoming > self.sink.maximum_file_bytes {
+                return Err(file_size_error());
+            }
+            state.pending.push(line);
+            state.enqueued = state.enqueued.saturating_add(1);
+            state.tail_hash = Some(envelope.record_hash);
+            (envelope, state.enqueued)
+        };
+        self.flush_through(position).await?;
+        Ok(envelope)
+    }
+
+    /// Report health without rescanning sealed history.
+    pub async fn ready(&self) -> bool {
+        let state = self.state.lock().await;
+        if state.check_writable().is_err() {
+            return false;
+        }
+        drop(state);
+        self.sink.ready().await
+    }
+
+    /// Number of durable writes performed by this process.
+    #[must_use]
+    pub fn durable_writes(&self) -> u64 {
+        self.durable_writes.load(Ordering::Relaxed)
+    }
+
+    /// Number of bounded startup head verifications performed by this process.
+    #[must_use]
+    pub fn startup_verifications(&self) -> u64 {
+        self.startup_verifications.load(Ordering::Relaxed)
+    }
+
+    async fn verify_startup(&self) -> Result<(), AuditError> {
+        let mut state = self.state.lock().await;
+        self.startup_verifications.fetch_add(1, Ordering::Relaxed);
+        let tail_hash = self.sink.tail_hash_with_hasher(&self.hasher).await?;
+        state.tail_hash = tail_hash;
+        state.verified = true;
+        Ok(())
+    }
+
+    async fn flush_through(&self, position: u64) -> Result<(), AuditError> {
+        loop {
+            if self.durable.load(Ordering::Acquire) >= position {
+                return Ok(());
+            }
+            let _writer = self.flush.lock().await;
+            if self.durable.load(Ordering::Acquire) >= position {
+                return Ok(());
+            }
+            self.flush_once().await?;
+        }
+    }
+
+    async fn flush_once(&self) -> Result<(), AuditError> {
+        let (lines, through) = {
+            let mut state = self.state.lock().await;
+            state.check_writable()?;
+            if state.pending.is_empty() {
+                return Ok(());
+            }
+            (std::mem::take(&mut state.pending), state.enqueued)
+        };
+        self.durable_writes.fetch_add(1, Ordering::Relaxed);
+        match self.sink.write_lines(lines).await {
+            Ok(()) => {
+                self.durable.store(through, Ordering::Release);
+                Ok(())
+            }
+            Err(error) => {
+                self.state.lock().await.poison = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+}
+
 /// A durable single-writer sink with online, non-destructive size rotation.
 ///
 /// The active file remains at `path`. Rotation renames it to
@@ -50,6 +226,7 @@ pub struct DurableSegmentedJsonlSink {
     path: PathBuf,
     lock_path: PathBuf,
     maximum_file_bytes: u64,
+    directory_policy: DirectoryPolicy,
     state: tokio::sync::Mutex<SinkState>,
     healthy: Arc<AtomicBool>,
     lock_fingerprint: FileFingerprint,
@@ -60,6 +237,12 @@ struct SinkState {
     audit_file: File,
     fingerprint: FileFingerprint,
     next_sequence: u64,
+}
+
+#[derive(Clone, Copy)]
+enum DirectoryPolicy {
+    OwnerOnly,
+    OwnerControlled,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,20 +270,27 @@ impl std::fmt::Debug for DurableSegmentedJsonlSink {
 impl DurableSegmentedJsonlSink {
     /// Open an active audit segment and take the process-lifetime writer lock.
     pub fn open(path: impl Into<PathBuf>, maximum_file_bytes: u64) -> Result<Self, AuditError> {
+        Self::open_with_policy(path.into(), maximum_file_bytes, DirectoryPolicy::OwnerOnly)
+    }
+
+    fn open_with_policy(
+        path: PathBuf,
+        maximum_file_bytes: u64,
+        directory_policy: DirectoryPolicy,
+    ) -> Result<Self, AuditError> {
         if maximum_file_bytes == 0 {
             return Err(file_size_error());
         }
-        let path = path.into();
         super::ensure_parent_dir(&path)?;
         let parent = parent(&path)?;
-        validate_owner_only_directory(parent)?;
+        validate_directory(parent, directory_policy)?;
 
         let created = !path.exists();
         let audit_file = open_append(&path)?;
         validate_owner_only_active_file(&audit_file)?;
         audit_file.sync_all().map_err(AuditError::Io)?;
         if created {
-            sync_parent(&path)?;
+            sync_parent(&path, directory_policy)?;
         }
 
         let lock_path = lock_path(&path);
@@ -118,7 +308,7 @@ impl DurableSegmentedJsonlSink {
         }
         writer_lock.sync_all().map_err(AuditError::Io)?;
         if lock_created {
-            sync_parent(&path)?;
+            sync_parent(&path, directory_policy)?;
         }
 
         let fingerprint = file_fingerprint(&audit_file)?;
@@ -129,6 +319,7 @@ impl DurableSegmentedJsonlSink {
             path,
             lock_path,
             maximum_file_bytes,
+            directory_policy,
             state: tokio::sync::Mutex::new(SinkState {
                 audit_file,
                 fingerprint,
@@ -195,31 +386,34 @@ impl DurableSegmentedJsonlSink {
         }
         Ok(())
     }
-}
 
-#[async_trait]
-impl AuditSink for DurableSegmentedJsonlSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
+    async fn write_lines(&self, lines: Vec<String>) -> Result<(), AuditError> {
         self.check_writable()?;
-        let line = envelope.to_jsonl()?;
-        let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
-        if incoming > self.maximum_file_bytes {
-            return Err(file_size_error());
+        if lines.is_empty() {
+            return Ok(());
+        }
+        for line in &lines {
+            let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
+            if incoming > self.maximum_file_bytes {
+                return Err(file_size_error());
+            }
         }
 
+        let first = parse_envelope_strict(lines.first().expect("nonempty lines checked"))?;
         let mut state = self.state.lock().await;
         self.check_writable()?;
         let request = AppendRequest {
             path: self.path.clone(),
             maximum_file_bytes: self.maximum_file_bytes,
-            line,
-            expected_previous: envelope.prev_hash,
+            lines,
+            expected_previous: first.prev_hash,
             audit_file: state.audit_file.try_clone().map_err(AuditError::Io)?,
             fingerprint: state.fingerprint,
             lock_path: self.lock_path.clone(),
             writer_lock: self._writer_lock.try_clone().map_err(AuditError::Io)?,
             lock_fingerprint: self.lock_fingerprint,
             next_sequence: state.next_sequence,
+            directory_policy: self.directory_policy,
         };
         match tokio::task::spawn_blocking(move || request.run()).await {
             Ok(Ok(result)) => {
@@ -239,6 +433,14 @@ impl AuditSink for DurableSegmentedJsonlSink {
                 Err(AuditError::Io(io::Error::other(error)))
             }
         }
+    }
+}
+
+#[async_trait]
+impl AuditSink for DurableSegmentedJsonlSink {
+    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
+        let line = envelope.to_jsonl()?;
+        self.write_lines(vec![line]).await
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
@@ -276,7 +478,7 @@ impl AuditSink for DurableSegmentedJsonlSink {
 struct AppendRequest {
     path: PathBuf,
     maximum_file_bytes: u64,
-    line: String,
+    lines: Vec<String>,
     expected_previous: Option<[u8; 32]>,
     audit_file: File,
     fingerprint: FileFingerprint,
@@ -284,6 +486,7 @@ struct AppendRequest {
     writer_lock: File,
     lock_fingerprint: FileFingerprint,
     next_sequence: u64,
+    directory_policy: DirectoryPolicy,
 }
 
 struct AppendResult {
@@ -304,21 +507,41 @@ impl AppendRequest {
             });
         }
 
-        let incoming = u64::try_from(self.line.len()).map_err(|_| file_size_error())?;
-        let current = self.audit_file.metadata().map_err(AuditError::Io)?.len();
+        let mut current = self.audit_file.metadata().map_err(AuditError::Io)?.len();
         let mut replacement = None;
-        if current > 0 && current.saturating_add(incoming) > self.maximum_file_bytes {
-            let sealed = seal_active_segment(&self.path, &self.audit_file, self.next_sequence)?;
-            self.audit_file = sealed.active.try_clone().map_err(AuditError::Io)?;
-            replacement = Some(sealed.active);
-            self.next_sequence = sealed.next_sequence;
+        let mut run = String::new();
+        for line in &self.lines {
+            let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
+            if incoming > self.maximum_file_bytes {
+                return Err(file_size_error());
+            }
+            if current > 0 && current.saturating_add(incoming) > self.maximum_file_bytes {
+                self.audit_file
+                    .write_all(run.as_bytes())
+                    .map_err(AuditError::Io)?;
+                self.audit_file.flush().map_err(AuditError::Io)?;
+                run.clear();
+                let sealed = seal_active_segment(
+                    &self.path,
+                    &self.audit_file,
+                    self.next_sequence,
+                    self.directory_policy,
+                )?;
+                self.audit_file = sealed.active.try_clone().map_err(AuditError::Io)?;
+                replacement = Some(sealed.active);
+                self.next_sequence = sealed.next_sequence;
+                current = 0;
+            }
+            run.push_str(line);
+            current = current.saturating_add(incoming);
         }
 
         self.audit_file
-            .write_all(self.line.as_bytes())
+            .write_all(run.as_bytes())
             .map_err(AuditError::Io)?;
+        self.audit_file.flush().map_err(AuditError::Io)?;
         self.audit_file.sync_all().map_err(AuditError::Io)?;
-        sync_parent(&self.path)?;
+        sync_parent(&self.path, self.directory_policy)?;
         validate_owner_only_active_file(&self.audit_file)?;
         let fingerprint = file_fingerprint(&self.audit_file)?;
         validate_pinned_file(&self.path, &self.audit_file, fingerprint)?;
@@ -340,6 +563,7 @@ fn seal_active_segment(
     path: &Path,
     active: &File,
     sequence: u64,
+    directory_policy: DirectoryPolicy,
 ) -> Result<SealedSegment, AuditError> {
     active.sync_all().map_err(AuditError::Io)?;
     let mut sequence = sequence;
@@ -357,7 +581,7 @@ fn seal_active_segment(
         )));
     }
     replacement.sync_all().map_err(AuditError::Io)?;
-    sync_parent(path)?;
+    sync_parent(path, directory_policy)?;
     Ok(SealedSegment {
         active: replacement,
         next_sequence: next_sequence(sequence)?,
@@ -391,7 +615,7 @@ pub fn verify_segmented_audit_chain(
     hasher: &AuditChainHasher,
 ) -> Result<SegmentedAuditSummary, AuditError> {
     let parent = parent(path)?;
-    validate_owner_only_directory(parent)?;
+    validate_directory(parent, DirectoryPolicy::OwnerControlled)?;
     let guard = verification_lock(path)?;
     let active_available = match guard.try_lock() {
         Ok(()) => true,
@@ -442,6 +666,100 @@ pub fn verify_segmented_audit_chain(
     })
 }
 
+/// Verify a complete stopped chain and pass each exact verified envelope to a
+/// bounded caller-owned collector.
+///
+/// Unlike [`verify_segmented_audit_chain`], this requires the sealed sequence
+/// to start at one, requires an active segment, and holds the writer lock for
+/// the whole replay. It is intended for local inspection commands that must
+/// derive a view from one stable, complete retained chain.
+pub fn visit_stopped_segmented_audit_chain(
+    path: &Path,
+    hasher: &AuditChainHasher,
+    maximum_segments: usize,
+    maximum_records: usize,
+    mut visit: impl FnMut(AuditEnvelope) -> Result<(), AuditError>,
+) -> Result<SegmentedAuditSummary, AuditError> {
+    if maximum_segments == 0 || maximum_records == 0 {
+        return Err(file_size_error());
+    }
+    let parent = parent(path)?;
+    validate_directory(parent, DirectoryPolicy::OwnerControlled)?;
+    let lock_path = lock_path(path);
+    let guard = verification_lock(path)?;
+    match guard.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(AuditError::Io(io::Error::other("audit writer is active")));
+        }
+        Err(TryLockError::Error(error)) => return Err(AuditError::Io(error)),
+    }
+    let lock_fingerprint = file_fingerprint(&guard)?;
+
+    let sealed = sealed_segments_bounded(path, maximum_segments.saturating_sub(1))?;
+    for (offset, (sequence, _)) in sealed.iter().enumerate() {
+        let expected = 1u64.saturating_add(offset as u64);
+        if *sequence != expected {
+            return Err(AuditError::SegmentMissing { sequence: expected });
+        }
+    }
+
+    let mut head = None;
+    let mut records = 0usize;
+    let mut segments = 0usize;
+    for (_, segment) in &sealed {
+        let file = open_sealed(segment)?;
+        let before = file_fingerprint(&file)?;
+        let verification = verify_segment_with(
+            file.try_clone().map_err(AuditError::Io)?,
+            hasher,
+            head,
+            &mut |envelope| {
+                records = records.checked_add(1).ok_or_else(file_size_error)?;
+                if records > maximum_records {
+                    return Err(file_size_error());
+                }
+                visit(envelope)
+            },
+        )?;
+        validate_stable_segment(segment, &file, before, false)?;
+        head = verification.head;
+        segments = segments.saturating_add(1);
+    }
+
+    if segments >= maximum_segments {
+        return Err(file_size_error());
+    }
+    let active = open_read(path)?;
+    validate_owner_only_active_file(&active)?;
+    let before = file_fingerprint(&active)?;
+    let verification = verify_segment_with(
+        active.try_clone().map_err(AuditError::Io)?,
+        hasher,
+        head,
+        &mut |envelope| {
+            records = records.checked_add(1).ok_or_else(file_size_error)?;
+            if records > maximum_records {
+                return Err(file_size_error());
+            }
+            visit(envelope)
+        },
+    )?;
+    validate_stable_segment(path, &active, before, true)?;
+    validate_pinned_file(&lock_path, &guard, lock_fingerprint)?;
+    head = verification.head;
+    segments = segments.saturating_add(1);
+
+    Ok(SegmentedAuditSummary {
+        segments,
+        records,
+        last_hash: head,
+        first_sequence: sealed.first().map(|(sequence, _)| *sequence),
+        last_sequence: sealed.last().map(|(sequence, _)| *sequence),
+        active_verified: true,
+    })
+}
+
 struct SegmentVerification {
     file: File,
     head: Option<[u8; 32]>,
@@ -453,18 +771,28 @@ fn verify_segment(
     hasher: &AuditChainHasher,
     expected_head: Option<[u8; 32]>,
 ) -> Result<SegmentVerification, AuditError> {
+    verify_segment_with(file, hasher, expected_head, &mut |_| Ok(()))
+}
+
+fn verify_segment_with(
+    file: File,
+    hasher: &AuditChainHasher,
+    expected_head: Option<[u8; 32]>,
+    visit: &mut impl FnMut(AuditEnvelope) -> Result<(), AuditError>,
+) -> Result<SegmentVerification, AuditError> {
     let mut reader = BufReader::new(file);
     let mut expected_previous = expected_head;
     let mut records = 0usize;
     while let Some(line) = read_bounded_jsonl_line(&mut reader)? {
         let exact = line.trim_end_matches('\n');
-        let verification = verify_one_line(exact, hasher)?;
+        let (envelope, verification) = verify_envelope_line(exact, hasher)?;
         if verification.start_prev_hash != expected_previous {
             return Err(AuditError::ChainForkDetected {
                 expected: OptionalHashHex(expected_previous),
                 found: OptionalHashHex(verification.start_prev_hash),
             });
         }
+        visit(envelope)?;
         expected_previous = verification.last_hash;
         records = records.saturating_add(verification.records);
     }
@@ -516,8 +844,17 @@ fn verify_one_line(
     line: &str,
     hasher: &AuditChainHasher,
 ) -> Result<super::ChainVerification, AuditError> {
-    parse_envelope_strict(line)?;
-    verify_jsonl_lines_with_hasher([line], hasher).map_err(AuditError::ChainVerification)
+    verify_envelope_line(line, hasher).map(|(_, verification)| verification)
+}
+
+fn verify_envelope_line(
+    line: &str,
+    hasher: &AuditChainHasher,
+) -> Result<(AuditEnvelope, super::ChainVerification), AuditError> {
+    let envelope = parse_envelope_strict(line)?;
+    let verification =
+        verify_jsonl_lines_with_hasher([line], hasher).map_err(AuditError::ChainVerification)?;
+    Ok((envelope, verification))
 }
 
 fn parse_envelope_strict(line: &str) -> Result<AuditEnvelope, AuditError> {
@@ -594,11 +931,21 @@ fn last_jsonl_line(mut file: File) -> Result<Option<String>, AuditError> {
 }
 
 fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
+    sealed_segments_bounded(path, usize::MAX)
+}
+
+fn sealed_segments_bounded(
+    path: &Path,
+    maximum_segments: usize,
+) -> Result<Vec<(u64, PathBuf)>, AuditError> {
     let mut sealed = Vec::new();
     for entry in fs::read_dir(parent(path)?).map_err(AuditError::Io)? {
         let candidate = entry.map_err(AuditError::Io)?.path();
         if let Some(sequence) = segment_sequence(path, &candidate) {
             sealed.push((sequence, candidate));
+            if sealed.len() > maximum_segments {
+                return Err(file_size_error());
+            }
         }
     }
     sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
@@ -696,15 +1043,22 @@ fn reject_symlink(path: &Path) -> Result<(), AuditError> {
     }
 }
 
-fn validate_owner_only_directory(path: &Path) -> Result<(), AuditError> {
+fn validate_directory(path: &Path, policy: DirectoryPolicy) -> Result<(), AuditError> {
     let metadata = fs::symlink_metadata(path).map_err(AuditError::Io)?;
-    if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
+    let (unsafe_mode, message) = match policy {
+        DirectoryPolicy::OwnerOnly => (
+            metadata.mode() & 0o077 != 0,
+            "audit directory must be owner-only",
+        ),
+        DirectoryPolicy::OwnerControlled => (
+            metadata.mode() & 0o022 != 0,
+            "audit directory must be owner-controlled",
+        ),
+    };
+    if !metadata.is_dir() || metadata.uid() != rustix::process::geteuid().as_raw() || unsafe_mode {
         return Err(AuditError::Io(io::Error::new(
             ErrorKind::PermissionDenied,
-            "audit directory must be owner-only",
+            message,
         )));
     }
     Ok(())
@@ -768,6 +1122,28 @@ fn validate_pinned_file(
     Ok(())
 }
 
+fn validate_stable_segment(
+    path: &Path,
+    pinned: &File,
+    before: FileFingerprint,
+    active: bool,
+) -> Result<(), AuditError> {
+    let candidate = open_read(path)?;
+    if active {
+        validate_owner_only_active_file(pinned)?;
+        validate_owner_only_active_file(&candidate)?;
+    } else {
+        validate_owner_only_sealed_file(pinned)?;
+        validate_owner_only_sealed_file(&candidate)?;
+    }
+    if file_fingerprint(pinned)? != before || file_fingerprint(&candidate)? != before {
+        return Err(AuditError::Io(io::Error::other(
+            "audit segment changed during verification",
+        )));
+    }
+    Ok(())
+}
+
 fn parent(path: &Path) -> Result<&Path, AuditError> {
     path.parent().ok_or_else(|| {
         AuditError::Io(io::Error::new(
@@ -777,9 +1153,9 @@ fn parent(path: &Path) -> Result<&Path, AuditError> {
     })
 }
 
-fn sync_parent(path: &Path) -> Result<(), AuditError> {
+fn sync_parent(path: &Path, directory_policy: DirectoryPolicy) -> Result<(), AuditError> {
     let parent = parent(path)?;
-    validate_owner_only_directory(parent)?;
+    validate_directory(parent, directory_policy)?;
     File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(AuditError::Io)
@@ -1006,5 +1382,64 @@ mod tests {
             .await
             .is_err());
         assert!(!sink.healthy());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn keyed_log_group_commit_rotates_and_the_stopped_visitor_replays_it() {
+        let (_directory, path, hasher) = fixture();
+        let log = Arc::new(
+            DurableSegmentedAuditLog::initialize(&path, 700, hasher.clone())
+                .await
+                .expect("log initializes"),
+        );
+        let mut appends = tokio::task::JoinSet::new();
+        for index in 0..64 {
+            let log = Arc::clone(&log);
+            appends.spawn(async move {
+                log.append_record(json!({"index": index, "padding": "x".repeat(120)}))
+                    .await
+            });
+        }
+        while let Some(result) = appends.join_next().await {
+            result.expect("append task joins").expect("record appends");
+        }
+        assert!(log.durable_writes() < 64, "concurrent records share writes");
+        assert_eq!(log.startup_verifications(), 1);
+        drop(log);
+
+        let mut visited = Vec::new();
+        let summary = visit_stopped_segmented_audit_chain(&path, &hasher, 128, 128, |envelope| {
+            visited.push(envelope.record["index"].as_u64().expect("index is present"));
+            Ok(())
+        })
+        .expect("stopped chain visits");
+        visited.sort_unstable();
+        assert_eq!(visited, (0..64).collect::<Vec<_>>());
+        assert_eq!(summary.records, 64);
+        assert!(summary.segments > 1);
+        assert!(summary.active_verified);
+    }
+
+    #[tokio::test]
+    async fn keyed_log_preserves_the_owner_controlled_directory_contract() {
+        let (directory, path, hasher) = fixture();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755))
+            .expect("make directory owner-controlled");
+        assert!(DurableSegmentedJsonlSink::open(&path, 1_048_576).is_err());
+        let log = DurableSegmentedAuditLog::initialize(&path, 1_048_576, hasher.clone())
+            .await
+            .expect("keyed log accepts an owner-controlled directory");
+        log.append_record(json!({"decision": "issued"}))
+            .await
+            .expect("record appends");
+        drop(log);
+
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o775))
+            .expect("make directory group-writable");
+        assert!(
+            DurableSegmentedAuditLog::initialize(&path, 1_048_576, hasher)
+                .await
+                .is_err()
+        );
     }
 }

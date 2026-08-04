@@ -82,8 +82,8 @@ pub enum AuditInitializationFault {
     Configuration,
     /// The audit hash secret is missing, unreadable, or too weak.
     Secret,
-    /// The audit file, its lock, or its directory cannot be opened as an
-    /// owner-only, singly linked regular file.
+    /// The audit file or lock is not owner-only and singly linked, or its
+    /// directory is not controlled by the service owner.
     Storage,
     /// Another writer already holds the sink's single-writer lock.
     Locked,
@@ -100,7 +100,7 @@ impl AuditInitializationFault {
             Self::Configuration => "the audit storage configuration is out of range",
             Self::Secret => "the audit hash secret is unusable",
             Self::Storage => {
-                "the audit file, its lock, or its directory is unavailable or is not owner-only"
+                "the audit file or lock is not owner-only, or its directory is unavailable or not owner-controlled"
             }
             Self::Locked => "another writer already holds the audit sink lock",
             Self::Chain => "the existing audit chain did not verify",

@@ -378,8 +378,8 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                 set_mode(&deployment.path("audit.jsonl"), 0o644);
                 None
             },
-            expected: "evidence: runtime audit initialization failed: the audit file, its lock, \
-                       or its directory is unavailable or is not owner-only\n",
+            expected: "evidence: runtime audit initialization failed: the audit file or lock is \
+                       not owner-only, or its directory is unavailable or not owner-controlled\n",
         },
         AuditFaultCase {
             label: "an audit chain that does not verify",

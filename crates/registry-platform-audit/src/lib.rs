@@ -6,8 +6,8 @@ pub mod pseudonym_keyring;
 mod segmented_jsonl;
 #[cfg(unix)]
 pub use segmented_jsonl::{
-    segmented_audit_paths, verify_segmented_audit_chain, DurableSegmentedJsonlSink,
-    SegmentedAuditSummary,
+    segmented_audit_paths, verify_segmented_audit_chain, visit_stopped_segmented_audit_chain,
+    DurableSegmentedAuditLog, DurableSegmentedJsonlSink, SegmentedAuditSummary,
 };
 
 use std::{

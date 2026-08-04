@@ -15,6 +15,8 @@ helpers for registry services.
   No in-memory sink exists in production builds.
 - Built-in `JsonlFileSink`, `DurableSegmentedJsonlSink`, `JsonlStdoutSink`, and
   `SyslogSink`.
+- `DurableSegmentedAuditLog` for keyed chain-head ownership, concurrent
+  append ordering, and group commit over `DurableSegmentedJsonlSink`.
 - `verify_chain` and `verify_jsonl_lines` for retained audit consistency
   checks.
 - `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
@@ -204,8 +206,16 @@ production use.
 - `DurableSegmentedJsonlSink` is the parallel evidence-grade file contract. It
   seals the active file as `<path>.<eight-digit-sequence>` when the configured
   threshold is reached, keeps the keyed chain continuous across segments, and
-  never deletes or compacts sealed history. Use
-  `verify_segmented_audit_chain` for full-chain verification.
+  never deletes or compacts sealed history. It requires an owner-only audit
+  directory for direct use.
+- `DurableSegmentedAuditLog` adds keyed startup verification and group commit.
+  It retains Evidence's established owner-controlled directory contract while
+  keeping active and lock files owner-only. Use this type when each append must
+  return only after its own bytes are durable.
+- Use `verify_segmented_audit_chain` for operator full-chain verification.
+  Use `visit_stopped_segmented_audit_chain` only for a bounded, caller-owned
+  projection that requires a stopped writer and the complete retained chain
+  starting at sealed segment one.
 - `AuditProfile::bootstrap_or_start_empty` and
   `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
   new appends, which is the normal startup path for persistent sinks.

@@ -2,33 +2,29 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{File, TryLockError},
-    io::{BufRead as _, BufReader, Error as IoError, ErrorKind, Read as _, Seek, SeekFrom, Write},
+    io::{Error as IoError, ErrorKind},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 #[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io::{Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
-    verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError, AuditHashSecret,
-    AuditKeyHasher, OptionalHashHex,
+    verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
+    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, DurableSegmentedAuditLog,
 };
-use registry_platform_crypto::{canonicalize_json, parse_json_strict};
+use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::config::AssuranceProfile;
 
 const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
-const MAX_AUDIT_LINE_BYTES: usize = 1024 * 1024;
-/// Sealed segments are named `<path>.<sequence>` with a zero-padded,
-/// fixed-width sequence, so lexical order matches chain order and the sink's
-/// `.lock` companion can never be mistaken for a segment.
-const SEGMENT_SEQUENCE_DIGITS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -340,7 +336,7 @@ pub struct AuditStorageUsage {
 }
 
 pub struct EvidenceAuditLog {
-    sink: Arc<DurableJsonlSink>,
+    sink: Arc<DurableSegmentedAuditLog>,
     key_hasher: AuditKeyHasher,
     key_version: u32,
 }
@@ -349,7 +345,7 @@ impl std::fmt::Debug for EvidenceAuditLog {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EvidenceAuditLog")
-            .field("path", &self.sink.path)
+            .field("path", &self.sink.path())
             .field("key_version", &self.key_version)
             .finish_non_exhaustive()
     }
@@ -365,18 +361,27 @@ impl EvidenceAuditLog {
         if maximum_file_bytes == 0 || key_version == 0 {
             return Err(EvidenceAuditError::Configuration);
         }
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(AuditError::Io(IoError::new(
+                ErrorKind::InvalidInput,
+                "audit path must be absolute",
+            ))
+            .into());
+        }
+        if !path.parent().is_some_and(Path::is_dir) {
+            return Err(AuditError::Io(IoError::new(
+                ErrorKind::NotFound,
+                "audit parent directory is unavailable",
+            ))
+            .into());
+        }
         let secret = AuditHashSecret::new(master_secret)?;
         let chain_hasher = AuditChainHasher::keyed(secret.clone());
         let key_hasher = AuditKeyHasher::Keyed(secret);
-        let sink = Arc::new(DurableJsonlSink::open(
-            path.into(),
-            maximum_file_bytes,
-            chain_hasher,
-        )?);
-        // The sink owns the chain head rather than a separate chain object,
-        // because the head has to advance in the same lock that claims a place
-        // in the pending batch.
-        sink.verify_startup().await?;
+        let sink = Arc::new(
+            DurableSegmentedAuditLog::initialize(path, maximum_file_bytes, chain_hasher).await?,
+        );
         Ok(Self {
             sink,
             key_hasher,
@@ -412,7 +417,7 @@ impl EvidenceAuditLog {
     /// through the walk is skipped rather than failing the read, because an
     /// operator archiving history concurrently is expected, not an error.
     pub async fn storage_usage(&self) -> Result<AuditStorageUsage, EvidenceAuditError> {
-        let path = self.sink.path.clone();
+        let path = self.sink.path().to_path_buf();
         tokio::task::spawn_blocking(move || {
             let segments = audit_segment_paths(&path)?;
             let mut bytes = 0u64;
@@ -457,790 +462,13 @@ impl EvidenceAuditLog {
     /// share them rather than each paying an `fsync`.
     #[cfg(test)]
     pub(crate) fn durable_writes(&self) -> usize {
-        self.sink.durable_writes.load(Ordering::Relaxed)
+        usize::try_from(self.sink.durable_writes()).unwrap_or(usize::MAX)
     }
-}
 
-struct DurableJsonlSink {
-    path: PathBuf,
-    lock_path: PathBuf,
-    maximum_file_bytes: u64,
-    hasher: AuditChainHasher,
-    state: tokio::sync::Mutex<SinkState>,
-    /// Held by whichever caller is performing the current durable write, so
-    /// exactly one runs at a time and the rest queue behind it. Separate from
-    /// `state` because the write must not hold the state lock: appends arriving
-    /// during it are what form the next batch.
-    flush: tokio::sync::Mutex<()>,
-    /// Highest enqueue position known to be on disk. Compared against a
-    /// caller's own position to decide whether it still has to write.
-    durable: AtomicU64,
-    _writer_lock: File,
     #[cfg(test)]
-    full_verifications: AtomicUsize,
-    #[cfg(test)]
-    durable_writes: AtomicUsize,
-}
-
-/// Writer state guarded by the sink mutex. The active segment handle lives here
-/// rather than on the sink because rotation replaces it, and the replacement
-/// must become visible to the next writer atomically with the sequence and
-/// fingerprint it belongs to.
-struct SinkState {
-    verified: bool,
-    fingerprint: FileFingerprint,
-    tail_hash: Option<[u8; 32]>,
-    audit_file: File,
-    next_sequence: u64,
-    /// Serialized records that have taken a chain position but are not on disk
-    /// yet. Always exactly the records between `durable` and `enqueued`.
-    pending: Vec<String>,
-    /// Chain positions handed out so far, counting from one.
-    enqueued: u64,
-    /// Why the sink stopped accepting writes. Set when a durable write fails,
-    /// which leaves the in-memory head ahead of the disk.
-    poison: Option<String>,
-}
-
-impl SinkState {
-    /// Refuse work the sink can no longer perform safely.
-    ///
-    /// A poisoned sink stays poisoned for the process's life. That is
-    /// deliberate: after a failed durable write the head has advanced past
-    /// records the disk never received, so any later append would chain onto
-    /// something that does not exist. Failing every request is visible;
-    /// continuing would fork the chain silently.
-    fn check_writable(&self) -> Result<(), AuditError> {
-        if let Some(reason) = &self.poison {
-            return Err(AuditError::Io(IoError::other(format!(
-                "audit sink stopped after a failed durable write: {reason}"
-            ))));
-        }
-        if !self.verified {
-            return Err(AuditError::Io(IoError::other(
-                "audit chain was not verified at startup",
-            )));
-        }
-        Ok(())
+    fn startup_verifications(&self) -> u64 {
+        self.sink.startup_verifications()
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct FileFingerprint {
-    length: u64,
-    #[cfg(unix)]
-    modified_seconds: i64,
-    #[cfg(unix)]
-    modified_nanoseconds: i64,
-    #[cfg(unix)]
-    changed_seconds: i64,
-    #[cfg(unix)]
-    changed_nanoseconds: i64,
-    #[cfg(not(unix))]
-    modified: Option<std::time::SystemTime>,
-}
-
-impl std::fmt::Debug for DurableJsonlSink {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DurableJsonlSink")
-            .field("path", &self.path)
-            .field("maximum_file_bytes", &self.maximum_file_bytes)
-            .finish_non_exhaustive()
-    }
-}
-
-impl DurableJsonlSink {
-    fn open(
-        path: PathBuf,
-        maximum_file_bytes: u64,
-        hasher: AuditChainHasher,
-    ) -> Result<Self, AuditError> {
-        if !path.is_absolute() {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "audit path must be absolute",
-            )));
-        }
-        let parent = path.parent().ok_or_else(|| {
-            AuditError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "audit path has no parent",
-            ))
-        })?;
-        if !parent.is_dir() {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::NotFound,
-                "audit parent directory is unavailable",
-            )));
-        }
-
-        // A pre-existing active segment larger than the configured bound is not
-        // an error: `maximum_file_bytes` is a rotation threshold, so an
-        // oversized segment is simply sealed by the next append. Refusing to
-        // start would turn a lowered bound into an outage.
-        let created = !path.exists();
-        let file = open_append_nofollow(&path)?;
-        validate_owner_only_regular_file(&file)?;
-        file.sync_all().map_err(AuditError::Io)?;
-        if created {
-            sync_parent(parent)?;
-        }
-
-        let lock_path = lock_path(&path);
-        let lock_created = !lock_path.exists();
-        let writer_lock = open_lock_nofollow(&lock_path)?;
-        validate_owner_only_regular_file(&writer_lock)?;
-        match writer_lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                return Err(AuditError::SinkLocked {
-                    path: lock_path.display().to_string(),
-                });
-            }
-            Err(TryLockError::Error(error)) => return Err(AuditError::Io(error)),
-        }
-        writer_lock.sync_all().map_err(AuditError::Io)?;
-        if lock_created {
-            sync_parent(parent)?;
-        }
-
-        let fingerprint = file_fingerprint(&file)?;
-        let next_sequence = newest_sealed_sequence(&path)?
-            .map_or(1, |sequence| sequence.checked_add(1).unwrap_or(sequence));
-        Ok(Self {
-            path,
-            lock_path,
-            maximum_file_bytes,
-            hasher,
-            state: tokio::sync::Mutex::new(SinkState {
-                verified: false,
-                fingerprint,
-                tail_hash: None,
-                audit_file: file,
-                next_sequence,
-                pending: Vec::new(),
-                enqueued: 0,
-                poison: None,
-            }),
-            flush: tokio::sync::Mutex::new(()),
-            durable: AtomicU64::new(0),
-            _writer_lock: writer_lock,
-            #[cfg(test)]
-            full_verifications: AtomicUsize::new(0),
-            #[cfg(test)]
-            durable_writes: AtomicUsize::new(0),
-        })
-    }
-
-    async fn ready(&self) -> bool {
-        // Waiting for this lock is safe and a non-blocking acquire would not be:
-        // the writer holds it only long enough to claim a chain position, never
-        // across a durable write, so contention here means the service is busy
-        // rather than unhealthy and refusing to wait would report a working
-        // service as unready under its own load. The one long hold, the startup
-        // scan that establishes the authenticated chain head, completes before
-        // the service serves.
-        let state = self.state.lock().await;
-        if state.check_writable().is_err() {
-            return false;
-        }
-        let path = self.path.clone();
-        let lock_path = self.lock_path.clone();
-        let Ok(file) = state.audit_file.try_clone() else {
-            return false;
-        };
-        let Ok(writer_lock) = self._writer_lock.try_clone() else {
-            return false;
-        };
-        // The recorded fingerprint only describes the file between durable
-        // writes, so it is only compared when nothing is queued and everything
-        // enqueued is on disk. While a write is in flight the file legitimately
-        // differs from it, and that write validates its own pinned identity and
-        // resulting length before reporting success, so an append is never the
-        // thing that has to be caught here. Both reads happen under the lock the
-        // writer advances them under: outside it, the service's own traffic
-        // would look like external mutation.
-        let quiescent =
-            state.pending.is_empty() && self.durable.load(Ordering::Acquire) == state.enqueued;
-        if quiescent {
-            let Ok(metadata) = file.metadata() else {
-                return false;
-            };
-            let Ok(observed) = file_fingerprint(&file) else {
-                return false;
-            };
-            if !metadata.is_file() || observed != state.fingerprint {
-                return false;
-            }
-        }
-        // The probe's own sync must not hold the state lock: appends take it to
-        // claim a chain position, and readiness is not allowed to stall them.
-        drop(state);
-        // Segment length is deliberately not a health property: with rotation a
-        // full segment is a routine state the next append resolves, and a
-        // lowered bound would otherwise wedge the service permanently unready.
-        tokio::task::spawn_blocking(move || -> Result<bool, AuditError> {
-            validate_pinned_path(&path, &file)?;
-            validate_pinned_path(&lock_path, &writer_lock)?;
-            file.sync_all().map_err(AuditError::Io)?;
-            validate_pinned_path(&path, &file)?;
-            validate_pinned_path(&lock_path, &writer_lock)?;
-            Ok(true)
-        })
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or(false)
-    }
-
-    /// Establish the authenticated chain head at startup.
-    ///
-    /// Only the active segment is replayed. The head it continues from is the
-    /// last record of the newest sealed segment, read on its own, so restart
-    /// cost is bounded by one segment rather than by all retained history.
-    /// Proving sealed segments is the job of [`verify_audit_chain`], run out of
-    /// band; corruption inside an already sealed segment is therefore not
-    /// caught at startup.
-    fn verify_and_tail(
-        path: &Path,
-        file: File,
-        hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        let sealed_head = sealed_tail_hash(path, hasher)?;
-        Ok(verify_reader(file, hasher, sealed_head)?.head)
-    }
-}
-
-impl DurableJsonlSink {
-    /// Enqueue one record and return once it is durable.
-    ///
-    /// The chain head advances under `state`, so records take chain positions
-    /// in enqueue order. Nothing under that lock touches the filesystem, which
-    /// is what lets appends arriving during a durable write join the next one
-    /// instead of queueing behind an `fsync`.
-    async fn append_record(&self, record: serde_json::Value) -> Result<AuditEnvelope, AuditError> {
-        let (envelope, position) = {
-            let mut state = self.state.lock().await;
-            state.check_writable()?;
-            let envelope = AuditEnvelope::new_with_hasher(record, state.tail_hash, &self.hasher)?;
-            let line = envelope.to_jsonl()?;
-            // Checked before the head advances, so a record too large for an
-            // empty segment fails on its own rather than poisoning the batch it
-            // would otherwise have joined.
-            let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
-            if incoming > self.maximum_file_bytes {
-                return Err(file_size_error());
-            }
-            state.pending.push(line);
-            state.enqueued = state.enqueued.saturating_add(1);
-            state.tail_hash = Some(envelope.record_hash);
-            (envelope, state.enqueued)
-        };
-        self.flush_through(position).await?;
-        Ok(envelope)
-    }
-
-    /// Return once every record up to `position` is on disk.
-    ///
-    /// The first caller to arrive while no write is in flight writes everything
-    /// queued so far; the rest wait and find their records already durable.
-    /// There is no timer and no configured window: a batch is exactly what
-    /// accumulated during the previous write, so it is one record on an idle
-    /// service and grows by itself under load.
-    async fn flush_through(&self, position: u64) -> Result<(), AuditError> {
-        loop {
-            if self.durable.load(Ordering::Acquire) >= position {
-                return Ok(());
-            }
-            let _writer = self.flush.lock().await;
-            if self.durable.load(Ordering::Acquire) >= position {
-                return Ok(());
-            }
-            self.flush_once().await?;
-        }
-    }
-
-    /// Write and sync everything currently queued.
-    ///
-    /// The caller holds `flush`, so exactly one of these runs at a time and the
-    /// batch it takes is never split with another writer.
-    async fn flush_once(&self) -> Result<(), AuditError> {
-        let (request, through) = {
-            let mut state = self.state.lock().await;
-            state.check_writable()?;
-            if state.pending.is_empty() {
-                return Ok(());
-            }
-            let request = BlockingAppend {
-                lines: std::mem::take(&mut state.pending),
-                path: self.path.clone(),
-                lock_path: self.lock_path.clone(),
-                maximum: self.maximum_file_bytes,
-                expected_fingerprint: state.fingerprint,
-                sequence: state.next_sequence,
-                file: state.audit_file.try_clone().map_err(AuditError::Io)?,
-                writer_lock: self._writer_lock.try_clone().map_err(AuditError::Io)?,
-            };
-            (request, state.enqueued)
-        };
-        #[cfg(test)]
-        self.durable_writes.fetch_add(1, Ordering::Relaxed);
-        let (rotated, appended) = tokio::task::spawn_blocking(move || request.run())
-            .await
-            .map_err(|error| AuditError::Io(IoError::other(error)))?;
-
-        let mut state = self.state.lock().await;
-        // Adopt a replaced segment even when the write that triggered the
-        // rotation then failed. The rename already happened on disk, so leaving
-        // the pinned handle on the sealed segment would fail
-        // `validate_pinned_path` on every later append and wedge the sink.
-        if let Some(sealed) = rotated {
-            state.audit_file = sealed.active;
-            state.next_sequence = sealed.next_sequence;
-            state.fingerprint = file_fingerprint(&state.audit_file)?;
-        }
-        match appended {
-            Ok(fingerprint) => {
-                state.fingerprint = fingerprint;
-                drop(state);
-                self.durable.store(through, Ordering::Release);
-                Ok(())
-            }
-            Err(error) => {
-                state.poison = Some(error.to_string());
-                Err(error)
-            }
-        }
-    }
-
-    /// Establish the authenticated chain head at startup.
-    async fn verify_startup(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        let mut state = self.state.lock().await;
-        let path = self.path.clone();
-        let lock_path = self.lock_path.clone();
-        let hasher = self.hasher.clone();
-        let file = state.audit_file.try_clone().map_err(AuditError::Io)?;
-        let writer_lock = self._writer_lock.try_clone().map_err(AuditError::Io)?;
-        #[cfg(test)]
-        self.full_verifications.fetch_add(1, Ordering::Relaxed);
-        let (tail_hash, fingerprint) = tokio::task::spawn_blocking(move || {
-            validate_pinned_path(&path, &file)?;
-            validate_pinned_path(&lock_path, &writer_lock)?;
-            let tail_hash =
-                Self::verify_and_tail(&path, file.try_clone().map_err(AuditError::Io)?, &hasher)?;
-            Ok((tail_hash, file_fingerprint(&file)?))
-        })
-        .await
-        .map_err(|error| AuditError::Io(IoError::other(error)))??;
-        state.verified = true;
-        state.fingerprint = fingerprint;
-        state.tail_hash = tail_hash;
-        Ok(tail_hash)
-    }
-}
-
-#[cfg(unix)]
-fn file_fingerprint(file: &File) -> Result<FileFingerprint, AuditError> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = file.metadata().map_err(AuditError::Io)?;
-    Ok(FileFingerprint {
-        length: metadata.len(),
-        modified_seconds: metadata.mtime(),
-        modified_nanoseconds: metadata.mtime_nsec(),
-        changed_seconds: metadata.ctime(),
-        changed_nanoseconds: metadata.ctime_nsec(),
-    })
-}
-
-#[cfg(not(unix))]
-fn file_fingerprint(file: &File) -> Result<FileFingerprint, AuditError> {
-    let metadata = file.metadata().map_err(AuditError::Io)?;
-    Ok(FileFingerprint {
-        length: metadata.len(),
-        modified: metadata.modified().ok(),
-    })
-}
-
-/// The record hash a segment ended on, and how many records it held.
-struct SegmentVerification {
-    head: Option<[u8; 32]>,
-    records: usize,
-}
-
-/// Replay one segment, requiring its first record to continue `expected_head`.
-/// `None` means the segment must start the chain at genesis, which is what the
-/// only segment of an unrotated chain does.
-fn verify_reader(
-    file: File,
-    hasher: &AuditChainHasher,
-    expected_head: Option<[u8; 32]>,
-) -> Result<SegmentVerification, AuditError> {
-    verify_reader_with_envelopes(file, hasher, expected_head, |_| Ok(()))
-}
-
-/// Replay and expose each exact verified envelope to one bounded collector.
-/// The collector runs on the strict parse of the same line whose keyed hash
-/// and chain predecessor were just verified, never on a second file read.
-fn verify_reader_with_envelopes(
-    mut file: File,
-    hasher: &AuditChainHasher,
-    expected_head: Option<[u8; 32]>,
-    mut collect: impl FnMut(AuditEnvelope) -> Result<(), AuditError>,
-) -> Result<SegmentVerification, AuditError> {
-    file.seek(SeekFrom::Start(0)).map_err(AuditError::Io)?;
-    let mut reader = BufReader::new(file);
-    let mut expected_previous = expected_head;
-    let mut records = 0usize;
-    while let Some(line) = read_bounded_jsonl_line(&mut reader)? {
-        let exact = line.trim_end_matches('\n');
-        let strict = parse_json_strict(exact.as_bytes()).map_err(|_| invalid_audit_data())?;
-        let envelope: AuditEnvelope =
-            serde_json::from_value(strict).map_err(|_| invalid_audit_data())?;
-        let verification = verify_jsonl_lines_with_hasher([exact], hasher)
-            .map_err(AuditError::ChainVerification)?;
-        if verification.start_prev_hash != expected_previous {
-            return Err(AuditError::ChainForkDetected {
-                expected: OptionalHashHex(expected_previous),
-                found: OptionalHashHex(verification.start_prev_hash),
-            });
-        }
-        collect(envelope)?;
-        expected_previous = verification.last_hash;
-        records += verification.records;
-    }
-    Ok(SegmentVerification {
-        head: expected_previous,
-        records,
-    })
-}
-
-fn invalid_audit_data() -> AuditError {
-    AuditError::Io(IoError::new(
-        ErrorKind::InvalidData,
-        "audit record is invalid",
-    ))
-}
-
-/// A sealed segment and the sequence the next rotation will claim.
-struct SealedSegment {
-    active: File,
-    next_sequence: u64,
-}
-
-/// The blocking half of one durable append.
-///
-/// This is a struct rather than a closure so that a rotation can be reported
-/// back to the caller on the failure path as well as the success path: once the
-/// rename has happened the writer state must follow it regardless of what the
-/// subsequent write did.
-struct BlockingAppend {
-    lines: Vec<String>,
-    path: PathBuf,
-    lock_path: PathBuf,
-    maximum: u64,
-    expected_fingerprint: FileFingerprint,
-    sequence: u64,
-    file: File,
-    writer_lock: File,
-}
-
-impl BlockingAppend {
-    fn run(mut self) -> (Option<SealedSegment>, Result<FileFingerprint, AuditError>) {
-        let mut rotated = None;
-        let appended = self.append(&mut rotated);
-        (rotated, appended)
-    }
-
-    /// Write the whole batch and sync once.
-    ///
-    /// The batch is one `fsync` regardless of how many records it holds, which
-    /// is the whole point: the cost that bounds append throughput is the sync,
-    /// not the bytes. A batch that crosses the segment bound is split, and each
-    /// outgoing segment is synced by its own seal before the rename.
-    fn append(
-        &mut self,
-        rotated: &mut Option<SealedSegment>,
-    ) -> Result<FileFingerprint, AuditError> {
-        // This check stays first, ahead of any rotation decision. It is what
-        // separates a legitimate rotation, which renames a path whose inode
-        // still matches the writer's own handle, from an external rename, which
-        // leaves the pinned handle naming a file the path no longer resolves to.
-        validate_pinned_path(&self.path, &self.file)?;
-        validate_pinned_path(&self.lock_path, &self.writer_lock)?;
-        if file_fingerprint(&self.file)? != self.expected_fingerprint {
-            return Err(AuditError::Io(IoError::other(
-                "audit file changed outside the initialized writer",
-            )));
-        }
-        let mut current = self.file.metadata().map_err(AuditError::Io)?.len();
-        let lines = std::mem::take(&mut self.lines);
-        let mut run = String::new();
-        for line in &lines {
-            let incoming = u64::try_from(line.len()).map_err(|_| file_size_error())?;
-            // A record that cannot fit an empty segment must fail closed rather
-            // than rotate forever looking for room it will never find.
-            if incoming > self.maximum {
-                return Err(file_size_error());
-            }
-            if current.saturating_add(incoming) > self.maximum && current > 0 {
-                // Everything buffered for the outgoing segment has to reach it
-                // before the seal, because the seal is what syncs and renames
-                // it. `seal_active_segment` relies on a sealed segment never
-                // holding a torn record.
-                self.file
-                    .write_all(run.as_bytes())
-                    .map_err(AuditError::Io)?;
-                self.file.flush().map_err(AuditError::Io)?;
-                run.clear();
-                let sealed = seal_active_segment(&self.path, &self.file, self.sequence)?;
-                self.file = sealed.active.try_clone().map_err(AuditError::Io)?;
-                self.sequence = sealed.next_sequence;
-                current = 0;
-                // Only the newest replacement matters to the caller: it is the
-                // handle and sequence the writer state must adopt.
-                *rotated = Some(sealed);
-            }
-            run.push_str(line);
-            current = current.saturating_add(incoming);
-        }
-        self.file
-            .write_all(run.as_bytes())
-            .map_err(AuditError::Io)?;
-        self.file.flush().map_err(AuditError::Io)?;
-        self.file.sync_all().map_err(AuditError::Io)?;
-        validate_pinned_path(&self.path, &self.file)?;
-        validate_pinned_path(&self.lock_path, &self.writer_lock)?;
-        let fingerprint = file_fingerprint(&self.file)?;
-        if fingerprint.length != current {
-            return Err(AuditError::Io(IoError::other(
-                "audit file length changed during append",
-            )));
-        }
-        Ok(fingerprint)
-    }
-}
-
-fn segment_path(path: &Path, sequence: u64) -> PathBuf {
-    let mut value = path.as_os_str().to_owned();
-    value.push(format!(
-        ".{sequence:0width$}",
-        width = SEGMENT_SEQUENCE_DIGITS
-    ));
-    PathBuf::from(value)
-}
-
-/// Recognize `candidate` as a sealed segment of the chain rooted at `path` and
-/// return its sequence.
-fn segment_sequence(path: &Path, candidate: &Path) -> Option<u64> {
-    let active = path.file_name()?.to_str()?;
-    let suffix = candidate
-        .file_name()?
-        .to_str()?
-        .strip_prefix(active)?
-        .strip_prefix('.')?;
-    if suffix.len() != SEGMENT_SEQUENCE_DIGITS || !suffix.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    suffix.parse().ok()
-}
-
-/// Enumerate the sealed segments of the chain rooted at `path`, oldest first.
-///
-/// Enumeration reads the directory and parses suffixes rather than probing
-/// sequences upward from one, so a missing middle segment shows up as a gap
-/// instead of silently truncating the set to the segments before it.
-fn sealed_segments(path: &Path) -> Result<Vec<(u64, PathBuf)>, AuditError> {
-    sealed_segments_bounded(path, usize::MAX)
-}
-
-fn sealed_segments_bounded(
-    path: &Path,
-    maximum_segments: usize,
-) -> Result<Vec<(u64, PathBuf)>, AuditError> {
-    let parent = path.parent().ok_or_else(|| {
-        AuditError::Io(IoError::new(
-            ErrorKind::InvalidInput,
-            "audit path has no parent",
-        ))
-    })?;
-    let mut sealed = Vec::new();
-    for entry in std::fs::read_dir(parent).map_err(AuditError::Io)? {
-        let candidate = entry.map_err(AuditError::Io)?.path();
-        if let Some(sequence) = segment_sequence(path, &candidate) {
-            sealed.push((sequence, candidate));
-            if sealed.len() > maximum_segments {
-                return Err(file_size_error());
-            }
-        }
-    }
-    sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
-    Ok(sealed)
-}
-
-/// Enumerate the chain's segments oldest first: every sealed segment in
-/// sequence order, then the active segment when it exists.
-pub fn audit_segment_paths(path: &Path) -> Result<Vec<PathBuf>, AuditError> {
-    let mut segments: Vec<PathBuf> = sealed_segments(path)?
-        .into_iter()
-        .map(|(_, path)| path)
-        .collect();
-    if std::fs::symlink_metadata(path).is_ok() {
-        segments.push(path.to_path_buf());
-    }
-    Ok(segments)
-}
-
-fn newest_sealed_segment(path: &Path) -> Result<Option<(u64, PathBuf)>, AuditError> {
-    Ok(sealed_segments(path)?.pop())
-}
-
-fn newest_sealed_sequence(path: &Path) -> Result<Option<u64>, AuditError> {
-    Ok(newest_sealed_segment(path)?.map(|(sequence, _)| sequence))
-}
-
-/// Seal the active segment under the next free sequence and open an empty
-/// replacement at the configured path.
-///
-/// Chain continuity needs nothing extra here: the head lives in memory and
-/// survives rotation, so the first record written after this call carries the
-/// sealed segment's last record hash as its predecessor.
-///
-/// Crashing between the rename and the replacement leaves no active segment.
-/// Startup recreates it and recovers the head from the sealed tail, so the seam
-/// still closes. This assumes the filesystem does not reorder the rename after
-/// the create; a filesystem that does could lose a segment silently.
-///
-/// One invariant here is load-bearing for reading a sealed segment's last
-/// record on its own: a sealed segment can never hold a torn final record,
-/// because rotation only ever renames a file every one of whose records
-/// returned from a successful `sync_all`.
-fn seal_active_segment(
-    path: &Path,
-    active: &File,
-    sequence: u64,
-) -> Result<SealedSegment, AuditError> {
-    let parent = path.parent().ok_or_else(|| {
-        AuditError::Io(IoError::new(
-            ErrorKind::InvalidInput,
-            "audit path has no parent",
-        ))
-    })?;
-    active.sync_all().map_err(AuditError::Io)?;
-
-    // Never rename over an existing sealed segment: that would erase history.
-    // The exclusive writer lock makes this process the only Evidence writer for
-    // this chain, so probing for a free sequence cannot race another sink.
-    let mut sequence = sequence;
-    let mut sealed = segment_path(path, sequence);
-    while std::fs::symlink_metadata(&sealed).is_ok() {
-        sequence = next_sequence(sequence)?;
-        sealed = segment_path(path, sequence);
-    }
-    std::fs::rename(path, &sealed).map_err(AuditError::Io)?;
-
-    let replacement = open_append_nofollow(path)?;
-    validate_owner_only_regular_file(&replacement)?;
-    if replacement.metadata().map_err(AuditError::Io)?.len() != 0 {
-        return Err(AuditError::Io(IoError::other(
-            "replacement audit segment is not empty",
-        )));
-    }
-    replacement.sync_all().map_err(AuditError::Io)?;
-    sync_parent(parent)?;
-    Ok(SealedSegment {
-        active: replacement,
-        next_sequence: next_sequence(sequence)?,
-    })
-}
-
-fn next_sequence(sequence: u64) -> Result<u64, AuditError> {
-    sequence
-        .checked_add(1)
-        .ok_or_else(|| AuditError::Io(IoError::other("audit segment sequence is exhausted")))
-}
-
-/// Recover the chain head an active segment continues from by reading only the
-/// last record of the newest sealed segment.
-fn sealed_tail_hash(
-    path: &Path,
-    hasher: &AuditChainHasher,
-) -> Result<Option<[u8; 32]>, AuditError> {
-    let Some((_, newest)) = newest_sealed_segment(path)? else {
-        return Ok(None);
-    };
-    let file = open_sealed_segment(&newest)?;
-    // An empty newest sealed segment is a hard error, never a fall back to
-    // genesis: otherwise truncating the sealed tail and the active segment to
-    // zero would start a clean chain in a directory full of history.
-    let Some(line) = last_jsonl_line(file)? else {
-        return Err(AuditError::Io(IoError::new(
-            ErrorKind::InvalidData,
-            "sealed audit segment holds no records",
-        )));
-    };
-    let verification = verify_jsonl_lines_with_hasher([line.trim_end_matches('\n')], hasher)
-        .map_err(AuditError::ChainVerification)?;
-    Ok(verification.last_hash)
-}
-
-/// Read a segment's final complete record without reading the segment, bounded
-/// by the same per-record limit the forward reader enforces.
-fn last_jsonl_line(mut file: File) -> Result<Option<String>, AuditError> {
-    let length = file.metadata().map_err(AuditError::Io)?.len();
-    if length == 0 {
-        return Ok(None);
-    }
-    let bound = u64::try_from(MAX_AUDIT_LINE_BYTES.saturating_add(1)).unwrap_or(u64::MAX);
-    let window = bound.min(length);
-    file.seek(SeekFrom::Start(length - window))
-        .map_err(AuditError::Io)?;
-    let mut tail = vec![
-        0u8;
-        usize::try_from(window).map_err(|_| AuditError::Io(IoError::other(
-            "audit segment tail is unreadable"
-        )))?
-    ];
-    file.read_exact(&mut tail).map_err(AuditError::Io)?;
-    if tail.pop() != Some(b'\n') {
-        return Err(AuditError::Io(IoError::new(
-            ErrorKind::InvalidData,
-            "sealed audit segment has an incomplete final record",
-        )));
-    }
-    let start = tail
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index + 1);
-    if start == 0 && window < length {
-        return Err(AuditError::Io(IoError::new(
-            ErrorKind::InvalidData,
-            "audit JSONL record exceeds its bound",
-        )));
-    }
-    let line = String::from_utf8(tail[start..].to_vec()).map_err(|_| {
-        AuditError::Io(IoError::new(
-            ErrorKind::InvalidData,
-            "audit JSONL is not UTF-8",
-        ))
-    })?;
-    Ok(Some(line))
-}
-
-/// Open a sealed segment for reading.
-///
-/// Sealed segments are read-only history, so link count is deliberately not
-/// checked here: the single-link rule exists to pin the *active* writer's file,
-/// while an operator archiving sealed history with a hard link is legitimate.
-/// Ownership and mode still are checked, so a segment another user could have
-/// written is never read, and `O_NOFOLLOW` still rejects a symlink planted at a
-/// segment name.
-fn open_sealed_segment(path: &Path) -> Result<File, AuditError> {
-    let file = open_read_nofollow(path)?;
-    validate_owner_only_readable_file(&file)?;
-    Ok(file)
 }
 
 /// Result of an out-of-band verification pass over a whole audit chain.
@@ -1469,390 +697,53 @@ fn verified_last_local_audit_operation_with_bounds(
         return Err(EvidenceAuditError::Configuration);
     }
 
-    // The guard remains alive through enumeration, replay, active stability
-    // checks, and view construction. A live service therefore fails before any
-    // record is read, and a new writer cannot start midway through inspection.
-    let lock = lock_path(path);
-    let guard = open_lock_nofollow(&lock).map_err(EvidenceAuditError::Audit)?;
-    validate_owner_only_regular_file(&guard).map_err(EvidenceAuditError::Audit)?;
-    match guard.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => {
-            return Err(EvidenceAuditError::Audit(AuditError::Io(IoError::other(
-                "audit writer is active",
-            ))))
-        }
-        Err(TryLockError::Error(error)) => {
-            return Err(EvidenceAuditError::Audit(AuditError::Io(error)))
-        }
-    }
-
-    let maximum_sealed = bounds.maximum_segments.saturating_sub(1);
-    let sealed =
-        sealed_segments_bounded(path, maximum_sealed).map_err(EvidenceAuditError::Audit)?;
-    for (offset, (sequence, _)) in sealed.iter().enumerate() {
-        let expected = 1u64.saturating_add(offset as u64);
-        if *sequence != expected {
-            return Err(EvidenceAuditError::SegmentMissing { sequence: expected });
-        }
-    }
-
     let hasher = AuditChainHasher::keyed(master_secret.clone());
     let mut collector = LocalAuditCollector::new(bounds);
-    let mut head = None;
-    for (_, segment) in &sealed {
-        let file = open_sealed_segment(segment).map_err(EvidenceAuditError::Audit)?;
-        let before = file_fingerprint(&file).map_err(EvidenceAuditError::Audit)?;
-        let verification = verify_reader_with_envelopes(
-            file.try_clone().map_err(AuditError::Io)?,
-            &hasher,
-            head,
-            |envelope| collector.collect(envelope),
-        )
-        .map_err(EvidenceAuditError::Audit)?;
-        validate_stable_segment(segment, &file, before, false)
-            .map_err(EvidenceAuditError::Audit)?;
-        head = verification.head;
-    }
-
-    let active = open_read_nofollow(path).map_err(EvidenceAuditError::Audit)?;
-    validate_owner_only_regular_file(&active).map_err(EvidenceAuditError::Audit)?;
-    let before = file_fingerprint(&active).map_err(EvidenceAuditError::Audit)?;
-    verify_reader_with_envelopes(
-        active.try_clone().map_err(AuditError::Io)?,
+    visit_stopped_segmented_audit_chain(
+        path,
         &hasher,
-        head,
+        bounds.maximum_segments,
+        bounds.maximum_records,
         |envelope| collector.collect(envelope),
     )
-    .map_err(EvidenceAuditError::Audit)?;
-    validate_stable_segment(path, &active, before, true).map_err(EvidenceAuditError::Audit)?;
-    validate_pinned_path(&lock, &guard).map_err(EvidenceAuditError::Audit)?;
+    .map_err(map_platform_audit_error)?;
     collector.finish()
 }
 
-fn validate_stable_segment(
-    path: &Path,
-    pinned: &File,
-    before: FileFingerprint,
-    active: bool,
-) -> Result<(), AuditError> {
-    let candidate = open_read_nofollow(path)?;
-    if active {
-        validate_owner_only_regular_file(&candidate)?;
-        validate_owner_only_regular_file(pinned)?;
-    } else {
-        validate_owner_only_readable_file(&candidate)?;
-        validate_owner_only_readable_file(pinned)?;
-    }
-    if !same_file(pinned, &candidate)?
-        || file_fingerprint(pinned)? != before
-        || file_fingerprint(&candidate)? != before
-    {
-        return Err(AuditError::Io(IoError::other(
-            "audit segment changed during verification",
-        )));
-    }
-    Ok(())
-}
-
-/// Verify every segment of an audit chain, sealed history included.
-///
-/// Startup verification is deliberately bounded to the active segment so that
-/// restart time does not grow with retained history. This is its counterpart:
-/// a full replay across every seam, meant to run out of band, and the only
-/// check that detects tampering inside an already sealed segment.
-///
-/// A gap in the sealed sequence is reported as [`EvidenceAuditError::SegmentMissing`]
-/// naming the absent sequence, not as a hash break, so that history an operator
-/// archived is distinguishable from history someone rewrote.
-///
-/// The active segment is only replayed when the writer lock is free. Against a
-/// running service it would race an in-flight append and report a partially
-/// written final record as corruption, so it is skipped and `active_verified`
-/// says so.
+/// Verify every retained segment, including the active segment when no writer is running.
 pub fn verify_audit_chain(
     path: &Path,
     master_secret: &AuditHashSecret,
 ) -> Result<AuditChainSummary, EvidenceAuditError> {
-    let hasher = AuditChainHasher::keyed(master_secret.clone());
-    let sealed = sealed_segments(path).map_err(EvidenceAuditError::Audit)?;
-    let first_sequence = sealed.first().map(|(sequence, _)| *sequence);
-    let last_sequence = sealed.last().map(|(sequence, _)| *sequence);
-    if let Some(first) = first_sequence {
-        for (offset, (sequence, _)) in sealed.iter().enumerate() {
-            let expected = first.saturating_add(offset as u64);
-            if *sequence != expected {
-                return Err(EvidenceAuditError::SegmentMissing { sequence: expected });
-            }
-        }
-    }
-
-    let mut head = None;
-    let mut records = 0usize;
-    let mut segments = 0usize;
-    for (_, segment) in &sealed {
-        let file = open_sealed_segment(segment).map_err(EvidenceAuditError::Audit)?;
-        let verification = verify_reader(file, &hasher, head).map_err(EvidenceAuditError::Audit)?;
-        head = verification.head;
-        records = records.saturating_add(verification.records);
-        segments = segments.saturating_add(1);
-    }
-
-    let active_verified = match active_segment_if_quiescent(path)? {
-        Some(file) => {
-            let verification =
-                verify_reader(file, &hasher, head).map_err(EvidenceAuditError::Audit)?;
-            head = verification.head;
-            records = records.saturating_add(verification.records);
-            segments = segments.saturating_add(1);
-            true
-        }
-        None => false,
-    };
-
+    let summary =
+        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(master_secret.clone()))
+            .map_err(map_platform_audit_error)?;
     Ok(AuditChainSummary {
-        first_sequence,
-        last_sequence,
-        active_verified,
-        segments,
-        records,
-        head,
+        segments: summary.segments,
+        records: summary.records,
+        head: summary.last_hash,
+        first_sequence: summary.first_sequence,
+        last_sequence: summary.last_sequence,
+        active_verified: summary.active_verified,
     })
 }
 
-/// Open the active segment for verification, but only if no writer holds the
-/// chain. Returns `None` when a live Evidence process owns the lock, or when
-/// the active segment is absent because a crash landed between the rename and
-/// the replacement.
-fn active_segment_if_quiescent(path: &Path) -> Result<Option<File>, EvidenceAuditError> {
-    let lock_path = lock_path(path);
-    if lock_path.exists() {
-        let guard = open_lock_nofollow(&lock_path).map_err(EvidenceAuditError::Audit)?;
-        match guard.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Ok(None),
-            Err(TryLockError::Error(error)) => {
-                return Err(EvidenceAuditError::Audit(AuditError::Io(error)))
-            }
-        }
+fn map_platform_audit_error(error: AuditError) -> EvidenceAuditError {
+    match error {
+        AuditError::SegmentMissing { sequence } => EvidenceAuditError::SegmentMissing { sequence },
+        error => EvidenceAuditError::Audit(error),
     }
-    if !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-        return Ok(None);
-    }
-    let file = open_read_nofollow(path).map_err(EvidenceAuditError::Audit)?;
-    validate_owner_only_regular_file(&file).map_err(EvidenceAuditError::Audit)?;
-    Ok(Some(file))
 }
 
-fn read_bounded_jsonl_line(reader: &mut BufReader<File>) -> Result<Option<String>, AuditError> {
-    let mut line = Vec::new();
-    loop {
-        let available = reader.fill_buf().map_err(AuditError::Io)?;
-        if available.is_empty() {
-            if line.is_empty() {
-                return Ok(None);
-            }
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::InvalidData,
-                "audit JSONL has an incomplete final record",
-            )));
-        }
-        let take = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        if line.len().saturating_add(take) > MAX_AUDIT_LINE_BYTES {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::InvalidData,
-                "audit JSONL record exceeds its bound",
-            )));
-        }
-        let found_newline = available[take - 1] == b'\n';
-        line.extend_from_slice(&available[..take]);
-        reader.consume(take);
-        if found_newline {
-            let line = String::from_utf8(line).map_err(|_| {
-                AuditError::Io(IoError::new(
-                    ErrorKind::InvalidData,
-                    "audit JSONL is not UTF-8",
-                ))
-            })?;
-            return Ok(Some(line));
-        }
-    }
+fn invalid_audit_data() -> AuditError {
+    AuditError::Io(IoError::new(
+        ErrorKind::InvalidData,
+        "audit record is invalid",
+    ))
 }
 
 fn file_size_error() -> AuditError {
     AuditError::Io(IoError::other("audit file size bound exceeded"))
-}
-
-fn lock_path(path: &Path) -> PathBuf {
-    let mut value = path.as_os_str().to_owned();
-    value.push(".lock");
-    PathBuf::from(value)
-}
-
-fn validate_pinned_path(path: &Path, pinned: &File) -> Result<(), AuditError> {
-    let candidate = open_read_nofollow(path)?;
-    validate_owner_only_regular_file(pinned)?;
-    validate_owner_only_regular_file(&candidate)?;
-    if !same_file(pinned, &candidate)? {
-        return Err(AuditError::Io(IoError::other(
-            "audit path no longer names the initialized file",
-        )));
-    }
-    Ok(())
-}
-
-/// The owner-only checks that apply to any audit file, with the single-link
-/// requirement left out. See [`open_sealed_segment`] for why sealed history is
-/// allowed more than one name.
-#[cfg(unix)]
-fn validate_owner_only_readable_file(file: &File) -> Result<(), AuditError> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = file.metadata().map_err(AuditError::Io)?;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(AuditError::Io(IoError::new(
-            ErrorKind::PermissionDenied,
-            "audit files must be owner-only regular files",
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_owner_only_readable_file(file: &File) -> Result<(), AuditError> {
-    validate_owner_only_regular_file(file)
-}
-
-#[cfg(unix)]
-fn validate_owner_only_regular_file(file: &File) -> Result<(), AuditError> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = file.metadata().map_err(AuditError::Io)?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(AuditError::Io(IoError::new(
-            ErrorKind::PermissionDenied,
-            "audit files must be owner-only, singly linked regular files",
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_owner_only_regular_file(file: &File) -> Result<(), AuditError> {
-    if file.metadata().map_err(AuditError::Io)?.is_file() {
-        Ok(())
-    } else {
-        Err(AuditError::Io(IoError::new(
-            ErrorKind::InvalidInput,
-            "audit file is not regular",
-        )))
-    }
-}
-
-#[cfg(unix)]
-fn same_file(left: &File, right: &File) -> Result<bool, AuditError> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let left = left.metadata().map_err(AuditError::Io)?;
-    let right = right.metadata().map_err(AuditError::Io)?;
-    Ok(left.dev() == right.dev() && left.ino() == right.ino())
-}
-
-#[cfg(not(unix))]
-fn same_file(_left: &File, _right: &File) -> Result<bool, AuditError> {
-    Ok(true)
-}
-
-#[cfg(unix)]
-fn open_append_nofollow(path: &Path) -> Result<File, AuditError> {
-    use rustix::fs::{Mode, OFlags};
-    rustix::fs::open(
-        path,
-        OFlags::RDWR | OFlags::APPEND | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::from_raw_mode(0o600),
-    )
-    .map(File::from)
-    .map_err(|error| AuditError::Io(error.into()))
-}
-
-#[cfg(not(unix))]
-fn open_append_nofollow(path: &Path) -> Result<File, AuditError> {
-    reject_symlink(path)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(path)
-        .map_err(AuditError::Io)
-}
-
-#[cfg(unix)]
-fn open_lock_nofollow(path: &Path) -> Result<File, AuditError> {
-    use rustix::fs::{Mode, OFlags};
-    rustix::fs::open(
-        path,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::from_raw_mode(0o600),
-    )
-    .map(File::from)
-    .map_err(|error| AuditError::Io(error.into()))
-}
-
-#[cfg(not(unix))]
-fn open_lock_nofollow(path: &Path) -> Result<File, AuditError> {
-    reject_symlink(path)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(path)
-        .map_err(AuditError::Io)
-}
-
-#[cfg(unix)]
-fn open_read_nofollow(path: &Path) -> Result<File, AuditError> {
-    use rustix::fs::{Mode, OFlags};
-    rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(|error| AuditError::Io(error.into()))
-}
-
-#[cfg(not(unix))]
-fn open_read_nofollow(path: &Path) -> Result<File, AuditError> {
-    reject_symlink(path)?;
-    File::open(path).map_err(AuditError::Io)
-}
-
-#[cfg(not(unix))]
-fn reject_symlink(path: &Path) -> Result<(), AuditError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(AuditError::Io(IoError::new(
-            ErrorKind::InvalidInput,
-            "audit path is a symlink",
-        ))),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AuditError::Io(error)),
-    }
-}
-
-fn sync_parent(parent: &Path) -> Result<(), AuditError> {
-    File::open(parent)
-        .and_then(|file| file.sync_all())
-        .map_err(AuditError::Io)
 }
 
 #[cfg(test)]
@@ -2043,12 +934,12 @@ mod tests {
         )
         .await
         .expect("audit initializes");
-        assert_eq!(log.sink.full_verifications.load(Ordering::Relaxed), 1);
+        assert_eq!(log.startup_verifications(), 1);
         assert!(log.ready().await, "an empty verified chain is ready");
         log.append(event(&log)).await.expect("event appends");
         assert!(log.ready().await);
         assert_eq!(
-            log.sink.full_verifications.load(Ordering::Relaxed),
+            log.startup_verifications(),
             1,
             "steady-state appends and readiness must not rescan the audit file"
         );
@@ -2111,7 +1002,7 @@ mod tests {
             "the chain verifies after concurrent appends"
         );
         assert_eq!(
-            log.sink.full_verifications.load(Ordering::Relaxed),
+            log.startup_verifications(),
             1,
             "concurrent appends extend the chain incrementally without rescanning it"
         );
@@ -2170,7 +1061,7 @@ mod tests {
         .await
         .expect("a valid nonempty chain verifies on restart");
         assert!(restarted.ready().await);
-        assert_eq!(restarted.sink.full_verifications.load(Ordering::Relaxed), 1);
+        assert_eq!(restarted.startup_verifications(), 1);
         restarted
             .append(event(&restarted))
             .await
@@ -2314,7 +1205,7 @@ mod tests {
 
         assert!(!log.ready().await);
         assert!(log.append(event(&log)).await.is_err());
-        assert_eq!(log.sink.full_verifications.load(Ordering::Relaxed), 1);
+        assert_eq!(log.startup_verifications(), 1);
     }
 
     #[tokio::test]
@@ -3046,8 +1937,8 @@ mod tests {
         // Retention is the operator's, so archiving a sealed segment must show
         // up as a smaller footprint rather than being masked by a counter that
         // only ever accumulates.
-        let sealed = sealed_segments(&path).expect("sealed segments enumerate");
-        let (_, oldest) = sealed.first().expect("rotation sealed a segment");
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        let oldest = segments.first().expect("rotation sealed a segment");
         let archived = std::fs::metadata(oldest).expect("sealed metadata").len();
         std::fs::remove_file(oldest).expect("sealed segment archives away");
 

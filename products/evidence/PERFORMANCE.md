@@ -8,26 +8,29 @@ Date: 2026-08-03
 Evidence trades request throughput for audit durability. This file records what
 that trade costs, how it was measured, and the change that recovered most of
 the cost without weakening the guarantee: group commit in the audit sink,
-implemented in `crates/registry-evidence/src/audit.rs`. The current end-to-end
-measurement lives in `OPERATOR-CONTRACT.md` under "Measured throughput".
-Nothing here is a Version 1 commitment. Throughput is not a Definition of Done
-row and is not a `CONCEPT.md` non-goal.
+implemented by `DurableSegmentedAuditLog` in `registry-platform-audit` and used
+through Evidence's event boundary in `crates/registry-evidence/src/audit.rs`.
+The current end-to-end measurement lives in `OPERATOR-CONTRACT.md` under
+"Measured throughput". Nothing here is a Version 1 commitment. Throughput is
+not a Definition of Done row and is not a `CONCEPT.md` non-goal.
 
 ## The guarantee that sets the ceiling
 
 The security invariant matrix requires that the disclosure-release record be
 durably accepted before the response bytes reach the caller, and that the access
-record be durably accepted before source access. `DurableJsonlSink` implements
-this by calling `sync_all` inside the append, and `ChainState::append` holds the
-chain mutex across that call so hash links cannot interleave.
+record be durably accepted before source access. `DurableSegmentedAuditLog`
+implements this by assigning keyed chain positions under a short in-memory
+lock, then calling `sync_all` for the batch that contains each append before
+that append resolves.
 
-The result is two serialized disk barriers per successful request.
+The result is two append durability obligations per successful request. Their
+barriers are serialized, but concurrent requests can share one barrier.
 
-This is Evidence-specific. The shared `JsonlFileSink` and Relay's file sink both
-end their append at `write_all` plus `flush` and never call `sync_all`, so their
-records sit in the page cache and are lost on power failure. Evidence is the
-only one of the three that survives that failure, and the ceiling below is the
-price of it.
+The legacy shared `JsonlFileSink` ends its append at `write_all` plus `flush`
+and does not provide this durability contract. Evidence and Mint now use the
+shared non-destructive durable segmented engine instead. This section records
+the historical Evidence ceiling that motivated adding group commit to that
+engine.
 
 ## Measured baseline before group commit
 
@@ -66,21 +69,23 @@ before they are quoted as production numbers or used to justify the work below.*
 
 ## Horizontal scaling works today
 
-`DurableJsonlSink::open` takes an exclusive `flock`, so one process owns one
-audit path. Nothing else is shared between requests. N processes with N distinct
-audit paths therefore give N times the throughput with no code change. Only
-vertical throughput is capped.
+`DurableSegmentedAuditLog::initialize` takes an exclusive `flock`, so one
+process owns one audit path. Nothing else is shared between requests. N
+processes with N distinct audit paths therefore give N times the throughput
+with no code change. Only vertical throughput is capped.
 
 ## Group commit
 
 The lever for vertical throughput is batching the barrier, not removing it.
-The audit sink in `crates/registry-evidence/src/audit.rs` implements this:
-appends that arrive while a durable write is in flight form the next batch,
-and one `fsync` covers the whole batch. There is no timer and no configured
-window; a batch is exactly what queued behind the in-flight barrier, so the
-sink degrades to one barrier per append when requests do not overlap.
+`DurableSegmentedAuditLog` in
+`crates/registry-platform-audit/src/segmented_jsonl.rs` implements this. Appends
+that arrive while a durable write is in flight form the next batch, and one
+`fsync` covers the whole batch. There is no timer and no configured window; a
+batch is exactly what queued behind the in-flight barrier, so the sink degrades
+to one barrier per append when requests do not overlap.
 
-Properties that survived the change, each held by tests in `audit.rs`:
+Properties that survived the change are held by platform storage tests and
+Evidence boundary tests:
 
 - durability before release: an append resolves only after the barrier that
   covers its own bytes has completed, so no caller receives evidence ahead of
@@ -90,7 +95,7 @@ Properties that survived the change, each held by tests in `audit.rs`:
 - fail-closed: a failed barrier fails every append it covers, and none of them
   may report success;
 - fork detection: the pinned-path, fingerprint, and tail checks in
-  `DurableJsonlSink::write` still bracket the batched write, and a batch that
+  `DurableSegmentedJsonlSink` bracket the batched write, and a batch that
   crosses the segment bound is split so each segment stays self-consistent.
 
 The gain scales with concurrent arrivals rather than helping a single idle
@@ -105,7 +110,11 @@ production numbers.
 
 ## Regression baseline
 
-Two tests cover this area:
+The principal regression tests cover both shared storage and its Evidence use:
+
+- `keyed_log_group_commit_rotates_and_the_stopped_visitor_replays_it` proves
+  the platform coordinator batches concurrent appends, rotates online, and
+  replays the exact verified stopped chain.
 
 - `concurrent_evidence_requests_keep_one_verifiable_audit_chain` runs in CI. It
   drives simultaneous evaluations and asserts one verifiable chain, two records
@@ -123,6 +132,6 @@ Record the host alongside any figure taken from it.
 
 ## Not measured
 
-The shared `JsonlFileSink` was read, not benchmarked. The claim that it is
-materially faster on this axis is inference from the absent `sync_all`, not a
-measurement.
+The legacy shared `JsonlFileSink` was read, not benchmarked. Any claim that it
+is materially faster on this axis is inference from the absent `sync_all`, not
+a measurement.
