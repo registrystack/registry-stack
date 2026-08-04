@@ -30,7 +30,7 @@ auth:
     leeway: 60s
     scope_claim: $scope_claim
     scope_map:
-      "registry-smoke-reader": "smoke_registry:metadata"
+      "registry-smoke-reader": $mapped_scope
     scope_object_required_keys:
       - $required_org
     allowed_clients:

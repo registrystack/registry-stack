@@ -136,7 +136,7 @@ gates for its area (see Verification), and committed.
 Opened 2026-08-03 by the post-merge review of C. Each is deletion-cascade
 residue the workstream did not reach, not new scope.
 
-- [ ] C9. A Relay-only source-read conformance successor exists. The
+- [x] C9. A Relay-only source-read conformance successor exists. The
       external integration runner and its evidence packet went with Notary,
       and the retirement guard that froze their absence is now gone too
       (2026-08-03), so nothing in `release/` currently exercises a real
@@ -144,6 +144,14 @@ residue the workstream did not reach, not new scope.
       source-read or data-minimization assurance from conformance evidence.
       Decide first whether the successor belongs in `release/conformance/`
       beside `relay-oidc`, or as a Relay integration test.
+
+      Decided 2026-08-04: `release/conformance/`, and inside the existing
+      `relay-oidc` harness rather than as a sibling directory. The gap was
+      release evidence, not test coverage; Relay's own integration tests
+      already read every supported source. A sibling would have duplicated
+      about two thousand lines of candidate binding, cosign and slsa
+      verification, secret-canary scanning, and teardown to reuse a topology
+      that already mounts a real CSV source and starts a released image.
 - [ ] C10. The manifest layer's Notary vocabulary is resolved.
       `registry-manifest-core` still requires the protocol identifier
       `registry-notary-federation/v0.1` from any manifest that declares a
@@ -972,3 +980,35 @@ is parallel; B has no upstream dependencies and is the standing priority
   pins that `notary-retirement.test.mjs` requires), `src/data/standards.yaml`,
   `src/data/generated/configuration-reference.json` (generated from a Relay
   Rust doc string), and the history pages.
+
+- 2026-08-04: C9 done. The successor lives inside the existing `relay-oidc`
+  harness, for the reason recorded on the item. The gap was real and narrower
+  than "nothing reads a source": the topology already mounts `records.csv` and
+  declares `read_scope: smoke_registry:rows` on the `person` entity, but every
+  assertion targeted `/v1/datasets`, so the read scope was never granted and no
+  row was ever read. The harness now maps the Zitadel role through a
+  parameterized `$mapped_scope`, and three checks join `REQUIRED_CHECKS`:
+  `source-read-scope-denied` (the metadata-scoped token is refused at the
+  records route with `403 auth.scope_denied`), `source-read-records` (the same
+  token remapped to the read scope returns `200`), and
+  `source-read-minimized-projection` (the record is exactly the authored
+  projection, so the source column `person_id` is absent). Relay restarts
+  between the two scope stages on purpose: one token carrying both scopes could
+  not show the read scope is independently enforced. `source_read_result` is a
+  pure function so the projection rule is unit-tested offline, and it reports
+  field names only, never the row, so a failing report keeps the same evidence
+  boundary as a passing one. A new test derives the expected record from the
+  pinned fixture so the CSV, the template projection, and the expectation
+  cannot drift apart. Verified against Relay source before asserting: the
+  entity records route requires `entity.access.read_scope`
+  (`crates/registry-relay/src/api/entity.rs:780`), `AuthError::ScopeDenied`
+  renders `auth.scope_denied` at `403`, and governed access is a pass-through
+  for this entity because it sets neither `require_purpose_header` nor a
+  governed policy (`crates/registry-relay/src/api/governed.rs:166`). Gates:
+  `test_relay_oidc_smoke.py` 37/37, `test_registry_release.py` 71/71,
+  `test_conformance_candidate.py` 6/6, `test_check_gates_inventory.py` 70/70,
+  `test_check_release_source_model.py` 13/13, `registry-release validate` on
+  beta-27, and the monorepo source-model check. Honest limit: like every other
+  assertion in this harness, these have never executed live, because a live run
+  needs a published digest-pinned candidate. `release/READINESS.md` records the
+  new coverage as source-ready and unrun, so no release may cite it yet.

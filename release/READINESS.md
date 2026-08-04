@@ -53,6 +53,11 @@ write.
       wrapper was product-specific and is no longer an active gate; its
       [initial report](conformance/openid/initial-report.md) remains historical
       evidence only.
+- [ ] Source-read and field-projection evidence for a published Relay image.
+      The same Relay OIDC smoke now asserts that a row reaches the caller from
+      the mounted source only under the entity's own read scope, and that the
+      returned record carries the authored projection rather than the source
+      column. It is source-ready and unrun, so no release may yet cite it.
 - [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The prior
       integration packet was Notary-specific and was retired on 2026-08-03.
       No current Relay or Evidence interoperability claim replaces it.
