@@ -1,0 +1,611 @@
+---
+title: Verify a registered parent with OpenCRVS
+description: >-
+  Connect Evidence to the public OpenCRVS demo and verify a registered-parent relationship
+  without disclosing civil-registration identifiers.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Connect Evidence to the public OpenCRVS Farajaland demo and answer, "Is this candidate registered
+as a parent of this child?" The request identifies both people, but the signed assertion contains
+only a boolean answer and two pseudonymous subject bindings.
+
+<QuickstartMeta
+  outcome="A verified registered-parent assertion derived from a synthetic OpenCRVS birth."
+  time="About 30 minutes"
+  level="Institution integration with synthetic data"
+  prerequisites={[
+    'The completed role-bound relationship tutorial',
+    'The Evidence toolset',
+    'Access to the public OpenCRVS demo',
+    'curl and an editor',
+  ]}
+/>
+
+This tutorial uses synthetic data from a public demonstration system. Do not substitute a real
+person. The demo maintainers can reset its data, accounts, and integrations.
+
+## Understand the relationship
+
+The tutorial uses this provider-published synthetic registration:
+
+| Field | Value | Use |
+|---|---|---|
+| Child | Josh Hoeger | Find the registration in the web application |
+| Child national ID | `3617402568` | Select the registered birth through the Events API |
+| Tracking ID | `YADU1N` | Cross-check the registration in the web application |
+| Registration number | `CJWULMP0B6Z5` | Cross-check the registration in the web application |
+
+The registered birth contains an authenticated national ID for Josh's mother. It reports that the
+father's details are unavailable. You will copy the mother's national ID from the web application
+and use it as the candidate-parent selector.
+
+The Evidence question has two distinct subject roles:
+
+- `child`, selected by the child's national ID
+- `candidate-parent`, selected by the candidate's national ID
+
+The source searches for one registered birth by `child.nid`, reads the bounded `mother.nid` and
+`father.nid` fields when present, and compares them with the candidate. It does not return either
+national ID to the requester.
+
+## Inspect the synthetic registration
+
+Open the [Farajaland registration application](https://register.farajaland-integration.opencrvs.dev/)
+and sign in with the provider-published Registrar account:
+
+```text
+Username: k.mweene
+Password: test
+Two-factor code: 000000
+```
+
+Search for `3617402568`, `YADU1N`, or `CJWULMP0B6Z5`. Open Josh Hoeger's registered birth and note
+the mother's national ID. Keep it outside the tracked project. You can also use this account to
+create another synthetic registration.
+
+## Create your Record Search client
+
+The human account cannot authorize the Events API. Create a separate OAuth client for the
+tutorial instead of sharing an existing client ID or secret.
+
+In your own OpenCRVS deployment, sign in with a National System Admin account. OpenCRVS publishes
+this account for the Farajaland demo:
+
+```text
+Username: j.campbell
+Password: test
+Two-factor code: 000000
+```
+
+In **Configuration**, open **Integrations**, select **Create client**, and choose **Record Search**.
+Give the client a name that identifies your tutorial run. Copy the client ID and secret when
+OpenCRVS displays them. The secret is shown once.
+
+The client can search records. It cannot create, update, or delete registrations. OpenCRVS audits
+its searches and applies a daily request limit. Review the OpenCRVS guidance for
+[creating a client](https://documentation.opencrvs.org/technology/interoperability/apis-requiring-oauth-credentials/)
+and [Record Search clients](https://documentation.opencrvs.org/technology/interoperability/record-search-clients/)
+before using this pattern outside the demo.
+
+Do not put the OAuth credentials, access token, or a live response in source control. The private
+credentials used to validate this page are not part of the tutorial or repository.
+
+## Create the authoring project
+
+Create a working directory and download the reviewed tutorial subset of the OpenCRVS Events API:
+
+```sh
+mkdir opencrvs-parent-relationship
+cd opencrvs-parent-relationship
+curl -fsSLo opencrvs-events.openapi.yaml \
+  https://docs.registrystack.org/examples/evidence/opencrvs-events-search.openapi.yaml
+```
+
+OpenCRVS does not publish this bounded subset at a stable URL. Registry Stack maintains it for
+the tutorial and records its upstream review revision in the file. Review it against the target
+deployment before production use.
+
+Create an editable Evidence project and disposable local keys:
+
+```sh
+evidencectl new project \
+  --openapi opencrvs-events.openapi.yaml \
+  --profile local \
+  --generate-keys
+cd project
+```
+
+The command retains the OpenAPI document and creates empty authoring directories. It does not
+invent the source policy, relationship semantics, or question.
+
+## Draft the OpenCRVS source
+
+Select only the fields needed to establish cardinality, validate the birth, and compare its
+registered parents:
+
+```sh
+evidencectl source suggest \
+  --project . \
+  --source-id opencrvs-birth-parents \
+  --operation 'POST /events/search' \
+  --select /total \
+  --select '/results/*/type' \
+  --select '/results/*/status' \
+  --select '/results/*/declaration/child.nid' \
+  --select '/results/*/declaration/mother.nid' \
+  --select '/results/*/declaration/mother.verified' \
+  --select '/results/*/declaration/father.nid' \
+  --select '/results/*/declaration/father.verified'
+```
+
+The command writes one source, two scripts, and three schemas. They remain editable and cannot run
+until you supply the OpenCRVS-specific decisions.
+
+## Define the national-ID selector
+
+Create `selectors/opencrvs-national-id-v1.yaml`:
+
+```yaml
+maximumAggregateBytes: 128
+fields:
+  national_id:
+    type: string
+    minimumBytes: 1
+    maximumBytes: 128
+```
+
+The same bounded field can identify the child and candidate parent, but their roles remain
+distinct. A caller cannot omit a role or substitute another selector field.
+
+## Configure the bounded source
+
+Replace `sources/opencrvs-birth-parents.yaml` with:
+
+```yaml
+transport: http-json
+baseUrl: https://events.farajaland-integration.opencrvs.dev
+posture: record-transformed
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://auth.farajaland-integration.opencrvs.dev/token
+  clientIdRef: secret:file/opencrvs-client-id
+  clientSecretRef: secret:file/opencrvs-client-secret
+  scope: recordsearch
+  credentialPlacement: form-body
+  maximumCacheSeconds: 300
+  assumedLifetimeSeconds: 600
+request:
+  method: POST
+  path: /events/search
+  fixedHeaders:
+    - name: Accept
+      value: application/json
+  selectorInputs:
+    - role: child
+      alternatives:
+        - profile: opencrvs-national-id-v1
+          fields: [national_id]
+  prepareScript: adapters/opencrvs-birth-parents-prepare.rhai
+  adapterParameters:
+    childSelectorRole: child
+    eventType: birth
+    registeredStatus: REGISTERED
+    childNationalIdField: child.nid
+    motherNationalIdField: mother.nid
+    motherVerificationField: mother.verified
+    fatherNationalIdField: father.nid
+    fatherVerificationField: father.verified
+    authenticatedValue: authenticated
+    resultLimit: 2
+    resultOffset: 0
+  adapterParametersSchema: schemas/opencrvs-birth-parents-parameters.schema.yaml
+  preparationLimits:
+    query: forbidden
+    jsonBody: required
+    maximumJsonDepth: 12
+    maximumCollectionItems: 32
+    maximumStringBytes: 512
+    maximumNormalizedBytes: 8192
+  projection:
+    - /total
+    - /results/*/type
+    - /results/*/status
+    - /results/*/declaration/child.nid
+    - /results/*/declaration/mother.nid
+    - /results/*/declaration/mother.verified
+    - /results/*/declaration/father.nid
+    - /results/*/declaration/father.verified
+  redirects: deny
+  timeoutMilliseconds: 10000
+  maximumResponseBytes: 262144
+  concurrencyLimit: 8
+responseSchema: schemas/opencrvs-birth-parents-response.schema.yaml
+extractScript: adapters/opencrvs-birth-parents-extract.rhai
+factSchema: schemas/opencrvs-birth-parents-facts.schema.yaml
+```
+
+`record-transformed` states that OpenCRVS returns a bounded birth record and Evidence reduces it
+before disclosure. The fixed event type and status prevent the caller from turning this source
+into a general search proxy. A two-result ceiling lets extraction distinguish one match from an
+ambiguous national ID without paging through the registry.
+
+The token endpoint accepts credentials in the form body. OpenCRVS omits an expiry from this demo's
+token response, so the source assumes 600 seconds and clamps caching to 300 seconds.
+
+## Store your client credentials
+
+Read the two values without echoing them and write owner-only files without a trailing newline:
+
+```sh
+umask 077
+printf 'OpenCRVS client ID: ' >&2
+IFS= read -rs OPENCRVS_CLIENT_ID
+printf '\n' >&2
+printf '%s' "$OPENCRVS_CLIENT_ID" > secrets/opencrvs-client-id
+unset OPENCRVS_CLIENT_ID
+
+printf 'OpenCRVS client secret: ' >&2
+IFS= read -rs OPENCRVS_CLIENT_SECRET
+printf '\n' >&2
+printf '%s' "$OPENCRVS_CLIENT_SECRET" > secrets/opencrvs-client-secret
+unset OPENCRVS_CLIENT_SECRET
+```
+
+Paste each value copied from OpenCRVS at its prompt and press Enter. The generated `.gitignore`
+excludes the `secrets` directory.
+
+Evidence resolves these logical secret references beneath that directory. It does not read the
+credentials from source YAML, requests, command arguments, or logs.
+
+## Prepare the fixed birth search
+
+Replace `adapters/opencrvs-birth-parents-prepare.rhai` with:
+
+```rhai
+fn prepare(selectors, parameters) {
+    let child = selectors[parameters["childSelectorRole"]];
+    let data = #{};
+    data[parameters["childNationalIdField"]] = #{
+        type: "exact",
+        term: child["values"]["national_id"]
+    };
+
+    #{
+        query: [],
+        body: #{
+            query: #{
+                type: "and",
+                clauses: [#{
+                    eventType: parameters["eventType"],
+                    status: #{
+                        type: "exact",
+                        term: parameters["registeredStatus"]
+                    },
+                    data: data
+                }]
+            },
+            limit: parameters["resultLimit"],
+            offset: parameters["resultOffset"]
+        }
+    }
+}
+```
+
+The script can read the authorized child selector and fixed parameters. It cannot read the
+candidate parent, credentials, caller identity, purpose, or signing keys.
+
+Replace `schemas/opencrvs-birth-parents-parameters.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required:
+  - childSelectorRole
+  - eventType
+  - registeredStatus
+  - childNationalIdField
+  - motherNationalIdField
+  - motherVerificationField
+  - fatherNationalIdField
+  - fatherVerificationField
+  - authenticatedValue
+  - resultLimit
+  - resultOffset
+properties:
+  childSelectorRole: {const: child}
+  eventType: {const: birth}
+  registeredStatus: {const: REGISTERED}
+  childNationalIdField: {const: child.nid}
+  motherNationalIdField: {const: mother.nid}
+  motherVerificationField: {const: mother.verified}
+  fatherNationalIdField: {const: father.nid}
+  fatherVerificationField: {const: father.verified}
+  authenticatedValue: {const: authenticated}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}
+```
+
+The schema closes every parameter around its reviewed value. A later edit cannot silently change
+the event, status, search field, parent fields, verification value, or page size.
+
+## Extract authenticated parent identifiers
+
+The generated response schema closes the projected response around `total`, at most two results,
+and the selected declaration fields. Replace `adapters/opencrvs-birth-parents-extract.rhai` with:
+
+```rhai
+fn extract(source_response, parameters) {
+    let total = source_response["total"];
+    let results = source_response["results"];
+    if results.len > parameters["resultLimit"] {
+        throw("source_protocol_error");
+    }
+
+    if total == 0 {
+        if results.len != 0 { throw("source_protocol_error"); }
+        return #{outcome: "no_match"};
+    }
+    if total > 1 {
+        if results.len < 2 { throw("source_protocol_error"); }
+        return #{outcome: "ambiguous"};
+    }
+    if results.len != 1 { throw("source_protocol_error"); }
+
+    let result = results[0];
+    if result["type"] != parameters["eventType"] ||
+       result["status"] != parameters["registeredStatus"] ||
+       !result.contains("declaration") {
+        throw("source_protocol_error");
+    }
+
+    let declaration = result["declaration"];
+    let child_field = parameters["childNationalIdField"];
+    if !declaration.contains(child_field) {
+        throw("source_protocol_error");
+    }
+
+    let parent_ids = [];
+    let mother_field = parameters["motherNationalIdField"];
+    if declaration.contains(mother_field) {
+        let verification = parameters["motherVerificationField"];
+        if !declaration.contains(verification) ||
+           declaration[verification] != parameters["authenticatedValue"] {
+            throw("source_protocol_error");
+        }
+        parent_ids.push(declaration[mother_field]);
+    }
+
+    let father_field = parameters["fatherNationalIdField"];
+    if declaration.contains(father_field) {
+        let verification = parameters["fatherVerificationField"];
+        if !declaration.contains(verification) ||
+           declaration[verification] != parameters["authenticatedValue"] {
+            throw("source_protocol_error");
+        }
+        parent_ids.push(declaration[father_field]);
+    }
+
+    if parent_ids.len == 0 || parent_ids.len > 2 {
+        throw("source_protocol_error");
+    }
+
+    #{
+        outcome: "match",
+        facts: #{
+            child_national_id: declaration[child_field],
+            registered_parent_national_ids: parent_ids
+        }
+    }
+}
+```
+
+The script refuses inconsistent cardinality, incomplete births, and parent identifiers that the
+record does not mark as authenticated. An absent parent identifier is not converted into an
+invented parent. The source must establish at least one authenticated parent before the question
+can run.
+
+Replace `schemas/opencrvs-birth-parents-facts.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required: [child_national_id, registered_parent_national_ids]
+properties:
+  child_national_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  registered_parent_national_ids:
+    type: array
+    minItems: 1
+    maxItems: 2
+    uniqueItems: true
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+```
+
+These facts are the complete input to the relationship logic. Names, dates, addresses, and other
+birth fields cannot reach the derivation.
+
+## Author the relationship question
+
+Create `questions/registered-parent.yaml`:
+
+```yaml
+id: registered-parent
+question: Is the candidate registered as a parent of the child?
+purpose: relationship-check
+subjects:
+  - role: child
+    selector: national_id
+    profile: opencrvs-national-id-v1
+    derivation: true
+  - role: candidate-parent
+    selector: national_id
+    profile: opencrvs-national-id-v1
+    derivation: true
+source:
+  ref: opencrvs-birth-parents
+answers:
+  - concept: relationship_confirmed
+    type: boolean
+derivation: derivations/registered-parent.rhai
+disclosure:
+  allow: [relationship_confirmed]
+```
+
+The question declares the complete role set. `derivation: true` gives the script the child needed
+to verify the returned birth and the candidate needed for the comparison. The source search itself
+uses only the child. The question governs the one allowed purpose, answer, and disclosure. Sharing
+a selector profile does not make the two roles interchangeable.
+
+Create `derivations/registered-parent.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    if facts.child_national_id != selectors.child.values.national_id {
+        throw("derivation_input_error");
+    }
+
+    let candidate = selectors["candidate-parent"]["values"]["national_id"];
+    let confirmed = false;
+    for parent_id in facts.registered_parent_national_ids {
+        if parent_id == candidate { confirmed = true; }
+    }
+    #{relationship_confirmed: confirmed}
+}
+```
+
+The first check binds the returned birth to the requested child. The loop compares the candidate
+with at most two authenticated parent identifiers, then returns only the declared boolean.
+
+## Start the project
+
+Compile the editable artifacts into a private local generation and start Evidence with Registry
+Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+`dev` runs the real Evidence configuration check before either service becomes ready. Unresolved
+draft markers, invalid schemas, inconsistent roles, or missing credentials stop the start.
+
+## Send a real Evidence request
+
+Read the mother's national ID without leaving its value in shell history:
+
+```sh
+printf 'Mother national ID: ' >&2
+IFS= read -rs OPENCRVS_MOTHER_NID
+printf '\n' >&2
+```
+
+Prepare a request using Josh's national ID and that candidate-parent value:
+
+```sh
+evidencectl request prepare registered-parent \
+  --purpose relationship-check \
+  --subject child:national_id=3617402568 \
+  --subject "candidate-parent:national_id=$OPENCRVS_MOTHER_NID" \
+  --name opencrvs-parent
+unset OPENCRVS_MOTHER_NID
+```
+
+Use this only with the public synthetic record. In a real integration, selectors need an input
+path that does not expose identifiers in shell history or process arguments.
+
+Preparation obtains short-lived local authorization and records verification expectations before
+a response exists. It does not contact OpenCRVS.
+
+Send the request across the Evidence HTTP boundary:
+
+```sh
+curl -fsS \
+  --config .evidence/requests/opencrvs-parent/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/opencrvs-parent/request.json \
+  --output opencrvs-parent.jws.json
+```
+
+Evidence exchanges its client credentials for an OpenCRVS token, performs the fixed child search,
+projects the bounded parent fields, derives the relationship, and returns a signed flattened JWS.
+The caller cannot alter the event type, status, projection, or parent verification rule.
+
+## Verify before reading
+
+Verify the response against the expectations created before the request:
+
+```sh
+evidencectl verify opencrvs-parent.jws.json \
+  --context .evidence/requests/opencrvs-parent/verification.json \
+  --output opencrvs-parent.verified.json
+```
+
+```text
+VERIFIED
+```
+
+Inspect the verified payload:
+
+```sh
+python3 -m json.tool opencrvs-parent.verified.json
+```
+
+Using the mother recorded on Josh's birth produces this supported value:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:registered-parent:relationship_confirmed",
+  "value": true
+}
+```
+
+The assertion contains pseudonymous `child` and `candidate-parent` bindings. It does not contain
+either national ID, the tracking ID, registration number, names, birth date, parent list, or exact
+source response. The civil-registration record stayed behind the source boundary.
+
+## Inspect the audit and clean up
+
+Stop the services, verify the audit chain, and remove the sealed local generation:
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+evidencectl dev clean
+```
+
+The audit identifies the authorized question, purpose, requester pseudonym, decision, and
+disclosed concept. It does not record either selector, the OpenCRVS token, response, or boolean.
+
+Delete the Record Search client in OpenCRVS when you finish. Remove the two local credential files
+when you no longer need the project.
+
+## Next
+
+- [Issue an immunization summary from DHIS2](../issue-immunization-evidence-from-dhis2/)
+- [Draft another institution source from OpenAPI](../connect-an-institution-source/)
+- [Prove and promote an Evidence project](../prove-an-evidence-project/)
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
