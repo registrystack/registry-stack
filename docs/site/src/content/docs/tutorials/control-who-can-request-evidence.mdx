@@ -113,9 +113,10 @@ service-routing  age-bracket
 
 The commands write the reviewable policy documents to `access/policies/age-checks.yaml` and
 `access/policies/service-routing.yaml`.
-Many clients can share one policy. A client can also belong to several policies without creating
-client-specific Evidence configuration. Adding a question to either policy later changes the
-governed authorization boundary and requires a new Evidence generation.
+Many clients can share one policy. A client can also belong to several policies when their question
+sets do not overlap. `evidencectl` rejects overlapping policy assignments because they would make
+the access decision ambiguous. Adding a question to either policy later changes the governed
+authorization boundary and requires a new Evidence generation.
 
 ## Register the first local application
 

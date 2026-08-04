@@ -66,7 +66,7 @@ disposable, unbound Evidence key material only.
 | --- | --- | --- |
 | `evidencectl access policy add <policy> --question <question>` | Creates `access/policies/<policy>.yaml` | Defines one or more repeated `--question` values for the next Evidence generation |
 | `evidencectl access policy list` | Reads `access/policies/` | Lists the governed local policies and their questions |
-| `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for one or more repeated `--policy` values |
+| `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
 | `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
 | `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for new token requests |
 
