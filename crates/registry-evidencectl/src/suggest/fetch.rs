@@ -92,6 +92,15 @@ pub fn check_url(value: &str) -> Result<Url> {
              fetch a description that needs authentication with your own client and pass the file"
         );
     }
+    // A query is routinely where signed URLs and API keys live, and a
+    // fragment is client-side state rather than part of the fetched resource.
+    // Reject both without echoing either value into terminal output.
+    if url.query().is_some() || url.fragment().is_some() {
+        bail!(
+            "the OpenAPI URL carries a query or fragment; pass a stable URL without either, or \
+             fetch the description with your own client and pass the local file"
+        );
+    }
 
     match url.scheme() {
         "https" => {}

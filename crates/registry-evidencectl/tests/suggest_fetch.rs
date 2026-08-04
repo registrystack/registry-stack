@@ -100,6 +100,31 @@ fn a_url_carrying_credentials_is_refused_without_echoing_them() {
 }
 
 #[test]
+fn a_query_or_fragment_is_refused_without_echoing_its_value() {
+    for (url, sensitive) in [
+        (
+            "https://api.example.test/openapi.yaml?access_token=query-secret",
+            "query-secret",
+        ),
+        (
+            "https://api.example.test/openapi.yaml#private-fragment",
+            "private-fragment",
+        ),
+    ] {
+        let error = fetch::spec_source(url).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("query or fragment") && message.contains("local file"),
+            "message was: {message}"
+        );
+        assert!(
+            !message.contains(sensitive) && !message.contains(url),
+            "the refusal echoed the unsafe URL component: {message}"
+        );
+    }
+}
+
+#[test]
 fn a_scheme_that_is_not_http_is_refused() {
     for url in [
         "ftp://example.test/openapi.yaml",

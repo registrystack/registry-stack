@@ -104,6 +104,54 @@ fn invalid_local_or_remote_openapi_writes_nothing_and_cleans_staging() {
 }
 
 #[test]
+fn unsafe_remote_urls_are_value_free_and_fail_before_network_or_writes() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind connection probe");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking connection probe");
+    let address = listener.local_addr().expect("probe address");
+
+    for (name, url, sensitive, expected) in [
+        (
+            "userinfo",
+            format!("http://reader:userinfo-secret@{address}/openapi.yaml"),
+            "userinfo-secret",
+            "credentials",
+        ),
+        (
+            "query",
+            format!("http://{address}/openapi.yaml?access_token=query-secret"),
+            "query-secret",
+            "query or fragment",
+        ),
+        (
+            "fragment",
+            format!("http://{address}/openapi.yaml#private-fragment"),
+            "private-fragment",
+            "query or fragment",
+        ),
+    ] {
+        let project = workspace.path().join(name);
+        let output = openapi_new(&project, &url, &["--generate-keys"]);
+        assert!(!output.status.success());
+        let logged = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(logged.contains(expected), "unexpected refusal: {logged}");
+        assert!(
+            !logged.contains(sensitive) && !logged.contains(&url),
+            "refusal leaked an unsafe URL value: {logged}"
+        );
+        assert!(!project.exists(), "unsafe URL wrote project {name}");
+    }
+
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "an unsafe URL reached the network"
+    );
+    assert_no_staging_directories(workspace.path());
+}
+
+#[test]
 fn generate_keys_is_transactional_unbound_owner_only_and_prints_no_secret() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
