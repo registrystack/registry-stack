@@ -31,15 +31,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    authoring::{compile_local_project, CompiledConceptForm, CompiledProject, CompiledQuestion},
+    authoring::{
+        compile_local_project_with_ports, CompiledConceptForm, CompiledProject, CompiledQuestion,
+        LocalServicePorts,
+    },
     keygen,
 };
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v3";
-const EVIDENCE_ORIGIN: &str = "http://127.0.0.1:8080";
-const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
-const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
-const MINT_JWKS_URL: &str = "http://127.0.0.1:8081/.well-known/jwks.json";
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v4";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
@@ -64,6 +63,14 @@ pub struct DevArgs {
     #[arg(long)]
     detach: bool,
 
+    /// Loopback port for the local Evidence service.
+    #[arg(long, default_value_t = 8080)]
+    evidence_port: u16,
+
+    /// Loopback port for the local Mint service.
+    #[arg(long, default_value_t = 8081)]
+    mint_port: u16,
+
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
@@ -87,10 +94,18 @@ pub struct DevArgs {
 enum DevAction {
     /// Stop the active local Mint and Evidence pair.
     Stop(StopArgs),
+    /// Remove one completed stopped local generation.
+    Clean(CleanArgs),
 }
 
 #[derive(Debug, Args)]
 struct StopArgs {
+    #[arg(long, default_value = ".", hide = true)]
+    project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct CleanArgs {
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
 }
@@ -161,10 +176,16 @@ struct QuestionState {
     alias: String,
     requirement_uri: String,
     purpose: String,
-    subject_role: String,
+    subjects: Vec<SubjectState>,
+    concepts: Vec<ConceptState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubjectState {
+    role: String,
     selector_profile: String,
     selector_field: String,
-    concepts: Vec<ConceptState>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -201,10 +222,15 @@ pub(crate) struct ReadyQuestionState {
     pub(crate) alias: String,
     pub(crate) requirement_uri: String,
     pub(crate) purpose: String,
-    pub(crate) subject_role: String,
+    pub(crate) subjects: Vec<ReadySubjectState>,
+    pub(crate) concepts: Vec<ReadyConceptState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadySubjectState {
+    pub(crate) role: String,
     pub(crate) selector_profile: String,
     pub(crate) selector_field: String,
-    pub(crate) concepts: Vec<ReadyConceptState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,15 +278,23 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
             }
             stop_dev(&stop.project)
         }
+        Some(DevAction::Clean(clean)) => {
+            if args.detach {
+                bail!("`dev clean` does not accept `--detach`");
+            }
+            clean_dev(&clean.project)
+        }
         None => {
             if !args.detach {
                 bail!("the local development lifecycle requires `evidencectl dev --detach`");
             }
+            let ports = LocalServicePorts::new(args.evidence_port, args.mint_port)?;
             start_detached(
                 &args.project,
                 args.evidence_bin.as_deref(),
                 args.mint_bin.as_deref(),
                 args.ready_timeout_seconds,
+                ports,
             )
         }
     }
@@ -307,7 +341,7 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
         bail!("the local development state is not the closed ready session");
     }
     validate_closed_state(&state, &project, &dev_root)?;
-    validate_closed_caller(caller, &dev_root)?;
+    validate_closed_caller(caller, &dev_root, &state.token_url)?;
     require_owned_regular_file(&state.runtime_path, 0o400)?;
     require_owned_regular_file(&caller.private_key_path, PRIVATE_FILE_MODE)?;
     validate_control_socket(&dev_root.join("control.sock"))?;
@@ -352,6 +386,10 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
 }
 
 fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> Result<()> {
+    let evidence_port = local_origin_port(&state.evidence_origin);
+    let mint_port = local_origin_port(&state.mint_origin);
+    let origins_are_closed = matches!((evidence_port, mint_port), (Some(evidence), Some(mint)) if evidence != mint)
+        && state.token_url == format!("{}/token", state.mint_origin);
     let questions_are_closed = !state.questions.is_empty()
         && state.questions.len() <= 128
         && state.questions.iter().all(valid_question_state)
@@ -364,9 +402,7 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             == state.questions.len();
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
-        || state.evidence_origin != EVIDENCE_ORIGIN
-        || state.mint_origin != MINT_ORIGIN
-        || state.token_url != TOKEN_URL
+        || !origins_are_closed
         || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
         || !questions_are_closed
     {
@@ -376,14 +412,9 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
 }
 
 fn valid_question_state(question: &QuestionState) -> bool {
-    let identifiers_are_closed = [
-        question.alias.as_str(),
-        question.purpose.as_str(),
-        question.subject_role.as_str(),
-        question.selector_field.as_str(),
-    ]
-    .into_iter()
-    .all(valid_local_identifier);
+    let identifiers_are_closed = [question.alias.as_str(), question.purpose.as_str()]
+        .into_iter()
+        .all(valid_local_identifier);
     let requirement_uri = format!("{LOCAL_URI_PREFIX}requirement:{}", question.alias);
     let concepts_are_closed = !question.concepts.is_empty()
         && question.concepts.len() <= 16
@@ -398,10 +429,31 @@ fn valid_question_state(question: &QuestionState) -> bool {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
             == question.concepts.len();
-    let selector_profile = format!("local-subject-{}-v1", question.alias);
+    let subject_count = question.subjects.len();
+    let subjects_are_closed = !question.subjects.is_empty()
+        && question.subjects.len() <= 8
+        && question.subjects.iter().all(|subject| {
+            valid_local_identifier(&subject.role)
+                && valid_local_identifier(&subject.selector_profile)
+                && valid_local_identifier(&subject.selector_field)
+                && (!subject.selector_profile.starts_with("local-subject-")
+                    || subject.selector_profile
+                        == if subject_count == 1 {
+                            format!("local-subject-{}-v1", question.alias)
+                        } else {
+                            format!("local-subject-{}-{}-v1", question.alias, subject.role)
+                        })
+        })
+        && question
+            .subjects
+            .iter()
+            .map(|subject| subject.role.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == question.subjects.len();
     identifiers_are_closed
         && question.requirement_uri == requirement_uri
-        && question.selector_profile == selector_profile
+        && subjects_are_closed
         && concepts_are_closed
 }
 
@@ -418,16 +470,25 @@ fn valid_concept_state(question_alias: &str, concept: &ConceptState) -> bool {
         )
 }
 
-fn validate_closed_caller(caller: &CallerState, dev_root: &Path) -> Result<()> {
+fn validate_closed_caller(caller: &CallerState, dev_root: &Path, token_url: &str) -> Result<()> {
     if caller.client_id != CALLER_ID
         || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
-        || caller.assertion_audience != TOKEN_URL
+        || caller.assertion_audience != token_url
         || caller.evidence_audience != LOCAL_CALLER_EVIDENCE_AUDIENCE
         || caller.requester_tag != LOCAL_REQUESTER_TAG
     {
         bail!("the local development caller is outside the closed lifecycle profile");
     }
     Ok(())
+}
+
+fn local_origin_port(origin: &str) -> Option<u16> {
+    let port = origin.strip_prefix("http://127.0.0.1:")?.parse().ok()?;
+    (port != 0 && origin == format!("http://127.0.0.1:{port}")).then_some(port)
+}
+
+fn local_origin(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
 }
 
 fn valid_local_identifier(value: &str) -> bool {
@@ -444,6 +505,7 @@ fn start_detached(
     evidence_override: Option<&Path>,
     mint_override: Option<&Path>,
     ready_timeout_seconds: u64,
+    ports: LocalServicePorts,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = ensure_private_generated_root(&project)?;
@@ -466,6 +528,7 @@ fn start_detached(
         evidence_override,
         mint_override,
         ready_timeout_seconds,
+        ports,
     );
     if let Err(error) = result {
         if let Err(cleanup) = cleanup_new_dev_root(&dev_root) {
@@ -494,12 +557,24 @@ fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
     fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
 
+fn clean_dev(project: &Path) -> Result<ExitCode> {
+    let project = canonical_project(project)?;
+    let generated_root = existing_private_generated_root(&project)?;
+    let _lifecycle = lock_lifecycle(&generated_root)?;
+    let dev_root = generated_root.join("dev");
+    validate_private_directory(&dev_root)?;
+    remove_completed_dev_root(&project, &dev_root)?;
+    println!("Removed stopped local Evidence state");
+    Ok(ExitCode::SUCCESS)
+}
+
 fn prepare_and_start(
     project: &Path,
     dev_root: &Path,
     evidence_override: Option<&Path>,
     mint_override: Option<&Path>,
     ready_timeout_seconds: u64,
+    ports: LocalServicePorts,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
         "evidence",
@@ -511,7 +586,10 @@ fn prepare_and_start(
         mint_override,
         "EVIDENCECTL_TEST_MINT_BIN",
     )?)?;
-    let compiled = compile_local_project(project, dev_root, &evidence_bin)?;
+    let compiled = compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?;
+    let evidence_origin = local_origin(ports.evidence);
+    let mint_origin = local_origin(ports.mint);
+    let token_url = format!("{mint_origin}/token");
 
     let generated = dev_root.join("generated");
     let keys = generated.join("keys");
@@ -535,7 +613,7 @@ fn prepare_and_start(
     )?;
     let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
     let (mint_config, caller_registration) =
-        mint_documents(&compiled, &mint_private, caller_public);
+        mint_documents(&compiled, &mint_private, caller_public, ports);
     let mint_config_path = generated.join("mint.yaml");
     write_private_yaml(&mint_config_path, &mint_config)?;
     write_private_yaml(&clients.join("caller.yaml"), &caller_registration)?;
@@ -546,14 +624,14 @@ fn prepare_and_start(
         status: DevStatus::Starting,
         project: project.to_path_buf(),
         runtime_path: compiled.runtime_path.clone(),
-        evidence_origin: EVIDENCE_ORIGIN.to_owned(),
-        mint_origin: MINT_ORIGIN.to_owned(),
-        token_url: TOKEN_URL.to_owned(),
+        evidence_origin: evidence_origin.clone(),
+        mint_origin: mint_origin.clone(),
+        token_url: token_url.clone(),
         access_token_audience: compiled.local_audience.clone(),
         caller: Some(CallerState {
             client_id: CALLER_ID.to_owned(),
             private_key_path: caller_private,
-            assertion_audience: TOKEN_URL.to_owned(),
+            assertion_audience: token_url,
             evidence_audience: compiled.caller_evidence_audience.clone(),
             requester_tag: compiled.requester_tag.clone(),
         }),
@@ -593,8 +671,8 @@ fn prepare_and_start(
         publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
         return Err(error);
     }
-    println!("Evidence ready at {EVIDENCE_ORIGIN}");
-    println!("Mint ready at {MINT_ORIGIN}");
+    println!("Evidence ready at {evidence_origin}");
+    println!("Mint ready at {mint_origin}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -683,6 +761,11 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     if state.status != DevStatus::Starting || state.runtime_path != dev_root.join("runtime.yaml") {
         bail!("supervisor state is not a fresh compiled local session");
     }
+    let project = dev_root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("local development root is outside a project"))?;
+    validate_closed_state(&state, project, &dev_root)?;
 
     std::env::set_current_dir(&dev_root)
         .context("failed to enter the private local development directory")?;
@@ -711,7 +794,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
         },
     );
     if wait_for_http(
-        MINT_JWKS_URL,
+        &format!("{}/.well-known/jwks.json", state.mint_origin),
         children.mint.as_mut().expect("Mint child was assigned"),
         HttpProof::MintKey(MINT_KEY_ID),
         args.ready_timeout_seconds,
@@ -737,7 +820,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
         },
     );
     if wait_for_http(
-        &format!("{EVIDENCE_ORIGIN}/ready"),
+        &format!("{}/ready", state.evidence_origin),
         children
             .evidence
             .as_mut()
@@ -1002,14 +1085,17 @@ fn mint_documents(
     compiled: &CompiledProject,
     mint_private: &Path,
     caller_public: Value,
+    ports: LocalServicePorts,
 ) -> (Value, Value) {
+    let mint_origin = ports.mint_origin();
+    let token_url = format!("{mint_origin}/token");
     let mint_config = json!({
         "version": 1,
         "validationMode": "supervised-local-development",
-        "issuer": MINT_ORIGIN,
+        "issuer": mint_origin,
         "listener": {
             "address": "127.0.0.1",
-            "port": 8081,
+            "port": ports.mint,
             "maximumRequestBytes": 16384,
             "requestTimeoutMilliseconds": 5000,
         },
@@ -1032,7 +1118,7 @@ fn mint_documents(
             },
         },
         "clientAssertion": {
-            "audience": TOKEN_URL,
+            "audience": token_url,
             "maximumLifetimeSeconds": 120,
             "algorithms": ["EdDSA"],
             "replayCacheEntries": 256,
@@ -1055,9 +1141,15 @@ impl From<&CompiledQuestion> for QuestionState {
             alias: compiled.question_alias.clone(),
             requirement_uri: compiled.requirement_uri.clone(),
             purpose: compiled.purpose.clone(),
-            subject_role: compiled.subject_role.clone(),
-            selector_profile: compiled.selector_profile.clone(),
-            selector_field: compiled.selector_field.clone(),
+            subjects: compiled
+                .subjects
+                .iter()
+                .map(|subject| SubjectState {
+                    role: subject.role.clone(),
+                    selector_profile: subject.selector_profile.clone(),
+                    selector_field: subject.selector_field.clone(),
+                })
+                .collect(),
             concepts: compiled
                 .concepts
                 .iter()
@@ -1380,9 +1472,15 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
         alias: question.alias,
         requirement_uri: question.requirement_uri,
         purpose: question.purpose,
-        subject_role: question.subject_role,
-        selector_profile: question.selector_profile,
-        selector_field: question.selector_field,
+        subjects: question
+            .subjects
+            .into_iter()
+            .map(|subject| ReadySubjectState {
+                role: subject.role,
+                selector_profile: subject.selector_profile,
+                selector_field: subject.selector_field,
+            })
+            .collect(),
         concepts: question
             .concepts
             .into_iter()
@@ -1408,9 +1506,11 @@ mod tests {
                 requirement_uri: "urn:registrystack:evidence:local:requirement:adult-status"
                     .to_owned(),
                 purpose: "age-check".to_owned(),
-                subject_role: "person".to_owned(),
-                selector_profile: "local-subject-adult-status-v1".to_owned(),
-                selector_field: "person_id".to_owned(),
+                subjects: vec![crate::authoring::CompiledSubject {
+                    role: "person".to_owned(),
+                    selector_profile: "local-subject-adult-status-v1".to_owned(),
+                    selector_field: "person_id".to_owned(),
+                }],
                 concepts: vec![crate::authoring::CompiledConcept {
                     concept_alias: "is_adult".to_owned(),
                     concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
@@ -1431,9 +1531,10 @@ mod tests {
             &compiled,
             Path::new("/private/mint-private.jwk"),
             json!({"kty":"OKP","crv":"Ed25519","kid":"caller","alg":"EdDSA","x":"public"}),
+            LocalServicePorts::default(),
         );
         assert_eq!(config["validationMode"], "supervised-local-development");
-        assert_eq!(config["issuer"], MINT_ORIGIN);
+        assert_eq!(config["issuer"], "http://127.0.0.1:8081");
         assert_eq!(
             config["listener"],
             json!({
@@ -1501,14 +1602,14 @@ mod tests {
             status: DevStatus::Ready,
             project: project.clone(),
             runtime_path: runtime.clone(),
-            evidence_origin: EVIDENCE_ORIGIN.to_owned(),
-            mint_origin: MINT_ORIGIN.to_owned(),
-            token_url: TOKEN_URL.to_owned(),
+            evidence_origin: local_origin(8080),
+            mint_origin: local_origin(8081),
+            token_url: format!("{}/token", local_origin(8081)),
             access_token_audience: compiled.local_audience.clone(),
             caller: Some(CallerState {
                 client_id: CALLER_ID.to_owned(),
                 private_key_path: caller_key,
-                assertion_audience: TOKEN_URL.to_owned(),
+                assertion_audience: format!("{}/token", local_origin(8081)),
                 evidence_audience: compiled.caller_evidence_audience.clone(),
                 requester_tag: compiled.requester_tag.clone(),
             }),
@@ -1519,6 +1620,11 @@ mod tests {
         let ready = load_ready_state(&project).expect("ready handoff");
         assert_eq!(ready.runtime_path, runtime);
         assert_eq!(ready.questions[0].alias, "adult-status");
+        assert!(
+            clean_dev(&project).is_err(),
+            "active state is never removed"
+        );
+        assert!(dev.is_dir(), "refused cleanup preserves active state");
 
         let valid_ready = state.clone();
         state.access_token_audience = "tampered-audience".to_owned();
@@ -1545,7 +1651,7 @@ mod tests {
         assert_eq!(stopped.runtime_path, runtime);
         assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
 
-        remove_completed_dev_root(&project, &dev).expect("replaceable stopped session");
+        clean_dev(&project).expect("clean stopped session");
         assert!(!dev.exists());
     }
 

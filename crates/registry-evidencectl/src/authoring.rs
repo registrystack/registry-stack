@@ -31,8 +31,6 @@ const SELECTORS_DIRECTORY: &str = "selectors";
 const DERIVATIONS_DIRECTORY: &str = "derivations";
 const SECRETS_DIRECTORY: &str = "secrets";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
-const LOCAL_MINT_ORIGIN: &str = "http://127.0.0.1:8081";
-const LOCAL_EVIDENCE_PORT: u16 = 8080;
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const SIGNING_KEY_ID: &str = "local-signing-key-1";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
@@ -67,10 +65,15 @@ pub(crate) struct CompiledQuestion {
     pub(crate) question_alias: String,
     pub(crate) requirement_uri: String,
     pub(crate) purpose: String,
-    pub(crate) subject_role: String,
+    pub(crate) subjects: Vec<CompiledSubject>,
+    pub(crate) concepts: Vec<CompiledConcept>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CompiledSubject {
+    pub(crate) role: String,
     pub(crate) selector_profile: String,
     pub(crate) selector_field: String,
-    pub(crate) concepts: Vec<CompiledConcept>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -82,16 +85,63 @@ pub(crate) struct CompiledProject {
     pub(crate) caller_evidence_audience: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LocalServicePorts {
+    pub(crate) evidence: u16,
+    pub(crate) mint: u16,
+}
+
+impl LocalServicePorts {
+    pub(crate) fn new(evidence: u16, mint: u16) -> Result<Self> {
+        if evidence == 0 || mint == 0 {
+            bail!("local service ports must be non-zero");
+        }
+        if evidence == mint {
+            bail!("Evidence and Mint must use different local ports");
+        }
+        Ok(Self { evidence, mint })
+    }
+
+    pub(crate) fn mint_origin(self) -> String {
+        format!("http://127.0.0.1:{}", self.mint)
+    }
+}
+
+impl Default for LocalServicePorts {
+    fn default() -> Self {
+        Self {
+            evidence: 8080,
+            mint: 8081,
+        }
+    }
+}
+
 /// Compile the authored questions into one unpublished local generation, then
 /// ask the real Evidence binary to check the complete result.
 ///
 /// `staging_root` must be an existing, empty, owner-only directory. The caller
 /// owns generation publication and process supervision.
+#[cfg(test)]
 pub(crate) fn compile_local_project(
     project_root: &Path,
     staging_root: &Path,
     evidence_bin: &Path,
 ) -> Result<CompiledProject> {
+    compile_local_project_with_ports(
+        project_root,
+        staging_root,
+        evidence_bin,
+        LocalServicePorts::default(),
+    )
+}
+
+pub(crate) fn compile_local_project_with_ports(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+) -> Result<CompiledProject> {
+    LocalServicePorts::new(ports.evidence, ports.mint)?;
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
     validate_evidence_binary(evidence_bin)?;
@@ -99,8 +149,8 @@ pub(crate) fn compile_local_project(
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
     let inputs = read_inputs(&project_root)?;
-    let plan = compile_plan(inputs)?;
-    let compilation = write_plan(&project_root, staging_root, &plan)?;
+    let plan = compile_plan(inputs, ports)?;
+    let compilation = write_plan(&project_root, staging_root, &plan, ports)?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
         // A rejected unpublished generation should remain removable by its
@@ -119,7 +169,10 @@ struct Question {
     id: String,
     question: String,
     purpose: String,
-    subject: QuestionSubject,
+    #[serde(default)]
+    subject: Option<QuestionSubject>,
+    #[serde(default)]
+    subjects: Vec<QuestionSubject>,
     source: QuestionSource,
     answers: Vec<QuestionAnswer>,
     derivation: String,
@@ -131,6 +184,10 @@ struct Question {
 struct QuestionSubject {
     role: String,
     selector: String,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    derivation: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,13 +267,10 @@ struct QuestionPlan {
     authored_source_artifacts: Option<Vec<String>>,
     derivation_artifact: String,
     purpose: String,
-    subject_role: String,
-    selector_field: String,
     requirement_uri: String,
     concepts: Vec<ConceptPlan>,
-    selector_profile: String,
+    subjects: Vec<SubjectPlan>,
     source_id: String,
-    selector_profile_value: Value,
     source_value: Value,
     grant: Value,
     requirement: Value,
@@ -226,6 +280,14 @@ struct QuestionPlan {
     prepare_script: String,
     extract_script: String,
     derivation_script: String,
+}
+
+struct SubjectPlan {
+    role: String,
+    selector_field: String,
+    selector_profile: String,
+    selector_profile_value: Value,
+    derivation: bool,
 }
 
 struct ConceptPlan {
@@ -522,11 +584,25 @@ fn validate_question(question: &Question) -> Result<()> {
     for (label, value) in [
         ("id", question.id.as_str()),
         ("purpose", question.purpose.as_str()),
-        ("subject.role", question.subject.role.as_str()),
-        ("subject.selector", question.subject.selector.as_str()),
     ] {
         if !valid_local_identifier(value) {
             bail!("question {label} must be a lowercase local identifier");
+        }
+    }
+    let subjects = question_subjects(question)?;
+    let mut roles = BTreeSet::new();
+    for subject in &subjects {
+        if !valid_local_identifier(&subject.role)
+            || !valid_local_identifier(&subject.selector)
+            || subject
+                .profile
+                .as_deref()
+                .is_some_and(|profile| !valid_local_identifier(profile))
+        {
+            bail!("question subjects must use lowercase local role, selector, and profile identifiers");
+        }
+        if !roles.insert(subject.role.as_str()) {
+            bail!("question subject roles must be unique");
         }
     }
     if question.question.is_empty()
@@ -624,6 +700,15 @@ fn validate_question(question: &Question) -> Result<()> {
     Ok(())
 }
 
+fn question_subjects(question: &Question) -> Result<Vec<&QuestionSubject>> {
+    match (&question.subject, question.subjects.as_slice()) {
+        (Some(subject), []) => Ok(vec![subject]),
+        (None, subjects) if (1..=8).contains(&subjects.len()) => Ok(subjects.iter().collect()),
+        (Some(_), _) => bail!("question must declare either subject or subjects, not both"),
+        (None, _) => bail!("question must declare 1..=8 subjects"),
+    }
+}
+
 fn validate_answer(answer: &QuestionAnswer) -> Result<()> {
     match answer.answer_type {
         AnswerType::Boolean => {
@@ -691,7 +776,7 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
     Ok(())
 }
 
-fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
+fn compile_plan(inputs: Inputs, ports: LocalServicePorts) -> Result<CompilePlan> {
     let has_inline_source = inputs
         .questions
         .iter()
@@ -729,7 +814,7 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
             authored,
         )?);
     }
-    let bundle = render_bundle(&questions);
+    let bundle = render_bundle(&questions, ports);
     Ok(CompilePlan { questions, bundle })
 }
 
@@ -744,6 +829,13 @@ fn compile_question_plan(
     let question = &authored.question;
     if question.source.source_ref.is_some() {
         return compile_referenced_question(selectors, sources, authored);
+    }
+    let authored_subjects = question_subjects(question)?;
+    if authored_subjects
+        .iter()
+        .any(|subject| subject.profile.is_some())
+    {
+        bail!("an OpenAPI question derives its local selector profiles");
     }
     let operation_id = question
         .source
@@ -772,7 +864,13 @@ fn compile_question_plan(
         "selected OpenAPI operation",
     )?;
 
-    exact_path_selector(&operation, &question.subject.selector)?;
+    exact_path_selectors(
+        &operation,
+        &authored_subjects
+            .iter()
+            .map(|subject| subject.selector.as_str())
+            .collect::<Vec<_>>(),
+    )?;
     let compiled_facts = compile_facts(
         spec.expect("inline source needs parsed OpenAPI"),
         &operation,
@@ -806,14 +904,38 @@ fn compile_question_plan(
         "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
     let extract_script = compiled_facts.extract_script;
     let derivation_script = render_derivation(&authored.derivation, &concepts);
-    let selector_profile = local_selector_profile_id(&question.id);
+    let subjects = authored_subjects
+        .iter()
+        .map(|authored_subject| {
+            let selector_profile = local_subject_selector_profile_id(
+                &question.id,
+                &authored_subject.role,
+                authored_subjects.len(),
+            );
+            SubjectPlan {
+                role: authored_subject.role.clone(),
+                selector_field: authored_subject.selector.clone(),
+                selector_profile,
+                selector_profile_value: json!({
+                    "maximumAggregateBytes": 200,
+                    "fields": {
+                        authored_subject.selector.clone(): {
+                            "type": "string",
+                            "minimumBytes": 1,
+                            "maximumBytes": 200,
+                        }
+                    },
+                }),
+                derivation: authored_subject.derivation,
+            }
+        })
+        .collect::<Vec<_>>();
     let source_id = local_source_id(&question.id);
-    let (selector_profile_value, source_value, grant, requirement) = render_question_bundle_parts(
+    let (source_value, grant, requirement) = render_question_bundle_parts(
         question,
         base_url.expect("inline source needs local base URL"),
         operation.path,
-        &question.subject.selector,
-        &selector_profile,
+        &subjects,
         &source_id,
         &BundleRequirement {
             requirement_uri: requirement_uri.clone(),
@@ -821,20 +943,16 @@ fn compile_question_plan(
             concepts: &concepts,
         },
     );
-
     Ok(QuestionPlan {
         question_id: question.id.clone(),
         source_artifact_id: question.id.clone(),
         authored_source_artifacts: None,
         derivation_artifact: question.derivation.clone(),
         purpose: question.purpose.clone(),
-        subject_role: question.subject.role.clone(),
-        selector_field: question.subject.selector.clone(),
         requirement_uri,
         concepts,
-        selector_profile,
+        subjects,
         source_id,
-        selector_profile_value,
         source_value,
         grant,
         requirement,
@@ -864,27 +982,7 @@ fn compile_referenced_question(
             anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
         })?
         .clone();
-    let selector_profile = referenced_selector_profile(
-        &source_value,
-        &question.subject.role,
-        &question.subject.selector,
-    )?;
-    let selector_profile_value = selectors
-        .get(&selector_profile)
-        .ok_or_else(|| {
-            anyhow!("source `{source_id}` references missing selectors/{selector_profile}.yaml")
-        })?
-        .clone();
-    let selector_fields = selector_profile_value
-        .get("fields")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("selector profile `{selector_profile}` has no fields object"))?;
-    if !selector_fields.contains_key(&question.subject.selector) {
-        bail!(
-            "selector profile `{selector_profile}` does not declare question selector `{}`",
-            question.subject.selector
-        );
-    }
+    let subjects = compile_referenced_subjects(question, &source_value, selectors)?;
 
     let requirement_uri = local_uri(&format!("requirement:{}", question.id));
     let concepts = question
@@ -900,7 +998,7 @@ fn compile_referenced_question(
         };
     let (grant, requirement) = render_governance_parts(
         question,
-        &selector_profile,
+        &subjects,
         source_id,
         &BundleRequirement {
             requirement_uri: requirement_uri.clone(),
@@ -916,13 +1014,10 @@ fn compile_referenced_question(
         authored_source_artifacts: Some(referenced_source_artifacts(&source_value)?),
         derivation_artifact: question.derivation.clone(),
         purpose: question.purpose.clone(),
-        subject_role: question.subject.role.clone(),
-        selector_field: question.subject.selector.clone(),
         requirement_uri,
         concepts,
-        selector_profile,
+        subjects,
         source_id: source_id.to_owned(),
-        selector_profile_value,
         source_value,
         grant,
         requirement,
@@ -933,6 +1028,100 @@ fn compile_referenced_question(
         extract_script: String::new(),
         derivation_script,
     })
+}
+
+fn compile_referenced_subjects(
+    question: &Question,
+    source: &Value,
+    selectors: &BTreeMap<String, Value>,
+) -> Result<Vec<SubjectPlan>> {
+    let authored = question_subjects(question)?;
+    let mut compiled = Vec::with_capacity(authored.len());
+    for subject in authored {
+        let selector_profile = match &subject.profile {
+            Some(profile) => profile.clone(),
+            None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
+        };
+        let selector_profile_value = selectors
+            .get(&selector_profile)
+            .ok_or_else(|| {
+                anyhow!("referenced source question uses missing selectors/{selector_profile}.yaml")
+            })?
+            .clone();
+        let selector_fields = selector_profile_value
+            .get("fields")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("selector profile `{selector_profile}` has no fields object"))?;
+        if !selector_fields.contains_key(&subject.selector) {
+            bail!(
+                "selector profile `{selector_profile}` does not declare the question subject field"
+            );
+        }
+        let used_by_source =
+            source_uses_subject(source, &subject.role, &selector_profile, &subject.selector)?;
+        if !used_by_source && !subject.derivation {
+            bail!("every question subject must be used by the source or declared for derivation");
+        }
+        compiled.push(SubjectPlan {
+            role: subject.role.clone(),
+            selector_field: subject.selector.clone(),
+            selector_profile,
+            selector_profile_value,
+            derivation: subject.derivation,
+        });
+    }
+
+    let inputs = source
+        .pointer("/request/selectorInputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
+    for input in inputs {
+        let role = input
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("source selector input has no role"))?;
+        let matches = compiled
+            .iter()
+            .filter(|subject| {
+                subject.role == role
+                    && source_uses_subject(
+                        source,
+                        role,
+                        &subject.selector_profile,
+                        &subject.selector_field,
+                    )
+                    .unwrap_or(false)
+            })
+            .count();
+        if matches != 1 {
+            bail!("question subjects must select exactly one alternative for every source role");
+        }
+    }
+    Ok(compiled)
+}
+
+fn source_uses_subject(source: &Value, role: &str, profile: &str, field: &str) -> Result<bool> {
+    let inputs = source
+        .pointer("/request/selectorInputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
+    Ok(inputs.iter().any(|input| {
+        input.get("role").and_then(Value::as_str) == Some(role)
+            && input
+                .get("alternatives")
+                .and_then(Value::as_array)
+                .is_some_and(|alternatives| {
+                    alternatives.iter().any(|alternative| {
+                        alternative.get("profile").and_then(Value::as_str) == Some(profile)
+                            && alternative
+                                .get("fields")
+                                .and_then(Value::as_array)
+                                .is_some_and(|fields| {
+                                    fields.len() == 1 && fields[0].as_str() == Some(field)
+                                })
+                    })
+                })
+    }))
 }
 
 fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Result<String> {
@@ -1147,7 +1336,7 @@ fn unique_operation<'a>(document: &'a Value, operation_id: &str) -> Result<Opera
     Ok(operation)
 }
 
-fn exact_path_selector(operation: &Operation<'_>, expected: &str) -> Result<()> {
+fn exact_path_selectors(operation: &Operation<'_>, expected: &[&str]) -> Result<()> {
     let mut parameters = Vec::new();
     for owner in [operation.path_item, operation.operation] {
         if let Some(values) = owner.get("parameters") {
@@ -1157,33 +1346,44 @@ fn exact_path_selector(operation: &Operation<'_>, expected: &str) -> Result<()> 
             parameters.extend(values);
         }
     }
-    if parameters.len() != 1 {
-        bail!("the local tutorial operation must declare exactly one path selector");
+    if parameters.len() != expected.len() {
+        bail!("the local tutorial operation must declare exactly one path selector per subject");
     }
-    let parameter = parameters[0]
-        .as_object()
-        .ok_or_else(|| anyhow!("the path selector must be an object"))?;
-    reject_unsupported_keys(
-        parameter,
-        &["name", "in", "required", "schema"],
-        "path selector",
-    )?;
-    let parameter_schema = parameter
-        .get("schema")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("the path selector schema must be an object"))?;
-    reject_unsupported_keys(parameter_schema, &["type"], "path selector schema")?;
-    if parameter.contains_key("$ref")
-        || parameter.get("name").and_then(Value::as_str) != Some(expected)
-        || parameter.get("in").and_then(Value::as_str) != Some("path")
-        || parameter.get("required").and_then(Value::as_bool) != Some(true)
-        || parameter_schema.get("type").and_then(Value::as_str) != Some("string")
-    {
-        bail!(
-            "the question selector must equal the operation's one required string path parameter"
-        );
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    if expected.len() != parameters.len() {
+        bail!("each OpenAPI question subject must use a distinct path selector");
     }
-    let placeholder = format!("{{{expected}}}");
+    let mut actual = BTreeSet::new();
+    for parameter in parameters {
+        let parameter = parameter
+            .as_object()
+            .ok_or_else(|| anyhow!("the path selector must be an object"))?;
+        reject_unsupported_keys(
+            parameter,
+            &["name", "in", "required", "schema"],
+            "path selector",
+        )?;
+        let parameter_schema = parameter
+            .get("schema")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("the path selector schema must be an object"))?;
+        reject_unsupported_keys(parameter_schema, &["type"], "path selector schema")?;
+        let name = parameter
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("the path selector must have a name"))?;
+        if parameter.contains_key("$ref")
+            || parameter.get("in").and_then(Value::as_str) != Some("path")
+            || parameter.get("required").and_then(Value::as_bool) != Some(true)
+            || parameter_schema.get("type").and_then(Value::as_str) != Some("string")
+            || !actual.insert(name)
+        {
+            bail!("question selectors must equal the operation's required string path parameters");
+        }
+    }
+    if actual != expected {
+        bail!("question selectors must equal the operation's required string path parameters");
+    }
     if !operation.path.starts_with('/')
         || operation.path.starts_with("//")
         || operation.path.contains(['?', '#', '\\'])
@@ -1192,16 +1392,19 @@ fn exact_path_selector(operation: &Operation<'_>, expected: &str) -> Result<()> 
             .split('/')
             .skip(1)
             .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-        || operation
-            .path
-            .split('/')
-            .filter(|segment| *segment == placeholder)
-            .count()
-            != 1
-        || operation.path.matches('{').count() != 1
-        || operation.path.matches('}').count() != 1
+        || expected.iter().any(|name| {
+            let placeholder = format!("{{{name}}}");
+            operation
+                .path
+                .split('/')
+                .filter(|segment| *segment == placeholder)
+                .count()
+                != 1
+        })
+        || operation.path.matches('{').count() != expected.len()
+        || operation.path.matches('}').count() != expected.len()
     {
-        bail!("the path selector must occupy exactly one complete path segment");
+        bail!("each path selector must occupy exactly one complete path segment");
     }
     Ok(())
 }
@@ -1696,23 +1899,32 @@ fn render_question_bundle_parts(
     question: &Question,
     base_url: &str,
     path_template: &str,
-    selector: &str,
-    selector_profile: &str,
+    subjects: &[SubjectPlan],
     source_id: &str,
     requirement: &BundleRequirement,
-) -> (Value, Value, Value, Value) {
-    let path_bindings = Value::Object(Map::from_iter([(
-        selector.to_owned(),
-        json!({
-            "role": question.subject.role,
-            "profile": selector_profile,
-            "field": selector,
-        }),
-    )]));
-    let selector_fields = Value::Object(Map::from_iter([(
-        selector.to_owned(),
-        json!({"type": "string", "minimumBytes": 1, "maximumBytes": 200}),
-    )]));
+) -> (Value, Value, Value) {
+    let path_bindings = Value::Object(Map::from_iter(subjects.iter().map(|subject| {
+        (
+            subject.selector_field.clone(),
+            json!({
+                "role": subject.role,
+                "profile": subject.selector_profile,
+                "field": subject.selector_field,
+            }),
+        )
+    })));
+    let selector_inputs = subjects
+        .iter()
+        .map(|subject| {
+            json!({
+                "role": subject.role,
+                "alternatives": [{
+                    "profile": subject.selector_profile,
+                    "fields": [subject.selector_field],
+                }],
+            })
+        })
+        .collect::<Vec<_>>();
     let projection = question
         .source
         .facts
@@ -1720,10 +1932,6 @@ fn render_question_bundle_parts(
         .map(|fact| Value::String(fact.path.clone()))
         .collect::<Vec<_>>();
 
-    let selector_profile_value = json!({
-        "maximumAggregateBytes": 200,
-        "fields": selector_fields,
-    });
     let source_value = json!({
         "transport": "http-json",
         "baseUrl": base_url,
@@ -1734,13 +1942,7 @@ fn render_question_bundle_parts(
             "pathTemplate": path_template,
             "pathBindings": path_bindings,
             "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
-            "selectorInputs": [{
-                "role": question.subject.role,
-                "alternatives": [{
-                    "profile": selector_profile,
-                    "fields": [selector],
-                }],
-            }],
+            "selectorInputs": selector_inputs,
             "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
             "adapterParameters": {"operationId": question.source.operation.as_deref().expect("inline source")},
             "adapterParametersSchema": format!(
@@ -1763,34 +1965,35 @@ fn render_question_bundle_parts(
         "factSchema": format!("schemas/{}-source-facts.schema.yaml", question.id),
     });
     let (grant, requirement_value) =
-        render_governance_parts(question, selector_profile, source_id, requirement);
-    (
-        selector_profile_value,
-        source_value,
-        grant,
-        requirement_value,
-    )
+        render_governance_parts(question, subjects, source_id, requirement);
+    (source_value, grant, requirement_value)
 }
 
 fn render_governance_parts(
     question: &Question,
-    selector_profile: &str,
+    subjects: &[SubjectPlan],
     source_id: &str,
     requirement: &BundleRequirement<'_>,
 ) -> (Value, Value) {
     let framework_id = local_uri(&format!("framework:{}", question.id));
     let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
     let disclosure_family = local_uri(&format!("disclosure-family:{}", question.id));
+    let grant_subjects = subjects
+        .iter()
+        .map(|subject| {
+            json!({
+                "role": subject.role,
+                "selectorProfile": subject.selector_profile,
+                "valueOrigin": "request",
+            })
+        })
+        .collect::<Vec<_>>();
     let grant = json!({
         "requirement": requirement.requirement_uri,
         "purpose": question.purpose,
         "audienceFrom": "authenticated-requester",
         "responseFormats": ["signed-jws"],
-        "subjects": [{
-            "role": question.subject.role,
-            "selectorProfile": selector_profile,
-            "valueOrigin": "request",
-        }],
+        "subjects": grant_subjects,
     });
     let concepts = requirement
         .concepts
@@ -1808,24 +2011,47 @@ fn render_governance_parts(
             })
         })
         .collect::<Vec<_>>();
+    let subject_roles = subjects
+        .iter()
+        .map(|subject| {
+            json!({
+                "role": subject.role,
+                "cardinality": "one",
+                "selectorProfiles": [subject.selector_profile],
+            })
+        })
+        .collect::<Vec<_>>();
+    let selector_inputs = subjects
+        .iter()
+        .filter(|subject| subject.derivation)
+        .map(|subject| {
+            json!({
+                "role": subject.role,
+                "alternatives": [{
+                    "profile": subject.selector_profile,
+                    "fields": [subject.selector_field],
+                }],
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut derivation = Map::from_iter([
+        ("script".to_owned(), json!(question.derivation)),
+        ("parameters".to_owned(), json!({})),
+    ]);
+    if !selector_inputs.is_empty() {
+        derivation.insert("selectorInputs".to_owned(), Value::Array(selector_inputs));
+    }
     let requirement_value = json!({
             "id": requirement.requirement_uri,
             "kind": requirement.kind,
             "source": source_id,
             "purposes": [question.purpose],
-            "subjectRoles": [{
-                "role": question.subject.role,
-                "cardinality": "one",
-                "selectorProfiles": [selector_profile],
-            }],
+            "subjectRoles": subject_roles,
             "referenceFrameworks": [framework_id],
             "evidenceType": evidence_type,
             "observationTimezone": "UTC",
             "validitySeconds": 300,
-            "derivation": {
-                "script": question.derivation,
-                "parameters": {},
-            },
+            "derivation": derivation,
             "concepts": concepts,
             "disclosureGuard": {"families": [disclosure_family]},
             "existenceDisclosure": "collapse-unresolved",
@@ -1833,13 +2059,15 @@ fn render_governance_parts(
     (grant, requirement_value)
 }
 
-fn render_bundle(questions: &[QuestionPlan]) -> Value {
+fn render_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value {
+    let mint_origin = ports.mint_origin();
     let selector_profiles = questions
         .iter()
-        .map(|question| {
+        .flat_map(|question| &question.subjects)
+        .map(|subject| {
             (
-                question.selector_profile.clone(),
-                question.selector_profile_value.clone(),
+                subject.selector_profile.clone(),
+                subject.selector_profile_value.clone(),
             )
         })
         .collect::<Map<_, _>>();
@@ -1865,11 +2093,11 @@ fn render_bundle(questions: &[QuestionPlan]) -> Value {
         "issuer": {"id": local_uri("issuer")},
         "authentication": {
             "kind": "oidc-access-token",
-            "issuer": LOCAL_MINT_ORIGIN,
+            "issuer": mint_origin,
             "audiences": [LOCAL_AUDIENCE],
             "tokenTypes": ["at+jwt"],
             "algorithms": ["EdDSA"],
-            "jwksUri": format!("{LOCAL_MINT_ORIGIN}/.well-known/jwks.json"),
+            "jwksUri": format!("{mint_origin}/.well-known/jwks.json"),
             "principalClaim": "sub",
             "requesterTagsClaim": "evidence_tags",
             "evidenceAudienceClaim": "evidence_audience",
@@ -1919,6 +2147,7 @@ fn write_plan(
     project_root: &Path,
     staging_root: &Path,
     plan: &CompilePlan,
+    ports: LocalServicePorts,
 ) -> Result<CompiledProject> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
@@ -2008,7 +2237,7 @@ fn write_plan(
         "bundleDirectory": canonical_staging.join("bundle").to_string_lossy(),
         "listener": {
             "bindHost": "127.0.0.1",
-            "port": LOCAL_EVIDENCE_PORT,
+            "port": ports.evidence,
             "tlsTermination": "operator-controlled-upstream",
             "trustProxyIdentityHeaders": false,
             "maximumRequestBytes": 65536,
@@ -2037,9 +2266,15 @@ fn write_plan(
             question_alias: question.question_id.clone(),
             requirement_uri: question.requirement_uri.clone(),
             purpose: question.purpose.clone(),
-            subject_role: question.subject_role.clone(),
-            selector_profile: question.selector_profile.clone(),
-            selector_field: question.selector_field.clone(),
+            subjects: question
+                .subjects
+                .iter()
+                .map(|subject| CompiledSubject {
+                    role: subject.role.clone(),
+                    selector_profile: subject.selector_profile.clone(),
+                    selector_field: subject.selector_field.clone(),
+                })
+                .collect(),
             concepts: question
                 .concepts
                 .iter()
@@ -2135,6 +2370,18 @@ fn local_selector_profile_id(question_id: &str) -> String {
     format!("local-subject-{question_id}-v1")
 }
 
+fn local_subject_selector_profile_id(
+    question_id: &str,
+    role: &str,
+    subject_count: usize,
+) -> String {
+    if subject_count == 1 {
+        local_selector_profile_id(question_id)
+    } else {
+        format!("local-subject-{question_id}-{role}-v1")
+    }
+}
+
 fn local_source_id(question_id: &str) -> String {
     format!("local-source-{question_id}")
 }
@@ -2197,6 +2444,62 @@ answers:
 derivation: derivations/adult-status.rhai
 disclosure:
   allow: [is_adult]
+"#;
+
+    const RELATIONSHIP_OPENAPI: &str = r#"openapi: 3.1.0
+info: {title: Tutorial family registry, version: 1.0.0}
+servers: [{url: 'http://127.0.0.1:8000'}]
+paths:
+  /children/{child_id}/candidate-parents/{candidate_id}:
+    get:
+      operationId: getParentRelationship
+      parameters:
+        - name: child_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: candidate_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: A governed relationship decision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [relationship_confirmed]
+                properties:
+                  relationship_confirmed: {type: boolean}
+"#;
+
+    const RELATIONSHIP_QUESTION: &str = r#"id: parent-relationship
+question: Is the candidate registered as a parent of the child?
+purpose: relationship-check
+subjects:
+  - role: child
+    selector: child_id
+  - role: candidate-parent
+    selector: candidate_id
+source:
+  operation: getParentRelationship
+  facts:
+    - name: relationship_confirmed
+      path: /relationship_confirmed
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: relationship_confirmed
+    type: boolean
+derivation: derivations/parent-relationship.rhai
+disclosure:
+  allow: [relationship_confirmed]
+"#;
+
+    const RELATIONSHIP_ANSWER: &str = r#"fn answer(facts, selectors, context) {
+    #{relationship_confirmed: required(facts.relationship_confirmed, "relationship_missing")}
+}
 "#;
 
     const ANSWER: &str = r#"fn answer(facts, selectors, context) {
@@ -2367,12 +2670,12 @@ disclosure:
             "urn:registrystack:evidence:local:concept:adult-status:is_adult"
         );
         assert_eq!(question.purpose, "age-check");
-        assert_eq!(question.subject_role, "person");
+        assert_eq!(question.subjects[0].role, "person");
         assert_eq!(
-            question.selector_profile,
+            question.subjects[0].selector_profile,
             local_selector_profile_id("adult-status")
         );
-        assert_eq!(question.selector_field, "person_id");
+        assert_eq!(question.subjects[0].selector_field, "person_id");
         assert_eq!(question.concepts[0].concept_alias, "is_adult");
         assert_eq!(
             question.concepts[0].concept_form,
@@ -2442,6 +2745,79 @@ disclosure:
             .contains("let governed_answers = answer(facts, selectors, evaluation_context)"));
         assert!(derivation.contains("value: governed_answers[\"is_adult\"]"));
         assert!(!derivation.contains("concept_id: \"is_adult\""));
+    }
+
+    #[test]
+    fn inline_openapi_question_compiles_multiple_role_bound_subjects() {
+        let fixture = Fixture::new(
+            RELATIONSHIP_OPENAPI,
+            RELATIONSHIP_QUESTION,
+            RELATIONSHIP_ANSWER,
+            true,
+        );
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("multi-subject local compilation succeeds");
+
+        let question = &compiled.questions[0];
+        assert_eq!(question.subjects.len(), 2);
+        assert_eq!(question.subjects[0].role, "child");
+        assert_eq!(question.subjects[0].selector_field, "child_id");
+        assert_eq!(question.subjects[1].role, "candidate-parent");
+        assert_eq!(question.subjects[1].selector_field, "candidate_id");
+
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let source = &bundle["sources"][local_source_id("parent-relationship")];
+        assert_eq!(
+            source["request"]["pathBindings"]["child_id"]["role"],
+            "child"
+        );
+        assert_eq!(
+            source["request"]["pathBindings"]["candidate_id"]["role"],
+            "candidate-parent"
+        );
+        assert_eq!(
+            source["request"]["selectorInputs"]
+                .as_array()
+                .expect("selector inputs")
+                .len(),
+            2
+        );
+        assert_eq!(
+            bundle["requirements"][0]["subjectRoles"]
+                .as_array()
+                .expect("subject roles")
+                .len(),
+            2
+        );
+        assert_eq!(
+            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"]
+                .as_array()
+                .expect("grant subjects")
+                .len(),
+            2
+        );
+
+        for invalid_question in [
+            RELATIONSHIP_QUESTION.replace(
+                "  - role: candidate-parent\n    selector: candidate_id\n",
+                "",
+            ),
+            RELATIONSHIP_QUESTION.replace("role: candidate-parent", "role: child"),
+            RELATIONSHIP_QUESTION.replace("selector: candidate_id", "selector: person_id"),
+        ] {
+            let fixture = Fixture::new(
+                RELATIONSHIP_OPENAPI,
+                &invalid_question,
+                RELATIONSHIP_ANSWER,
+                true,
+            );
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                .expect_err("incomplete or ambiguous role binding is rejected");
+            assert!(fixture.staging_is_empty());
+        }
     }
 
     #[test]
@@ -2686,6 +3062,145 @@ factSchema: schemas/people-facts.schema.yaml
             .staging
             .join("bundle/adapters/people-extract.rhai")
             .is_file());
+    }
+
+    #[test]
+    fn referenced_question_compiles_multiple_role_bound_subjects() {
+        let question = r#"id: relationship-check
+question: Does the governed relationship hold?
+purpose: relationship-review
+subjects:
+  - role: child
+    selector: child_reference
+    profile: child-reference-v1
+    derivation: true
+  - role: candidate
+    selector: person_reference
+    profile: person-reference-v1
+    derivation: true
+source:
+  ref: family-record
+answers:
+  - concept: relationship_confirmed
+    type: boolean
+derivation: derivations/relationship-check.rhai
+disclosure:
+  allow: [relationship_confirmed]
+"#;
+        let answer = r#"fn answer(facts, selectors, context) {
+    let child = required(selectors["child"], "child_missing");
+    let candidate = required(selectors["candidate"], "candidate_missing");
+    #{relationship_confirmed: child["values"]["child_reference"] != candidate["values"]["person_reference"]}
+}
+"#;
+        let fixture = Fixture::new(OPENAPI, question, answer, true);
+        for directory in ["sources", "selectors", "adapters", "schemas"] {
+            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
+        }
+        for (name, field) in [
+            ("child-reference-v1", "child_reference"),
+            ("person-reference-v1", "person_reference"),
+        ] {
+            fs::write(
+                fixture.project.join(format!("selectors/{name}.yaml")),
+                format!(
+                    "maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
+                ),
+            )
+            .expect("selector");
+        }
+        fs::write(
+            fixture.project.join("sources/family-record.yaml"),
+            r#"transport: http-json
+baseUrl: https://records.example.test
+posture: field-projected
+authentication: {kind: static-bearer, tokenRef: 'secret:file/records-token'}
+request:
+  method: GET
+  pathTemplate: /children/{child_reference}/relationships
+  pathBindings:
+    child_reference: {role: child, profile: child-reference-v1, field: child_reference}
+  selectorInputs:
+    - role: child
+      alternatives:
+        - {profile: child-reference-v1, fields: [child_reference]}
+  prepareScript: adapters/family-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/family-parameters.schema.yaml
+  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+  projection: [/relationship_complete]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/family-response.schema.yaml
+extractScript: adapters/family-extract.rhai
+factSchema: schemas/family-facts.schema.yaml
+"#,
+        )
+        .expect("source");
+        for (path, contents) in [
+            (
+                "adapters/family-prepare.rhai",
+                "fn prepare(s, p) { #{query: [], body: ()} }\n",
+            ),
+            (
+                "adapters/family-extract.rhai",
+                "fn extract(r, p) { #{outcome: \"match\", facts: r} }\n",
+            ),
+            (
+                "schemas/family-parameters.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+            (
+                "schemas/family-response.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [relationship_complete]\nproperties:\n  relationship_complete: {type: boolean}\n",
+            ),
+            (
+                "schemas/family-facts.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [relationship_complete]\nproperties:\n  relationship_complete: {type: boolean}\n",
+            ),
+        ] {
+            fs::write(fixture.project.join(path), contents).expect("source artifact");
+        }
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("multi-subject question compiles");
+        assert_eq!(
+            compiled.questions[0]
+                .subjects
+                .iter()
+                .map(|subject| (subject.role.as_str(), subject.selector_profile.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("child", "child-reference-v1"),
+                ("candidate", "person-reference-v1"),
+            ]
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
+        )
+        .expect("bundle YAML");
+        assert_eq!(bundle["selectorProfiles"].as_object().unwrap().len(), 2);
+        let grant = &bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0];
+        assert_eq!(grant["subjects"].as_array().unwrap().len(), 2);
+        let requirement = &bundle["requirements"][0];
+        assert_eq!(requirement["subjectRoles"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            requirement["derivation"]["selectorInputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            bundle["sources"]["family-record"]["request"]["selectorInputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "the derivation-only candidate never widens the provider request"
+        );
     }
 
     #[test]
@@ -2946,7 +3461,10 @@ factSchema: schemas/people-facts.schema.yaml
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect("punctuated names compile");
 
-        assert_eq!(compiled.questions[0].selector_field, "person-id.v1");
+        assert_eq!(
+            compiled.questions[0].subjects[0].selector_field,
+            "person-id.v1"
+        );
         let extract = fs::read_to_string(
             fixture
                 .staging
@@ -3054,6 +3572,20 @@ factSchema: schemas/people-facts.schema.yaml
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts nested repeated fact extraction");
+
+        let fixture = Fixture::new(
+            RELATIONSHIP_OPENAPI,
+            RELATIONSHIP_QUESTION,
+            RELATIONSHIP_ANSWER,
+            true,
+        );
+        crate::keygen::generate_scaffold_key_material(
+            &fixture.project.join("secrets"),
+            SIGNING_KEY_ID,
+        )
+        .expect("generate local keys");
+        compile_local_project(&fixture.project, &fixture.staging, &evidence)
+            .expect("real Evidence loader accepts multiple role-bound subjects");
     }
 
     fn punctuated_inputs() -> (String, String, String) {

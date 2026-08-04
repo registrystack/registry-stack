@@ -215,6 +215,93 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
 }
 
 #[test]
+fn multi_subject_prepare_requires_the_exact_role_set_and_emits_declaration_order() {
+    let fixture = Fixture::new();
+    let prepared = fixture.prepare_with(
+        &[
+            "relationship-check",
+            "--purpose",
+            "relationship-review",
+            "--subject",
+            "candidate:person_reference=person-456",
+            "--subject",
+            "child:child_reference=child-123",
+        ],
+        "relationship",
+    );
+    assert_success(&prepared);
+    let request: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .root
+                .join(".evidence/requests/relationship/request.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request["subjects"],
+        json!([
+            {
+                "role": "child",
+                "selector": {
+                    "profile": "child-reference-v1",
+                    "values": {"child_reference": "child-123"}
+                }
+            },
+            {
+                "role": "candidate",
+                "selector": {
+                    "profile": "person-reference-v1",
+                    "values": {"person_reference": "person-456"}
+                }
+            }
+        ])
+    );
+
+    for (name, inputs) in [
+        (
+            "missing",
+            vec![
+                "relationship-check",
+                "--purpose",
+                "relationship-review",
+                "--subject",
+                "child:child_reference=child-123",
+            ],
+        ),
+        (
+            "duplicate",
+            vec![
+                "relationship-check",
+                "--purpose",
+                "relationship-review",
+                "--subject",
+                "child:child_reference=child-123",
+                "--subject",
+                "child:child_reference=child-456",
+            ],
+        ),
+        (
+            "wrong-field",
+            vec![
+                "relationship-check",
+                "--purpose",
+                "relationship-review",
+                "--subject",
+                "child:person_reference=child-123",
+                "--subject",
+                "candidate:child_reference=person-456",
+            ],
+        ),
+    ] {
+        let refused = fixture.prepare_with(&inputs, name);
+        assert!(!refused.status.success(), "{name} role set must fail");
+        assert!(!fixture.root.join(".evidence/requests").join(name).exists());
+    }
+}
+
+#[test]
 fn request_inputs_are_exact_and_every_failed_preparation_cleans_staging() {
     for arguments in [
         vec![
@@ -354,7 +441,7 @@ impl Fixture {
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let canonical = fs::canonicalize(&root).unwrap();
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v3",
+            "schema": "registry.evidencectl.dev-state/v4",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -374,9 +461,11 @@ impl Fixture {
                     "alias": "adult-status",
                     "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
                     "purpose": "age-check",
-                    "subjectRole": "person",
-                    "selectorProfile": "local-subject-adult-status-v1",
-                    "selectorField": "person_id",
+                    "subjects": [{
+                        "role": "person",
+                        "selectorProfile": "local-subject-adult-status-v1",
+                        "selectorField": "person_id"
+                    }],
                     "concepts": [{
                         "alias": "is_adult",
                         "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
@@ -387,13 +476,37 @@ impl Fixture {
                     "alias": "age-bracket",
                     "requirementUri": "urn:registrystack:evidence:local:requirement:age-bracket",
                     "purpose": "service-path-selection",
-                    "subjectRole": "person",
-                    "selectorProfile": "local-subject-age-bracket-v1",
-                    "selectorField": "person_id",
+                    "subjects": [{
+                        "role": "person",
+                        "selectorProfile": "local-subject-age-bracket-v1",
+                        "selectorField": "person_id"
+                    }],
                     "concepts": [{
                         "alias": "age_bracket",
                         "uri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
                         "form": "controlled-category"
+                    }]
+                },
+                {
+                    "alias": "relationship-check",
+                    "requirementUri": "urn:registrystack:evidence:local:requirement:relationship-check",
+                    "purpose": "relationship-review",
+                    "subjects": [
+                        {
+                            "role": "child",
+                            "selectorProfile": "child-reference-v1",
+                            "selectorField": "child_reference"
+                        },
+                        {
+                            "role": "candidate",
+                            "selectorProfile": "person-reference-v1",
+                            "selectorField": "person_reference"
+                        }
+                    ],
+                    "concepts": [{
+                        "alias": "relationship_confirmed",
+                        "uri": "urn:registrystack:evidence:local:concept:relationship-check:relationship_confirmed",
+                        "form": "boolean"
                     }]
                 }
             ],

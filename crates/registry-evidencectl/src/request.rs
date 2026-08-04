@@ -5,6 +5,7 @@
 //! context semantics.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::{Read as _, Write as _},
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
@@ -42,9 +43,9 @@ pub struct PrepareArgs {
     #[arg(long)]
     purpose: String,
 
-    /// Subject selector as the question's one field=value pair.
-    #[arg(long)]
-    subject: String,
+    /// Subject selector. Repeat role:field=value for a multi-subject question.
+    #[arg(long, required = true)]
+    subject: Vec<String>,
 
     /// Safe name for this retained request.
     #[arg(long)]
@@ -70,7 +71,7 @@ pub fn run(command: RequestCommand) -> Result<ExitCode> {
 fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
-    let (question, subject_value) = validate_closed_inputs(&ready, &args)?;
+    let (question, subjects) = validate_closed_inputs(&ready, &args)?;
     let evidence = dev::resolve_tool_binary(
         "evidence",
         args.evidence_bin.as_deref(),
@@ -87,7 +88,7 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     require_absent(&destination)?;
     let mut staging = StagingDirectory::create(&requests_root)?;
 
-    let request = closed_request(question, subject_value)?;
+    let request = closed_request(question, &subjects)?;
     let request_path = staging.path().join("request.json");
     write_private_bytes(&request_path, &request)?;
 
@@ -126,7 +127,10 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
 fn validate_closed_inputs<'a, 'b>(
     ready: &'a ReadyDevState,
     args: &'b PrepareArgs,
-) -> Result<(&'a dev::ReadyQuestionState, &'b str)> {
+) -> Result<(
+    &'a dev::ReadyQuestionState,
+    Vec<(&'a dev::ReadySubjectState, &'b str)>,
+)> {
     let question = ready
         .questions
         .iter()
@@ -135,21 +139,47 @@ fn validate_closed_inputs<'a, 'b>(
     if args.purpose != question.purpose {
         bail!("purpose does not match the active local tutorial question");
     }
-    let (field, value) = args
-        .subject
-        .split_once('=')
-        .filter(|(_, value)| !value.contains('='))
-        .ok_or_else(|| anyhow!("subject must be exactly one field=value pair"))?;
-    if field != question.selector_field {
-        bail!("subject field does not match the active local tutorial question");
+    if args.subject.len() != question.subjects.len() {
+        bail!("subject inputs must match the question's complete role set");
     }
-    if value.is_empty()
-        || value.len() > MAX_SELECTOR_VALUE_BYTES
-        || value.chars().any(char::is_control)
-    {
-        bail!("subject value must be non-empty, bounded, and contain no control characters");
+    let mut values = BTreeMap::new();
+    for input in &args.subject {
+        let (binding, value) = input
+            .split_once('=')
+            .filter(|(_, value)| !value.contains('='))
+            .ok_or_else(|| anyhow!("subject must be one field=value or role:field=value pair"))?;
+        let (role, field) = match binding.split_once(':') {
+            Some((role, field)) if !role.contains(':') && !field.contains(':') => (role, field),
+            None if question.subjects.len() == 1 => (question.subjects[0].role.as_str(), binding),
+            _ => bail!("multi-subject inputs must use role:field=value"),
+        };
+        let subject = question
+            .subjects
+            .iter()
+            .find(|subject| subject.role == role)
+            .ok_or_else(|| anyhow!("subject role does not match the active local question"))?;
+        if field != subject.selector_field || values.insert(role, value).is_some() {
+            bail!("subject inputs must contain each declared role and selector exactly once");
+        }
+        if value.is_empty()
+            || value.len() > MAX_SELECTOR_VALUE_BYTES
+            || value.chars().any(char::is_control)
+        {
+            bail!("subject value must be non-empty, bounded, and contain no control characters");
+        }
     }
-    Ok((question, value))
+    let subjects = question
+        .subjects
+        .iter()
+        .map(|subject| {
+            values
+                .get(subject.role.as_str())
+                .copied()
+                .map(|value| (subject, value))
+                .ok_or_else(|| anyhow!("subject inputs do not cover the complete role set"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((question, subjects))
 }
 
 fn validate_request_name(name: &str) -> Result<()> {
@@ -167,26 +197,35 @@ fn validate_request_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn closed_request(question: &dev::ReadyQuestionState, subject_value: &str) -> Result<Vec<u8>> {
+fn closed_request(
+    question: &dev::ReadyQuestionState,
+    subjects: &[(&dev::ReadySubjectState, &str)],
+) -> Result<Vec<u8>> {
     let mut random = [0_u8; 32];
     getrandom::fill(&mut random).context("failed to generate a request nonce")?;
     let nonce = URL_SAFE_NO_PAD.encode(random);
     random.zeroize();
-    let selector_values = Value::Object(Map::from_iter([(
-        question.selector_field.clone(),
-        Value::String(subject_value.to_owned()),
-    )]));
+    let subjects = subjects
+        .iter()
+        .map(|(subject, value)| {
+            let selector_values = Value::Object(Map::from_iter([(
+                subject.selector_field.clone(),
+                Value::String((*value).to_owned()),
+            )]));
+            json!({
+                "role": subject.role,
+                "selector": {
+                    "profile": subject.selector_profile,
+                    "values": selector_values,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
     let request = json!({
         "requestNonce": nonce,
         "requirement": question.requirement_uri,
         "purpose": question.purpose,
-        "subjects": [{
-            "role": question.subject_role,
-            "selector": {
-                "profile": question.selector_profile,
-                "values": selector_values,
-            }
-        }]
+        "subjects": subjects,
     });
     canonicalize_json(&request).context("failed to serialize the closed Evidence request")
 }

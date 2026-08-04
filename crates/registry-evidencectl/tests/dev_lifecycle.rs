@@ -135,7 +135,7 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
 
     let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).expect("state"))
         .expect("state JSON");
-    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v3");
+    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v4");
     assert_eq!(state["status"], "ready");
     assert_eq!(state["accessTokenAudience"], "registry-evidence-local");
     assert_eq!(state["caller"]["requesterTag"], "local-caller");
@@ -196,6 +196,79 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
     assert!(stopped_state["caller"].is_null());
     assert!(dev.join("audit/evidence.jsonl").is_file());
     assert!(dev.join("runtime.yaml").is_file());
+    assert_success(&fixture.dev_clean(), "dev clean");
+    assert!(!dev.exists(), "clean removes the sealed stopped generation");
+}
+
+#[test]
+#[ignore = "exact gate: starts real local Mint and Evidence services"]
+fn configurable_ports_drive_every_generated_url_and_listener() {
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let (evidence_port, mint_port) = unused_port_pair();
+
+    let started = fixture.dev_start_on_ports(&evidence, &mint, evidence_port, mint_port);
+    assert_success(&started, "dev --detach on configured ports");
+    assert_eq!(
+        String::from_utf8_lossy(&started.stdout),
+        format!(
+            "Evidence ready at http://127.0.0.1:{evidence_port}\nMint ready at http://127.0.0.1:{mint_port}\n"
+        )
+    );
+    assert!(ready(
+        &format!("http://127.0.0.1:{evidence_port}/ready"),
+        json!({"status":"ready"})
+    ));
+    assert!(jwks_ready_at(mint_port));
+
+    let dev = fixture.root.join(".evidence/dev");
+    let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(
+        state["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        state["tokenUrl"],
+        format!("http://127.0.0.1:{mint_port}/token")
+    );
+    let runtime: Value = serde_norway::from_slice(&fs::read(dev.join("runtime.yaml")).unwrap())
+        .expect("runtime YAML");
+    let mint_config: Value =
+        serde_norway::from_slice(&fs::read(dev.join("generated/mint.yaml")).unwrap())
+            .expect("Mint YAML");
+    assert_eq!(runtime["listener"]["port"], evidence_port);
+    assert_eq!(mint_config["listener"]["port"], mint_port);
+    assert_eq!(
+        mint_config["clientAssertion"]["audience"],
+        format!("http://127.0.0.1:{mint_port}/token")
+    );
+
+    assert_success(&fixture.dev_stop(), "stop configured ports");
+    wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
+    wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+    assert_success(&fixture.dev_clean(), "clean configured ports");
+}
+
+#[test]
+fn equal_local_ports_fail_before_creating_private_state() {
+    let fixture = Project::new();
+    let output = evidencectl()
+        .args([
+            "dev",
+            "--detach",
+            "--evidence-port",
+            "18080",
+            "--mint-port",
+            "18080",
+            "--project",
+        ])
+        .arg(&fixture.root)
+        .output()
+        .expect("equal-port start");
+    assert!(!output.status.success());
+    assert!(!fixture.root.join(".evidence").exists());
 }
 
 #[test]
@@ -373,6 +446,7 @@ fn public_symlink_and_stale_state_fail_before_binary_or_process_access() {
         .output()
         .expect("public-state start");
     assert!(!output.status.success());
+    assert!(!public.dev_clean().status.success());
 
     let linked = Project::new();
     let target = linked.root.join("private-target");
@@ -385,6 +459,8 @@ fn public_symlink_and_stale_state_fail_before_binary_or_process_access() {
         .output()
         .expect("symlink-state start");
     assert!(!output.status.success());
+    assert!(!linked.dev_clean().status.success());
+    assert!(linked.root.join(".evidence").is_symlink());
 
     let stale = Project::new();
     fs::create_dir(stale.root.join(".evidence")).expect("generated root");
@@ -410,6 +486,7 @@ fn public_symlink_and_stale_state_fail_before_binary_or_process_access() {
         .output()
         .expect("stale-state start");
     assert!(!output.status.success());
+    assert!(!stale.dev_clean().status.success());
     assert!(stale.root.join(".evidence/dev/unknown").is_file());
     assert!(unrelated.try_wait().expect("unrelated status").is_none());
     stop_child(&mut unrelated);
@@ -475,6 +552,20 @@ impl Project {
             .expect("dev --detach")
     }
 
+    fn dev_start_on_ports(
+        &self,
+        evidence: &Path,
+        mint: &Path,
+        evidence_port: u16,
+        mint_port: u16,
+    ) -> Output {
+        self.dev_start_command(evidence, mint)
+            .args(["--evidence-port", &evidence_port.to_string()])
+            .args(["--mint-port", &mint_port.to_string()])
+            .output()
+            .expect("dev --detach on configured ports")
+    }
+
     fn dev_start_with_env(
         &self,
         evidence: &Path,
@@ -509,6 +600,14 @@ impl Project {
             .output()
             .expect("dev stop")
     }
+
+    fn dev_clean(&self) -> Output {
+        evidencectl()
+            .args(["dev", "clean", "--project"])
+            .arg(&self.root)
+            .output()
+            .expect("dev clean")
+    }
 }
 
 fn evidencectl() -> Command {
@@ -539,7 +638,11 @@ fn ready(url: &str, expected: Value) -> bool {
 }
 
 fn jwks_ready() -> bool {
-    ureq::get("http://127.0.0.1:8081/.well-known/jwks.json")
+    jwks_ready_at(8081)
+}
+
+fn jwks_ready_at(port: u16) -> bool {
+    ureq::get(&format!("http://127.0.0.1:{port}/.well-known/jwks.json"))
         .call()
         .ok()
         .and_then(|response| serde_json::from_reader::<_, Value>(response.into_reader()).ok())
@@ -548,6 +651,17 @@ fn jwks_ready() -> bool {
             keys.iter()
                 .any(|key| key["kid"] == "local-mint-signing-key-1")
         })
+}
+
+fn unused_port_pair() -> (u16, u16) {
+    let first = TcpListener::bind("127.0.0.1:0").expect("reserve first port");
+    let second = TcpListener::bind("127.0.0.1:0").expect("reserve second port");
+    let ports = (
+        first.local_addr().expect("first address").port(),
+        second.local_addr().expect("second address").port(),
+    );
+    drop((first, second));
+    ports
 }
 
 fn assert_mode(path: &Path, expected: u32) {
