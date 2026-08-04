@@ -1,6 +1,6 @@
 ---
 title: Move Evidence to production signing
-description: Replace scaffold key material with production signing keys, publish the JWKS, validate the deployment offline, and rotate keys without breaking verifiers.
+description: Replace non-production signing material in a complete Evidence deployment, publish the JWKS, validate offline, and rotate keys without breaking verifiers.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,17 +15,17 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Take a working Evidence deployment project from scaffold key material to production signing:
-generate the production key, publish the JWKS verifiers read, prove the deployment offline, and
-rotate keys later without invalidating assertions that are still within their validity window.
-Every rule on this page restates `products/evidence/OPERATOR-CONTRACT.md`, which is the binding
-contract.
+Take an adopter-supplied complete Evidence deployment project from non-production signing material
+to production signing: generate the production key, publish the JWKS verifiers read, prove the
+deployment offline, and rotate keys later without invalidating assertions that are still within
+their validity window. Every rule on this page restates
+`products/evidence/OPERATOR-CONTRACT.md`, which is the binding contract.
 
 <QuickstartMeta
   outcome="A deployment signing with production key material, a published JWKS, and a rehearsed rotation procedure."
   time="About 20 minutes"
   level="Production preparation"
-  prerequisites={['Any scaffolded Evidence deployment project; the earlier tutorials each build one', 'The Evidence toolset on PATH', 'A Unix host; Evidence Version 1 supports Unix targets only'] }
+  prerequisites={['An adopter-supplied complete Evidence deployment project using non-production signing material', 'The Evidence toolset on PATH', 'A Unix host; Evidence Version 1 supports Unix targets only'] }
 />
 
 Key generation here produces real private key material.
@@ -93,8 +93,8 @@ missing-data, source-failure, existence-disclosure, and anti-reconstruction beha
 running source.
 
 The runtime file, bundle directory, and every captured artifact must be non-writable to the
-service process; a read-only mount is preferred. If you rehearsed this in the first-assertion
-tutorial, the same freeze applies in production.
+service process; a read-only mount is preferred. Apply the same freeze to every production
+revision before validation.
 
 ## Serve and confirm readiness
 

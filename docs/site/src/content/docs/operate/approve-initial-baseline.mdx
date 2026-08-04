@@ -30,9 +30,11 @@ The approved-set owner assembles verified lane outputs but does not sign on beha
 Evidence and Registry Mint
 are not registryctl-generated products and do not participate in this trust-anchor and
 approved-set pipeline at all: each validates its own deployment inputs directly, with
-`evidence check` (or the `evidencectl` project scaffold and fixture commands that drive it) and
-`mint check`. See [Configure Evidence](../../configure/evidence/) and
-[Configure Registry Mint](../../configure/mint/) for that procedure.
+`evidence check` and `mint check`. The current `evidencectl new` command starts an incomplete
+OpenAPI authoring workspace; it does not create Evidence deployment inputs. For a complete
+Evidence project, `evidencectl fixtures run` drives the offline fixture checks. See
+[Configure Evidence](../../configure/evidence/) and [Configure Registry Mint](../../configure/mint/)
+for those procedures.
 
 ## Before you start
 

@@ -47,9 +47,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # Registered tutorials
 # ---------------------------------------------------------------------------
 
-EVIDENCE_TUTORIALS=(
-	verify-an-assertion-as-a-consumer
-)
+EVIDENCE_TUTORIALS=()
 
 load_spec() {
 	SPEC_FENCES=0
@@ -58,46 +56,6 @@ load_spec() {
 	SPEC_OUTPUTS=()
 
 	case "$1" in
-	verify-an-assertion-as-a-consumer)
-		SPEC_FENCES=9
-		# The only tutorial with no deployment, no network, and no edits: a
-		# consumer re-verifies bytes it was handed. The stored response and
-		# key set are embedded because a consumer cannot mint either, and
-		# `evidence evaluate --fixture` signs with an ephemeral in-memory key
-		# and writes nothing. The embedded synthetic fixture and every pinned
-		# value in the page's policy and `--at` instants are retained and
-		# refreshed together from a reviewed test deployment.
-		SPEC_STEPS=('run:1-9')
-		SPEC_LITERALS=(
-			'evidence verify --jws stored-response.json'
-			'--at 2027-02-03T00:00:00Z'
-			'--jwks issuer-keys.json'
-			'--policy policy.yaml'
-			'--at 2026-08-03T06:12:00Z'
-			'maximumAssertionLifetimeSeconds: 86400'
-			'--sd-jwt-vc <file>'
-		)
-		SPEC_OUTPUTS=(
-			'authentic: yes'
-			'currently-valid: yes'
-			'"providesValueFor": "urn:example:scaffold:concept:example-flag"'
-			# Authentic but out of its validity window is its own answer
-			# and its own exit code, not a signature failure.
-			'currently-valid: no'
-			'exit 3'
-			# The negative controls. Without them a passing run would prove
-			# only that one good response verifies, never that a replayed
-			# nonce, another subject, a tampered byte, an unpinned key, or
-			# an incomplete policy is refused. Both policy mismatches
-			# report this one class, which is the property the page
-			# teaches: the refusal is not an oracle.
-			'authentic: no'
-			'stored response verification failed (policy)'
-			'stored response verification failed (malformed)'
-			'stored response verification failed (signature)'
-			'stored response verification failed (key)'
-		)
-		;;
 	*)
 		printf '%s is not a registered Evidence tutorial\n' "$1" >&2
 		exit 2
@@ -298,7 +256,7 @@ executed_fence_count() {
 # Replay
 # ---------------------------------------------------------------------------
 
-if ((DRY_RUN == 0)); then
+if ((DRY_RUN == 0)) && ((${#EVIDENCE_TUTORIALS[@]} > 0)); then
 	prepare_toolset
 fi
 

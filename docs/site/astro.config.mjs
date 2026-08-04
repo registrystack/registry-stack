@@ -306,7 +306,6 @@ export default defineConfig({
           label: 'Answer with Evidence',
           items: [
             { label: 'Overview', slug: 'start/evaluate-evidence' },
-            { label: 'Verify an assertion as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
             { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },

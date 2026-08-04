@@ -28,7 +28,7 @@ Evidence's authenticator; Evidence does not depend on Mint.
 |---|---|
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
-| `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, project scaffolds, fixture runs |
+| `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
@@ -54,11 +54,12 @@ and testing.
 
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
-Version 1 runtime contract: it generates key material and deployment-project
-scaffolds and drives fixture runs, but it shells out to the `evidence` binary
-for every Evidence semantic decision and never re-implements evaluation,
-signing, or verification. Its source and scaffold templates are covered by the
-same source-product and domain neutrality checks as the runtime.
+Version 1 runtime contract: it generates key material, starts incomplete
+OpenAPI authoring workspaces, and drives fixture runs for complete deployment
+projects, but it shells out to the `evidence` binary for every Evidence semantic
+decision and never re-implements evaluation, signing, or verification. Its
+source is covered by the same source-product and domain neutrality checks as
+the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,
