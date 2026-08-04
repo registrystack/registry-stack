@@ -336,7 +336,7 @@ impl Fixture {
                 "clientId": "local-tutorial-caller",
                 "privateKeyPath": canonical.join(".evidence/dev/generated/keys/caller-private.jwk"),
                 "assertionAudience": "http://127.0.0.1:8081/token",
-                "evidenceAudience": "registry-evidence-local",
+                "evidenceAudience": "urn:registrystack:evidence:local:caller",
                 "requesterTag": "local-caller"
             },
             "question": {
