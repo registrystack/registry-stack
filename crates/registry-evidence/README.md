@@ -3,7 +3,10 @@
 `registry-evidence` is the single-crate Evidence Version 1 runtime. It loads
 one immutable operator-controlled bundle, evaluates fixed requirements through
 bounded Rhai extraction and derivation, and returns minimum-disclosure
-assertion evidence.
+assertion evidence. It depends on
+[`registry-evidence-verifier`](../registry-evidence-verifier/README.md) for the
+response formats, the Evidence payload contract, and relying-party verification,
+and serves those items at its own paths.
 
 The `evidence` binary takes a runtime file and one subcommand:
 

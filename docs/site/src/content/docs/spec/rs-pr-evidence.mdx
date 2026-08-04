@@ -107,7 +107,9 @@ inherits no requirement from it.
 ## 2. Service surface and discovery
 
 Evidence is one `registry-evidence` crate, one `evidence` binary, one serving process, and one
-operator-controlled trust domain (`products/evidence/README.md`).
+operator-controlled trust domain, beside the portable `registry-evidence-verifier` library the
+runtime depends on for the response formats, the Evidence payload contract, and relying-party
+verification (`products/evidence/README.md`).
 
 REQ-PR-EVIDENCE-001: The reachable HTTP surface MUST be exactly the operations declared in
 `products/evidence/generated/registry-evidence.openapi.json`: one evidence operation, one
