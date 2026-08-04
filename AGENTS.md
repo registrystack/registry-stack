@@ -29,6 +29,7 @@ Evidence's authenticator; Evidence does not depend on Mint.
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
+| `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
