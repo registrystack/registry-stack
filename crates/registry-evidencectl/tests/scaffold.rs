@@ -267,7 +267,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
     assert!(entries(&project.join("fixtures")).is_empty());
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
-        "secrets/\n"
+        "secrets/\n.evidence/\n"
     );
     for absent in ["bundle", "runtime.yaml", "evidence.yaml", "README.md"] {
         assert!(

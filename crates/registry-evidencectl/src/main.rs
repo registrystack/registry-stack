@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod access;
 mod audit_view;
 mod authoring;
 mod build;
@@ -33,6 +34,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Manage local caller access policies and clients.
+    #[command(subcommand)]
+    Access(access::AccessCommand),
     /// Generate Evidence deployment key material as owner-only files.
     #[command(subcommand)]
     Keygen(keygen::KeygenCommand),
@@ -67,6 +71,7 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Access(command) => access::run(command),
         Command::Keygen(command) => keygen::run(command),
         Command::Jwks(args) => jwks::run(args),
         Command::New(args) => scaffold::run(args),

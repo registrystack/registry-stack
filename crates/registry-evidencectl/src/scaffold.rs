@@ -62,7 +62,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         .with_context(|| format!("staging the project in {}", parent.display()))?;
     let staged_root = staging.path();
 
-    write_new_file(&staged_root.join(".gitignore"), b"secrets/\n", 0o644)?;
+    write_new_file(
+        &staged_root.join(".gitignore"),
+        b"secrets/\n.evidence/\n",
+        0o644,
+    )?;
     write_new_file(
         &staged_root.join(RETAINED_OPENAPI_FILE),
         document.as_bytes(),
