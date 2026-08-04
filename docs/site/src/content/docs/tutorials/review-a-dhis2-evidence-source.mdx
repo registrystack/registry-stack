@@ -21,11 +21,10 @@ only the governed boolean answer.
 
 <QuickstartMeta
   outcome="A signed adult-status assertion produced from a synthetic record in your DHIS2 test environment."
-  time="About 45 minutes"
+  time="About 60 minutes"
   level="Institution integration with synthetic data"
   prerequisites={[
     'The Evidence toolset and the first Evidence tutorial',
-    'A Registry Stack source checkout matching the installed toolset',
     'A non-production DHIS2 instance with one synthetic Tracker record',
     'A DHIS2 service account with read access to that record',
     'An Evidence-compatible access token for the tutorial caller',
@@ -94,82 +93,37 @@ This direct request exposes the source boundary. DHIS2 returns the tracked entit
 attribute values. Evidence will apply a closed projection, validate that response shape, extract
 the configured date, and release neither source value.
 
-## Copy the maintained DHIS2 project
+## Create the project
 
-From the root of the Registry Stack checkout, copy the maintained deployment project into a
-separate working directory:
+Create one project for this question, with no example requirement or fixture data:
 
 ```sh
-cp -R \
-  products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence \
-  ../dhis2-evidence-tutorial
-cd ../dhis2-evidence-tutorial
+mkdir -p dhis2-evidence/bundle/adapters
+mkdir -p dhis2-evidence/bundle/derivations
+mkdir -p dhis2-evidence/bundle/schemas
+mkdir -p dhis2-evidence/audit
+mkdir -p dhis2-evidence/secrets
+chmod 700 dhis2-evidence/audit dhis2-evidence/secrets
+cd dhis2-evidence
 ```
 
-The project contains two independent examples. This tutorial exercises only
-`urn:gov:example:requirement:adult-status:v1`. The professional-licence requirement receives no
-tutorial caller authority and performs no source request.
+The project will contain one source, one authority profile, and one adult-status requirement.
+Local assurance keeps these files editable while you learn. Production and evidence-grade
+profiles require reviewed fixtures and immutable inputs.
 
-Change the top-level profile for this writable development copy:
+## Define the service and caller trust
+
+Create `bundle/evidence.yaml`. Start with the service identity, caller-token verification, audit,
+subject binding, signing, and one subject selector:
 
 ```yaml
+version: 1
 assuranceProfile: local
-```
-
-Production and evidence-grade profiles require reviewed immutable inputs. The local profile keeps
-the project editable while you confirm the source integration.
-
-The adult-status path is split across four reviewed decisions:
-
-- `bundle/evidence.yaml` fixes the source request, authorization, and disclosed concept.
-- `bundle/adapters/prepare.rhai` places the authorized tracked entity reference in the DHIS2 query.
-- `bundle/adapters/adult-status-extract.rhai` requires one record and extracts the configured date.
-- `bundle/derivations/adult-status.rhai` compares that date with the legal local date and returns a
-  boolean.
-
-## Configure the DHIS2 source
-
-In `bundle/evidence.yaml`, find the `population-tracker` source. Replace its base URL and the three
-DHIS2 metadata identifiers:
-
-```yaml
-  population-tracker:
-    transport: http-json
-    baseUrl: https://<dhis2-host>
-    posture: record-transformed
-    authentication:
-      kind: basic
-      usernameRef: secret:file/dhis2-username
-      passwordRef: secret:file/dhis2-password
-    request:
-      method: GET
-      path: /api/tracker/trackedEntities
-      adapterParameters:
-        program: <program-id>
-        organisationUnit: <organisation-unit-id>
-        providerFields: trackedEntity,attributes[attribute,value]
-        pageSize: "2"
-        page: "1"
-        totalPages: "true"
-        dateOfBirthAttribute: <date-of-birth-attribute-id>
-```
-
-Keep `pageSize`, `page`, `totalPages`, `providerFields`, the projection, response ceiling, redirect
-policy, and scripts unchanged. Together they limit the source interaction to one page that can
-distinguish no match, one match, and ambiguity.
-
-If DHIS2 uses a certificate issued by a public certificate authority, remove
-`tlsTrustProfile: government-internal-pki` from both DHIS2 sources in this reference project. If it
-uses a private certificate authority, keep the fields and bind that authority in `runtime.yaml`
-before starting Evidence.
-
-## Configure caller authentication
-
-Evidence verifies the caller before contacting DHIS2. In the top-level `authentication` block,
-replace the example issuer, audience, and key-set URL with values from your development identity
-provider:
-
-```yaml
+service:
+  providerId: urn:example:provider:dhis2-evidence
+  trustDomain: urn:example:trust-domain:tutorial
+issuer:
+  id: urn:example:issuer:population-authority
 authentication:
   kind: oidc-access-token
   issuer: https://<identity-provider>
@@ -182,22 +136,357 @@ authentication:
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+  failClosed: true
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: EdDSA
+  activeKeyId: tutorial-signing-key-1
+  activeKeyRef: secret:file/signing-ed25519-private-jwk
+  retiredPublicJwkFiles: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 86400
+  verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+selectorProfiles:
+  tracked-entity-reference-v1:
+    maximumAggregateBytes: 64
+    fields:
+      record_reference:
+        type: string
+        minimumBytes: 11
+        maximumBytes: 64
 ```
 
-Your tutorial token must contain the configured audience, an `evidence_tags` value containing
-`eligibility-caseworker`, and a URI in `evidence_audience`. Those server-issued claims match the
-`eligibility-caseworker-v1` authority profile. Request JSON cannot add that authority.
+Evidence verifies the caller before contacting DHIS2. Replace the identity-provider placeholders
+with your development issuer, API audience, accepted signing algorithm, and JSON Web Key Set
+(JWKS) path. The token must carry the configured audience, an `evidence_tags` value containing
+`eligibility-caseworker`, and a URI in `evidence_audience`.
+
+The selector profile permits the caller to provide one bounded tracked entity reference. It does
+not permit an arbitrary DHIS2 path, filter, field list, or page size.
 
 Registry Mint can issue the token when your development environment has no identity provider. The
 [Registry Mint reference](../../reference/mint/) documents the required claims and client
 registration.
+
+## Define the fixed DHIS2 read
+
+Continue editing `bundle/evidence.yaml`. Add the source after `selectorProfiles`:
+
+```yaml
+sources:
+  population-tracker:
+    transport: http-json
+    baseUrl: https://<dhis2-host>
+    posture: record-transformed
+    authentication:
+      kind: basic
+      usernameRef: secret:file/dhis2-username
+      passwordRef: secret:file/dhis2-password
+    request:
+      method: GET
+      path: /api/tracker/trackedEntities
+      fixedHeaders:
+        - name: Accept
+          value: application/json
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
+      prepareScript: adapters/prepare.rhai
+      adapterParameters:
+        program: <program-id>
+        organisationUnit: <organisation-unit-id>
+        providerFields: trackedEntity,attributes[attribute,value]
+        pageSize: "2"
+        page: "1"
+        totalPages: "true"
+        dateOfBirthAttribute: <date-of-birth-attribute-id>
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits:
+        query: required
+        jsonBody: forbidden
+        maximumQueryPairs: 8
+        maximumQueryNameBytes: 64
+        maximumQueryValueBytes: 1024
+        maximumNormalizedBytes: 4096
+      projection:
+        - /pager/page
+        - /pager/pageSize
+        - /pager/total
+        - /pager/pageCount
+        - /trackedEntities/*/trackedEntity
+        - /trackedEntities/*/attributes/*/attribute
+        - /trackedEntities/*/attributes/*/value
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/extract.rhai
+    factSchema: schemas/facts.schema.yaml
+```
+
+Replace the four source placeholders with the values from your direct DHIS2 request. Everything
+else stays fixed. Evidence can then ask for one page of at most two matches and only the attribute
+identifier/value pairs required to find the configured date of birth.
+
+For a DHIS2 certificate issued by a private certificate authority, add a `tlsTrustProfile` to this
+source and bind its certificate file in `runtime.yaml`. The configuration shown here uses public
+system roots.
+
+## Build the DHIS2 query
+
+Create `bundle/adapters/prepare.rhai`:
+
+```rhai
+fn prepare(selectors, parameters) {
+    let subject = selectors["subject"];
+    #{
+        query: [
+            #{name: "program", value: parameters["program"]},
+            #{name: "orgUnits", value: parameters["organisationUnit"]},
+            #{name: "trackedEntities", value: subject["values"]["record_reference"]},
+            #{name: "fields", value: parameters["providerFields"]},
+            #{name: "pageSize", value: parameters["pageSize"]},
+            #{name: "page", value: parameters["page"]},
+            #{name: "totalPages", value: parameters["totalPages"]}
+        ],
+        body: ()
+    }
+}
+```
+
+The script receives only the authorized selector and bundle-owned parameters. It cannot receive
+the access token, DHIS2 password, caller identity, purpose, or signing key. Rust URL-encodes the
+query after the script returns it.
+
+Create `bundle/schemas/adapter-parameters.schema.yaml`:
+
+```yaml
+type: object
+additionalProperties: false
+required:
+  - program
+  - organisationUnit
+  - providerFields
+  - pageSize
+  - page
+  - totalPages
+  - dateOfBirthAttribute
+properties:
+  program: {type: string, minLength: 1, maxLength: 128}
+  organisationUnit: {type: string, minLength: 1, maxLength: 128}
+  providerFields: {const: "trackedEntity,attributes[attribute,value]"}
+  pageSize: {const: "2"}
+  page: {const: "1"}
+  totalPages: {const: "true"}
+  dateOfBirthAttribute: {type: string, minLength: 1, maxLength: 128}
+```
+
+This schema prevents later edits from widening the reviewed program, organisation unit, field
+projection, or paging shape without failing project validation.
+
+## Validate and extract the DHIS2 response
+
+Create `bundle/schemas/response.schema.yaml`:
+
+```yaml
+type: object
+additionalProperties: false
+required: [pager, trackedEntities]
+properties:
+  pager:
+    type: object
+    additionalProperties: false
+    required: [page, pageSize, total, pageCount]
+    properties:
+      page: {type: integer, const: 1}
+      pageSize: {type: integer, const: 2}
+      total: {type: integer, minimum: 0, maximum: 1000000}
+      pageCount: {type: integer, minimum: 0, maximum: 1000000}
+  trackedEntities:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        trackedEntity: {type: string, minLength: 1, maxLength: 64}
+        attributes:
+          type: array
+          minItems: 0
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [attribute, value]
+            properties:
+              attribute: {type: string, minLength: 1, maxLength: 64}
+              value: {type: string, maxLength: 512}
+```
+
+Rust applies this closed schema after projection and before extraction. Extra response members are
+dropped by the projection. Missing, mistyped, or oversized projected values are refused.
+
+Create `bundle/adapters/extract.rhai`:
+
+```rhai
+fn extract(source_response, parameters) {
+    let pager = source_response["pager"];
+    let records = source_response["trackedEntities"];
+    let total = pager["total"];
+
+    if pager["pageCount"] != (total + pager["pageSize"] - 1) / pager["pageSize"] {
+        throw("source_protocol_error");
+    }
+    if total == 0 {
+        if records.len != 0 { throw("source_protocol_error"); }
+        return #{outcome: "no_match"};
+    }
+    if total > 1 {
+        if records.len != 2 { throw("source_protocol_error"); }
+        return #{outcome: "ambiguous"};
+    }
+    if records.len != 1 { throw("source_protocol_error"); }
+
+    let record = records[0];
+    if is_missing(record["trackedEntity"]) {
+        throw("source_protocol_error");
+    }
+
+    let date_of_birth = ();
+    let matches = 0;
+    for attribute in record["attributes"] {
+        if attribute["attribute"] == parameters["dateOfBirthAttribute"] {
+            date_of_birth = attribute["value"];
+            matches += 1;
+        }
+    }
+    if matches > 1 { throw("source_protocol_error"); }
+
+    let facts = #{record_reference: record["trackedEntity"]};
+    if matches == 1 { facts["date_of_birth"] = date_of_birth; }
+    #{outcome: "match", facts: facts}
+}
+```
+
+Zero matches and several matches are different internal outcomes, but both become the same public
+`evidence_not_available` problem. A duplicated date attribute is a malformed source response, not
+a date Evidence can choose between.
+
+Create `bundle/schemas/facts.schema.yaml`:
+
+```yaml
+type: object
+additionalProperties: false
+required: [record_reference, date_of_birth]
+properties:
+  record_reference: {type: string, minLength: 11, maxLength: 64}
+  date_of_birth: {type: string, format: date}
+```
+
+Only these validated facts can reach the derivation. The source response and credentials cannot.
+
+## Derive the adult-status answer
+
+Create `bundle/derivations/adult-status.rhai`:
+
+```rhai
+fn derive(facts, selectors, evaluation_context) {
+    if facts["record_reference"] !=
+       selectors["subject"]["values"]["record_reference"] {
+        throw("derivation_input_error");
+    }
+    let date_of_birth = parse_date(required(
+        facts["date_of_birth"],
+        "required_fact_missing"
+    ));
+    let threshold = add_calendar_years(
+        date_of_birth,
+        evaluation_context["parameters"]["minimum_age_years"]
+    );
+    [#{
+        concept_id: "urn:example:concept:adult-status",
+        value: compare_dates(evaluation_context["legal_local_date"], threshold) >= 0
+    }]
+}
+```
+
+The first comparison prevents a source response for another tracked entity from being evaluated.
+The derivation then returns one boolean. It has no way to add the date of birth to the assertion.
+
+Finish `bundle/evidence.yaml` by adding the caller grant and requirement after `sources`:
+
+```yaml
+authorityProfiles:
+  eligibility-caseworker-v1:
+    kind: statutory
+    requesterTags: [eligibility-caseworker]
+    grants:
+      - requirement: urn:example:requirement:adult-status:v1
+        purpose: benefit-eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: tracked-entity-reference-v1
+            valueOrigin: request
+requirements:
+  - id: urn:example:requirement:adult-status:v1
+    kind: criterion
+    source: population-tracker
+    purposes: [benefit-eligibility]
+    subjectRoles:
+      - role: subject
+        cardinality: one
+        selectorProfiles: [tracked-entity-reference-v1]
+    referenceFrameworks: [urn:example:framework:age-of-majority:v1]
+    evidenceType: urn:example:evidence-type:adult-status:v1
+    observationTimezone: Asia/Bangkok
+    validitySeconds: 86400
+    derivation:
+      script: derivations/adult-status.rhai
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - profile: tracked-entity-reference-v1
+              fields: [record_reference]
+      parameters: {minimum_age_years: 18}
+    concepts:
+      - id: urn:example:concept:adult-status
+        form: boolean
+        required: true
+        constraints: {}
+    disclosureGuard:
+      families: [urn:example:disclosure-family:adult-status]
+    existenceDisclosure: collapse-unresolved
+```
+
+The grant connects the server-issued `eligibility-caseworker` tag to one requirement and purpose.
+The requirement connects that authorized request to one source, derivation, and disclosed boolean.
+The caller cannot substitute any of those choices.
 
 ## Bind local files and secrets
 
 Generate independent signing, audit, and subject-binding material:
 
 ```sh
-evidencectl keygen signing --out-dir secrets --kid evidence-signing-2026-01
+evidencectl keygen signing --out-dir secrets --kid tutorial-signing-key-1
 evidencectl keygen secret --out secrets/audit-hmac-key
 evidencectl keygen secret --out secrets/subject-binding-hmac-key
 touch secrets/dhis2-username secrets/dhis2-password
@@ -212,7 +501,7 @@ In `runtime.yaml`, replace the example paths with absolute paths for this workin
 
 ```yaml
 version: 1
-bundleDirectory: /absolute/path/to/dhis2-evidence-tutorial/bundle
+bundleDirectory: /absolute/path/to/dhis2-evidence/bundle
 listener:
   bindHost: 127.0.0.1
   port: 8080
@@ -224,26 +513,28 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file:
-    root: /absolute/path/to/dhis2-evidence-tutorial/secrets
+    root: /absolute/path/to/dhis2-evidence/secrets
 auditStorage:
-  path: /absolute/path/to/dhis2-evidence-tutorial/audit/evidence.jsonl
+  path: /absolute/path/to/dhis2-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {}
 ```
 
-Create the audit directory, then validate the complete project:
+Make the completed runtime and bundle read-only, then validate the complete project:
 
 ```sh
-mkdir -p audit
-chmod 700 audit
+chmod -R a-w bundle
+chmod a-w runtime.yaml
 evidence check --runtime runtime.yaml
 ```
 
-The success line begins with `Evidence deployment` and ends with `passed check (2 requirements)`.
+The success line begins with `Evidence deployment` and ends with `passed check (1 requirements)`.
 It means the bundle, scripts, schemas, runtime bindings, and secret files agree. It does not call
-DHIS2.
+DHIS2. Evidence captures these startup inputs as one revision, even under the local assurance
+profile. If you need to edit again, run `chmod -R u+w bundle` and `chmod u+w runtime.yaml`, then
+repeat this check after the change.
 
 ## Start Evidence
 
@@ -285,7 +576,7 @@ nonce="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 cat >request.json <<EOF
 {
   "requestNonce": "$nonce",
-  "requirement": "urn:gov:example:requirement:adult-status:v1",
+  "requirement": "urn:example:requirement:adult-status:v1",
   "purpose": "benefit-eligibility",
   "subjects": [
     {
@@ -323,17 +614,24 @@ Signature (JWS), not a copy of the Tracker response.
 Do not decode and trust the payload directly. Complete the [consumer verification
 tutorial](../verify-an-assertion-as-a-consumer/) with independently retained trust and request
 expectations. After verification, the supported value for
-`urn:gov:example:concept:adult-status` is a boolean. The verified payload contains neither the
+`urn:example:concept:adult-status` is a boolean. The verified payload contains neither the
 tracked entity identifier nor the date of birth.
 
 ## Clean up
 
-Press `Ctrl+C` in the Evidence terminal. Remove the copied project when you no longer need it, and
-remove the separate DHIS2 curl configuration if it was created only for this tutorial.
+Press `Ctrl+C` in the Evidence terminal. Restore owner write permission before editing or removing
+the project:
 
-Do not promote this tutorial project. Before deployment, replace every example identity, remove
-unused requirements, add project-specific fixtures, review the source projection and derivation,
-bind production trust, and freeze the reviewed bundle.
+```sh
+chmod -R u+w bundle
+chmod u+w runtime.yaml
+```
+
+Remove the separate DHIS2 curl configuration if it was created only for this tutorial.
+
+Do not promote this tutorial project. Before deployment, replace every example identity, add
+project-specific fixtures, review the source projection and derivation, bind production trust, and
+freeze the reviewed bundle.
 
 ## Next
 
