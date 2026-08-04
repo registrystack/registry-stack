@@ -114,12 +114,17 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
     if view.schema != CORE_VIEW_SCHEMA
         || !valid_operation(&view.operation)
         || !valid_alias(&question.alias)
-        || !valid_alias(&question.concept_alias)
+        || question.concepts.is_empty()
+        || question.concepts.len() > 16
+        || question.concepts.iter().any(|concept| {
+            !valid_alias(&concept.alias)
+                || !valid_uri(&concept.uri)
+                || !matches!(
+                    concept.form.as_str(),
+                    "boolean" | "controlled-category" | "bounded-integer"
+                )
+        })
         || !valid_purpose(&question.purpose)
-        || !matches!(
-            question.concept_form.as_str(),
-            "boolean" | "controlled-category"
-        )
         || !(1..=2).contains(&view.events.len())
     {
         return Err(failed());
@@ -151,7 +156,14 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
         || release.requester_pseudonym != access.requester_pseudonym
         || release.response_protection != access.response_protection
         || parse_time(&release.occurred_at)? < parse_time(&access.occurred_at)?
-        || release.disclosed_concepts != Presence::Present(vec![question.concept_uri.clone()])
+        || release.disclosed_concepts
+            != Presence::Present(
+                question
+                    .concepts
+                    .iter()
+                    .map(|concept| concept.uri.clone())
+                    .collect(),
+            )
         || !matches!(
             &release.evidence_id,
             Presence::Present(value) if valid_uri(value)
@@ -159,7 +171,15 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
     {
         return Err(failed());
     }
-    rendered.push_str(&format!("DISCLOSURE RELEASED {}\n", question.concept_alias));
+    rendered.push_str(&format!(
+        "DISCLOSURE RELEASED {}\n",
+        question
+            .concepts
+            .iter()
+            .map(|concept| concept.alias.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     Ok(rendered)
 }
 

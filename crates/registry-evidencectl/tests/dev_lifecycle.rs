@@ -54,17 +54,17 @@ subject:
 source:
   operation: getPerson
   facts: [date_of_birth]
-answer:
-  concept: is_adult
-  type: boolean
-  derivation: derivations/adult-status.rhai
+answers:
+  - concept: is_adult
+    type: boolean
+derivation: derivations/adult-status.rhai
 disclosure:
   allow: [is_adult]
 "#;
 
 const DERIVATION: &str = r#"fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0
+    #{is_adult: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}
 }
 "#;
 
@@ -131,7 +131,7 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
 
     let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).expect("state"))
         .expect("state JSON");
-    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v2");
+    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v3");
     assert_eq!(state["status"], "ready");
     assert_eq!(state["accessTokenAudience"], "registry-evidence-local");
     assert_eq!(state["caller"]["requesterTag"], "local-caller");

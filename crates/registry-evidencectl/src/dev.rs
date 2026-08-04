@@ -35,7 +35,7 @@ use crate::{
     keygen,
 };
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v2";
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v3";
 const EVIDENCE_ORIGIN: &str = "http://127.0.0.1:8080";
 const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
 const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
@@ -164,9 +164,15 @@ struct QuestionState {
     subject_role: String,
     selector_profile: String,
     selector_field: String,
-    concept_alias: String,
-    concept_uri: String,
-    concept_form: String,
+    concepts: Vec<ConceptState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConceptState {
+    alias: String,
+    uri: String,
+    form: String,
 }
 
 /// Validated active-session inputs for native request preparation.
@@ -198,9 +204,14 @@ pub(crate) struct ReadyQuestionState {
     pub(crate) subject_role: String,
     pub(crate) selector_profile: String,
     pub(crate) selector_field: String,
-    pub(crate) concept_alias: String,
-    pub(crate) concept_uri: String,
-    pub(crate) concept_form: String,
+    pub(crate) concepts: Vec<ReadyConceptState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadyConceptState {
+    pub(crate) alias: String,
+    pub(crate) uri: String,
+    pub(crate) form: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -370,23 +381,40 @@ fn valid_question_state(question: &QuestionState) -> bool {
         question.purpose.as_str(),
         question.subject_role.as_str(),
         question.selector_field.as_str(),
-        question.concept_alias.as_str(),
     ]
     .into_iter()
     .all(valid_local_identifier);
     let requirement_uri = format!("{LOCAL_URI_PREFIX}requirement:{}", question.alias);
-    let concept_uri = format!(
-        "{LOCAL_URI_PREFIX}concept:{}:{}",
-        question.alias, question.concept_alias
-    );
+    let concepts_are_closed = !question.concepts.is_empty()
+        && question.concepts.len() <= 16
+        && question
+            .concepts
+            .iter()
+            .all(|concept| valid_concept_state(&question.alias, concept))
+        && question
+            .concepts
+            .iter()
+            .map(|concept| concept.alias.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == question.concepts.len();
     let selector_profile = format!("local-subject-{}-v1", question.alias);
     identifiers_are_closed
         && question.requirement_uri == requirement_uri
         && question.selector_profile == selector_profile
-        && question.concept_uri == concept_uri
+        && concepts_are_closed
+}
+
+fn valid_concept_state(question_alias: &str, concept: &ConceptState) -> bool {
+    valid_local_identifier(&concept.alias)
+        && concept.uri
+            == format!(
+                "{LOCAL_URI_PREFIX}concept:{question_alias}:{}",
+                concept.alias
+            )
         && matches!(
-            question.concept_form.as_str(),
-            "boolean" | "controlled-category"
+            concept.form.as_str(),
+            "boolean" | "controlled-category" | "bounded-integer"
         )
 }
 
@@ -1030,12 +1058,19 @@ impl From<&CompiledQuestion> for QuestionState {
             subject_role: compiled.subject_role.clone(),
             selector_profile: compiled.selector_profile.clone(),
             selector_field: compiled.selector_field.clone(),
-            concept_alias: compiled.concept_alias.clone(),
-            concept_uri: compiled.concept_uri.clone(),
-            concept_form: match compiled.concept_form {
-                CompiledConceptForm::Boolean => "boolean".to_owned(),
-                CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
-            },
+            concepts: compiled
+                .concepts
+                .iter()
+                .map(|concept| ConceptState {
+                    alias: concept.concept_alias.clone(),
+                    uri: concept.concept_uri.clone(),
+                    form: match concept.concept_form {
+                        CompiledConceptForm::Boolean => "boolean".to_owned(),
+                        CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
+                        CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
+                    },
+                })
+                .collect(),
         }
     }
 }
@@ -1348,9 +1383,15 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
         subject_role: question.subject_role,
         selector_profile: question.selector_profile,
         selector_field: question.selector_field,
-        concept_alias: question.concept_alias,
-        concept_uri: question.concept_uri,
-        concept_form: question.concept_form,
+        concepts: question
+            .concepts
+            .into_iter()
+            .map(|concept| ReadyConceptState {
+                alias: concept.alias,
+                uri: concept.uri,
+                form: concept.form,
+            })
+            .collect(),
     }
 }
 
@@ -1370,10 +1411,12 @@ mod tests {
                 subject_role: "person".to_owned(),
                 selector_profile: "local-subject-adult-status-v1".to_owned(),
                 selector_field: "person_id".to_owned(),
-                concept_alias: "is_adult".to_owned(),
-                concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
-                    .to_owned(),
-                concept_form: CompiledConceptForm::Boolean,
+                concepts: vec![crate::authoring::CompiledConcept {
+                    concept_alias: "is_adult".to_owned(),
+                    concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+                        .to_owned(),
+                    concept_form: CompiledConceptForm::Boolean,
+                }],
             }],
             local_audience: "registry-evidence-local".to_owned(),
             requester_tag: "local-caller".to_owned(),
@@ -1485,6 +1528,10 @@ mod tests {
         state.questions[0].requirement_uri = "urn:tampered".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered canonical value");
         assert!(load_ready_state(&project).is_err());
+        state = valid_ready.clone();
+        state.questions[0].concepts[0].uri = "urn:tampered".to_owned();
+        replace_state(&dev.join("state.json"), &state).expect("tampered concept");
+        assert!(load_ready_state(&project).is_err());
         state = valid_ready;
         replace_state(&dev.join("state.json"), &state).expect("restore ready state");
 
@@ -1496,7 +1543,7 @@ mod tests {
         replace_state(&dev.join("state.json"), &state).expect("stopped state");
         let stopped = load_stopped_state(&project).expect("stopped handoff");
         assert_eq!(stopped.runtime_path, runtime);
-        assert_eq!(stopped.questions[0].concept_alias, "is_adult");
+        assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
 
         remove_completed_dev_root(&project, &dev).expect("replaceable stopped session");
         assert!(!dev.exists());

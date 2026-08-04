@@ -354,7 +354,7 @@ impl Fixture {
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let canonical = fs::canonicalize(&root).unwrap();
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v2",
+            "schema": "registry.evidencectl.dev-state/v3",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -377,9 +377,11 @@ impl Fixture {
                     "subjectRole": "person",
                     "selectorProfile": "local-subject-adult-status-v1",
                     "selectorField": "person_id",
-                    "conceptAlias": "is_adult",
-                    "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                    "conceptForm": "boolean"
+                    "concepts": [{
+                        "alias": "is_adult",
+                        "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                        "form": "boolean"
+                    }]
                 },
                 {
                     "alias": "age-bracket",
@@ -388,9 +390,11 @@ impl Fixture {
                     "subjectRole": "person",
                     "selectorProfile": "local-subject-age-bracket-v1",
                     "selectorField": "person_id",
-                    "conceptAlias": "age_bracket",
-                    "conceptUri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                    "conceptForm": "controlled-category"
+                    "concepts": [{
+                        "alias": "age_bracket",
+                        "uri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                        "form": "controlled-category"
+                    }]
                 }
             ],
             "failure": null

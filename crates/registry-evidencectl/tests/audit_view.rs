@@ -115,6 +115,48 @@ fn access_only_view_prints_authorized_without_claiming_release() {
 }
 
 #[test]
+fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
+    let fixture = Fixture::new();
+    let state_path = fixture.root.join(".evidence/dev/state.json");
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
+    state["questions"][1]["concepts"] = json!([
+        {
+            "alias": "is_adult",
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+            "form": "boolean"
+        },
+        {
+            "alias": "age_years",
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
+            "form": "bounded-integer"
+        }
+    ]);
+    fs::write(
+        &state_path,
+        serde_json::to_vec(&state).expect("state renders"),
+    )
+    .expect("state writes");
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
+
+    let mut view = successful_view();
+    view["events"][1]["disclosedConcepts"] = json!([
+        "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+        "urn:registrystack:evidence:local:concept:adult-status:age_years"
+    ]);
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("DISCLOSURE RELEASED is_adult, age_years\n"));
+
+    view["events"][1]["disclosedConcepts"] =
+        json!(["urn:registrystack:evidence:local:concept:adult-status:is_adult"]);
+    fixture.write_core_json(&view);
+    assert_closed_failure(&fixture.show(), "incomplete multi-concept release");
+}
+
+#[test]
 fn closed_parser_alias_mapping_and_metadata_fail_without_partial_output() {
     let fixture = Fixture::new();
     let base = successful_view();
@@ -258,7 +300,7 @@ impl Fixture {
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v2",
+            "schema": "registry.evidencectl.dev-state/v3",
             "status": "stopped",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -275,9 +317,11 @@ impl Fixture {
                     "subjectRole": "person",
                     "selectorProfile": "local-subject-age-bracket-v1",
                     "selectorField": "person_id",
-                    "conceptAlias": "age_bracket",
-                    "conceptUri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                    "conceptForm": "controlled-category"
+                    "concepts": [{
+                        "alias": "age_bracket",
+                        "uri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                        "form": "controlled-category"
+                    }]
                 },
                 {
                     "alias": "adult-status",
@@ -286,9 +330,11 @@ impl Fixture {
                     "subjectRole": "person",
                     "selectorProfile": "local-subject-adult-status-v1",
                     "selectorField": "person_id",
-                    "conceptAlias": "is_adult",
-                    "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                    "conceptForm": "boolean"
+                    "concepts": [{
+                        "alias": "is_adult",
+                        "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                        "form": "boolean"
+                    }]
                 }
             ],
             "failure": null
