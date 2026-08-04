@@ -100,7 +100,10 @@ hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 inquire = { version = "0.9.4" }
 insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
-jsonschema = { version = "0.18", features = ["draft202012"] }
+# Default features pull an HTTP client for remote $ref resolution and a command
+# line parser for the bundled CLI. Every consumer here compiles schemas it
+# already holds in memory, so neither belongs in the dependency graph.
+jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 native-tls = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", features = ["features"] }
