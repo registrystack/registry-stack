@@ -309,6 +309,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Return an age bracket', slug: 'tutorials/return-a-governed-value' },
+            { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
             { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
             { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
             { label: 'Issue a birth certificate VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
