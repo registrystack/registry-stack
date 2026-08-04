@@ -152,7 +152,7 @@ residue the workstream did not reach, not new scope.
       about two thousand lines of candidate binding, cosign and slsa
       verification, secret-canary scanning, and teardown to reuse a topology
       that already mounts a real CSV source and starts a released image.
-- [ ] C10. The manifest layer's Notary vocabulary is resolved.
+- [x] C10. The manifest layer's Notary vocabulary is resolved.
       `registry-manifest-core` still requires the protocol identifier
       `registry-notary-federation/v0.1` from any manifest that declares a
       `federation` block, and still names the enforcement profile
@@ -1012,3 +1012,58 @@ is parallel; B has no upstream dependencies and is the standing priority
   assertion in this harness, these have never executed live, because a live run
   needs a published digest-pinned candidate. `release/READINESS.md` records the
   new coverage as source-ready and unrun, so no release may cite it yet.
+
+- 2026-08-04: C10 done, and the item's premise was wrong on both halves, so the
+  resolution is neither of the two the item offered. First,
+  `registry-evidence-gateway-pdp/v1` is not dead surface. It is validated in
+  manifest-core, consumed by the governed evidence pack policy path
+  (`crates/registry-relay/src/api/governed.rs`), required at Relay startup in
+  `crates/registry-relay/src/config/validate.rs`, and re-declared in
+  `registry-platform-pdp`, which C4 deliberately kept. It also does not name
+  Notary. It stays, unrenamed. Second, `federation` and the `registry-notary`
+  access kind were not dead either, but in the opposite direction: Relay's
+  runtime binding required *every* evidence offering to be
+  `kind: registry-notary`, so a Relay deployment could only advertise offerings
+  pointing at a retired product. Removing the vocabulary alone would have left
+  `kind` dangling, so access is retargeted rather than deleted: `federation` is
+  gone, and `registry-evidence` is validated in its place against Evidence's
+  real surfaces, an assertion endpoint and the discovery document a relying
+  party reads to verify the response.
+  The shared layer stays product-neutral in two ways that matter. `conforms_to`
+  is required to be present and non-blank but is not pinned to
+  `registry.assertion-evidence/v1`, so the portable manifest does not inherit an
+  Evidence contract version; the demo configs carry that value as an example
+  only. And manifest-core does not enumerate product names: an unrecognized
+  `access.kind` falls through to generic optional-URI validation and is rejected
+  by the consuming runtime, which
+  `validation_leaves_an_unrecognized_access_kind_to_the_consuming_runtime`
+  asserts directly.
+  The manifest version stays `registry-manifest/v1`, following C11's precedent.
+  No adopter has published a manifest, `federation` was optional, and serde's
+  unknown-field rejection fails closed naming the removed key, which
+  `manifest_rejects_a_retired_federation_block` asserts. Bumping would churn the
+  published JSON-LD namespace IRI and the DCAT/SHACL goldens for nobody.
+  One present-tense claim about Notary was corrected outside the manifest layer:
+  the `Data-Purpose` header description asserted that "Registry Notary remains
+  the purpose-certification layer for an offering handoff". That is a live claim
+  about a retired product on the offering surface this item retargets, not a
+  name that only names the past, so it now says certification belongs to the
+  layer that hands off an offering. The frozen D5 semantics are unchanged.
+  Gates: `cargo check --locked --workspace --all-targets` clean,
+  `cargo clippy --workspace --all-targets -- -D warnings` clean,
+  `cargo test --locked -p registry-relay -p registry-manifest-core
+  -p registry-manifest-cli` all green with zero failures (manifest-core
+  `metadata_core` 90/90, relay lib 776/776), `just openapi-contract` passing
+  against a regenerated document, and from `docs/site/` `npm run check` and
+  `npm test` (296/296).
+  Left alone on purpose: the `registry-platform-ops` posture fixtures and
+  `examples/registry-notary.posture.valid.json` still carry
+  `registry-notary-federation/v0.1` as opaque recorded posture data. They have
+  no manifest dependency and no code path, and decision 9 keeps the shared
+  platform layer's historical vocabulary. The consultation-plane prose in
+  `openapi.rs` (the authenticated Notary workload, its OIDC credential, its
+  batch child identity) also stays: those name the past, and C4 settled that
+  surface.
+  Worth knowing outside this item: the machine's disk hit 100% mid-run. Docker
+  holds about 192GB with roughly 122GB reclaimable (273 images, 895 volumes,
+  38GB build cache). Pruning is not this plan's call.

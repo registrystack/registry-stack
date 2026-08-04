@@ -1,6 +1,6 @@
 ---
 title: "RS-DM-MANIFEST: Registry Manifest portable metadata data model"
-description: "The data model for a Registry Manifest portable metadata manifest: schema version, runtime-binding boundary, catalog collections, reference integrity, governed evidence metadata, federation discovery, discovery-bundle digests, and strict unknown-key rejection."
+description: "The data model for a Registry Manifest portable metadata manifest: schema version, runtime-binding boundary, catalog collections, reference integrity, governed evidence metadata, evidence-offering access discovery, discovery-bundle digests, and strict unknown-key rejection."
 status: draft
 owner: registry-docs
 source_repos:
@@ -44,6 +44,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
 | 0.3.1 | 2026-08-04 | draft | Recorded that Registry Notary is retired: Section 7 and REQ-DM-MANIFEST-010 now state that the `registry-notary` access kind and its federation vocabulary are validated published surface with no maintained runtime behind them, and the retired product's claim data model is no longer cross-referenced. No validator behavior changed. |
 | 0.3.0 | 2026-07-07 | draft | Corrected REQ-DM-MANIFEST-007 to require a unique `(id, version)` pair rather than independently unique `id` and `version` values, corrected the REQ-DM-MANIFEST-002 runtime-only-key example, renamed the static discovery bundle consistently, and rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time (issue #249, issue #285). |
+| 0.4.0 | 2026-08-04 | draft | Removed the `federation` block and the `registry-notary` access kind from the manifest schema and rewrote REQ-DM-MANIFEST-010 around the `registry-evidence` access kind. The `access.kind` vocabulary is now open: any other kind is left to the consuming runtime. The `registry-manifest/v1` schema version is unchanged; a manifest carrying the removed block is rejected at parse time by REQ-DM-MANIFEST-013. |
 
 ## 1. Scope and references
 
@@ -55,7 +56,7 @@ This specification covers the structure and invariants of a portable metadata ma
 - Reference integrity and identifier and vocabulary constraints.
 - Requirements and grouped evidence.
 - Governed evidence pack metadata and the Evidence Gateway PDP binding surface.
-- Federation discovery metadata.
+- Evidence-offering access discovery metadata.
 - The standards-shaped render set and the static discovery bundle.
 - Compatibility and evolution.
 
@@ -69,23 +70,23 @@ For the narrative two-layer pipeline, see the [architecture overview](../../expl
 
 ## 2. Anatomy of a metadata manifest
 
-A metadata manifest is a single portable document. It declares a schema version, a catalog that identifies the publisher, the collections that describe a registry, and, optionally, the federation metadata for delegated evaluation. Registry Manifest validates the document and renders it, as a pure function, into a static discovery bundle.
+A metadata manifest is a single portable document. It declares a schema version, a catalog that identifies the publisher, the collections that describe a registry, and, optionally, the evidence offerings that point at a service which answers evidence requests. Registry Manifest validates the document and renders it, as a pure function, into a static discovery bundle.
 
 ```mermaid
 flowchart TD
     manifest["metadata.yaml<br/>schema_version: registry-manifest/v1"]
     catalog["Catalog<br/>id · base_url · title · publisher"]
     describe["Description<br/>datasets · entities · fields · requirements<br/>evidence types · services · forms · policies · codelists"]
-    federation["Federation metadata<br/>node_id · issuer · ruleset bindings"]
+    offerings["Evidence offerings<br/>access.kind · endpoint · discovery · ruleset"]
     render["Validate, then render<br/>(pure · deterministic · no data sources)"]
     bundle["Discovery bundle<br/>DCAT · BRegDCAT-AP · CPSV-AP · SHACL<br/>JSON Schema · OGC Records · ODRL · CCCEV<br/>embedded SKOS-shaped codelists"]
     index["index.json<br/>source_manifest_digest · package_digest · per-artifact sha256"]
     manifest --> catalog
     manifest --> describe
-    manifest --> federation
+    manifest --> offerings
     catalog --> render
     describe --> render
-    federation --> render
+    offerings --> render
     render --> bundle --> index
 ```
 
@@ -97,13 +98,13 @@ REQ-DM-MANIFEST-001: A metadata manifest MUST declare `schema_version: registry-
 
 The manifest is portable: it carries the static description of a registry and nothing about a particular deployment. This boundary is what lets a manifest be authored, reviewed, hosted, and pinned without access to any production system, and what keeps Registry Manifest a pure library with no data dependencies (REQ-ARC-G-001).
 
-REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, peer allow-lists, federation signing keys, replay stores, or token URLs. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in a runtime service's own configuration, never in the manifest.
+REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, caller allow-lists, signing keys, replay stores, or token URLs. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in a runtime service's own configuration, never in the manifest.
 
 ## 4. Catalog and top-level structure
 
 A manifest's required core is its catalog; the rest of a manifest is the collections through which it describes a registry. RS-TERMS summarizes those collections as datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings; the full top-level set the reference defines is broader, and this document names it so a reader does not infer the manifest stops at that summary.
 
-REQ-DM-MANIFEST-003: A metadata manifest MUST declare a `catalog` carrying at least an identifier, a base URL, a title, and a publisher, each validated (an identifier matching the manifest identifier pattern, an HTTP or HTTPS base URL, a non-empty title, and a non-empty publisher name). Beyond the catalog, a manifest describes a registry through the top-level collections the reference defines: `vocabularies`, `profiles`, `requirements`, `evidence_types`, `authorities`, `public_services`, `data_services`, `forms`, `datasets` (each with its `entities`, `fields`, `relationships`, `policies`, and `evidence_offerings`), `codelists`, `federation`, `evaluation_profiles`, and `ecosystem_bindings`. This document does not restate their field schemas; the [Registry Manifest reference](../../products/registry-manifest/reference/) is authoritative.
+REQ-DM-MANIFEST-003: A metadata manifest MUST declare a `catalog` carrying at least an identifier, a base URL, a title, and a publisher, each validated (an identifier matching the manifest identifier pattern, an HTTP or HTTPS base URL, a non-empty title, and a non-empty publisher name). Beyond the catalog, a manifest describes a registry through the top-level collections the reference defines: `vocabularies`, `profiles`, `requirements`, `evidence_types`, `authorities`, `public_services`, `data_services`, `forms`, `datasets` (each with its `entities`, `fields`, `relationships`, `policies`, and `evidence_offerings`), `codelists`, `evaluation_profiles`, and `ecosystem_bindings`. This document does not restate their field schemas; the [Registry Manifest reference](../../products/registry-manifest/reference/) is authoritative.
 
 REQ-DM-MANIFEST-004: Within a manifest, every cross-reference between objects MUST resolve to a defined object of the expected kind: an evidence type to a requirement it proves, an evidence offering to an entity and that entity's fields, a public service to its authority and its referenced requirements, forms, and data services, a form to its service and channel, a field to a codelist, and a relationship to an entity in the same dataset. Registry Manifest MUST reject a manifest with a dangling or mistyped reference at load.
 
@@ -125,15 +126,17 @@ REQ-DM-MANIFEST-008: A governed evidence pack MUST bind runtime policy selection
 
 REQ-DM-MANIFEST-009: A governed evidence pack MUST declare `odrl_enforcement.profile: registry-evidence-gateway-pdp/v1`, and its `constraint_terms` MUST contain at least one unique term from the profile vocabulary: `odrl:purpose` and `odrl:spatial`. The wider manifest policy renderer MAY publish broader Open Digital Rights Language (ODRL) metadata, but a governed evidence pack MUST NOT claim PDP enforcement for ODRL terms outside this profile vocabulary. A runtime service MAY support only a subset of the profile vocabulary; Registry Relay currently enforces `odrl:purpose` and denies `odrl:spatial` fail-closed.
 
-## 7. Federation discovery metadata
+## 7. Evidence-offering access discovery metadata
 
-No maintained runtime consumes this section. Registry Manifest still validates the vocabulary, because it is published schema surface that manifests in the field already carry, so the requirement below records what the validator enforces today rather than a capability an adopter can deploy. Whether the vocabulary is removed or renamed is a manifest version decision that has not been taken.
+An evidence offering's `access` block says where an evidence request is answered and how a relying party verifies the answer. It is public discovery: it describes where a service is and what it evaluates, not who may call it.
 
-A manifest MAY advertise the metadata a partner needed to configure static-peer delegated evaluation against that retired product. This metadata is public discovery: it describes where a delegated evaluator is and what it evaluates, not who may call it.
+The `access.kind` vocabulary is open. A manifest may name any access kind, and the runtime that consumes the manifest decides which kinds it can serve. Registry Manifest checks the endpoint shape of exactly one kind, `registry-evidence`, because that kind names a service whose shape this repository defines. For every other kind, `conforms_to` is validated as an ordinary optional URI and the rest of the `access` block is left to the consuming runtime.
 
-REQ-DM-MANIFEST-010: Where an evidence offering declares `access.kind: registry-notary`, the manifest MUST carry a `federation` block with HTTPS issuer, JWKS, and federation-API URLs, a `did:web` node identifier bound to the issuer host, the supported protocol version `registry-notary-federation/v0.1`, and an `access.ruleset` that names a declared evaluation profile. This metadata is public discovery only and MUST NOT be read as an access grant (REQ-ARC-G-009). The service that would have decided at runtime which peers may call it is retired, so a manifest declaring this access kind advertises an endpoint no maintained runtime serves.
+REQ-DM-MANIFEST-010: Where an evidence offering declares `access.kind: registry-evidence`, the offering MUST declare a non-blank `access.conforms_to` naming the response profile the endpoint returns, an HTTPS `access.endpoint_url`, and an HTTPS `access.discovery_url`. Where `access.ruleset` is present and non-blank, it MUST name a declared evaluation profile ruleset. This metadata is public discovery only and MUST NOT be read as an access grant (REQ-ARC-G-009).
 
-Federation discovery metadata is also not a trust bootstrap by itself. A consumer that reads federation metadata from an external manifest validates the issuer, JWKS, federation API, and `did:web` host against local trust policy before treating any key or endpoint as authoritative. The registry stack no longer has a runtime path that consumes this metadata at all.
+Registry Manifest does not pin `conforms_to` to a particular response-profile version. The portable metadata layer stays independent of any one product's contract version, so the value is checked for presence, not membership in a fixed set.
+
+Access discovery metadata is also not a trust bootstrap by itself. A consumer that reads an `access` block from an external manifest validates the endpoint and discovery hosts against local trust policy before treating any key or endpoint as authoritative.
 
 ## 8. Rendered artifacts and standards
 
@@ -162,9 +165,9 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. This check and the general unknown-key rejection REQ-DM-MANIFEST-013 requires both operate over an intermediate JSON value, so a rejection error carries the offending key's dotted field path but not its YAML line or column (REQ-DM-MANIFEST-002).
 - **Standards conformance is not validated.** The renderers emit standards-shaped artifacts but do not validate them against the external standard bodies. A rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard (REQ-DM-MANIFEST-011).
 - **URI checks are shallow.** A field required to be a URI is checked for an HTTP or HTTPS scheme or for the identifier pattern, not for full RFC 3987 IRI validity (REQ-DM-MANIFEST-004, REQ-DM-MANIFEST-005).
-- **Federation metadata is not a trust anchor.** Registry Manifest validates required federation fields and selected URL shapes, but a published manifest does not bind an external consumer to trust a JWKS endpoint, a federation API host, or a peer identity. Host pinning and trust bootstrap belong to the consumer's local policy, and the runtime that once held the peer configuration is retired (REQ-DM-MANIFEST-010).
+- **Access discovery metadata is not a trust anchor.** Registry Manifest validates required access fields and selected URL shapes, but a published manifest does not bind an external consumer to trust an endpoint, a discovery document, or an issuer identity. Host pinning and trust bootstrap belong to the consumer's local policy (REQ-DM-MANIFEST-010).
 - **Library callers own untrusted-input resource limits.** The command-line path may impose its own input limits, but callers that embed Registry Manifest as a library and accept manifests from untrusted parties still need request size, nesting, collection-count, and time limits appropriate to their service boundary. Manifest validation is not a general resource sandbox.
-- **The federation checks are keyed to a retired access kind.** They apply only where the manifest declares the `registry-notary` evidence access path, and they validate shape, not reachability. A generic `conforms_to` value or generic URI metadata alone must not be treated by consumers as proof that an endpoint set is complete and safe to trust, and the product behind that access kind is retired in any case.
+- **The access checks are keyed to one access kind and validate shape, not reachability.** They apply only where the manifest declares `access.kind: registry-evidence`. A `conforms_to` value or a well-formed HTTPS URL alone must not be treated by consumers as proof that an endpoint is live, that it returns the named profile, or that the endpoint set is safe to trust. Manifest validation does not fetch either URL.
 - **Publication provenance depends on a clean destination.** The `package_digest` pins the artifact inventory it sees. It is not proof that every file was created by the current publish invocation if the output directory already contained local files.
 - **Evidence pack metadata remains partly opaque.** Governed evidence packs require key metadata and validate selected object shapes, supported gate names, supported output names, policy digest shape, inline-policy digest binding, and supported ODRL enforcement terms. The implementation still represents several fields as JSON values rather than a fully typed external evidence-pack schema (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009).
 - **Profile fixtures are non-normative.** The example profiles shipped with Registry Manifest are illustrative until reviewed against official artifacts; they are not authoritative profiles for any named external system (see the [profile fixtures guide](../../products/registry-manifest/profile-fixtures/)).
@@ -180,7 +183,7 @@ A metadata manifest, and the Registry Manifest tooling that validates and render
 - keeps identifiers patterned and unique in scope and closed-vocabulary fields within their vocabulary (REQ-DM-MANIFEST-005);
 - proves every evidence type against a requirement and treats grouped evidence as conjunction within a list and alternatives across lists (REQ-DM-MANIFEST-006);
 - validates governed evidence pack metadata, policy id/hash binding, required gates and outputs, and supported ODRL enforcement terms without claiming a fully typed evidence-pack model or runtime enforcement by Registry Manifest (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009);
-- advertises federation metadata as discovery only, with the required HTTPS, `did:web`, protocol-version, and ruleset bindings, and never as an access grant (REQ-DM-MANIFEST-010);
+- advertises evidence-offering access metadata as discovery only, with the required response profile, HTTPS endpoint and discovery URLs, and ruleset binding for `registry-evidence` access, and never as an access grant (REQ-DM-MANIFEST-010);
 - renders its artifacts as a pure, deterministic, standards-shaped set without asserting external-standard conformance (REQ-DM-MANIFEST-011);
 - publishes a self-describing bundle digested for pinning and comparison without a runtime service (REQ-DM-MANIFEST-012);
 - rejects an unmodeled key at parse time, naming its dotted field path, without relaxing other validation, and versions every breaking change (REQ-DM-MANIFEST-013).
@@ -191,7 +194,7 @@ Conformance to this specification does not imply conformance to any external sta
 
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
-- The [Registry Manifest overview](../../products/registry-manifest/) describes the pure render pipeline, the multi-pass validator, the minimal manifest and its required core, grouped evidence, governed evidence ecosystem bindings, and the federation-is-discovery-not-grant rule that Sections 2 through 8 make precise.
+- The [Registry Manifest overview](../../products/registry-manifest/) describes the pure render pipeline, the multi-pass validator, the minimal manifest and its required core, grouped evidence, governed evidence ecosystem bindings, and the discovery-is-not-a-grant rule that Sections 2 through 8 make precise.
 - The [Registry Manifest reference](../../products/registry-manifest/reference/) lists the top-level keys, the catalog core, the runtime-only key list, the render formats, the schema-version markers, the publish bundle layout, the digest fields, and the extension policy that Sections 3 through 11 state normatively.
 - The [validate and render guide](../../products/registry-manifest/validate-and-render/) walks the validation checks, the render and publish commands, and the `index.json` digest fields behind Sections 8 and 9.
 - [RS-PR-RELAY](../rs-pr-relay/) carries the Relay-protocol form of the ownership boundary this document gives a data-model form (REQ-PR-RELAY-011).

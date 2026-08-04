@@ -79,9 +79,10 @@ For setup steps, scope strings, and credential configuration, see
   posture document returned by `GET /admin/v1/posture`.
 - **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
   `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
-  The routes still exist, but runtime binding accepts only `access.kind: registry-notary`, an
-  access kind with nothing maintained behind it, so a new deployment should declare no evidence
-  offering. Relay never
-  executed the verification behind an offering; an offering was always a pointer somewhere else.
+  Runtime binding accepts only `access.kind: registry-evidence`, so an offering points at a
+  Registry Evidence deployment: its `endpoint_url` is where the assertion is requested and its
+  `discovery_url` resolves the issuer keys a relying party needs to verify the response. Relay
+  never answers the evidence request behind an offering; an offering is a pointer somewhere
+  else.
 - **Read-only, no streaming.** Relay does not mutate source registry data. Sources are read as batch
   snapshots or table scans; there is no event-stream backend.
