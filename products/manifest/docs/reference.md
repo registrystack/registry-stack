@@ -145,39 +145,37 @@ Source:
 | `forms[].sections[].fields[].supports_requirement` | Requirement ID supported by the field. |
 | `forms[].sections[].fields[].fulfillment` | Manual input, file upload, registry lookup, evidence exchange, self-declaration, or already-known mode metadata. |
 
-### Federation metadata keys
+### Evidence offering access keys
 
-Registry Manifest federation metadata supports Registry Notary static-peer delegated evaluation.
-It is public discovery metadata, not an access grant.
-
-Fields of `FederationManifest`.
-
-| Key | Required | Description |
-| --- | --- | --- |
-| `node_id` | Yes | Publishing Notary node id. MVP validation requires `did:web`. |
-| `issuer` | Yes | HTTPS issuer URL. Host must bind to the `did:web` node id. |
-| `jwks_uri` | Yes | HTTPS JWKS URL partners use to verify signed federation responses. Host must bind to the issuer host. |
-| `federation_api` | Yes | HTTPS federation API base URL. Host must bind to the issuer host. |
-| `supported_protocol_versions` | Yes | Must include `registry-notary-federation/v0.1`. |
+An evidence offering's `access` block is public discovery metadata, not an access grant. The
+`kind` vocabulary is open: a manifest may name any access kind, and the runtime that consumes
+the manifest decides which kinds it can serve. Registry Manifest checks the endpoint shape of
+one kind, `registry-evidence`, because that kind names a service whose shape this repository
+defines.
 
 Fields of `EvaluationProfileManifest`.
 
 | Key | Required | Description |
 | --- | --- | --- |
 | `id` | Yes | Public profile id. Must be unique. |
-| `ruleset` | Yes | Public ruleset id. Must be unique and referenced by `registry-notary` offerings. |
-| `claim_id` | Yes | Notary claim id evaluated for the profile. |
+| `ruleset` | Yes | Public ruleset id. Must be unique and referenced by `registry-evidence` offerings. |
+| `claim_id` | Yes | Public claim id evaluated for the profile. |
 | `subject_id_type` | Yes | Subject id type the profile accepts. |
-| `max_source_observed_age_seconds` | No | Optional public freshness hint. Runtime enforcement is in Registry Notary config. |
+| `max_source_observed_age_seconds` | No | Optional public freshness hint. Runtime enforcement belongs to the service that answers the offering, not to the manifest. |
 | `evidence_pack` | No | Optional `EvidencePackMetadata` object. Shares its shape with `ecosystem_bindings[].evidence_pack`. See [Ecosystem binding keys](#ecosystem-binding-keys). |
 
-For `EvidenceOfferingAccessManifest` with `kind: registry-notary`:
+For `EvidenceOfferingAccessManifest` with `kind: registry-evidence`:
 
-- `conforms_to` must be `registry-notary-federation/v0.1`.
-- `endpoint_url` must be HTTPS.
-- `discovery_url` must be HTTPS.
-- `ruleset` must reference an existing `evaluation_profiles[].ruleset`.
-- A top-level `federation` block is required.
+- `conforms_to` must be present and non-blank. It names the response profile the endpoint
+  returns, for example `registry.assertion-evidence/v1`. The manifest layer does not pin a
+  particular profile version, so it is not required to be a URI.
+- `endpoint_url` is required and must be HTTPS.
+- `discovery_url` is required and must be HTTPS. It points at the document a relying party
+  reads to verify what the endpoint returns, for example an issuer JWKS.
+- `ruleset`, when set, must reference an existing `evaluation_profiles[].ruleset`.
+
+For every other `kind`, `conforms_to` is validated as an ordinary optional URI and the rest of
+the `access` block is left to the consuming runtime.
 
 ### Ecosystem binding keys
 

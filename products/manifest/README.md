@@ -8,7 +8,7 @@ Registry Manifest is the commons contract and schema kernel for registry
 metadata. It is a portable set of Rust crates for modeling, validating, and
 rendering standards-facing registry metadata without running Registry Relay.
 
-It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, form JSON Schema, OGC API Records item collections, policy documents, evidence-offering metadata, embedded SKOS-shaped codelist metadata, and public federation metadata for Registry Notary delegated evaluation.
+It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, form JSON Schema, OGC API Records item collections, policy documents, evidence-offering metadata, and embedded SKOS-shaped codelist metadata.
 
 ## Monorepo layout
 
@@ -97,7 +97,7 @@ scripts/check-contract-kernel.sh
 ```
 
 Consumer manifests can be passed as arguments. Each file is validated and
-published into `target/contract-kernel/` so Relay, Notary, and adopter demos can
+published into `target/contract-kernel/` so Relay and adopter demos can
 exercise the same schema and renderer contract before a commons release:
 
 ```sh
@@ -132,30 +132,31 @@ claim boundary and known BRegDCAT-AP warning behavior.
 - `form-json-schema` with `--form <id>`
 - `ogc-records`
 
-## Registry Notary Federation Metadata
+## Evidence Offering Metadata
 
-Registry Manifest can publish public metadata that helps a partner configure the
-Registry Notary delegated-evaluation MVP:
+Registry Manifest can publish public metadata that helps a partner find and
+connect to a service that answers evidence requests:
 
-- top-level `federation` metadata with `node_id`, `issuer`, `jwks_uri`,
-  `federation_api`, and `supported_protocol_versions`;
 - top-level `evaluation_profiles` that bind public profile IDs and `ruleset`
-  IDs to Notary claim IDs and subject ID types, optionally with `evidence_pack`
+  IDs to public claim IDs and subject ID types, optionally with `evidence_pack`
   policy identity metadata;
 - top-level `ecosystem_bindings` that publish governed evidence binding IDs,
   versions, profiles, and ODRL enforcement metadata for runtime PDP selection;
-- `registry-notary` evidence offerings whose `access.ruleset` references one
-  of those evaluation profile rulesets.
+- evidence offerings whose `access.ruleset` references one of those evaluation
+  profile rulesets.
+
+The `access.kind` vocabulary is open. Registry Manifest checks endpoint shape
+for one kind, `registry-evidence`, because that kind names a service whose shape
+this repository defines. Any other kind is left to the runtime that consumes it.
 
 This metadata is discovery and documentation only. It does not grant runtime
-access; the serving Notary still enforces its local `federation.peers` policy,
-request signature checks, purpose allowlist, replay protection, and audit
-behavior.
+access; the service that answers the offering still enforces its own
+authentication, authorization, purpose handling, and audit behavior.
 
 ## Boundary
 
 Registry Manifest must stay portable. `registry-manifest-core` must not depend on
-Registry Relay, Registry Notary, Axum, DataFusion, Postgres, auth, audit,
+Registry Relay, Axum, DataFusion, Postgres, auth, audit,
 observability, runtime row access, secret handling, `utoipa`, or `clap`.
 
 Registry Relay may publish these artifacts over HTTP and scope them for callers, but those runtime concerns stay outside this repository.

@@ -295,5 +295,5 @@ Run `validate` first to confirm the manifest is clean before running `publish`.
 ### Validation rejects a key like `source`, `table`, or `scope`
 
 Portable manifests cannot include runtime binding keys. Move data-source locations, database
-tables, caller scopes, credentials, peer allowlists, signing keys, and replay-store settings to
-Registry Relay or Registry Notary runtime configuration.
+tables, caller scopes, credentials, caller allowlists, signing keys, and replay-store settings to
+runtime configuration.
