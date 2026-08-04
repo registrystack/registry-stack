@@ -5468,6 +5468,7 @@ dependencies = [
  "getrandom 0.4.3",
  "inquire",
  "registry-platform-crypto",
+ "rhai",
  "rustix",
  "serde",
  "serde_json",

@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod authoring;
 mod doctor;
 mod fixtures;
 mod jwks;
