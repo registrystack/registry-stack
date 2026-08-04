@@ -1,6 +1,6 @@
 ---
 title: Issue an adult-status assertion from DHIS2
-description: Configure Evidence to read one synthetic DHIS2 Tracker record and return a signed adult-status answer without releasing the source record.
+description: Configure Evidence to read one synthetic record from the public DHIS2 demo and return a signed adult-status answer without releasing the source record.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,42 +15,41 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Connect Evidence to a DHIS2 Tracker program and request one adult-status assertion over the real
-HTTP boundary. DHIS2 returns the tracked entity and date of birth to Evidence. The caller receives
-only the governed boolean answer.
+Connect Evidence to the public DHIS2 Tracker demo and request one adult-status assertion over the
+real HTTP boundary. DHIS2 returns a synthetic tracked entity and date of birth to Evidence. The
+caller receives only the governed boolean answer.
 
 <QuickstartMeta
-  outcome="A signed adult-status assertion produced from a synthetic record in your DHIS2 test environment."
+  outcome="A signed adult-status assertion produced from a synthetic record in the public DHIS2 demo."
   time="About 60 minutes"
   level="Institution integration with synthetic data"
   prerequisites={[
     'The Evidence toolset and the first Evidence tutorial',
-    'A non-production DHIS2 instance with one synthetic Tracker record',
-    'A DHIS2 service account with read access to that record',
     'An Evidence-compatible access token for the tutorial caller',
     'curl, OpenSSL, and Python 3',
   ]}
 />
 
-Use synthetic data throughout this tutorial. If you do not have a development instance, choose a
-test environment from the [official DHIS2 demo catalog](https://dhis2.org/demo/) and obtain its
-current access details outside this project. Public demo data and credentials can change.
+This tutorial uses synthetic data from the public DHIS2 demo. Do not replace the demonstrated
+record with a real person's record. The demo maintainers can reset its data and credentials.
 
-## Identify the DHIS2 fields
+## Set the demo parameters
 
-Choose one synthetic tracked entity whose date of birth is known. Record these non-secret values
-from the DHIS2 program metadata:
+Define the DHIS2 endpoint and the identifiers used throughout the tutorial:
 
-- The HTTPS base URL of the DHIS2 instance
-- The program identifier
-- The organisation unit identifier
-- The tracked entity identifier
-- The tracked entity attribute identifier that stores the date of birth
+```sh
+export DHIS2_BASE_URL='https://play.im.dhis2.org/stable-2-43-1'
+export DHIS2_PROGRAM_ID='uy2gU8kT1jF'
+export DHIS2_ORG_UNIT_ID='DiszpKrYNg8'
+export DHIS2_TRACKED_ENTITY_ID='mXAzn3hMR5a'
+export DHIS2_DATE_OF_BIRTH_ATTRIBUTE_ID='iESIqZ0R0R0'
+```
 
-The tutorial uses placeholders for those five values. Do not put the DHIS2 username or password in
-your shell history, project configuration, or source control.
+These values select the `MNCH / PNC (Adult Woman)` program, the `Ngelehun CHC` organisation unit,
+one synthetic tracked entity, and its `Date of birth` attribute. The synthetic date is
+`2004-01-01`, so the result is `true` under the 18-year threshold used later.
 
-## Read the bounded source response
+## Call DHIS2 directly
 
 Create an owner-only curl configuration outside the Registry Stack checkout:
 
@@ -61,11 +60,14 @@ touch "$HOME/.config/registry-evidence/dhis2.curl"
 chmod 600 "$HOME/.config/registry-evidence/dhis2.curl"
 ```
 
-Open `dhis2.curl` in your editor and add the service credential:
+Open `dhis2.curl` in your editor and add the public demo credential:
 
 ```text
-user = "<dhis2-service-username>:<dhis2-service-password>"
+user = "admin:district"
 ```
+
+The username and password belong only to this public demo. Store credentials for any other DHIS2
+instance through your organisation's secret-management process.
 
 Request the same bounded Tracker shape that Evidence will use:
 
@@ -73,10 +75,10 @@ Request the same bounded Tracker shape that Evidence will use:
 curl --silent --show-error --fail \
   --config "$HOME/.config/registry-evidence/dhis2.curl" \
   --get \
-  --url 'https://<dhis2-host>/api/tracker/trackedEntities' \
-  --data-urlencode 'program=<program-id>' \
-  --data-urlencode 'orgUnits=<organisation-unit-id>' \
-  --data-urlencode 'trackedEntities=<tracked-entity-id>' \
+  --url "$DHIS2_BASE_URL/api/tracker/trackedEntities" \
+  --data-urlencode "program=$DHIS2_PROGRAM_ID" \
+  --data-urlencode "orgUnits=$DHIS2_ORG_UNIT_ID" \
+  --data-urlencode "trackedEntities=$DHIS2_TRACKED_ENTITY_ID" \
   --data-urlencode 'fields=trackedEntity,attributes[attribute,value]' \
   --data-urlencode 'pageSize=2' \
   --data-urlencode 'page=1' \
@@ -86,7 +88,7 @@ python3 -m json.tool dhis2-response.json
 ```
 
 Confirm that the response has `pager.total: 1`, one member under `trackedEntities`, and exactly one
-attribute with your date-of-birth attribute identifier. A zero result cannot establish adult
+attribute with identifier `iESIqZ0R0R0` and value `2004-01-01`. A zero result cannot establish adult
 status. Two results are ambiguous and must not be reduced to the first record.
 
 This direct request exposes the source boundary. DHIS2 returns the tracked entity reference and
@@ -95,21 +97,31 @@ the configured date, and release neither source value.
 
 ## Create the project
 
-Create one project for this question, with no example requirement or fixture data:
+Download the Tracker OpenAPI document from the same DHIS2 instance, then let `evidencectl` retain
+the description and generate disposable local key material:
 
 ```sh
-mkdir -p dhis2-evidence/bundle/adapters
-mkdir -p dhis2-evidence/bundle/derivations
-mkdir -p dhis2-evidence/bundle/schemas
-mkdir -p dhis2-evidence/audit
-mkdir -p dhis2-evidence/secrets
-chmod 700 dhis2-evidence/audit dhis2-evidence/secrets
+curl --silent --show-error --fail \
+  --config "$HOME/.config/registry-evidence/dhis2.curl" \
+  --header 'Accept: application/x-yaml' \
+  --url "$DHIS2_BASE_URL/api/tracker/openapi.yaml" \
+  --output dhis2-tracker.openapi.yaml
+
+evidencectl new dhis2-evidence \
+  --openapi dhis2-tracker.openapi.yaml \
+  --profile local \
+  --generate-keys
+
 cd dhis2-evidence
+mkdir -p bundle/adapters bundle/derivations bundle/schemas audit
+chmod 700 audit
 ```
 
-The project will contain one source, one authority profile, and one adult-status requirement.
-Local assurance keeps these files editable while you learn. Production and evidence-grade
-profiles require reviewed fixtures and immutable inputs.
+`evidencectl new` stores the source description as `source.openapi.yaml` and creates the signing,
+audit, and subject-binding keys. It does not infer an Evidence question or source policy from the
+DHIS2 API. You will define one source, one authority profile, and one adult-status requirement in
+the next steps. Local assurance keeps these files editable while you learn. Production and
+evidence-grade profiles require reviewed fixtures and immutable inputs.
 
 ## Define the service and caller trust
 
@@ -151,7 +163,7 @@ rateLimits:
 signing:
   format: flattened-jws-json
   algorithm: EdDSA
-  activeKeyId: tutorial-signing-key-1
+  activeKeyId: local-signing-key-1
   activeKeyRef: secret:file/signing-ed25519-private-jwk
   retiredPublicJwkFiles: []
   jwksPath: /.well-known/evidence/jwks.json
@@ -188,7 +200,7 @@ Continue editing `bundle/evidence.yaml`. Add the source after `selectorProfiles`
 sources:
   population-tracker:
     transport: http-json
-    baseUrl: https://<dhis2-host>
+    baseUrl: https://play.im.dhis2.org/stable-2-43-1
     posture: record-transformed
     authentication:
       kind: basic
@@ -207,13 +219,13 @@ sources:
               fields: [record_reference]
       prepareScript: adapters/prepare.rhai
       adapterParameters:
-        program: <program-id>
-        organisationUnit: <organisation-unit-id>
+        program: uy2gU8kT1jF
+        organisationUnit: DiszpKrYNg8
         providerFields: trackedEntity,attributes[attribute,value]
         pageSize: "2"
         page: "1"
         totalPages: "true"
-        dateOfBirthAttribute: <date-of-birth-attribute-id>
+        dateOfBirthAttribute: iESIqZ0R0R0
       adapterParametersSchema: schemas/adapter-parameters.schema.yaml
       preparationLimits:
         query: required
@@ -239,9 +251,9 @@ sources:
     factSchema: schemas/facts.schema.yaml
 ```
 
-Replace the four source placeholders with the values from your direct DHIS2 request. Everything
-else stays fixed. Evidence can then ask for one page of at most two matches and only the attribute
-identifier/value pairs required to find the configured date of birth.
+The fixed values match the direct DHIS2 request. Evidence can ask for one page of at most two
+matches and only the attribute identifier/value pairs required to find the configured date of
+birth.
 
 For a DHIS2 certificate issued by a private certificate authority, add a `tlsTrustProfile` to this
 source and bind its certificate file in `runtime.yaml`. The configuration shown here uses public
@@ -483,19 +495,19 @@ The caller cannot substitute any of those choices.
 
 ## Bind local files and secrets
 
-Generate independent signing, audit, and subject-binding material:
+`evidencectl new --generate-keys` already created independent signing, audit, and subject-binding
+material. Add the public DHIS2 demo credential as two owner-only secret files:
 
 ```sh
-evidencectl keygen signing --out-dir secrets --kid tutorial-signing-key-1
-evidencectl keygen secret --out secrets/audit-hmac-key
-evidencectl keygen secret --out secrets/subject-binding-hmac-key
-touch secrets/dhis2-username secrets/dhis2-password
+umask 077
+printf '%s' 'admin' >secrets/dhis2-username
+printf '%s' 'district' >secrets/dhis2-password
 chmod 600 secrets/dhis2-username secrets/dhis2-password
 ```
 
-Write only the DHIS2 service username into `secrets/dhis2-username` and only its password into
-`secrets/dhis2-password`. The files must contain no surrounding quotes or extra fields. Keep the
-whole `secrets/` directory out of source control.
+The files contain no newline, surrounding quotes, or extra fields. Keep the whole `secrets/`
+directory out of source control. Replace the public demo account with a least-privilege service
+account when adapting the project to another DHIS2 instance.
 
 In `runtime.yaml`, replace the example paths with absolute paths for this working directory:
 
@@ -583,7 +595,7 @@ cat >request.json <<EOF
       "role": "subject",
       "selector": {
         "profile": "tracked-entity-reference-v1",
-        "values": {"record_reference": "<tracked-entity-id>"}
+        "values": {"record_reference": "mXAzn3hMR5a"}
       }
     }
   ]
