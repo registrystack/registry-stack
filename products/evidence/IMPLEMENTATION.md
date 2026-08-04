@@ -619,9 +619,36 @@ inconclusive without protected data.
 - Self-review the complete diff against the security acceptance matrix and the
   future-profile stop boundary.
 
-Exit gate: every Definition of Done row is satisfied with reproducible test or
-review evidence. Version 1 implementation stops here. Future profiles require
-new concept approval and are not continuation tasks for this schedule.
+Exit gate: the frozen runtime contract and its release evidence are complete.
+The remaining adopter build phase may not change request, assertion,
+authorization, source, signing, audit, or verification semantics.
+
+### Phase 7: production build and optional Mint handoff
+
+- Extend local authoring with an empty `fixtures/` directory and optional,
+  exact question governance metadata without weakening local development.
+- Compile one explicit production target into a create-only candidate. Reject
+  symlinks, outside-project references, missing fixtures, incomplete
+  governance or authority, invented URIs, unresolved review markers,
+  unauthenticated or plain-HTTP sources, unknown fields, and existing outputs.
+- Delegate candidate validation to the real `evidence` binary with private
+  temporary validation material. Run `evidence check` and every referenced
+  fixture before atomic publication; retain no secret, request, audit, source,
+  or local-development residue.
+- Add the target-host ceremony for independently provisioned secrets, real
+  startup, retained signed-response verification under independent production
+  policy, and audit-chain verification.
+- Add the optional read-only Mint compatibility check. It compares only
+  mechanical protocol bindings and pin tests for every mismatch without
+  printing protected values.
+- Document, but do not generate, the Compose adapter and the released-bare-
+  binary tutorial journey. State Mint's single-process, memory-only replay
+  cache limit.
+
+Exit gate: every Definition of Done row is satisfied with focused tests,
+contract and source-neutrality checks, documentation checks, and grouped
+workspace verification on one revision. Future profiles require new concept
+approval and are not continuation tasks for this schedule.
 
 ## Definition of Done
 
@@ -650,6 +677,10 @@ follow-up issue.
 | Verification evidence | Focused invariant tests, all package tests, contract drift checks, dependency policy, formatting, package and workspace check, Clippy with warnings denied, and workspace tests pass. Security-sensitive behavior has a named threat, enforcement point, and negative test. |
 | Local compatibility smoke | After deterministic mocks pass, the read-only DHIS2 and OpenCRVS smoke tests are attempted when local credentials and approved demo selectors are available. Unavailability may be recorded as inconclusive; authenticated schema drift or excess disclosure is investigated and cannot be ignored. No credential or live-data artifact enters the repository or test output. |
 | Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, and complete DHIS2/OpenCRVS-shaped projects without editing Rust. An operator can independently bind the immutable governed bundle to listener, secret, audit, and private-CA paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, signing rollover, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
+| Production build | An editable project remains local until its author supplies exact governance metadata, stable concept identifiers, and one synthetic fixture per question. `evidencectl build` consumes one explicit closed production target, follows no symlink or outside-project reference, creates no secret or runtime residue, delegates bundle validation and every fixture to the real `evidence` binary, atomically publishes only a complete candidate, and reproduces identical bundle bytes and revision from identical inputs. It creates no keys, callers, approvals, deployments, or network side effects. |
+| Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor`, `evidencectl fixtures run`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit events pass `evidence verify-audit`. |
+| Optional Mint pairing | External HTTPS OIDC builds without Mint. When Mint is selected, `mint check`, the paired read-only doctor check, registered-client token acquisition, and Evidence acceptance pass. Issuer, JWKS URI, audience, algorithm, token type, and all configured claim-name mismatches fail generically without keys, tokens, credentials, selectors, or source values in output. Mint remains a single process with a memory-only replay cache. |
+| Compose and bare-binary journey | The maintained Compose guidance mounts the candidate bundle unchanged and read-only, uses a distinct container runtime revision, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. It documents service UID and secret modes, public-HTTPS Mint routing, and image provenance without generating Compose output. The production and optional-Mint tutorials execute from released bare binaries and include a real Curl boundary. |
 | Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, public or federated catalogs, runtime bundle mutation, script-selected transport or multi-call source planning, multi-source fulfillment, a general policy engine, application database, message broker, or worker process. |
 
 ## Required Version 1 acceptance tests

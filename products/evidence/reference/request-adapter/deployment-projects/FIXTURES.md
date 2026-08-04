@@ -21,6 +21,14 @@ fail-closed audit path. Production and evidence-grade bundles retain this
 document's complete fixture-coverage requirement and fail to load when a
 reference is absent or its captured suite is incomplete.
 
+For production compilation, each editable question names one regular,
+project-relative `fixtures/<name>.yaml` file. The build copies that file into
+the candidate bundle and delegates its execution to `evidence evaluate`; it
+does not reinterpret fixture semantics or manufacture cases. Missing,
+symlinked, outside-project, duplicate, or incomplete fixture references stop
+the build before publication. The build's private validation secrets and
+runtime are not fixture inputs and never appear in the candidate.
+
 ## File shape
 
 ```yaml

@@ -12,6 +12,12 @@ source does not carry a redundant `adapterAbiVersion` field unless the product
 later demonstrates a need to run multiple adapter ABIs under one bundle
 version.
 
+`evidencectl build` is an authoring-to-bundle compiler, not another adapter
+runtime. It carries reviewed scripts and their referenced schemas into one
+closed candidate, then asks the real `evidence` binary to compile and evaluate
+them. Production build metadata cannot add an ABI entry point, helper,
+transport capability, source call, or script-selected behavior.
+
 ## Complete Version 1 surface
 
 This inventory is the complete adopter-facing Version 1 script surface. It

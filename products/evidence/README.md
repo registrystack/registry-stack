@@ -76,20 +76,19 @@ neutral.
 
 `evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
 beside the runtime, like `registryctl` for the rest of the stack. It sits
-outside the frozen Version 1 runtime contract: it generates signing, holder,
-and HMAC key material, assembles public JWKS documents, starts incomplete
-OpenAPI-assisted authoring workspaces, and drives fixture runs for complete
-deployment projects. It shells out to the `evidence` binary for every Evidence
-semantic decision and never re-implements evaluation, signing, or verification.
-Its source remains covered by the same source-product and domain neutrality
-checks as the runtime.
+outside the frozen Version 1 runtime contract: it generates key material,
+starts incomplete OpenAPI-assisted authoring workspaces, compiles a reviewed
+production candidate, and drives fixture runs for complete projects. It shells
+out to the `evidence` binary for every Evidence semantic decision and never
+re-implements evaluation, signing, or verification. Its source remains covered
+by the same source-product and domain-neutrality checks as the runtime.
 
 `evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
-OpenAPI document exactly as `source.openapi.yaml` and creates empty `questions/`
-and `derivations/` directories. `--generate-keys` adds owner-only disposable
-local key material that is not bound to a runtime. The command does not select
-an API operation, invent a question, or generate source policy, fixtures,
-authentication, a runtime file, Mint configuration, or a deployable bundle.
+OpenAPI document exactly as `source.openapi.yaml` and creates empty
+`questions/`, `derivations/`, and `fixtures/` directories. `--generate-keys`
+adds owner-only disposable local key material that is not bound to a runtime.
+The command does not select an API operation, invent a question, fixture,
+policy, production target, Mint configuration, or deployable bundle.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema
@@ -106,6 +105,58 @@ under the same rule the runtime applies to the source URLs it will itself call:
 `https` anywhere, plain `http` only to a numeric loopback host, and never a
 credential in the URL. A description behind authentication is fetched with your
 own client and passed as a file.
+
+### Production build and handoff
+
+An authored question may include optional `governance` metadata. Local `dev`
+continues to work without it, using its explicit local defaults. When present,
+`dev` uses the declared requirement semantics while retaining local assurance
+and local authentication. A production build requires every question to carry
+that metadata, stable concept identifiers, and one project-relative fixture.
+It never invents requirement, framework, Evidence Type, concept, or
+disclosure-family URIs.
+
+The explicit production target contains only `governance.yaml` and
+`runtime.yaml`. The former contributes the bundle-owned service,
+authentication, audit, signing, rate-limit, response-format, and authority
+values; it may not override compiler-owned selectors, sources, or requirements.
+The latter is copied unchanged and binds the completed candidate to one target
+host. Secret values and absolute secret paths do not belong in either authored
+governance input.
+
+`evidencectl build --project <editable-project> --target <production-target>
+--output <new-candidate-directory>` is create-only. It reads regular files
+without following symlinks, compiles one closed bundle, uses private temporary
+validation material, runs `evidence check` and every referenced fixture through
+the real `evidence` binary, and publishes atomically only on success. It makes
+no network request, opens no listener, writes no production audit event, and
+never copies local `.evidence` state, credentials, tokens, responses, or
+private keys into the candidate.
+
+The candidate contains `runtime.yaml` and `bundle/`; the bundle may contain
+adapters, derivations, schemas, codelists, fixtures, and public keys where
+referenced. The operator independently provisions the signing, audit,
+subject-binding, and source secrets, then runs one grouped handoff:
+
+```sh
+evidencectl doctor --project <candidate>
+evidencectl fixtures run --project <candidate>
+evidence --runtime <candidate>/runtime.yaml serve
+```
+
+An existing OIDC issuer and Registry Mint are equal issuer choices from
+Evidence's perspective. Mint remains separately authored and checked with
+`mint check`. When selected, `evidencectl doctor --mint-config <mint.yaml>`
+performs only a read-only mechanical comparison of issuer, JWKS URI, audience,
+algorithm, token type, and configured claim names. It does not register a
+client, decide authority, copy Mint files, or mint a token.
+
+The initial deployment proof uses released bare binaries. Docker Compose is a
+documented adapter, not build output: it mounts the reviewed bundle unchanged,
+uses a separate container runtime file and secret mounts, preserves audit
+storage, and keeps Evidence private behind operator TLS. Container, Helm,
+Kubernetes, Terraform, cloud packaging, approval, promotion, and deployment
+commands remain outside this build command.
 
 ## Installing the toolset
 

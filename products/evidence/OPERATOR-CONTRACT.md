@@ -90,6 +90,62 @@ coexisting revisions, differing requester entitlements, and relationship
 combinations. Rate controls and after-the-fact audit analysis do not make an
 unsafe bundle safe.
 
+### Production candidate handoff
+
+`evidencectl build` compiles an editable project and one explicit production
+target into a new candidate directory. It is a create-only authoring command,
+not an approval, promotion, deployment, key-generation, caller-registration,
+or service-start command. It runs the real `evidence` binary against private
+temporary validation material before atomically publishing a candidate with a
+copied `runtime.yaml` and one closed `bundle/`. The candidate contains no
+production private key, credential, token, local request, audit entry, or
+source response.
+
+The operator reviews and transfers the exact candidate, records its bundle
+revision, and independently provisions the signing key, audit HMAC key,
+subject-binding HMAC key, and source credentials below the runtime's secret
+root. Secret ownership and mode requirements remain unchanged: each referenced
+secret is a regular owner-only file accepted by the eventual service identity.
+The bundle and runtime must be non-writable to that identity. The copied
+runtime is target-specific; its revision and bound private-CA bytes are not the
+bundle revision, and signed assertions continue to carry only the bundle
+revision as `configurationRevision`.
+
+Run the following grouped handoff after provisioning and whenever candidate
+bytes, runtime bindings, trust files, or secrets change:
+
+```sh
+evidencectl doctor --project <candidate>
+evidencectl fixtures run --project <candidate>
+evidence --runtime <candidate>/runtime.yaml serve
+```
+
+`doctor` is advisory for local artifact posture; the real runtime remains the
+authority for startup. Route traffic only after `/ready`. For one approved
+synthetic deployment subject, retain the signed response, verify it against an
+independently prepared `production` policy and trusted keys, and run
+`evidence verify-audit` over the resulting audit chain.
+
+An existing HTTPS OIDC issuer and Registry Mint are equal authentication
+choices for Evidence. Mint is a separate process and separately authored
+configuration. When used, the operator runs `mint check --config <mint.yaml>`
+and the read-only paired check
+`evidencectl doctor --project <candidate> --mint-config <mint.yaml>`. The
+paired check compares only issuer, JWKS URI, audiences, signing algorithm,
+token type, and configured principal, requester-tag, evidence-audience,
+grant-id, grant-authority, and optional actor claim names. It does not decide
+authority, register a client, copy Mint material, or issue a token.
+
+Docker Compose remains a documented deployment adapter, never build output.
+It mounts the approved candidate bundle unchanged and read-only, supplies a
+separate container runtime file and owner-readable secret mounts, gives only
+the audit path persistent writable storage, binds Evidence privately, and
+keeps public TLS and routing operator-controlled. A Compose deployment with
+Mint retains its public HTTPS issuer and JWKS URI: internal plain-HTTP service
+names do not replace either value. Container images and their provenance are
+operator responsibilities; Version 1 proves this journey with released bare
+binaries, not generated containers or orchestrator manifests.
+
 ## Discovery of available evidence
 
 Evidence Version 1 answers "what may this caller request?" with authenticated

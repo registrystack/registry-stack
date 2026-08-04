@@ -123,4 +123,4 @@ bytes through staging and production. Bind environment-specific runtime paths,
 credentials, private CA, and signing key in each environment. Staging must
 verify the configured `at+jwt` header and claims, OAuth bootstrap, readiness,
 one approved synthetic source lookup, audit durability, and JWS verification.
-See the [authoring and promotion workflow](../CONFIG.md#authoring-and-promotion-workflow).
+See the [authoring and production-build workflow](../CONFIG.md#authoring-and-production-build-workflow).

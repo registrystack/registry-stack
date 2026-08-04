@@ -1373,6 +1373,18 @@ mandatory default and includes:
   a governed explicitly selected unsigned envelope, and a public JWKS endpoint;
 - keyed JSONL audit on explicitly durable storage, fail-closed before source access and before release;
 - offline bundle checking and fixture evaluation;
+- adopter tooling that starts an incomplete local authoring project, compiles
+  one explicit production target into a create-only candidate, and delegates
+  bundle checking and fixture evaluation to the real `evidence` binary;
+- per-question governance metadata and one sanitized fixture required for a
+  production build, without a new runtime configuration schema or evaluator;
+- a target-host handoff in which operators independently provision secrets,
+  run `doctor`, fixture evaluation, startup, retained-response verification,
+  and audit-chain verification;
+- Registry Mint as an optional separately authored issuer, with only a
+  read-only mechanical Evidence/Mint compatibility check;
+- a documented Docker Compose adapter that mounts the candidate bundle
+  unchanged without generating Compose, container, or cloud deployment output;
 - deterministic source-contract mocks for flat REST, DHIS2 Tracker-style REST,
   and OpenCRVS Version 2 Event Search-style JSON;
 - generated JSON Schema and OpenAPI artifacts;
@@ -1392,6 +1404,13 @@ It does not include:
 - OOTS runtime types;
 - multi-source fulfillment;
 - source-planning scripts;
+- conversion of `.evidence/dev` local state into production inputs;
+- generated production secrets, callers, approval, promotion, deployment, or
+  remote mutation commands;
+- target overlays, inheritance, templating, shared defaults, or secret
+  expansion;
+- generated Compose, Kubernetes, Helm, Terraform, cloud-specific, or other
+  orchestrator manifests;
 - application-level or ambient-environment HTTP proxy routing;
 - federation;
 - runtime configuration mutation;
@@ -1472,13 +1491,28 @@ The complete Version 1 sequence is:
 - Attempt optional read-only public-demo smoke tests after deterministic mocks.
 - Freeze Version 1 schemas only when the complete acceptance set passes.
 
-### Phase 6: release readiness and stop
+### Phase 6: runtime release readiness
 
 - Complete operator and verifier guidance and all applicable package,
   contract, dependency, and workspace gates.
-- Satisfy every Definition of Done row in `IMPLEMENTATION.md` on one revision.
-- Stop implementation before every future profile in section 15. Future work
-  requires a new approved concept and plan.
+- Satisfy the frozen runtime Definition of Done rows on one revision.
+
+### Phase 7: production build and optional Mint handoff
+
+- Keep the editable local project and `.evidence/dev` state outside production
+  inputs while compiling one explicit target into a closed candidate.
+- Require exact governance metadata, stable concept identifiers, and complete
+  synthetic fixtures without adding a domain branch or a second evaluator.
+- Use the real Evidence binary for candidate validation and fixture execution,
+  then perform target-host startup, verification, and audit proof with
+  independently provisioned secrets.
+- Support either external HTTPS OIDC or separately authored Mint. The optional
+  paired check remains mechanical and read-only.
+- Document the bare-binary journey and Compose adapter without generating
+  deployment artifacts.
+
+Stop implementation before every future profile in section 15. Future work
+requires a new approved concept and plan.
 
 ## 19. Success criteria
 

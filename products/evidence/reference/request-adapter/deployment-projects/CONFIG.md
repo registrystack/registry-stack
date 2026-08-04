@@ -587,27 +587,96 @@ credentials to another authority.
   changed bundle, runtime file, script, schema, codelist, CA file, or secret
   binding.
 
-## Authoring and promotion workflow
+## Authoring and production-build workflow
 
-Treat a deployment project like reviewed source code. Start with a copy of the
-closest complete project, keep governed semantics under `bundle/`, and keep
-environment paths in a separate `runtime.yaml`. While authoring, use only
-synthetic responses and selectors. Add the smallest provider-shaped
-`prepare/2`, `extract/2`, and requirement `derive/3` scripts, then add exact
-positive, legitimate-false, boundary, unresolved, malformed-provider,
-transport-failure, and privacy-canary cases.
+Treat an editable project like reviewed source code. `evidencectl new` creates
+empty `selectors/`, `sources/`, `adapters/`, `schemas/`, `questions/`,
+`derivations/`, and `fixtures/` directories. It creates no deployment input.
+While authoring, use only synthetic responses and selectors. Add the smallest
+provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
+then add exact positive, legitimate-false, boundary, unresolved,
+malformed-provider, transport-failure, and privacy-canary cases.
 
-Run `evidence check` and every currently referenced `evidence evaluate` command
-before requesting review. Before changing to `production` or `evidence-grade`,
-add and complete a fixture suite for every requirement. Review the complete bundle as one disclosure surface, not
-scripts independently. Promote the same reviewed bundle bytes through staging
-and production. Each environment may supply its own runtime file, secret
-files, private CA, and signing key, but may not override governed fields. In
-staging, verify OIDC claim shapes, source credentials, private trust, readiness,
-one approved synthetic positive, one legitimate negative or unresolved case,
-safe public failures, audit durability, and JWS verification before production
-exposure. A provider API or governance change produces a newly reviewed bundle
-revision and reruns the fixture matrix.
+The compact local question format may omit `governance`. When it is present,
+local development uses the declared requirement semantics but retains its
+explicit local assurance and authentication. A production build requires that
+block, stable concept identifiers, and exactly one project-relative
+`fixtures/<name>.yaml` regular file for every question. It never derives or
+invents requirement, framework, Evidence Type, concept, or disclosure-family
+URIs.
+
+Create one explicit `deployment-targets/production/` directory containing
+`governance.yaml` and `runtime.yaml`. `governance.yaml` is closed, has
+`version: 1` and `assuranceProfile: production`, and supplies the existing
+bundle-shaped service, issuer, authentication, audit, subject-binding,
+rate-limit, signing, response-format, and authority-profile values. It may not
+contain selectors, sources, or requirements, which the compiler obtains from
+the editable project. It permits logical `secret:file/<name>` references only,
+never secret values or absolute secret paths. `runtime.yaml` is the ordinary
+closed runtime document; the build copies its bytes unchanged and the target
+host remains authoritative for path, owner, permission, secret, and private-CA
+validation.
+
+Run the create-only compiler with explicit target and output paths:
+
+```sh
+evidencectl build \
+  --project <editable-project> \
+  --target <editable-project>/deployment-targets/production \
+  --output <new-candidate-directory>
+```
+
+The compiler follows no authored symlink, accepts no reference outside allowed
+project directories, rejects unreferenced generated artifacts, and removes only
+its own failed private staging. It requires authenticated HTTPS sources,
+complete authority, resolved review markers, complete governance, and complete
+fixtures. It validates the unpublished bundle with private temporary secrets
+through the real `evidence` binary, runs every fixture, and publishes nothing
+on failure. It makes no identity-provider, source-data, or Mint call; opens no
+listener; and writes no production audit event. The editable project and
+`.evidence` local state remain unchanged.
+
+The candidate contains `runtime.yaml` and `bundle/`, including only referenced
+adapters, derivations, schemas, codelists, fixtures, and public keys. Given
+identical authoring files, target governance, runtime bytes, and toolset
+release, bundle bytes and revision are identical. The copied runtime is
+environment-specific and has its own revision; it is not part of the bundle
+revision or signed `configurationRevision`.
+
+After approval, transfer the exact candidate, provision independent owner-only
+secrets under the configured secret root, make bundle and runtime non-writable
+to the service identity, and run the grouped handoff once whenever candidate
+bytes, runtime bindings, trust files, or secrets change:
+
+```sh
+evidencectl doctor --project <candidate>
+evidencectl fixtures run --project <candidate>
+evidence --runtime <candidate>/runtime.yaml serve
+```
+
+Then route only after `/ready`, retain one authorized synthetic-subject
+response, verify it under independently prepared production policy and trusted
+keys, and verify the audit chain. A provider API or governance change produces
+a newly reviewed bundle revision and reruns the fixture matrix.
+
+When no suitable OIDC issuer exists, author Mint separately and run
+`mint check --config <mint.yaml>`. The optional
+`evidencectl doctor --project <candidate> --mint-config <mint.yaml>` check is
+read-only: it compares issuer, derived JWKS URI, audiences, allowed signing
+algorithm, `at+jwt` admission, and configured principal, requester-tag,
+evidence-audience, grant-id, grant-authority, and optional actor claim names.
+It does not infer legal basis, create authority profiles, register callers, or
+copy Mint configuration into the candidate. Mint's replay cache is memory-only
+and clears on restart; Version 1 makes no multi-instance or high-availability
+claim.
+
+Docker Compose is a documented adapter rather than build output. It mounts the
+candidate bundle unchanged and read-only; mounts a distinct container runtime,
+secrets, and persistent audit storage separately; binds Evidence privately; and
+keeps TLS and public routing operator-controlled. The Compose runtime has its
+own revision while assertions continue to carry the unchanged bundle revision.
+When Mint shares that network, retain its public HTTPS issuer and JWKS URI;
+internal plain-HTTP service names do not replace them.
 
 After those checks, publish the static token-acquisition, legal context,
 endpoint-trust, and verifier guidance for each approved consumer class using

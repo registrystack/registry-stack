@@ -52,7 +52,7 @@ provider can satisfy the Version 1 request and cardinality boundary.
     deployment.
 11. Promote the same reviewed bundle through staging and production using
     environment-specific runtime files and secret mounts. Follow the complete
-    [authoring and promotion workflow](deployment-projects/CONFIG.md#authoring-and-promotion-workflow).
+    [authoring and production-build workflow](deployment-projects/CONFIG.md#authoring-and-production-build-workflow).
 
 The complete projects under
 [`deployment-projects/`](deployment-projects/README.md) are maintained
