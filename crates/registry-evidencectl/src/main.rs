@@ -13,8 +13,10 @@ mod doctor;
 mod fixtures;
 mod jwks;
 mod keygen;
+mod request;
 mod scaffold;
 mod suggest;
+mod verify;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -46,6 +48,11 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Run the private local Mint and Evidence pair for the first tutorial.
     Dev(dev::DevArgs),
+    /// Prepare one closed request for the active local tutorial.
+    #[command(subcommand)]
+    Request(request::RequestCommand),
+    /// Verify one retained Evidence response offline.
+    Verify(verify::VerifyArgs),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
 }
@@ -60,6 +67,8 @@ fn main() -> ExitCode {
         Command::Source(command) => suggest::run(command),
         Command::Doctor(args) => doctor::run(args),
         Command::Dev(args) => dev::run(args),
+        Command::Request(command) => request::run(command),
+        Command::Verify(args) => verify::run(args),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {
