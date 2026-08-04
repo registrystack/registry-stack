@@ -106,12 +106,20 @@ own client and passed as a file.
 Releases that include the Evidence toolset publish reproducible bare binaries
 named `<bin>-<tag>-<os>-<arch>` (for example `evidence-v1.2.0-linux-amd64`)
 plus a `SHA256SUMS` file that is cosign-signed at promotion. Older releases do
-not carry these assets. For a release that does, install the pinned installer
-asset directly:
+not carry these assets. For a release that does, download the pinned installer
+asset and run it:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/download/<tag>/evidencectl-<tag>-install.sh | bash
+tag=vX.Y.Z
+curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/evidencectl-${tag}-install.sh"
+bash "./evidencectl-${tag}-install.sh"
 ```
+
+The installer reads the release it belongs to from its own asset filename, so
+it has to reach the shell as a file. Piping it from `curl` leaves it with no
+filename and no pinned release, and it refuses to guess one. To install
+without keeping the file, name the release instead:
+`curl -fsSL <installer-url> | EVIDENCECTL_VERSION=<tag> bash`.
 
 The installer installs the three-binary Evidence toolset, the `evidence`
 runtime, `evidencectl` adopter tooling, and the `mint` token issuer, together
