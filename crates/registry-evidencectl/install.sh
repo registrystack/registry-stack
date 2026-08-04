@@ -33,6 +33,9 @@ usage() {
 Install the Evidence toolset: the evidence runtime, the evidencectl adopter
 tooling, and the mint token issuer.
 
+Quick install:
+  curl -fsSL https://github.com/${repo}/releases/latest/download/evidencectl-install.sh | bash
+
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
 three binaries together or not at all. It does not verify release

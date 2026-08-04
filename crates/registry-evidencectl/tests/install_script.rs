@@ -58,6 +58,7 @@ fn installer_help_describes_the_toolset_and_verification_contract() {
         "evidence runtime",
         "evidencectl adopter",
         "mint token issuer",
+        "curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash",
         "SHA256SUMS",
         "EVIDENCECTL_ASSET_DIR",
         "release/VERIFY.md",
@@ -85,7 +86,7 @@ fn versioned_installer_asset_selects_its_own_release_without_an_override() {
 
 #[cfg(unix)]
 #[test]
-fn released_installer_selects_its_embedded_release_when_read_from_stdin() {
+fn released_installer_supports_the_conventional_curl_pipe() {
     let fixture = InstallerFixture::new();
     let rendered = fixture.rendered_installer();
     let output = fixture.command_from_stdin(&rendered).output().unwrap();

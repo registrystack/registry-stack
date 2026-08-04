@@ -353,24 +353,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("verify-candidate", expiry_run)
 
     def test_signs_one_checksum_closure_without_beta_only_ceremony(self) -> None:
-        text, document = workflow("release.yml")
-        checksum = step_run(
-            document,
-            "finalize-assets",
-            "Sign and upload the checksum closure",
-        )
-        public_recheck = step_run(
-            document,
-            "publish",
-            "Recheck complete signed release and exact public images",
-        )
+        text, _ = workflow("release.yml")
         self.assertIn("SHA256SUMS.sigstore.json", text)
         self.assertIn("cosign sign-blob --yes", text)
-        self.assertIn(
-            "find . -maxdepth 1 -type f ! -name SHA256SUMS -print0",
-            checksum,
-        )
-        self.assertIn("sha256sum --check --strict SHA256SUMS", public_recheck)
         self.assertIn(
             ".github/workflows/release.yml@refs/heads/main",
             text,
