@@ -34,6 +34,11 @@ pub const OFFLINE_EVALUATION_REQUEST_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 const MAX_PUBLISHED_KEYS: usize = 33;
 
+// Two invariants meet at this number: the fixtures mirror the runtime signer's
+// published-key bound, and a fixture must never build a key set the verifier
+// would refuse. Divergence has to be a deliberate decision, not a drift.
+const _: () = assert!(MAX_PUBLISHED_KEYS == crate::verifier::MAX_TRUSTED_KEYS);
+
 #[derive(Debug)]
 pub enum FixtureSigningError {
     Algorithm,
