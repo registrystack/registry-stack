@@ -62,7 +62,7 @@ fn show(args: ShowArgs) -> Result<ExitCode> {
     .map_err(|_| failed())?;
     let output = inspect_core(&evidence, &stopped.runtime_path)?;
     let view: CoreAuditOperation = serde_json::from_slice(&output).map_err(|_| failed())?;
-    let rendered = render(&view, &stopped.question)?;
+    let rendered = render(&view, &stopped.questions)?;
 
     std::io::stdout()
         .lock()
@@ -103,7 +103,14 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn render(view: &CoreAuditOperation, question: &dev::ReadyQuestionState) -> Result<String> {
+fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> Result<String> {
+    let access = view.events.first().ok_or_else(failed)?;
+    let question = questions
+        .iter()
+        .find(|question| {
+            question.requirement_uri == access.requirement && question.purpose == access.purpose
+        })
+        .ok_or_else(failed)?;
     if view.schema != CORE_VIEW_SCHEMA
         || !valid_operation(&view.operation)
         || !valid_alias(&question.alias)
@@ -118,7 +125,6 @@ fn render(view: &CoreAuditOperation, question: &dev::ReadyQuestionState) -> Resu
         return Err(failed());
     }
 
-    let access = &view.events[0];
     validate_common(access, question)?;
     if access.phase != Phase::AccessAttempt
         || access.decision != Decision::Authorized

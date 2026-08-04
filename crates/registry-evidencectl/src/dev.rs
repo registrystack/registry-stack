@@ -1,4 +1,4 @@
-//! Minimal private lifecycle for the first local Evidence tutorial.
+//! Minimal private lifecycle for local Evidence tutorials.
 //!
 //! The final `.evidence/dev` directory is compiled in place because the
 //! runtime contains absolute paths. A resident supervisor owns both service
@@ -31,11 +31,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    authoring::{compile_local_project, CompiledConceptForm, CompiledQuestion},
+    authoring::{compile_local_project, CompiledConceptForm, CompiledProject, CompiledQuestion},
     keygen,
 };
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v1";
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v2";
 const EVIDENCE_ORIGIN: &str = "http://127.0.0.1:8080";
 const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
 const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
@@ -45,7 +45,6 @@ const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
-const LOCAL_SELECTOR_PROFILE: &str = "local-subject-v1";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const MINT_KEY_ID: &str = "local-mint-signing-key-1";
 const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
@@ -142,7 +141,7 @@ struct DevState {
     token_url: String,
     access_token_audience: String,
     caller: Option<CallerState>,
-    question: QuestionState,
+    questions: Vec<QuestionState>,
     failure: Option<FailureKind>,
 }
 
@@ -176,7 +175,6 @@ struct QuestionState {
 /// path is absolute and revalidated against the one ready `.evidence/dev`
 /// session before it is returned.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // Consumed by the immediately following request slice.
 pub(crate) struct ReadyDevState {
     pub(crate) project: PathBuf,
     pub(crate) runtime_path: PathBuf,
@@ -189,11 +187,10 @@ pub(crate) struct ReadyDevState {
     pub(crate) caller_assertion_audience: String,
     pub(crate) caller_evidence_audience: String,
     pub(crate) requester_tag: String,
-    pub(crate) question: ReadyQuestionState,
+    pub(crate) questions: Vec<ReadyQuestionState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // Consumed by the immediately following request slice.
 pub(crate) struct ReadyQuestionState {
     pub(crate) alias: String,
     pub(crate) requirement_uri: String,
@@ -207,10 +204,9 @@ pub(crate) struct ReadyQuestionState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // Consumed by the immediately following audit slice.
 pub(crate) struct StoppedDevState {
     pub(crate) runtime_path: PathBuf,
-    pub(crate) question: ReadyQuestionState,
+    pub(crate) questions: Vec<ReadyQuestionState>,
 }
 
 struct LifecycleLock {
@@ -247,7 +243,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
         }
         None => {
             if !args.detach {
-                bail!("the first tutorial lifecycle requires `evidencectl dev --detach`");
+                bail!("the local development lifecycle requires `evidencectl dev --detach`");
             }
             start_detached(
                 &args.project,
@@ -317,17 +313,7 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
         caller_assertion_audience: caller.assertion_audience,
         caller_evidence_audience: caller.evidence_audience,
         requester_tag: caller.requester_tag,
-        question: ReadyQuestionState {
-            alias: state.question.alias,
-            requirement_uri: state.question.requirement_uri,
-            purpose: state.question.purpose,
-            subject_role: state.question.subject_role,
-            selector_profile: state.question.selector_profile,
-            selector_field: state.question.selector_field,
-            concept_alias: state.question.concept_alias,
-            concept_uri: state.question.concept_uri,
-            concept_form: state.question.concept_form,
-        },
+        questions: state.questions.into_iter().map(ready_question).collect(),
     })
 }
 
@@ -350,12 +336,35 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
     }
     Ok(StoppedDevState {
         runtime_path: state.runtime_path,
-        question: ready_question(state.question),
+        questions: state.questions.into_iter().map(ready_question).collect(),
     })
 }
 
 fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> Result<()> {
-    let question = &state.question;
+    let questions_are_closed = !state.questions.is_empty()
+        && state.questions.len() <= 128
+        && state.questions.iter().all(valid_question_state)
+        && state
+            .questions
+            .iter()
+            .map(|question| question.alias.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == state.questions.len();
+    if state.project != project
+        || state.runtime_path != dev_root.join("runtime.yaml")
+        || state.evidence_origin != EVIDENCE_ORIGIN
+        || state.mint_origin != MINT_ORIGIN
+        || state.token_url != TOKEN_URL
+        || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
+        || !questions_are_closed
+    {
+        bail!("the local development state contains values outside the closed lifecycle profile");
+    }
+    Ok(())
+}
+
+fn valid_question_state(question: &QuestionState) -> bool {
     let identifiers_are_closed = [
         question.alias.as_str(),
         question.purpose.as_str(),
@@ -370,24 +379,15 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
         "{LOCAL_URI_PREFIX}concept:{}:{}",
         question.alias, question.concept_alias
     );
-    if state.project != project
-        || state.runtime_path != dev_root.join("runtime.yaml")
-        || state.evidence_origin != EVIDENCE_ORIGIN
-        || state.mint_origin != MINT_ORIGIN
-        || state.token_url != TOKEN_URL
-        || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
-        || !identifiers_are_closed
-        || question.requirement_uri != requirement_uri
-        || question.selector_profile != LOCAL_SELECTOR_PROFILE
-        || question.concept_uri != concept_uri
-        || !matches!(
+    let selector_profile = format!("local-subject-{}-v1", question.alias);
+    identifiers_are_closed
+        && question.requirement_uri == requirement_uri
+        && question.selector_profile == selector_profile
+        && question.concept_uri == concept_uri
+        && matches!(
             question.concept_form.as_str(),
             "boolean" | "controlled-category"
         )
-    {
-        bail!("the local development state contains values outside the closed lifecycle profile");
-    }
-    Ok(())
 }
 
 fn validate_closed_caller(caller: &CallerState, dev_root: &Path) -> Result<()> {
@@ -529,7 +529,7 @@ fn prepare_and_start(
             evidence_audience: compiled.caller_evidence_audience.clone(),
             requester_tag: compiled.requester_tag.clone(),
         }),
-        question: QuestionState::from(&compiled),
+        questions: compiled.questions.iter().map(QuestionState::from).collect(),
         failure: None,
     };
     write_new_state(&dev_root.join("state.json"), &state)?;
@@ -971,7 +971,7 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
 }
 
 fn mint_documents(
-    compiled: &CompiledQuestion,
+    compiled: &CompiledProject,
     mint_private: &Path,
     caller_public: Value,
 ) -> (Value, Value) {
@@ -1359,19 +1359,22 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
-    fn compiled(runtime: &Path) -> CompiledQuestion {
-        CompiledQuestion {
-            question_alias: "adult-status".to_owned(),
+    fn compiled(runtime: &Path) -> CompiledProject {
+        CompiledProject {
             runtime_path: runtime.to_path_buf(),
-            requirement_uri: "urn:registrystack:evidence:local:requirement:adult-status".to_owned(),
-            purpose: "age-check".to_owned(),
-            subject_role: "person".to_owned(),
-            selector_profile: "local-subject-v1".to_owned(),
-            selector_field: "person_id".to_owned(),
-            concept_alias: "is_adult".to_owned(),
-            concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
-                .to_owned(),
-            concept_form: CompiledConceptForm::Boolean,
+            questions: vec![CompiledQuestion {
+                question_alias: "adult-status".to_owned(),
+                requirement_uri: "urn:registrystack:evidence:local:requirement:adult-status"
+                    .to_owned(),
+                purpose: "age-check".to_owned(),
+                subject_role: "person".to_owned(),
+                selector_profile: "local-subject-adult-status-v1".to_owned(),
+                selector_field: "person_id".to_owned(),
+                concept_alias: "is_adult".to_owned(),
+                concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+                    .to_owned(),
+                concept_form: CompiledConceptForm::Boolean,
+            }],
             local_audience: "registry-evidence-local".to_owned(),
             requester_tag: "local-caller".to_owned(),
             caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
@@ -1466,20 +1469,20 @@ mod tests {
                 evidence_audience: compiled.caller_evidence_audience.clone(),
                 requester_tag: compiled.requester_tag.clone(),
             }),
-            question: QuestionState::from(&compiled),
+            questions: compiled.questions.iter().map(QuestionState::from).collect(),
             failure: None,
         };
         write_new_state(&dev.join("state.json"), &state).expect("ready state");
         let ready = load_ready_state(&project).expect("ready handoff");
         assert_eq!(ready.runtime_path, runtime);
-        assert_eq!(ready.question.alias, "adult-status");
+        assert_eq!(ready.questions[0].alias, "adult-status");
 
         let valid_ready = state.clone();
         state.access_token_audience = "tampered-audience".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered state");
         assert!(load_ready_state(&project).is_err());
         state = valid_ready.clone();
-        state.question.requirement_uri = "urn:tampered".to_owned();
+        state.questions[0].requirement_uri = "urn:tampered".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered canonical value");
         assert!(load_ready_state(&project).is_err());
         state = valid_ready;
@@ -1493,7 +1496,7 @@ mod tests {
         replace_state(&dev.join("state.json"), &state).expect("stopped state");
         let stopped = load_stopped_state(&project).expect("stopped handoff");
         assert_eq!(stopped.runtime_path, runtime);
-        assert_eq!(stopped.question.concept_alias, "is_adult");
+        assert_eq!(stopped.questions[0].concept_alias, "is_adult");
 
         remove_completed_dev_root(&project, &dev).expect("replaceable stopped session");
         assert!(!dev.exists());

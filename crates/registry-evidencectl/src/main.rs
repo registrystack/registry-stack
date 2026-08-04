@@ -47,9 +47,9 @@ enum Command {
     Source(suggest::SourceCommand),
     /// Report every project artifact whose mode or owner the runtime refuses.
     Doctor(doctor::DoctorArgs),
-    /// Run the private local Mint and Evidence pair for the first tutorial.
+    /// Run the private local Mint and Evidence pair for an authored project.
     Dev(dev::DevArgs),
-    /// Prepare one closed request for the active local tutorial.
+    /// Prepare a closed request for the active local project.
     #[command(subcommand)]
     Request(request::RequestCommand),
     /// Verify one retained Evidence response offline.

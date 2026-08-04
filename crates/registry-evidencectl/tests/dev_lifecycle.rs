@@ -131,13 +131,13 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
 
     let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).expect("state"))
         .expect("state JSON");
-    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v1");
+    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v2");
     assert_eq!(state["status"], "ready");
     assert_eq!(state["accessTokenAudience"], "registry-evidence-local");
     assert_eq!(state["caller"]["requesterTag"], "local-caller");
-    assert_eq!(state["question"]["alias"], "adult-status");
+    assert_eq!(state["questions"][0]["alias"], "adult-status");
     assert_eq!(
-        state["question"]["requirementUri"],
+        state["questions"][0]["requirementUri"],
         "urn:registrystack:evidence:local:requirement:adult-status"
     );
     let encoded_state = serde_json::to_string(&state).expect("state encodes");

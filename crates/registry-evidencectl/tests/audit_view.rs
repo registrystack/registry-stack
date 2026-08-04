@@ -258,7 +258,7 @@ impl Fixture {
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v1",
+            "schema": "registry.evidencectl.dev-state/v2",
             "status": "stopped",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -267,17 +267,30 @@ impl Fixture {
             "tokenUrl": "http://127.0.0.1:8081/token",
             "accessTokenAudience": "registry-evidence-local",
             "caller": null,
-            "question": {
-                "alias": "adult-status",
-                "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
-                "purpose": "age-check",
-                "subjectRole": "person",
-                "selectorProfile": "local-subject-v1",
-                "selectorField": "person_id",
-                "conceptAlias": "is_adult",
-                "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                "conceptForm": "boolean"
-            },
+            "questions": [
+                {
+                    "alias": "age-bracket",
+                    "requirementUri": "urn:registrystack:evidence:local:requirement:age-bracket",
+                    "purpose": "service-path-selection",
+                    "subjectRole": "person",
+                    "selectorProfile": "local-subject-age-bracket-v1",
+                    "selectorField": "person_id",
+                    "conceptAlias": "age_bracket",
+                    "conceptUri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                    "conceptForm": "controlled-category"
+                },
+                {
+                    "alias": "adult-status",
+                    "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
+                    "purpose": "age-check",
+                    "subjectRole": "person",
+                    "selectorProfile": "local-subject-adult-status-v1",
+                    "selectorField": "person_id",
+                    "conceptAlias": "is_adult",
+                    "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                    "conceptForm": "boolean"
+                }
+            ],
             "failure": null
         });
         private_file(

@@ -1,10 +1,8 @@
-//! Compile the deliberately narrow local authoring shape used by the first
-//! Evidence tutorial into the runtime's canonical deployment inputs.
+//! Compile the deliberately narrow local tutorial authoring shape into the
+//! runtime's canonical deployment inputs.
 //!
 //! This module is an internal seam for `dev`. It does not expose another CLI
 //! surface and it delegates the final semantic decision to `evidence check`.
-
-#![allow(dead_code)] // Wired by the local runner in the next vertical slice.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,13 +27,12 @@ const LOCAL_MINT_ORIGIN: &str = "http://127.0.0.1:8081";
 const LOCAL_EVIDENCE_PORT: u16 = 8080;
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const SIGNING_KEY_ID: &str = "local-signing-key-1";
-const SOURCE_ID: &str = "local-source";
-const SELECTOR_PROFILE_ID: &str = "local-subject-v1";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_QUESTION_BYTES: u64 = 64 * 1024;
 const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
+const MAX_QUESTIONS: usize = 128;
 const MAX_CATEGORIES: usize = 32;
 const MAX_CATEGORY_BYTES: usize = 64;
 
@@ -50,7 +47,6 @@ pub(crate) enum CompiledConceptForm {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CompiledQuestion {
     pub(crate) question_alias: String,
-    pub(crate) runtime_path: PathBuf,
     pub(crate) requirement_uri: String,
     pub(crate) purpose: String,
     pub(crate) subject_role: String,
@@ -59,14 +55,19 @@ pub(crate) struct CompiledQuestion {
     pub(crate) concept_alias: String,
     pub(crate) concept_uri: String,
     pub(crate) concept_form: CompiledConceptForm,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CompiledProject {
+    pub(crate) runtime_path: PathBuf,
+    pub(crate) questions: Vec<CompiledQuestion>,
     pub(crate) local_audience: String,
     pub(crate) requester_tag: String,
     pub(crate) caller_evidence_audience: String,
 }
 
-/// Compile one retained OpenAPI operation and one authored question into an
-/// unpublished local generation, then ask the real Evidence binary to check
-/// the complete result.
+/// Compile the authored questions into one unpublished local generation, then
+/// ask the real Evidence binary to check the complete result.
 ///
 /// `staging_root` must be an existing, empty, owner-only directory. The caller
 /// owns generation publication and process supervision.
@@ -74,7 +75,7 @@ pub(crate) fn compile_local_project(
     project_root: &Path,
     staging_root: &Path,
     evidence_bin: &Path,
-) -> Result<CompiledQuestion> {
+) -> Result<CompiledProject> {
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
     validate_evidence_binary(evidence_bin)?;
@@ -148,11 +149,20 @@ struct QuestionDisclosure {
 
 struct Inputs {
     openapi: Value,
+    questions: Vec<AuthoredQuestion>,
+}
+
+struct AuthoredQuestion {
     question: Question,
     derivation: String,
 }
 
 struct CompilePlan {
+    questions: Vec<QuestionPlan>,
+    bundle: Value,
+}
+
+struct QuestionPlan {
     question_id: String,
     derivation_artifact: String,
     purpose: String,
@@ -163,7 +173,12 @@ struct CompilePlan {
     concept_uri: String,
     concept_form: CompiledConceptForm,
     codelist: Option<(String, Value)>,
-    bundle: Value,
+    selector_profile: String,
+    source_id: String,
+    selector_profile_value: Value,
+    source_value: Value,
+    grant: Value,
+    requirement: Value,
     response_schema: Value,
     fact_schema: Value,
     adapter_parameters_schema: Value,
@@ -243,21 +258,39 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         .context("parsing retained OpenAPI document as YAML or JSON")?;
     validate_openapi_version(&openapi)?;
 
-    let question_path = one_question_path(project_root)?;
-    let question_bytes = read_regular_file(&question_path, MAX_QUESTION_BYTES, "question")?;
-    let question: Question = serde_norway::from_slice(&question_bytes)
-        .with_context(|| format!("parsing question {}", question_path.display()))?;
-    validate_question(&question)?;
+    let mut questions = Vec::new();
+    let mut question_ids = BTreeSet::new();
+    let mut derivation_paths = BTreeSet::new();
+    for question_path in question_paths(project_root)? {
+        let question_bytes = read_regular_file(&question_path, MAX_QUESTION_BYTES, "question")?;
+        let question: Question = serde_norway::from_slice(&question_bytes)
+            .with_context(|| format!("parsing question {}", question_path.display()))?;
+        validate_question(&question)?;
+        if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
+            bail!("question id must match its questions/<id>.yaml filename");
+        }
+        if !question_ids.insert(question.id.clone()) {
+            bail!("question ids must be unique");
+        }
+        if !derivation_paths.insert(question.answer.derivation.clone()) {
+            bail!("each question must name its own derivation file");
+        }
 
-    let derivation_path = project_relative_derivation(project_root, &question.answer.derivation)?;
-    let derivation_bytes = read_regular_file(
-        &derivation_path,
-        MAX_DERIVATION_BYTES,
-        "authored derivation",
-    )?;
-    let derivation =
-        String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
-    validate_authored_answer(&derivation)?;
+        let derivation_path =
+            project_relative_derivation(project_root, &question.answer.derivation)?;
+        let derivation_bytes = read_regular_file(
+            &derivation_path,
+            MAX_DERIVATION_BYTES,
+            "authored derivation",
+        )?;
+        let derivation =
+            String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
+        validate_authored_answer(&derivation)?;
+        questions.push(AuthoredQuestion {
+            question,
+            derivation,
+        });
+    }
 
     let secrets = project_root.join(SECRETS_DIRECTORY);
     let secrets_metadata = fs::symlink_metadata(&secrets)
@@ -270,11 +303,7 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         bail!("local secret directory must be a plain owner-only directory (mode 0700)");
     }
 
-    Ok(Inputs {
-        openapi,
-        question,
-        derivation,
-    })
+    Ok(Inputs { openapi, questions })
 }
 
 /// Parse the authored program as Rhai and reserve `derive` exclusively for
@@ -337,24 +366,28 @@ fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Resu
     Ok(bytes)
 }
 
-fn one_question_path(project_root: &Path) -> Result<PathBuf> {
+fn question_paths(project_root: &Path) -> Result<Vec<PathBuf>> {
     let directory = project_root.join(QUESTIONS_DIRECTORY);
     let metadata = fs::symlink_metadata(&directory)
         .with_context(|| format!("inspecting question directory {}", directory.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         bail!("questions must be held in a plain directory");
     }
-    let entries = fs::read_dir(&directory)
+    let mut paths = fs::read_dir(&directory)
         .with_context(|| format!("reading question directory {}", directory.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
-    if entries.len() != 1 {
-        bail!("local authoring requires exactly one questions/*.yaml file");
+    paths.sort();
+    if paths.is_empty() || paths.len() > MAX_QUESTIONS {
+        bail!("local authoring requires 1..={MAX_QUESTIONS} questions/*.yaml files");
     }
-    let path = entries[0].path();
-    if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
-        bail!("local authoring requires exactly one questions/*.yaml file");
+    if paths
+        .iter()
+        .any(|path| path.extension().and_then(|value| value.to_str()) != Some("yaml"))
+    {
+        bail!("questions must contain only questions/*.yaml files");
     }
-    Ok(path)
+    Ok(paths)
 }
 
 fn project_relative_derivation(project_root: &Path, value: &str) -> Result<PathBuf> {
@@ -467,7 +500,6 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
 }
 
 fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
-    let question = &inputs.question;
     reject_unsupported_keys(
         inputs
             .openapi
@@ -480,7 +512,21 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         bail!("the local tutorial source must omit top-level OpenAPI security");
     }
     let base_url = exact_loopback_server(&inputs.openapi)?;
-    let operation = unique_operation(&inputs.openapi, &question.source.operation)?;
+    let mut questions = Vec::with_capacity(inputs.questions.len());
+    for authored in inputs.questions {
+        questions.push(compile_question_plan(&inputs.openapi, &base_url, authored)?);
+    }
+    let bundle = render_bundle(&questions);
+    Ok(CompilePlan { questions, bundle })
+}
+
+fn compile_question_plan(
+    openapi: &Value,
+    base_url: &str,
+    authored: AuthoredQuestion,
+) -> Result<QuestionPlan> {
+    let question = &authored.question;
+    let operation = unique_operation(openapi, &question.source.operation)?;
     if operation.operation.get("security").is_some() {
         bail!("the local tutorial operation must omit OpenAPI security");
     }
@@ -560,12 +606,16 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
     let prepare_script =
         "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
     let extract_script = render_extract_script(&question.source.facts);
-    let derivation_script = render_derivation(&inputs.derivation, &concept_uri, concept_form);
-    let bundle = render_bundle(
+    let derivation_script = render_derivation(&authored.derivation, &concept_uri, concept_form);
+    let selector_profile = local_selector_profile_id(&question.id);
+    let source_id = local_source_id(&question.id);
+    let (selector_profile_value, source_value, grant, requirement) = render_question_bundle_parts(
         question,
-        &base_url,
+        base_url,
         operation.path,
         &question.subject.selector,
+        &selector_profile,
+        &source_id,
         &BundleRequirement {
             requirement_uri: requirement_uri.clone(),
             concept_uri: concept_uri.clone(),
@@ -575,7 +625,7 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         },
     );
 
-    Ok(CompilePlan {
+    Ok(QuestionPlan {
         question_id: question.id.clone(),
         derivation_artifact: question.answer.derivation.clone(),
         purpose: question.purpose.clone(),
@@ -586,7 +636,12 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         concept_uri,
         concept_form,
         codelist,
-        bundle,
+        selector_profile,
+        source_id,
+        selector_profile_value,
+        source_value,
+        grant,
+        requirement,
         response_schema,
         fact_schema,
         adapter_parameters_schema,
@@ -960,13 +1015,15 @@ fn render_derivation(
     rendered
 }
 
-fn render_bundle(
+fn render_question_bundle_parts(
     question: &Question,
     base_url: &str,
     path_template: &str,
     selector: &str,
+    selector_profile: &str,
+    source_id: &str,
     requirement: &BundleRequirement,
-) -> Value {
+) -> (Value, Value, Value, Value) {
     let framework_id = local_uri(&format!("framework:{}", question.id));
     let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
     let disclosure_family = local_uri(&format!("disclosure-family:{}", question.id));
@@ -974,7 +1031,7 @@ fn render_bundle(
         selector.to_owned(),
         json!({
             "role": question.subject.role,
-            "profile": SELECTOR_PROFILE_ID,
+            "profile": selector_profile,
             "field": selector,
         }),
     )]));
@@ -989,6 +1046,119 @@ fn render_bundle(
         .map(|fact| Value::String(format!("/{}", escape_pointer_segment(fact))))
         .collect::<Vec<_>>();
 
+    let selector_profile_value = json!({
+        "maximumAggregateBytes": 200,
+        "fields": selector_fields,
+    });
+    let source_value = json!({
+        "transport": "http-json",
+        "baseUrl": base_url,
+        "posture": "field-projected",
+        "authentication": {"kind": "none"},
+        "request": {
+            "method": "GET",
+            "pathTemplate": path_template,
+            "pathBindings": path_bindings,
+            "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
+            "selectorInputs": [{
+                "role": question.subject.role,
+                "alternatives": [{
+                    "profile": selector_profile,
+                    "fields": [selector],
+                }],
+            }],
+            "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
+            "adapterParameters": {"operationId": question.source.operation},
+            "adapterParametersSchema": format!(
+                "schemas/{}-source-adapter-parameters.schema.yaml",
+                question.id
+            ),
+            "preparationLimits": {
+                "query": "allowed",
+                "jsonBody": "forbidden",
+                "maximumNormalizedBytes": 4096,
+            },
+            "projection": projection,
+            "redirects": "deny",
+            "timeoutMilliseconds": 3000,
+            "maximumResponseBytes": 65536,
+            "concurrencyLimit": 8,
+        },
+        "responseSchema": format!("schemas/{}-source-response.schema.yaml", question.id),
+        "extractScript": format!("adapters/{}-source-extract.rhai", question.id),
+        "factSchema": format!("schemas/{}-source-facts.schema.yaml", question.id),
+    });
+    let grant = json!({
+        "requirement": requirement.requirement_uri,
+        "purpose": question.purpose,
+        "audienceFrom": "authenticated-requester",
+        "responseFormats": ["signed-jws"],
+        "subjects": [{
+            "role": question.subject.role,
+            "selectorProfile": selector_profile,
+            "valueOrigin": "request",
+        }],
+    });
+    let requirement_value = json!({
+            "id": requirement.requirement_uri,
+            "kind": requirement.kind,
+            "source": source_id,
+            "purposes": [question.purpose],
+            "subjectRoles": [{
+                "role": question.subject.role,
+                "cardinality": "one",
+                "selectorProfiles": [selector_profile],
+            }],
+            "referenceFrameworks": [framework_id],
+            "evidenceType": evidence_type,
+            "observationTimezone": "UTC",
+            "validitySeconds": 300,
+            "derivation": {
+                "script": question.answer.derivation,
+                "parameters": {},
+            },
+            "concepts": [{
+                "id": requirement.concept_uri,
+                "form": match requirement.concept_form {
+                    CompiledConceptForm::Boolean => "boolean",
+                    CompiledConceptForm::ControlledCategory => "controlled-category",
+                },
+                "required": true,
+                "constraints": requirement.concept_constraints,
+            }],
+            "disclosureGuard": {"families": [disclosure_family]},
+            "existenceDisclosure": "collapse-unresolved",
+    });
+    (
+        selector_profile_value,
+        source_value,
+        grant,
+        requirement_value,
+    )
+}
+
+fn render_bundle(questions: &[QuestionPlan]) -> Value {
+    let selector_profiles = questions
+        .iter()
+        .map(|question| {
+            (
+                question.selector_profile.clone(),
+                question.selector_profile_value.clone(),
+            )
+        })
+        .collect::<Map<_, _>>();
+    let sources = questions
+        .iter()
+        .map(|question| (question.source_id.clone(), question.source_value.clone()))
+        .collect::<Map<_, _>>();
+    let grants = questions
+        .iter()
+        .map(|question| question.grant.clone())
+        .collect::<Vec<_>>();
+    let requirements = questions
+        .iter()
+        .map(|question| question.requirement.clone())
+        .collect::<Vec<_>>();
     json!({
         "version": 1,
         "assuranceProfile": "local",
@@ -1036,96 +1206,16 @@ fn render_bundle(
             "verifierClockSkewSeconds": 30,
         },
         "responseFormats": ["signed-jws"],
-        "selectorProfiles": {
-            SELECTOR_PROFILE_ID: {
-                "maximumAggregateBytes": 200,
-                "fields": selector_fields,
-            }
-        },
-        "sources": {
-            SOURCE_ID: {
-                "transport": "http-json",
-                "baseUrl": base_url,
-                "posture": "field-projected",
-                "authentication": {"kind": "none"},
-                "request": {
-                    "method": "GET",
-                    "pathTemplate": path_template,
-                    "pathBindings": path_bindings,
-                    "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
-                    "selectorInputs": [{
-                        "role": question.subject.role,
-                        "alternatives": [{
-                            "profile": SELECTOR_PROFILE_ID,
-                            "fields": [selector],
-                        }],
-                    }],
-                    "prepareScript": "adapters/local-source-prepare.rhai",
-                    "adapterParameters": {"operationId": question.source.operation},
-                    "adapterParametersSchema": "schemas/local-source-adapter-parameters.schema.yaml",
-                    "preparationLimits": {
-                        "query": "allowed",
-                        "jsonBody": "forbidden",
-                        "maximumNormalizedBytes": 4096,
-                    },
-                    "projection": projection,
-                    "redirects": "deny",
-                    "timeoutMilliseconds": 3000,
-                    "maximumResponseBytes": 65536,
-                    "concurrencyLimit": 8,
-                },
-                "responseSchema": "schemas/local-source-response.schema.yaml",
-                "extractScript": "adapters/local-source-extract.rhai",
-                "factSchema": "schemas/local-source-facts.schema.yaml",
-            }
-        },
+        "selectorProfiles": selector_profiles,
+        "sources": sources,
         "authorityProfiles": {
             AUTHORITY_PROFILE_ID: {
                 "kind": "explicit-request",
                 "requesterTags": [AUTHORITY_PROFILE_ID],
-                "grants": [{
-                    "requirement": requirement.requirement_uri,
-                    "purpose": question.purpose,
-                    "audienceFrom": "authenticated-requester",
-                    "responseFormats": ["signed-jws"],
-                    "subjects": [{
-                        "role": question.subject.role,
-                        "selectorProfile": SELECTOR_PROFILE_ID,
-                        "valueOrigin": "request",
-                    }],
-                }],
+                "grants": grants,
             }
         },
-        "requirements": [{
-            "id": requirement.requirement_uri,
-            "kind": requirement.kind,
-            "source": SOURCE_ID,
-            "purposes": [question.purpose],
-            "subjectRoles": [{
-                "role": question.subject.role,
-                "cardinality": "one",
-                "selectorProfiles": [SELECTOR_PROFILE_ID],
-            }],
-            "referenceFrameworks": [framework_id],
-            "evidenceType": evidence_type,
-            "observationTimezone": "UTC",
-            "validitySeconds": 300,
-            "derivation": {
-                "script": question.answer.derivation,
-                "parameters": {},
-            },
-            "concepts": [{
-                "id": requirement.concept_uri,
-                "form": match requirement.concept_form {
-                    CompiledConceptForm::Boolean => "boolean",
-                    CompiledConceptForm::ControlledCategory => "controlled-category",
-                },
-                "required": true,
-                "constraints": requirement.concept_constraints,
-            }],
-            "disclosureGuard": {"families": [disclosure_family]},
-            "existenceDisclosure": "collapse-unresolved",
-        }],
+        "requirements": requirements,
     })
 }
 
@@ -1133,45 +1223,66 @@ fn write_plan(
     project_root: &Path,
     staging_root: &Path,
     plan: &CompilePlan,
-) -> Result<CompiledQuestion> {
+) -> Result<CompiledProject> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
     for directory in ["adapters", "derivations", "schemas"] {
         create_private_directory(&bundle.join(directory))?;
     }
-    if plan.codelist.is_some() {
+    if plan
+        .questions
+        .iter()
+        .any(|question| question.codelist.is_some())
+    {
         create_private_directory(&bundle.join("codelists"))?;
     }
     create_private_directory(&staging_root.join("audit"))?;
 
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
-    write_private_file(
-        &bundle.join("adapters/local-source-prepare.rhai"),
-        plan.prepare_script.as_bytes(),
-    )?;
-    write_private_file(
-        &bundle.join("adapters/local-source-extract.rhai"),
-        plan.extract_script.as_bytes(),
-    )?;
-    write_private_file(
-        &bundle.join(&plan.derivation_artifact),
-        plan.derivation_script.as_bytes(),
-    )?;
-    if let Some((path, codelist)) = &plan.codelist {
-        write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
+    for question in &plan.questions {
+        write_private_file(
+            &bundle.join(format!(
+                "adapters/{}-source-prepare.rhai",
+                question.question_id
+            )),
+            question.prepare_script.as_bytes(),
+        )?;
+        write_private_file(
+            &bundle.join(format!(
+                "adapters/{}-source-extract.rhai",
+                question.question_id
+            )),
+            question.extract_script.as_bytes(),
+        )?;
+        write_private_file(
+            &bundle.join(&question.derivation_artifact),
+            question.derivation_script.as_bytes(),
+        )?;
+        if let Some((path, codelist)) = &question.codelist {
+            write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
+        }
+        write_private_file(
+            &bundle.join(format!(
+                "schemas/{}-source-response.schema.yaml",
+                question.question_id
+            )),
+            &yaml_bytes(&question.response_schema)?,
+        )?;
+        write_private_file(
+            &bundle.join(format!(
+                "schemas/{}-source-facts.schema.yaml",
+                question.question_id
+            )),
+            &yaml_bytes(&question.fact_schema)?,
+        )?;
+        write_private_file(
+            &bundle.join(format!(
+                "schemas/{}-source-adapter-parameters.schema.yaml",
+                question.question_id
+            )),
+            &yaml_bytes(&question.adapter_parameters_schema)?,
+        )?;
     }
-    write_private_file(
-        &bundle.join("schemas/local-source-response.schema.yaml"),
-        &yaml_bytes(&plan.response_schema)?,
-    )?;
-    write_private_file(
-        &bundle.join("schemas/local-source-facts.schema.yaml"),
-        &yaml_bytes(&plan.fact_schema)?,
-    )?;
-    write_private_file(
-        &bundle.join("schemas/local-source-adapter-parameters.schema.yaml"),
-        &yaml_bytes(&plan.adapter_parameters_schema)?,
-    )?;
 
     let canonical_staging = fs::canonicalize(staging_root)
         .with_context(|| format!("resolving staging root {}", staging_root.display()))?;
@@ -1204,17 +1315,24 @@ fn write_plan(
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
         .with_context(|| format!("sealing {}", runtime_path.display()))?;
 
-    Ok(CompiledQuestion {
-        question_alias: plan.question_id.clone(),
+    let questions = plan
+        .questions
+        .iter()
+        .map(|question| CompiledQuestion {
+            question_alias: question.question_id.clone(),
+            requirement_uri: question.requirement_uri.clone(),
+            purpose: question.purpose.clone(),
+            subject_role: question.subject_role.clone(),
+            selector_profile: question.selector_profile.clone(),
+            selector_field: question.selector_field.clone(),
+            concept_alias: question.concept_alias.clone(),
+            concept_uri: question.concept_uri.clone(),
+            concept_form: question.concept_form,
+        })
+        .collect();
+    Ok(CompiledProject {
         runtime_path,
-        requirement_uri: plan.requirement_uri.clone(),
-        purpose: plan.purpose.clone(),
-        subject_role: plan.subject_role.clone(),
-        selector_profile: SELECTOR_PROFILE_ID.to_owned(),
-        selector_field: plan.selector_field.clone(),
-        concept_alias: plan.concept_alias.clone(),
-        concept_uri: plan.concept_uri.clone(),
-        concept_form: plan.concept_form,
+        questions,
         local_audience: LOCAL_AUDIENCE.to_owned(),
         requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
         caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
@@ -1292,6 +1410,14 @@ fn local_uri(suffix: &str) -> String {
     format!("{LOCAL_URI_PREFIX}{suffix}")
 }
 
+fn local_selector_profile_id(question_id: &str) -> String {
+    format!("local-subject-{question_id}-v1")
+}
+
+fn local_source_id(question_id: &str) -> String {
+    format!("local-source-{question_id}")
+}
+
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings serialize")
 }
@@ -1356,7 +1482,7 @@ disclosure:
 "#;
 
     const AGE_BRACKET_QUESTION: &str = r#"id: age-bracket
-question: Which reviewed age bracket contains the person?
+question: Which age bracket does this person belong to?
 purpose: service-path-selection
 subject:
   role: person
@@ -1367,8 +1493,8 @@ source:
 answer:
   concept: age_bracket
   type: controlled-category
-  values: [under-18, 18-to-24, 25-or-older]
-  derivation: derivations/adult-status.rhai
+  values: [under-18, 18-to-24, 25-to-64, 65-or-older]
+  derivation: derivations/age-bracket.rhai
 disclosure:
   allow: [age_bracket]
 "#;
@@ -1379,8 +1505,10 @@ disclosure:
         "under-18"
     } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
         "18-to-24"
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
+        "25-to-64"
     } else {
-        "25-or-older"
+        "65-or-older"
     }
 }
 "#;
@@ -1392,21 +1520,26 @@ disclosure:
             .expect("local compilation succeeds");
 
         assert_eq!(compiled.runtime_path, fixture.staging.join("runtime.yaml"));
-        assert_eq!(compiled.question_alias, "adult-status");
+        assert_eq!(compiled.questions.len(), 1);
+        let question = &compiled.questions[0];
+        assert_eq!(question.question_alias, "adult-status");
         assert_eq!(
-            compiled.requirement_uri,
+            question.requirement_uri,
             "urn:registrystack:evidence:local:requirement:adult-status"
         );
         assert_eq!(
-            compiled.concept_uri,
+            question.concept_uri,
             "urn:registrystack:evidence:local:concept:adult-status:is_adult"
         );
-        assert_eq!(compiled.purpose, "age-check");
-        assert_eq!(compiled.subject_role, "person");
-        assert_eq!(compiled.selector_profile, SELECTOR_PROFILE_ID);
-        assert_eq!(compiled.selector_field, "person_id");
-        assert_eq!(compiled.concept_alias, "is_adult");
-        assert_eq!(compiled.concept_form, CompiledConceptForm::Boolean);
+        assert_eq!(question.purpose, "age-check");
+        assert_eq!(question.subject_role, "person");
+        assert_eq!(
+            question.selector_profile,
+            local_selector_profile_id("adult-status")
+        );
+        assert_eq!(question.selector_field, "person_id");
+        assert_eq!(question.concept_alias, "is_adult");
+        assert_eq!(question.concept_form, CompiledConceptForm::Boolean);
         assert_eq!(compiled.local_audience, LOCAL_AUDIENCE);
         assert_eq!(compiled.requester_tag, AUTHORITY_PROFILE_ID);
         assert_eq!(
@@ -1419,15 +1552,15 @@ disclosure:
                 "audit/",
                 "bundle/",
                 "bundle/adapters/",
-                "bundle/adapters/local-source-extract.rhai",
-                "bundle/adapters/local-source-prepare.rhai",
+                "bundle/adapters/adult-status-source-extract.rhai",
+                "bundle/adapters/adult-status-source-prepare.rhai",
                 "bundle/derivations/",
                 "bundle/derivations/adult-status.rhai",
                 "bundle/evidence.yaml",
                 "bundle/schemas/",
-                "bundle/schemas/local-source-adapter-parameters.schema.yaml",
-                "bundle/schemas/local-source-facts.schema.yaml",
-                "bundle/schemas/local-source-response.schema.yaml",
+                "bundle/schemas/adult-status-source-adapter-parameters.schema.yaml",
+                "bundle/schemas/adult-status-source-facts.schema.yaml",
+                "bundle/schemas/adult-status-source-response.schema.yaml",
                 "runtime.yaml",
             ]
         );
@@ -1441,13 +1574,15 @@ disclosure:
         )
         .expect("bundle parses");
         assert_eq!(bundle["assuranceProfile"], "local");
+        let source_id = local_source_id("adult-status");
+        let selector_profile = local_selector_profile_id("adult-status");
         assert_eq!(
-            bundle["sources"][SOURCE_ID]["authentication"],
+            bundle["sources"][&source_id]["authentication"],
             json!({"kind": "none"})
         );
         assert_eq!(
-            bundle["sources"][SOURCE_ID]["request"]["pathBindings"]["person_id"],
-            json!({"role": "person", "profile": SELECTOR_PROFILE_ID, "field": "person_id"})
+            bundle["sources"][&source_id]["request"]["pathBindings"]["person_id"],
+            json!({"role": "person", "profile": selector_profile, "field": "person_id"})
         );
         assert!(bundle["requirements"][0].get("fixtures").is_none());
         assert_eq!(
@@ -1476,7 +1611,7 @@ disclosure:
             .expect("controlled category compiles");
 
         assert_eq!(
-            compiled.concept_form,
+            compiled.questions[0].concept_form,
             CompiledConceptForm::ControlledCategory
         );
         let codelist: Value = serde_norway::from_slice(
@@ -1490,7 +1625,7 @@ disclosure:
         .expect("codelist parses");
         assert_eq!(
             codelist["codes"],
-            json!(["under-18", "18-to-24", "25-or-older"])
+            json!(["under-18", "18-to-24", "25-to-64", "65-or-older"])
         );
         let bundle: Value = serde_norway::from_slice(
             &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
@@ -1501,6 +1636,46 @@ disclosure:
             bundle["requirements"][0]["concepts"][0]["form"],
             "controlled-category"
         );
+    }
+
+    #[test]
+    fn compiles_every_authored_question_into_one_generation() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("multiple questions compile");
+
+        assert_eq!(
+            compiled
+                .questions
+                .iter()
+                .map(|question| question.question_alias.as_str())
+                .collect::<Vec<_>>(),
+            ["adult-status", "age-bracket"]
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(bundle["selectorProfiles"].as_object().unwrap().len(), 2);
+        assert_eq!(bundle["sources"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(bundle["requirements"].as_array().unwrap().len(), 2);
+        assert!(fixture
+            .staging
+            .join("bundle/derivations/adult-status.rhai")
+            .is_file());
+        assert!(fixture
+            .staging
+            .join("bundle/derivations/age-bracket.rhai")
+            .is_file());
     }
 
     #[test]
@@ -1515,7 +1690,12 @@ disclosure:
             ),
             format!("{QUESTION}unknown: true\n"),
         ] {
-            let fixture = Fixture::new(OPENAPI, &mutation, ANSWER, true);
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            fs::write(
+                fixture.project.join("questions/adult-status.yaml"),
+                mutation,
+            )
+            .expect("mutated question");
             let error =
                 compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
                     .expect_err("widened question is rejected");
@@ -1643,11 +1823,11 @@ disclosure:
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect("punctuated names compile");
 
-        assert_eq!(compiled.selector_field, "person-id.v1");
+        assert_eq!(compiled.questions[0].selector_field, "person-id.v1");
         let extract = fs::read_to_string(
             fixture
                 .staging
-                .join("bundle/adapters/local-source-extract.rhai"),
+                .join("bundle/adapters/adult-status-source-extract.rhai"),
         )
         .expect("extract script reads");
         assert!(extract.contains("facts[\"date-of.birth\"] = source_response[\"date-of.birth\"];"));
@@ -1663,11 +1843,14 @@ disclosure:
         assert!(error.to_string().contains("0700"));
 
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fs::write(fixture.project.join("questions/extra.yaml"), QUESTION)
-            .expect("write extra question");
+        fs::write(
+            fixture.project.join("questions/notes.txt"),
+            b"not a question",
+        )
+        .expect("write unexpected entry");
         let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("ambiguous questions rejected");
-        assert!(error.to_string().contains("exactly one"));
+            .expect_err("unexpected question entry rejected");
+        assert!(error.to_string().contains("only questions/*.yaml"));
         assert!(fixture.staging_is_empty());
     }
 
@@ -1685,6 +1868,16 @@ disclosure:
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts generated inputs");
+
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
+        crate::keygen::generate_scaffold_key_material(
+            &fixture.project.join("secrets"),
+            SIGNING_KEY_ID,
+        )
+        .expect("generate local keys");
+        compile_local_project(&fixture.project, &fixture.staging, &evidence)
+            .expect("real Evidence loader accepts multiple questions");
 
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
         crate::keygen::generate_scaffold_key_material(
@@ -1735,9 +1928,6 @@ disclosure:
             secrets.mode(0o700);
             secrets.create(project.join("secrets")).expect("secrets");
             fs::write(project.join(OPENAPI_FILE), openapi).expect("OpenAPI");
-            fs::write(project.join("questions/adult-status.yaml"), question).expect("question");
-            fs::write(project.join("derivations/adult-status.rhai"), derivation)
-                .expect("derivation");
 
             let staging = root.path().join("staging");
             let mut private = fs::DirBuilder::new();
@@ -1758,12 +1948,27 @@ disclosure:
             };
             file.write_all(script.as_bytes()).expect("write stub");
 
-            Self {
+            let fixture = Self {
                 _root: root,
                 project,
                 staging,
                 evidence,
-            }
+            };
+            fixture.add_question(question, derivation);
+            fixture
+        }
+
+        fn add_question(&self, question: &str, derivation: &str) {
+            let parsed: Question = serde_norway::from_str(question).expect("question parses");
+            fs::write(
+                self.project
+                    .join("questions")
+                    .join(format!("{}.yaml", parsed.id)),
+                question,
+            )
+            .expect("question");
+            fs::write(self.project.join(&parsed.answer.derivation), derivation)
+                .expect("derivation");
         }
 
         fn staging_is_empty(&self) -> bool {

@@ -77,7 +77,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
             "subjects": [{
                 "role": "person",
                 "selector": {
-                    "profile": "local-subject-v1",
+                    "profile": "local-subject-adult-status-v1",
                     "values": {"person_id": "person-123"}
                 }
             }]
@@ -155,6 +155,36 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     )
     .unwrap();
     assert_ne!(request["requestNonce"], second["requestNonce"]);
+
+    let age = fixture.prepare_with(
+        &[
+            "age-bracket",
+            "--purpose",
+            "service-path-selection",
+            "--subject",
+            "person_id=person-123",
+        ],
+        "age-bracket",
+    );
+    assert_success(&age);
+    let age: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .root
+                .join(".evidence/requests/age-bracket/request.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        age["requirement"],
+        "urn:registrystack:evidence:local:requirement:age-bracket"
+    );
+    assert_eq!(age["purpose"], "service-path-selection");
+    assert_eq!(
+        age["subjects"][0]["selector"]["profile"],
+        "local-subject-age-bracket-v1"
+    );
 
     let response = fixture.root.join("assertion.jws.json");
     fs::write(&response, b"ordinary curl response").expect("response");
@@ -324,7 +354,7 @@ impl Fixture {
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let canonical = fs::canonicalize(&root).unwrap();
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v1",
+            "schema": "registry.evidencectl.dev-state/v2",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -339,17 +369,30 @@ impl Fixture {
                 "evidenceAudience": "urn:registrystack:evidence:local:caller",
                 "requesterTag": "local-caller"
             },
-            "question": {
-                "alias": "adult-status",
-                "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
-                "purpose": "age-check",
-                "subjectRole": "person",
-                "selectorProfile": "local-subject-v1",
-                "selectorField": "person_id",
-                "conceptAlias": "is_adult",
-                "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                "conceptForm": "boolean"
-            },
+            "questions": [
+                {
+                    "alias": "adult-status",
+                    "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
+                    "purpose": "age-check",
+                    "subjectRole": "person",
+                    "selectorProfile": "local-subject-adult-status-v1",
+                    "selectorField": "person_id",
+                    "conceptAlias": "is_adult",
+                    "conceptUri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                    "conceptForm": "boolean"
+                },
+                {
+                    "alias": "age-bracket",
+                    "requirementUri": "urn:registrystack:evidence:local:requirement:age-bracket",
+                    "purpose": "service-path-selection",
+                    "subjectRole": "person",
+                    "selectorProfile": "local-subject-age-bracket-v1",
+                    "selectorField": "person_id",
+                    "conceptAlias": "age_bracket",
+                    "conceptUri": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                    "conceptForm": "controlled-category"
+                }
+            ],
             "failure": null
         });
         private_file(

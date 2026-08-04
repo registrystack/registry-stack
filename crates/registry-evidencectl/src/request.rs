@@ -70,7 +70,7 @@ pub fn run(command: RequestCommand) -> Result<ExitCode> {
 fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
-    let subject_value = validate_closed_inputs(&ready, &args)?;
+    let (question, subject_value) = validate_closed_inputs(&ready, &args)?;
     let evidence = dev::resolve_tool_binary(
         "evidence",
         args.evidence_bin.as_deref(),
@@ -87,7 +87,7 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     require_absent(&destination)?;
     let mut staging = StagingDirectory::create(&requests_root)?;
 
-    let request = closed_request(&ready, subject_value)?;
+    let request = closed_request(question, subject_value)?;
     let request_path = staging.path().join("request.json");
     write_private_bytes(&request_path, &request)?;
 
@@ -123,11 +123,16 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn validate_closed_inputs<'a>(ready: &ReadyDevState, args: &'a PrepareArgs) -> Result<&'a str> {
-    if args.question != ready.question.alias {
-        bail!("question does not match the active local tutorial");
-    }
-    if args.purpose != ready.question.purpose {
+fn validate_closed_inputs<'a, 'b>(
+    ready: &'a ReadyDevState,
+    args: &'b PrepareArgs,
+) -> Result<(&'a dev::ReadyQuestionState, &'b str)> {
+    let question = ready
+        .questions
+        .iter()
+        .find(|question| question.alias == args.question)
+        .ok_or_else(|| anyhow!("question does not match the active local project"))?;
+    if args.purpose != question.purpose {
         bail!("purpose does not match the active local tutorial question");
     }
     let (field, value) = args
@@ -135,7 +140,7 @@ fn validate_closed_inputs<'a>(ready: &ReadyDevState, args: &'a PrepareArgs) -> R
         .split_once('=')
         .filter(|(_, value)| !value.contains('='))
         .ok_or_else(|| anyhow!("subject must be exactly one field=value pair"))?;
-    if field != ready.question.selector_field {
+    if field != question.selector_field {
         bail!("subject field does not match the active local tutorial question");
     }
     if value.is_empty()
@@ -144,7 +149,7 @@ fn validate_closed_inputs<'a>(ready: &ReadyDevState, args: &'a PrepareArgs) -> R
     {
         bail!("subject value must be non-empty, bounded, and contain no control characters");
     }
-    Ok(value)
+    Ok((question, value))
 }
 
 fn validate_request_name(name: &str) -> Result<()> {
@@ -162,23 +167,23 @@ fn validate_request_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn closed_request(ready: &ReadyDevState, subject_value: &str) -> Result<Vec<u8>> {
+fn closed_request(question: &dev::ReadyQuestionState, subject_value: &str) -> Result<Vec<u8>> {
     let mut random = [0_u8; 32];
     getrandom::fill(&mut random).context("failed to generate a request nonce")?;
     let nonce = URL_SAFE_NO_PAD.encode(random);
     random.zeroize();
     let selector_values = Value::Object(Map::from_iter([(
-        ready.question.selector_field.clone(),
+        question.selector_field.clone(),
         Value::String(subject_value.to_owned()),
     )]));
     let request = json!({
         "requestNonce": nonce,
-        "requirement": ready.question.requirement_uri,
-        "purpose": ready.question.purpose,
+        "requirement": question.requirement_uri,
+        "purpose": question.purpose,
         "subjects": [{
-            "role": ready.question.subject_role,
+            "role": question.subject_role,
             "selector": {
-                "profile": ready.question.selector_profile,
+                "profile": question.selector_profile,
                 "values": selector_values,
             }
         }]
