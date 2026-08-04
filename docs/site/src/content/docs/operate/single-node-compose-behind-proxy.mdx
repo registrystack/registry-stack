@@ -275,6 +275,9 @@ secret root, and audit path) and, when the deployment has no identity provider t
 tokens, a `mint.yaml` for Registry Mint (naming its signing key and client registry directory).
 [Configure Evidence](../../configure/evidence/) and
 [Configure Registry Mint](../../configure/mint/) cover both documents field by field.
+For an approved Evidence candidate, use
+[Integrate an Evidence candidate with Docker Compose](../../tutorials/integrate-evidence-candidate-with-docker-compose/).
+That guide keeps the candidate bundle, container runtime, secret root, and audit storage separate.
 
 Every listener either binary opens, including Evidence's optional `metricsListener`, must bind to
 a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local address; a wildcard or public bind is

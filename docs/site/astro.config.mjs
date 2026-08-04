@@ -317,6 +317,9 @@ export default defineConfig({
             { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
             { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },
             { label: 'Prove a project', slug: 'tutorials/prove-an-evidence-project' },
+            { label: 'Build and deploy a project', slug: 'tutorials/build-and-deploy-evidence-project' },
+            { label: 'Issue access tokens with Mint', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
+            { label: 'Integrate a candidate with Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
             { label: 'Verify as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
             { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
             { label: 'Request SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
@@ -363,6 +366,7 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Project configuration', slug: 'reference/project-configuration' },
+            { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
             { label: 'registryctl CLI', slug: 'reference/registryctl' },
             {
               label: 'API reference',

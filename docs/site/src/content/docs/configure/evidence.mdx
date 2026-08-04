@@ -39,11 +39,12 @@ evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
   schemas/             source parameter, response, and fact schemas
   questions/           empty question-authoring directory
   derivations/         empty derivation-authoring directory
+  fixtures/            empty production-fixture directory
   secrets/             optional owner-only, unbound local keys
 ```
 
-The command retains the OpenAPI bytes exactly and creates no question, source policy, fixture,
-Mint configuration, README, or deployable bundle. Add `--generate-keys` to create disposable local
+The command retains the OpenAPI bytes exactly and creates no fixture content, question, source policy,
+Mint configuration, README, production target, or deployable bundle. Add `--generate-keys` to create disposable local
 signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
 editable artifacts from the retained contract. After you add a question, `evidencectl dev`
 compiles the authoring objects into a private local runtime and delegates validation to the real
@@ -218,6 +219,46 @@ involved.
 project: it runs `check`, then `evaluate` against every fixture path the bundle's requirements
 reference, and reports `PASS` or `FAIL` per step
 (`crates/registry-evidencectl/src/fixtures.rs`). The incomplete workspace created by
-`evidencectl new` has no bundle, runtime, or fixtures, so it cannot pass this gate. After an
+`evidencectl new` has no bundle, runtime, or fixture cases, so it cannot pass this gate. After an
 operator supplies those deployment artifacts, both `check` and `fixtures run` must pass before
 `evidence serve` runs the revision.
+
+## Build a production candidate
+
+An editable project is not a deployment input. Add one explicit target under
+`deployment-targets/production/` when the reviewed source, questions, and fixtures are ready:
+
+```text
+deployment-targets/
+  production/
+    governance.yaml
+    runtime.yaml
+```
+
+`governance.yaml` supplies the production-owned bundle fields, including service, issuer,
+authentication, audit, subject binding, rate limits, signing, response formats, and authority
+profiles. It cannot override selectors, sources, or requirements. Each production question adds
+stable concept identifiers and a `governance` block with its requirement, frameworks, Evidence
+Type, validity, observation timezone, fixture, and disclosure families.
+
+`runtime.yaml` remains the ordinary runtime document. It names the final absolute bundle,
+private listener, secret root, audit path, and any private CA files for one target. It is copied
+without transformation.
+
+Build a new candidate directory with explicit target and output paths:
+
+```sh
+evidencectl build \
+  --project "<editable-project>" \
+  --target "<editable-project>/deployment-targets/production" \
+  --output "<new-candidate-directory>"
+```
+
+The output is create-only and contains `runtime.yaml` and a closed `bundle/`. It contains no
+secret values, source responses, local request state, or audit records. The compiler validates
+the resulting bundle with the `evidence` binary and every referenced fixture before publishing.
+It does not contact an identity provider, Mint, or a source endpoint.
+
+Use [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+for the full handoff, and [Evidencectl command reference](../../reference/evidencectl/) for the
+command contract.

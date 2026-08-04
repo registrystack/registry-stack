@@ -159,10 +159,9 @@ evidencectl new dhis2-immunization \
 cd dhis2-immunization
 ```
 
-`evidencectl new` retains the OpenAPI document and creates empty `sources/`, `questions/`, and
-`derivations/` directories.
-It also generates disposable local signing, audit, subject-binding, and Registry Mint key
-material.
+`evidencectl new` retains the OpenAPI document and creates empty `sources/`, `questions/`,
+`derivations/`, and `fixtures/` directories.
+It generates only disposable local Evidence signing, audit, and subject-binding material.
 It does not invent the source policy or the answer.
 
 ## Draft the DHIS2 source
@@ -540,10 +539,10 @@ Delete `.local/dhis2-response.json` and `.local/dhis2.curl` if they were created
 tutorial.
 Keep the project editable while evaluating the integration.
 Before deployment, add project-specific fixtures, replace the demo account with a least-privilege
-service account, review the source acquisition posture, and promote the governed bundle.
+service account, review the source acquisition posture, and build a reviewed production candidate.
 
 ## Next
 
 - [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Prove and promote an Evidence project](../prove-an-evidence-project/)
+- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

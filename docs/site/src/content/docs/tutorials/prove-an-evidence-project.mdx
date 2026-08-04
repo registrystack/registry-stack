@@ -1,6 +1,6 @@
 ---
-title: Prove and promote an Evidence project
-description: Add fixtures that describe your own requirement, run them through the production evaluator, then promote the exact reviewed bundle.
+title: Prove an Evidence project
+description: Add fixtures that describe your own requirement and run them through the Evidence evaluator before a production build.
 status: current
 owner: registry-docs
 source_repos:
@@ -48,7 +48,7 @@ then keep only cases that express your project.
 From any directory, run:
 
 ```sh
-evidencectl fixtures run --project <evidence-project>
+evidencectl fixtures run --project "<evidence-project>"
 ```
 
 Evidencectl first runs `evidence check`, discovers the fixture files referenced by the captured
@@ -59,18 +59,18 @@ separate integration check.
 Use JSON output in CI:
 
 ```sh
-evidencectl fixtures run --project <evidence-project> --json > fixture-report.json
+evidencectl fixtures run --project "<evidence-project>" --json > fixture-report.json
 ```
 
 Treat any failed case, missing reference, unknown field, or unsupported expectation as a failed
-promotion. Do not convert a real failure into an ignored case.
+build input. Do not convert a real failure into an ignored case.
 
 ## Check the deployable inputs
 
 Run the real startup validator against the runtime file you plan to deploy:
 
 ```sh
-evidence check --runtime <evidence-project>/runtime.yaml
+evidence check --runtime "<evidence-project>/runtime.yaml"
 ```
 
 This validates the complete captured bundle, scripts, schemas, codelists, key references, and
@@ -81,27 +81,29 @@ During local authoring, keep the project writable so changes are convenient. Fre
 for the deployable revision: make the runtime and bundle non-writable to the service identity, or
 mount them read-only, then rerun the check against those exact bytes.
 
-## Promote the exact reviewed revision
+## Hand off the reviewed inputs
 
-Evidencectl deliberately has no generic `promote` command. Your deployment system owns approval,
-artifact transport, rollback, and environment binding.
+Evidencectl has no generic `promote` command. Your deployment system owns approval, artifact
+transport, rollback, and environment binding. Use `evidencectl build` to create a new candidate
+from the editable project and one explicit production target.
 
-Promote only when these facts are recorded together:
+Build and hand off only when these facts are recorded together:
 
-1. The fixture suite passed against the candidate bundle.
-2. `evidence check` accepted the exact frozen runtime and bundle.
+1. The fixture suite passed against the editable inputs and the generated candidate.
+2. `evidence check` accepted the exact candidate runtime and bundle.
 3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
    codelists, purposes, audiences, and privacy expectations.
 4. The environment supplies independent owner-only signing, subject-binding, and audit secrets.
-5. The deployed bundle digest matches the reviewed candidate.
+5. The deployed bundle revision matches the reviewed candidate.
 6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
 
 Keep the governed bundle unchanged across environments where practical. Bind environment-specific
 paths, secret roots, audit storage, listener settings, and trust files through each environment's
-runtime file.
+runtime file. [Build and deploy an Evidence project](../build-and-deploy-evidence-project/) covers
+the target-host ceremony.
 
 ## Next
 
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
 - [Move Evidence to production signing](../move-evidence-to-production-signing/)
-- [Configure Evidence](../../configure/evidence/)
+- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)

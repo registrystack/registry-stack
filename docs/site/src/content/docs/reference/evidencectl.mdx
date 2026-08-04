@@ -1,0 +1,70 @@
+---
+title: Evidencectl command reference
+description: Reference for Evidence authoring, production build, deployment inspection, fixture, and local-development commands.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+`evidencectl` is Evidence adopter tooling. It creates key material and editable projects, compiles
+production candidates, and invokes the `evidence` binary for Evidence semantic decisions. It does
+not approve, deploy, promote, register clients, or write production secret values.
+
+## Contract status
+
+Evidencectl is outside the frozen Evidence Version 1 runtime contract. Its command line can change
+before a compatibility promise covers it. The `evidence` runtime remains the authority for bundle
+compilation, fixture evaluation, secret validation, and startup acceptance.
+
+## Production build commands
+
+| Command | Inputs | Result | Does not do |
+| --- | --- | --- | --- |
+| `evidencectl build --project <project> --target <target> --output <new-candidate>` | Editable project and one explicit production target | Creates a new candidate with `runtime.yaml` and closed `bundle/` | Overwrite output, contact source services, OIDC, or Mint, create production secrets, or start a listener |
+| `evidencectl doctor --project <candidate>` | Completed candidate on its target host | Reports runtime, bundle, secret, and audit file posture | Change project files or replace `evidence check` |
+| `evidencectl doctor --project <candidate> --mint-config <mint.yaml>` | Completed candidate and separately authored Mint configuration | Adds read-only mechanical protocol compatibility checks | Register callers, copy Mint files, infer authority, or mint a token |
+| `evidencectl fixtures run --project <candidate>` | Completed candidate and referenced synthetic fixtures | Runs `evidence check` and every referenced fixture | Start HTTP, call a source, or write a production audit entry |
+
+`build` is create-only. It rejects an existing output directory, local assurance inputs,
+unauthenticated or non-HTTPS production sources, missing governance metadata or fixtures, unresolved
+review markers, unknown fields, symlink traversal, and references outside the allowed project
+directories. A failed build publishes no candidate.
+
+## Production input reference
+
+An editable project becomes a production build input only after it has:
+
+- A `fixtures/` regular file referenced by every production question.
+- Stable concept identifiers and production `governance` metadata in every question.
+- `deployment-targets/<target>/governance.yaml` with production bundle-owned fields.
+- `deployment-targets/<target>/runtime.yaml` with one target's runtime bindings.
+
+`governance.yaml` is strict. It must carry version `1`, `assuranceProfile: production`, service,
+issuer, authentication, audit, subject binding, rate limits, signing, optional response formats,
+and authority profiles. It cannot supply selector profiles, sources, or requirements. It accepts
+logical `secret:file/<name>` references, not values or absolute secret paths.
+
+The output runtime document is copied byte-for-byte. Its paths and secret posture are accepted only
+by the final target-host `evidence check`.
+
+## Local-only commands
+
+`evidencectl new --profile local` and `evidencectl dev` are local-authoring commands. Nothing under
+`.evidence/dev` is a production build input. `new` creates no source policy, question, fixture
+content, production target, Mint configuration, or deployable bundle. `--generate-keys` creates
+disposable, unbound Evidence key material only.
+
+Use `keygen`, `source suggest`, `request`, `verify`, and `audit` for their documented authoring or
+local inspection roles. Do not use a local request, local audit record, or disposable key as a
+production candidate input.
+
+## Related reference
+
+- [Configure Evidence](../../configure/evidence/)
+- [Registry Mint reference](../mint/)
+- [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/)

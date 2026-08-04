@@ -20,6 +20,10 @@ Registry Mint is a supporting service, not a product pattern of its own. Use it 
 server such as Evidence needs signed, expiring, audience-bound tokens and standing up a
 general-purpose identity provider is not an option for the deployment.
 
+Version 1 runs one active Mint process. Its client-assertion replay cache is memory-only and
+clears on restart. Do not claim high availability or durable replay protection for this deployment
+shape.
+
 Registry Mint answers a narrower question than a shared JWKS can. A pooled key set can only say
 that a token was signed by a trusted key; it cannot say which caller signed it or what that
 caller is permitted to assert. Registry Mint splits the two questions across two places: the
