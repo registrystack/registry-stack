@@ -35,9 +35,10 @@ set -euo pipefail
 
 SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
-# A generic fence helper, not registryctl-specific: it locates a fence by
-# heading, language and occurrence and applies it to a file.
-HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
+# A fence helper written against the replay userland's floor: it locates a
+# fence by heading, language and occurrence and applies it to a file, using
+# only the shell and coreutils the container carries.
+FENCE="$SITE_ROOT/scripts/evidence-tutorial-fence.sh"
 DOCS_ROOT="${EVIDENCE_TUTORIAL_DOCS_ROOT:-$SITE_ROOT/src/content/docs/tutorials}"
 BUILD_PROFILE="${EVIDENCE_TUTORIAL_CARGO_PROFILE:-ci}"
 TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
@@ -350,8 +351,12 @@ emit_run_step() {
 }
 
 # Emit a documented before/after fence pair applied to a file the reader edits.
+#
+# Both fences are read out of the tutorial here, while the journey is being
+# assembled, so a pair the tutorial no longer carries fails by name before the
+# reader's first command runs.
 emit_edit_step() {
-	local slug="$1" spec="$2"
+	local slug="$1" spec="$2" tutorial_file="$3" edit_dir="$4"
 	local IFS='|'
 	# shellcheck disable=SC2206  # deliberate split on the field separator
 	local parts=($spec)
@@ -360,23 +365,35 @@ emit_edit_step() {
 			"$slug" "${#parts[@]}" "$spec" >&2
 		exit 2
 	fi
+	EDIT_INDEX=$((EDIT_INDEX + 1))
+	local before after
+	before="$(printf '%s/edit-%02d-before' "$edit_dir" "$EDIT_INDEX")"
+	after="$(printf '%s/edit-%02d-after' "$edit_dir" "$EDIT_INDEX")"
+	if ! bash "$FENCE" write-fence "$tutorial_file" \
+		"${parts[0]}" "${parts[1]}" "${parts[2]}" "$before" ||
+		! bash "$FENCE" write-fence "$tutorial_file" \
+			"${parts[3]}" "${parts[4]}" "${parts[5]}" "$after"; then
+		printf 'tutorial drift in %s: edit step names a fence the tutorial no longer carries: %s\n' \
+			"$slug" "$spec" >&2
+		exit 1
+	fi
 	printf '\nprintf "==> %s edit %s\\n"\n' "$slug" "${parts[6]}"
-	# shellcheck disable=SC2016  # HELPER and TUTORIAL expand in the emitted script
-	printf 'node "$HELPER" replace-fence-pair "$TUTORIAL" %q %q %q %q %q %q %q\n' \
-		"${parts[0]}" "${parts[1]}" "${parts[2]}" \
-		"${parts[3]}" "${parts[4]}" "${parts[5]}" "${parts[6]}"
+	# shellcheck disable=SC2016  # FENCE expands in the emitted script
+	printf 'bash "$FENCE" replace-block %q %q %q\n' "${parts[6]}" "$before" "$after"
 }
 
 emit_journey() {
 	local slug="$1" fence_dir="$2" tutorial_file="$3"
+	local edit_dir="$WORK_ROOT/edits/$slug"
+	mkdir -p "$edit_dir"
+	EDIT_INDEX=0
 	printf 'set -euo pipefail\n'
-	printf 'HELPER=%q\n' "$HELPER"
-	printf 'TUTORIAL=%q\n' "$tutorial_file"
+	printf 'FENCE=%q\n' "$FENCE"
 	local step
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
-		edit:*) emit_edit_step "$slug" "${step#edit:}" ;;
+		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2

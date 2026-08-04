@@ -266,7 +266,7 @@ channel; it does not get a parallel one.
       `npm run check`.
 - [x] G2. Every removed docs URL redirects; no product-surface page
       describes Notary as current.
-- [x] G3. All tutorials pass their CI gates.
+- [ ] G3. All tutorials pass their CI gates.
 - [ ] G4. Frozen Evidence V1 contracts are byte-identical to the state at
       plan creation, or a re-approval is recorded here.
 - [x] G5. Review notes exist for every security-sensitive change. See
@@ -1392,9 +1392,9 @@ owed and is recorded here in full.
   `first-evidence-assertion`, `author-an-acceptance-definition`,
   `connect-an-institution-source`, `serve-assertions-over-http`, and
   `verify-an-assertion-as-a-consumer`.
-  Verification caveat, closed on 2026-08-04 by the entries below: both gates
-  were replayed on the host, and the Evidence gate then failed in CI's clean
-  container, which the host run could not have caught.
+  Correction, 2026-08-04, see the entry below: both replays above ran on the
+  host, and the Evidence gate then failed in CI, which replays in a clean
+  container the host run could not stand in for. This tick was premature.
   Coverage caveat, recorded rather than closed: the executing gates cover 11 of
   the tutorial surface's journeys, and six Evidence tutorial pages have no
   executing gate in this worktree
@@ -1446,3 +1446,27 @@ owed and is recorded here in full.
   rather than the working directory, because `target/` and `scratch/` swamp the
   scan with 141 unrelated hits; the export reproduced CI's single finding
   exactly, and reports none after the rename.
+- 2026-08-04: G3 is unticked. The 2026-08-03 tick was taken from host replays,
+  and the Evidence tutorial gate fails in CI, where it replays inside a clean
+  Debian userland holding a shell, coreutils and the toolset under test. The
+  gate emitted `node "$HELPER" replace-fence-pair ...` into each reader
+  journey for the tutorials that ask the reader to edit a file, so every such
+  journey stopped at `node: command not found`. Mounting an interpreter into
+  the container would have cleared the red without fixing anything: the
+  container's whole purpose is to prove a reader needs nothing beyond the
+  documented toolset, and a tutorial that quietly grew an interpreter
+  dependency would then pass CI and fail the reader. The edit step is instead
+  ported to `docs/site/scripts/evidence-tutorial-fence.sh`, shell and awk only,
+  with the same fence semantics. A test asserts the gate reaches for no
+  interpreter, so the dependency cannot come back unnoticed.
+  Evidence: all 22 fences named by the 11 edit steps across the three tutorials
+  that carry them are byte-identical between the retired Node helper and the
+  shell helper, checked both on the host and under Debian trixie's mawk 1.3.4;
+  the gate itself runs under that container's bash; and a host replay of all
+  five tutorials passes with the ported step, exercising every edit.
+  `npm run test:tutorial:evidence` is 14 of 14, `npm test` 307 of 307,
+  `npm run check` passes, and both files are clean under `shellcheck` and
+  `shfmt -d`. G3 re-ticks when the pull request's `Evidence tutorials from
+  source` job is green, which is the only run that proves it.
+  `docs/site/scripts/registryctl-tutorial.mjs` is untouched: the registryctl
+  gate runs on the host, where Node is part of the contract.
