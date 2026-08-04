@@ -61,8 +61,16 @@ def ed25519_jwk(kid: str) -> tuple[dict, dict]:
 
 
 def write(path: Path, text: str, mode: int = 0o644) -> Path:
+    """Write a file that is never wider than its final mode, not even briefly.
+
+    Creating the file and then narrowing it would leave a signing key readable
+    by anyone on the machine for the length of the write. `os.open` carries the
+    mode into the creation; the `chmod` after it only undoes the umask.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
     path.chmod(mode)
     return path
 

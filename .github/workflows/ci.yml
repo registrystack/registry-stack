@@ -123,6 +123,11 @@ jobs:
       - name: Check Debian 13 image contract
         run: python3 release/scripts/check-debian13-images.py
 
+      - name: Test Mint demonstration support scripts
+        run: |
+          python3 -m unittest discover \
+            --start-directory crates/registry-mint/demo/support
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
