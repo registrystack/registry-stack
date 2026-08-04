@@ -115,6 +115,36 @@ fn access_only_view_prints_authorized_without_claiming_release() {
 }
 
 #[test]
+fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
+    let fixture = Fixture::new();
+    let state_path = fixture.root.join(".evidence/dev/state.json");
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
+    state["questions"][1]["concepts"][0]["form"] = json!("reviewed-structured-value");
+    fs::write(
+        &state_path,
+        serde_json::to_vec(&state).expect("state renders"),
+    )
+    .expect("state writes");
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
+
+    let mut view = successful_view();
+    view["events"][0]["responseProtection"] = json!("sd-jwt-vc");
+    view["events"][1]["responseProtection"] = json!("sd-jwt-vc");
+    fixture.write_core_json(&view);
+
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             DISCLOSURE RELEASED is_adult\n"
+        )
+    );
+}
+
+#[test]
 fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     let fixture = Fixture::new();
     let state_path = fixture.root.join(".evidence/dev/state.json");

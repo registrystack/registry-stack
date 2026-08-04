@@ -121,7 +121,10 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
                 || !valid_uri(&concept.uri)
                 || !matches!(
                     concept.form.as_str(),
-                    "boolean" | "controlled-category" | "bounded-integer"
+                    "boolean"
+                        | "controlled-category"
+                        | "bounded-integer"
+                        | "reviewed-structured-value"
                 )
         })
         || !valid_purpose(&question.purpose)
@@ -186,7 +189,10 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
 fn validate_common(event: &CoreAuditEvent, question: &dev::ReadyQuestionState) -> Result<()> {
     if event.requirement != question.requirement_uri
         || event.purpose != question.purpose
-        || event.response_protection != ResponseProtection::Signed
+        || !matches!(
+            event.response_protection,
+            ResponseProtection::Signed | ResponseProtection::SdJwtVc
+        )
         || !valid_pseudonym(&event.requester_pseudonym)
     {
         return Err(failed());
@@ -292,6 +298,7 @@ enum Decision {
 #[serde(rename_all = "kebab-case")]
 enum ResponseProtection {
     Signed,
+    SdJwtVc,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]

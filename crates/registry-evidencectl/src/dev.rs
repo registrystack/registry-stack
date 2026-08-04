@@ -466,7 +466,7 @@ fn valid_concept_state(question_alias: &str, concept: &ConceptState) -> bool {
             )
         && matches!(
             concept.form.as_str(),
-            "boolean" | "controlled-category" | "bounded-integer"
+            "boolean" | "controlled-category" | "bounded-integer" | "reviewed-structured-value"
         )
 }
 
@@ -957,7 +957,7 @@ fn wait_for_http(
 ) -> Result<()> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(250))
-        .timeout_read(Duration::from_millis(500))
+        .timeout_read(Duration::from_secs(2))
         .timeout_write(Duration::from_millis(500))
         .redirects(0)
         .build();
@@ -1160,7 +1160,7 @@ impl From<&CompiledQuestion> for QuestionState {
                         CompiledConceptForm::Boolean => "boolean".to_owned(),
                         CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
                         CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
-                        CompiledConceptForm::Structured => "structured".to_owned(),
+                        CompiledConceptForm::Structured => "reviewed-structured-value".to_owned(),
                     },
                 })
                 .collect(),
@@ -1553,6 +1553,17 @@ mod tests {
             compiled.caller_evidence_audience
         );
         assert!(caller.to_string().find("private").is_none());
+    }
+
+    #[test]
+    fn structured_concepts_use_the_runtime_value_form_in_lifecycle_state() {
+        let mut compiled = compiled(Path::new("/private/runtime.yaml"));
+        compiled.questions[0].concepts[0].concept_form = CompiledConceptForm::Structured;
+
+        let state = QuestionState::from(&compiled.questions[0]);
+
+        assert_eq!(state.concepts[0].form, "reviewed-structured-value");
+        assert!(valid_question_state(&state));
     }
 
     #[test]
