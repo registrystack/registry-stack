@@ -23,11 +23,12 @@ async function runGate(env = {}, args = ['--dry-run']) {
   }
 }
 
-test('the dry-run gate registers the current first Evidence tutorial', async () => {
+test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
   assert.match(output, /first-evidence-assertion: 12 sh fences, 11 executed/u);
-  assert.match(output, /Checked 1 tutorial\./u);
+  assert.match(output, /return-a-governed-value: 9 sh fences, 9 executed/u);
+  assert.match(output, /Checked 2 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -35,6 +36,16 @@ test('--only accepts the current first Evidence tutorial', async () => {
     '--dry-run',
     '--only',
     'first-evidence-assertion',
+  ]);
+  assert.equal(code, 0, output);
+  assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('--only accepts the governed-value follow-up', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'return-a-governed-value',
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);

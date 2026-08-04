@@ -47,7 +47,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # Registered tutorials
 # ---------------------------------------------------------------------------
 
-EVIDENCE_TUTORIALS=(first-evidence-assertion)
+EVIDENCE_TUTORIALS=(first-evidence-assertion return-a-governed-value)
 
 load_spec() {
 	SPEC_FENCES=0
@@ -84,6 +84,33 @@ load_spec() {
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED adult-status age-check requester="
 			"DISCLOSURE RELEASED is_adult"
+		)
+		;;
+	return-a-governed-value)
+		SPEC_FENCES=9
+		SPEC_STEPS=(
+			"background:1"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:2"
+			"save:Add the age-bracket question|yaml|1|questions/age-bracket.yaml"
+			"save:Add the age-bracket question|rhai|1|derivations/age-bracket.rhai"
+			"run:3-9"
+		)
+		SPEC_LITERALS=(
+			"type: controlled-category"
+			"values: [under-18, 18-to-24, 25-or-older]"
+			"evidencectl request prepare age-bracket"
+			"--config .evidence/requests/age-bracket/authorization.curl"
+			"evidencectl verify age-bracket.jws.json"
+			"evidencectl audit show --last-operation"
+		)
+		SPEC_OUTPUTS=(
+			"Evidence ready at http://127.0.0.1:8080"
+			"Prepared request: .evidence/requests/age-bracket/request.json"
+			"VERIFIED"
+			"Local Evidence stopped"
+			"ACCESS AUTHORIZED age-bracket service-path-selection requester="
+			"DISCLOSURE RELEASED age_bracket"
 		)
 		;;
 	*)
@@ -392,7 +419,15 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 
 	# Replay the journey in one shell so `cd` persists exactly as a reader
 	# experiences it, from a reader directory of this tutorial's own.
-	reader_dir="$WORK_ROOT/reader/$slug"
+	case "$slug" in
+	first-evidence-assertion)
+		reader_dir="$WORK_ROOT/reader/evidence-start"
+		;;
+	return-a-governed-value)
+		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
+		;;
+	*) reader_dir="$WORK_ROOT/reader/$slug" ;;
+	esac
 	mkdir -p "$reader_dir"
 	run_script="$WORK_ROOT/run-$slug.sh"
 	emit_journey "$slug" "$fence_dir" "$tutorial_file" >"$run_script"
