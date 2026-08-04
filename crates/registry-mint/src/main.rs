@@ -159,10 +159,22 @@ fn run(cli: Cli) -> Result<(), String> {
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
             let summary = MintAuditLog::verify(&config.audit)
                 .map_err(|error| format!("the audit chain did not verify: {error}"))?;
+            let sealed_sequence = match (summary.first_sequence, summary.last_sequence) {
+                (Some(first), Some(last)) => format!("{first}-{last}"),
+                _ => "none".to_owned(),
+            };
+            let active_segment = if summary.active_verified {
+                "verified"
+            } else {
+                "not verified: a running writer holds it, so only sealed history was proven"
+            };
             println!(
-                "audit ok: records={} tail={}",
+                "segments: {}\nrecords: {}\nsealed-sequence: {}\nhead: {}\nactive-segment: {}",
+                summary.segments,
                 summary.records,
-                OptionalHashHex(summary.last_hash)
+                sealed_sequence,
+                OptionalHashHex(summary.last_hash),
+                active_segment,
             );
             Ok(())
         }

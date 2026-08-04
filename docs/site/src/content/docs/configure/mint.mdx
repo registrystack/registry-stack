@@ -61,7 +61,8 @@ You need:
   keep the private half with the client.
 - A directory to hold one registration file per client.
 - An owner-only directory on durable storage for the keyed Mint audit chain. Plan its capacity,
-  backup, and retention because Mint does not rotate or delete this file automatically.
+  backup, and retention because Registry Mint rotates segments but never deletes or compacts
+  them.
 - The claim names the resource server (Evidence, for example) reads its principal, requester
   tags, evidence audience, and grant pair from, so Registry Mint's `accessTokens.claims` can be
   set to match them exactly.
@@ -87,6 +88,7 @@ signing:
   activeKeyFile: secrets/signing.jwk
 audit:
   path: audit/mint.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
@@ -119,6 +121,9 @@ access token it synchronizes a token-release record to the chain and its parent 
 write fails, Mint returns `server_error`, does not release the token, and fails readiness. The
 chain keeps only keyed pseudonyms where correlation is needed, never raw assertions, access
 tokens, client ids, authority values, actors, or subject values.
+`audit.maximumFileBytes` is the per-segment rotation threshold. Mint seals a full segment as
+`<audit.path>.<eight-digit-sequence>` and continues online at `audit.path`; it never deletes or
+compacts sealed segments.
 
 Delegated tokens, bound to one named subject a client acts on behalf of, are a further optional
 step layered on top of this base configuration. `crates/registry-mint/README.md` covers the

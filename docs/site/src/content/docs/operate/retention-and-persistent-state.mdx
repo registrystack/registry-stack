@@ -41,6 +41,7 @@ Two consequences follow from that boundary:
 |---|---|---|---|
 | Relay audit sink | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | The file sink defaults to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
 | Evidence audit chain | A keyed, hash-chained JSONL log of the access-attempt event before every source read and the disclosure-release event before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a total ceiling. When an append would exceed it, the runtime seals the active segment as `<auditStorage.path>.<sequence>` and opens a new active segment online, with no operator action. Nothing in the runtime deletes or compacts a sealed segment; total retention is entirely operator-owned. | Set `auditStorage.path`, `auditStorage.maximumFileBytes`, and the hash secret in `runtime.yaml`. Archive sealed segments to cold storage oldest sequence first, never touch the active segment while the service runs, and run `evidence verify-audit` on the cadence the deployment's audit policy requires. |
+| Mint audit chain | A keyed, hash-chained JSONL log of token releases and denials. Records use keyed pseudonyms and omit raw assertions, access tokens, client ids, principals, authority values, actors, and subject values. | `audit.maximumFileBytes` is a per-segment threshold, not a total ceiling. Registry Mint seals full segments as `<audit.path>.<sequence>` online and never deletes or compacts them. | Set `audit.path`, `audit.maximumFileBytes`, and the hash key in `mint.yaml`. Archive sealed segments oldest first, never touch the active segment while Registry Mint runs, and run `mint verify-audit` on the deployment's verification cadence. |
 | Relay audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. Relay does not expire or rewrite it. | Mount the file read-only for the Relay process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
 | Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. For audited SnapshotExact, the authored `retain_generations` value keeps between `1` and `16` completed cache generations, including the active generation, after successful publication. Ordinary sources keep the built-in current and previous generations. Older snapshots are removed best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. Treat authored retention as a bounded recovery set, not an API for selecting arbitrary rollback targets. |
 | Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
@@ -108,12 +109,18 @@ active segment while the service runs: the runtime recognizes a segment by its
 `<auditStorage.path>.<sequence>` name, and a rename outside that namespace produces a silent fork
 on the next restart rather than a rotation.
 
-Registry Mint persists no application state beyond the operator-owned signing key and the client
-registration files under `clients.directory`. Onboarding, offboarding, and caller key rotation
-reload that directory on `SIGHUP` without a restart. Its client-assertion replay cache is
-in-memory only and clears on restart, so a restarted Registry Mint accepts a previously used `jti`
-again for whatever lifetime remains on that assertion; keep `clientAssertion.maximumLifetimeSeconds`
-short enough that this window stays small.
+Registry Mint's durable state is the operator-owned signing key, the client registration files
+under `clients.directory`, and the segmented audit chain. Onboarding, offboarding, and caller key
+rotation reload the client directory on `SIGHUP` without a restart. The client-assertion replay
+cache is in-memory only and clears on restart, so a restarted Registry Mint accepts a previously
+used `jti` again for whatever lifetime remains on that assertion. Keep
+`clientAssertion.maximumLifetimeSeconds` short enough that this window stays small.
+
+Run `mint verify-audit` to replay the Mint chain across every retained segment. The command reports
+segment and record counts, the first and last sealed sequence, the chain tail, and whether the
+active segment was verified. A running writer keeps the active segment out of the verification
+pass and produces `active-segment: not verified`; stop Registry Mint for a complete retained-chain
+pass.
 
 ## Relay consultation-state retention
 

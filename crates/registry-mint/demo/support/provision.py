@@ -174,6 +174,7 @@ signing:
   activeKeyFile: secrets/signing.jwk
 audit:
   path: audit/mint.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:

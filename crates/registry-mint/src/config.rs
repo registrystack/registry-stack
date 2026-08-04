@@ -120,6 +120,8 @@ pub struct SigningConfig {
 pub struct AuditConfig {
     /// Append-only keyed JSONL chain, resolved relative to the configuration.
     pub path: PathBuf,
+    /// Per-segment rotation threshold. Sealed segments are never deleted.
+    pub maximum_file_bytes: u64,
     /// Owner-only master HMAC key, resolved relative to the configuration.
     pub hash_key_file: PathBuf,
     /// Version label written into privacy-preserving audit handles.
@@ -313,6 +315,11 @@ impl MintConfig {
                 "audit path, hash key file, and non-zero hash key version are required",
             ));
         }
+        if !(1_048_576..=1_099_511_627_776).contains(&self.audit.maximum_file_bytes) {
+            return Err(ConfigError::Invalid(
+                "audit maximumFileBytes must be 1048576..=1099511627776",
+            ));
+        }
         if self.audit.path == self.audit.hash_key_file
             || self.audit.path == self.signing.active_key_file
             || self.audit.hash_key_file == self.signing.active_key_file
@@ -469,6 +476,7 @@ signing:
   activeKeyFile: secrets/signing.jwk
 audit:
   path: audit/mint.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
@@ -519,6 +527,7 @@ clients:
         );
         assert_eq!(config.clients.directory, directory.path().join("clients"));
         assert_eq!(config.audit.path, directory.path().join("audit/mint.jsonl"));
+        assert_eq!(config.audit.maximum_file_bytes, 1_073_741_824);
         assert_eq!(
             config.audit.hash_key_file,
             directory.path().join("secrets/audit-hmac-key")
@@ -531,7 +540,7 @@ clients:
     #[test]
     fn audit_configuration_is_required_bounded_and_separate_from_secrets() {
         assert!(load_from(&VALID.replace(
-            "audit:\n  path: audit/mint.jsonl\n  hashKeyFile: secrets/audit-hmac-key\n  hashKeyVersion: 1\n",
+            "audit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyFile: secrets/audit-hmac-key\n  hashKeyVersion: 1\n",
             ""
         ))
         .is_err());
@@ -540,6 +549,10 @@ clients:
             ConfigError::Invalid(
                 "audit path, hash key file, and non-zero hash key version are required"
             )
+        );
+        assert_eq!(
+            load_error(&VALID.replace("maximumFileBytes: 1073741824", "maximumFileBytes: 1024")),
+            ConfigError::Invalid("audit maximumFileBytes must be 1048576..=1099511627776")
         );
         assert_eq!(
             load_error(&VALID.replace(

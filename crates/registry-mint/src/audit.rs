@@ -1,20 +1,8 @@
-//! Fail-closed Mint audit over one durable, keyed JSONL chain.
+//! Fail-closed Mint audit over one durable, segmented keyed JSONL chain.
 
-use std::{
-    fs::{self, File, OpenOptions},
-    io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-
-use async_trait::async_trait;
 use registry_platform_audit::{
-    verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError, AuditHashSecret,
-    AuditKeyHasher, AuditSink, ChainState, JsonlFileSink,
+    verify_segmented_audit_chain, AuditChainHasher, AuditEnvelope, AuditError, AuditHashSecret,
+    AuditKeyHasher, ChainState, DurableSegmentedJsonlSink,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
@@ -37,6 +25,10 @@ pub enum MintAuditError {
     Audit(#[from] AuditError),
     #[error("an audit-safe reference could not be constructed")]
     Reference,
+    #[error(
+        "sealed segment {sequence} is archived or missing from the chain; this is not corruption"
+    )]
+    SegmentMissing { sequence: u64 },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -83,13 +75,17 @@ struct MintAuditEvent {
 /// Minimal operator report returned by `mint verify-audit`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MintAuditSummary {
+    pub segments: usize,
     pub records: usize,
     pub last_hash: Option<[u8; 32]>,
+    pub first_sequence: Option<u64>,
+    pub last_sequence: Option<u64>,
+    pub active_verified: bool,
 }
 
 /// Process-lifetime Mint audit boundary.
 pub struct MintAuditLog {
-    sink: DurableJsonlSink,
+    sink: DurableSegmentedJsonlSink,
     chain: ChainState,
     key_hasher: AuditKeyHasher,
     key_version: u32,
@@ -100,7 +96,7 @@ impl std::fmt::Debug for MintAuditLog {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MintAuditLog")
-            .field("path", &self.sink.path)
+            .field("path", &self.sink.path())
             .field("key_version", &self.key_version)
             .finish_non_exhaustive()
     }
@@ -113,7 +109,7 @@ impl MintAuditLog {
         let secret = AuditHashSecret::new(secret.as_bytes().to_vec())?;
         let chain_hasher = AuditChainHasher::keyed(secret.clone());
         let key_hasher = AuditKeyHasher::Keyed(secret);
-        let sink = DurableJsonlSink::open(config.path.clone())?;
+        let sink = DurableSegmentedJsonlSink::open(config.path.clone(), config.maximum_file_bytes)?;
         let chain = ChainState::bootstrap_or_start_empty(&sink, chain_hasher).await?;
         Ok(Self {
             sink,
@@ -129,27 +125,20 @@ impl MintAuditLog {
         let secret =
             secretfile::read_owner_only(&config.hash_key_file).map_err(MintAuditError::Secret)?;
         let secret = AuditHashSecret::new(secret.as_bytes().to_vec())?;
-        let hasher = AuditChainHasher::keyed(secret);
-        let contents = match fs::read_to_string(&config.path) {
-            Ok(contents) => {
-                reject_unsafe_existing_path(&config.path)?;
-                let parent = config.path.parent().ok_or_else(|| {
-                    AuditError::Io(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Mint audit path has no parent",
-                    ))
-                })?;
-                validate_owner_only_directory(parent)?;
-                contents
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(AuditError::Io(error).into()),
-        };
-        let summary = verify_jsonl_lines_with_hasher(contents.lines(), &hasher)
-            .map_err(AuditError::ChainVerification)?;
+        let summary = verify_segmented_audit_chain(&config.path, &AuditChainHasher::keyed(secret))
+            .map_err(|error| match error {
+                AuditError::SegmentMissing { sequence } => {
+                    MintAuditError::SegmentMissing { sequence }
+                }
+                error => MintAuditError::Audit(error),
+            })?;
         Ok(MintAuditSummary {
+            segments: summary.segments,
             records: summary.records,
             last_hash: summary.last_hash,
+            first_sequence: summary.first_sequence,
+            last_sequence: summary.last_sequence,
+            active_verified: summary.active_verified,
         })
     }
 
@@ -226,8 +215,8 @@ impl MintAuditLog {
     }
 
     #[must_use]
-    pub fn ready(&self) -> bool {
-        !self.sink.poisoned.load(Ordering::Acquire) && self.chain.try_last_hash().is_some()
+    pub async fn ready(&self) -> bool {
+        self.chain.try_last_hash().is_some() && self.sink.ready().await
     }
 
     fn pseudonym(&self, class: &str, protected: &str) -> Result<String, MintAuditError> {
@@ -249,178 +238,10 @@ impl MintAuditLog {
     }
 }
 
-/// Platform JSONL chaining plus an fsync boundary and permanent poisoning after
-/// an uncertain write. Rotation is deliberately absent: retention remains an
-/// explicit operator action and no retained Mint history is silently deleted.
-struct DurableJsonlSink {
-    inner: JsonlFileSink,
-    path: PathBuf,
-    poisoned: Arc<AtomicBool>,
-}
-
-impl std::fmt::Debug for DurableJsonlSink {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DurableJsonlSink")
-            .field("path", &self.path)
-            .field("poisoned", &self.poisoned.load(Ordering::Relaxed))
-            .finish()
-    }
-}
-
-impl DurableJsonlSink {
-    fn open(path: PathBuf) -> Result<Self, AuditError> {
-        reject_unsafe_existing_path(&path)?;
-        let inner = JsonlFileSink::with_rotation_single_writer(&path, 0, 1)?;
-        let parent = path.parent().ok_or_else(|| {
-            AuditError::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Mint audit path has no parent",
-            ))
-        })?;
-        validate_owner_only_directory(parent)?;
-        reject_unsafe_existing_path(&lock_path(&path))?;
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(AuditError::Io)?;
-        validate_owner_only_file(&file)?;
-        sync_file_and_parent(&path)?;
-        Ok(Self {
-            inner,
-            path,
-            poisoned: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
-    fn poison(&self) {
-        self.poisoned.store(true, Ordering::Release);
-    }
-
-    fn check_writable(&self) -> Result<(), AuditError> {
-        if self.poisoned.load(Ordering::Acquire) {
-            return Err(AuditError::Io(io::Error::other(
-                "Mint audit stopped after a failed durable write",
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl AuditSink for DurableJsonlSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        self.check_writable()?;
-        if let Err(error) = self.inner.write(envelope).await {
-            self.poison();
-            return Err(error);
-        }
-        let path = self.path.clone();
-        match tokio::task::spawn_blocking(move || sync_file_and_parent(&path)).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => {
-                self.poison();
-                Err(error)
-            }
-            Err(error) => {
-                self.poison();
-                Err(AuditError::Io(io::Error::other(error)))
-            }
-        }
-    }
-
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        self.inner
-            .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
-            .await
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        self.inner.tail_hash_with_hasher(hasher).await
-    }
-}
-
-fn reject_unsafe_existing_path(path: &Path) -> Result<(), AuditError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if !metadata.is_file()
-                || metadata.nlink() != 1
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.mode() & 0o077 != 0
-            {
-                return Err(AuditError::Io(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "Mint audit file is not an owner-only, single-link regular file",
-                )));
-            }
-            Ok(())
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AuditError::Io(error)),
-    }
-}
-
-fn validate_owner_only_directory(path: &Path) -> Result<(), AuditError> {
-    let metadata = fs::symlink_metadata(path).map_err(AuditError::Io)?;
-    if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(AuditError::Io(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Mint audit directory is not an owner-only directory",
-        )));
-    }
-    Ok(())
-}
-
-fn lock_path(path: &Path) -> PathBuf {
-    let mut raw = path.as_os_str().to_os_string();
-    raw.push(".lock");
-    PathBuf::from(raw)
-}
-
-fn validate_owner_only_file(file: &File) -> Result<(), AuditError> {
-    let metadata = file.metadata().map_err(AuditError::Io)?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(AuditError::Io(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Mint audit file is not an owner-only, single-link regular file",
-        )));
-    }
-    Ok(())
-}
-
-fn sync_file_and_parent(path: &Path) -> Result<(), AuditError> {
-    reject_unsafe_existing_path(path)?;
-    let file = File::open(path).map_err(AuditError::Io)?;
-    validate_owner_only_file(&file)?;
-    file.sync_all().map_err(AuditError::Io)?;
-    let parent = path.parent().ok_or_else(|| {
-        AuditError::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Mint audit path has no parent",
-        ))
-    })?;
-    validate_owner_only_directory(parent)?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(AuditError::Io)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::{fs, os::unix::fs::PermissionsExt};
 
     fn fixture() -> (tempfile::TempDir, AuditConfig) {
         let directory = tempfile::tempdir().expect("temp dir");
@@ -429,6 +250,7 @@ mod tests {
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).expect("restrict key");
         let config = AuditConfig {
             path: directory.path().join("audit/mint.jsonl"),
+            maximum_file_bytes: 1_048_576,
             hash_key_file: secret,
             hash_key_version: 1,
         };
@@ -457,8 +279,10 @@ mod tests {
                 .expect("second decision is durable");
         }
         let summary = MintAuditLog::verify(&config).expect("chain verifies");
+        assert_eq!(summary.segments, 1);
         assert_eq!(summary.records, 2);
         assert!(summary.last_hash.is_some());
+        assert!(summary.active_verified);
     }
 
     #[tokio::test]
@@ -493,5 +317,39 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn rotation_seals_history_without_breaking_restart_or_verification() {
+        let (_directory, mut config) = fixture();
+        config.maximum_file_bytes = 550;
+        {
+            let audit = MintAuditLog::initialize(&config, "https://mint.example.org")
+                .await
+                .expect("audit initializes");
+            for index in 0..8 {
+                audit
+                    .append_rejected(
+                        &format!("urn:ulid:01K0000000000000000000000{index}"),
+                        "invalid-client",
+                    )
+                    .await
+                    .expect("decision is durable");
+            }
+        }
+        let first_segment = config.path.with_extension("jsonl.00000001");
+        assert!(first_segment.exists(), "rotation seals the active segment");
+        let summary = MintAuditLog::verify(&config).expect("segmented chain verifies");
+        assert_eq!(summary.records, 8);
+        assert!(summary.segments > 1);
+        assert_eq!(summary.first_sequence, Some(1));
+
+        let restarted = MintAuditLog::initialize(&config, "https://mint.example.org")
+            .await
+            .expect("audit restarts from the segmented tail");
+        restarted
+            .append_rejected("urn:ulid:01K00000000000000000000009", "invalid-request")
+            .await
+            .expect("post-restart decision is durable");
     }
 }

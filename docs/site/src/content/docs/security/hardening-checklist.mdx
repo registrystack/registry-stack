@@ -127,12 +127,12 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   only the active segment, so this pass is what proves sealed history was not tampered with.
 - Registry Mint: put `audit.path` on durable storage whose permissions, capacity, backup, restore,
   and retention you own. Mint synchronizes the token-release record before returning a token and
-  fails closed when that write fails. It writes one unrotated file and never deletes records, so
-  monitor capacity and perform retention only through a reviewed stop, archive, verify, and
-  restart procedure.
+  fails closed when that write fails. Treat `audit.maximumFileBytes` as a per-segment threshold,
+  not a total ceiling. Rotation happens online, but Mint never deletes or compacts sealed segments.
 - Registry Mint: run one process per `audit.path`. Mint verifies the retained chain and takes an
-  exclusive lock at startup. Run `mint verify-audit` during backup, restore, incident procedures,
-  and on the cadence your retention policy requires.
+  exclusive lock at startup. Archive sealed segments oldest first, never rename or archive the
+  active segment while Mint runs, and run `mint verify-audit` during backup, restore, incident
+  procedures, and on the cadence your retention policy requires.
 - Relay: configure a durable audit sink (`file` or `syslog`, not bare `stdout`) before you declare
   `production` or `evidence_grade`. A missing durable sink trips `relay.audit.sink_missing`, which
   fails startup at `evidence_grade`.

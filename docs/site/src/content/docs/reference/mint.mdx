@@ -82,16 +82,24 @@ following tables group the surface by the struct that owns each field.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `path` | path | required | One keyed JSONL chain. The parent directory and existing chain must be owner-only. |
+| `maximumFileBytes` | integer (`u64`) | required | Per-segment rotation threshold, from `1048576` through `1099511627776` bytes. |
 | `hashKeyFile` | path | required | At least 32 bytes in a regular, owner-only, single-link file. Must differ from signing and audit paths. |
 | `hashKeyVersion` | integer (`u32`) | required | Must be non-zero. Labels keyed pseudonyms so an operator can identify the correlating key generation. |
 
 Mint takes a single-writer lock, verifies the active chain at startup, and synchronizes the chain
-and its parent directory for each append. It has no automatic audit rotation or deletion, so the
-operator owns capacity, backup, and retention for `audit.path`. Verify retained records with:
+and its parent directory for each append. When an append would exceed `maximumFileBytes`, Mint
+seals the active segment as `<path>.<eight-digit-sequence>` and opens a new active segment online.
+The keyed chain continues across segments. Mint does not delete or compact sealed segments, so the
+operator owns total capacity, backup, and retention. Verify retained records with:
 
 ```sh
 mint verify-audit --config /etc/mint/mint.yaml
 ```
+
+The command verifies every sealed segment and reports a missing sequence distinctly. It verifies
+the active segment when no Mint process owns the writer lock; otherwise it reports
+`active-segment: not verified`. Archive sealed segments oldest first. Do not rename or archive the
+active segment while Mint is running.
 
 The chain stores a random operation id for every decision. Successful release records add the
 token `jti`, signing key id, expiry, delegated status, and keyed pseudonyms for correlation.

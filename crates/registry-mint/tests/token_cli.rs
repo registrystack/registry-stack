@@ -140,6 +140,7 @@ signing:
   activeKeyFile: secrets/signing.jwk
 audit:
   path: audit/mint.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
@@ -262,7 +263,8 @@ fn the_subcommand_obtains_a_token_the_endpoint_agreed_to_issue() {
         .output()
         .expect("the verifier runs");
     assert!(verification.status.success());
-    assert!(String::from_utf8_lossy(&verification.stdout).contains("records=1"));
+    let verification = String::from_utf8_lossy(&verification.stdout);
+    assert!(verification.contains("active-segment: not verified"));
 }
 
 #[test]

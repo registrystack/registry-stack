@@ -85,6 +85,7 @@ signing:
   retiredPublicJwkFiles: []
 audit:
   path: audit/mint.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
@@ -127,9 +128,13 @@ value-free error categories. Raw assertions, tokens, client ids, actors,
 principals, and subject values never enter the chain; successful records use
 keyed pseudonyms where correlation is needed.
 
-Mint does not rotate or delete the audit file. Monitor its capacity and perform
-retention as an explicit stop, archive, verify, and restart operation while
-retaining the matching audit key.
+`audit.maximumFileBytes` is a per-segment threshold, not a total capacity limit.
+When an append would exceed the threshold, Mint seals the active segment as
+`<audit.path>.<eight-digit-sequence>` and opens a new active segment online. The
+keyed chain continues across the seam. Mint never deletes or compacts sealed
+segments, so monitor total capacity and archive sealed history under the
+deployment's retention policy while retaining the matching audit key. Never
+rename or archive the active segment while Mint is running.
 
 ## Registering a client
 
@@ -247,6 +252,10 @@ Verify the retained chain with the same configuration and audit key:
 ```bash
 mint verify-audit --config /etc/mint/mint.yaml
 ```
+
+The command verifies every sealed segment. It also verifies the active segment
+when no Mint process owns the writer lock; otherwise it reports
+`active-segment: not verified`.
 
 All three operator commands accept `MINT_CONFIG` in place of `--config`.
 `check` loads the configuration, signing key, audit chain, and client registry,

@@ -208,8 +208,8 @@ impl MintService {
     }
 
     #[must_use]
-    fn ready(&self) -> bool {
-        self.client_count() > 0 && self.audit.ready()
+    async fn ready(&self) -> bool {
+        self.client_count() > 0 && self.audit.ready().await
     }
 }
 
@@ -439,7 +439,7 @@ async fn health() -> Response {
 async fn ready(State(service): State<Arc<MintService>>) -> Response {
     // A Mint with no clients or a poisoned audit writer is live but cannot
     // safely issue a token, so admission fails until the process is repaired.
-    if !service.ready() {
+    if !service.ready().await {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             JSON_MEDIA_TYPE,
