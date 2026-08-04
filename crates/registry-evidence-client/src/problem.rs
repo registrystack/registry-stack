@@ -33,21 +33,31 @@ pub(crate) struct ProblemBody {
 /// Map a refused or failed exchange onto one coarse client failure.
 ///
 /// `retry_after_seconds` is read from the response header and honored only for
-/// the rate-limited answer, which is the one case the contract permits it for.
+/// the two answers the contract permits a bounded wait on: the rate-limited
+/// refusal, and a transient dependency or service failure.
+///
+/// `header_operation` is the identifier the response header carried. It is the
+/// fallback for every failure that can name one, because the case where the body
+/// cannot be read is exactly the case where the deployment's own identifier for
+/// the exchange is all a relying party can take to support. A readable body's own
+/// identifier wins when it satisfies the rule; both are held to the same rule.
 pub(crate) fn map_problem(
     status: u16,
     media_type: Option<&str>,
     body: &[u8],
     retry_after_seconds: Option<u64>,
+    header_operation: Option<&str>,
 ) -> EvidenceClientError {
+    let header_operation = header_operation.and_then(sanitized_operation);
     let Some(problem) = parse_problem(media_type, body) else {
         return EvidenceClientError::Protocol {
             status,
             code: None,
-            operation: None,
+            operation: header_operation,
+            retry_after_seconds: None,
         };
     };
-    let operation = sanitized_operation(&problem.operation);
+    let operation = sanitized_operation(&problem.operation).or(header_operation);
     match (status, problem.code.as_str()) {
         (401 | 403 | 429, code) => EvidenceClientError::Denied {
             status,
@@ -60,6 +70,7 @@ pub(crate) fn map_problem(
             status,
             code: Some(code.to_owned()),
             operation,
+            retry_after_seconds: retry_after_seconds.filter(|_| status == 503),
         },
     }
 }
@@ -126,6 +137,8 @@ mod tests {
         .into_bytes()
     }
 
+    const OPERATION: &str = "01JQ0QZ8YHZ0000000000000AB";
+
     #[test]
     fn refusals_map_to_the_denied_failure() {
         for (status, code) in [
@@ -138,13 +151,14 @@ mod tests {
                 Some(PROBLEM_MEDIA_TYPE),
                 &problem_json(status, code),
                 Some(1),
+                None,
             );
             assert_eq!(
                 mapped,
                 EvidenceClientError::Denied {
                     status,
                     code: code.to_owned(),
-                    operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+                    operation: Some(OPERATION.to_owned()),
                     // Only the rate-limited answer may carry a wait.
                     retry_after_seconds: (status == 429).then_some(1),
                 }
@@ -159,11 +173,12 @@ mod tests {
             Some(PROBLEM_MEDIA_TYPE),
             &problem_json(422, "evidence_not_available"),
             None,
+            None,
         );
         assert_eq!(
             mapped,
             EvidenceClientError::NotAvailable {
-                operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+                operation: Some(OPERATION.to_owned()),
             }
         );
     }
@@ -185,16 +200,117 @@ mod tests {
                 Some(PROBLEM_MEDIA_TYPE),
                 &problem_json(status, code),
                 None,
+                None,
             );
             assert_eq!(
                 mapped,
                 EvidenceClientError::Protocol {
                     status,
                     code: Some(code.to_owned()),
-                    operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+                    operation: Some(OPERATION.to_owned()),
+                    retry_after_seconds: None,
                 }
             );
         }
+    }
+
+    /// The contract permits a bounded wait on a transient failure, which is the
+    /// answer a relying party can politely back off from.
+    #[test]
+    fn a_transient_failure_may_carry_a_bounded_wait() {
+        for (status, code, expected_wait) in [
+            (503_u16, "dependency_unavailable", Some(30)),
+            (503, "service_unavailable", Some(30)),
+            // Nothing else in the coarse mapping surfaces a wait.
+            (400, "malformed_request", None),
+            (406, "response_format_not_acceptable", None),
+            (422, "malformed_request", None),
+        ] {
+            let mapped = map_problem(
+                status,
+                Some(PROBLEM_MEDIA_TYPE),
+                &problem_json(status, code),
+                Some(30),
+                None,
+            );
+            assert_eq!(
+                mapped,
+                EvidenceClientError::Protocol {
+                    status,
+                    code: Some(code.to_owned()),
+                    operation: Some(OPERATION.to_owned()),
+                    retry_after_seconds: expected_wait,
+                }
+            );
+        }
+    }
+
+    /// The response header is the fallback identifier. The body's own value wins
+    /// whenever the body is readable, and both are held to the same rule.
+    #[test]
+    fn the_response_header_supplies_the_identifier_the_body_does_not() {
+        // An unreadable body, so the header is all there is.
+        assert_eq!(
+            map_problem(400, Some("text/html"), b"<html/>", None, Some(OPERATION)),
+            EvidenceClientError::Protocol {
+                status: 400,
+                code: None,
+                operation: Some(OPERATION.to_owned()),
+                retry_after_seconds: None,
+            }
+        );
+
+        // A readable body, whose own identifier is the one to quote.
+        assert_eq!(
+            map_problem(
+                403,
+                Some(PROBLEM_MEDIA_TYPE),
+                &problem_json(403, "not_authorized"),
+                None,
+                Some("01HEADERONLY"),
+            ),
+            EvidenceClientError::Denied {
+                status: 403,
+                code: "not_authorized".to_owned(),
+                operation: Some(OPERATION.to_owned()),
+                retry_after_seconds: None,
+            }
+        );
+
+        // A readable body whose identifier is unusable falls back to the header.
+        let hostile = br#"{"type":"about:blank","title":"t","status":403,"code":"not_authorized","operation":"01AB\nrole=subject"}"#;
+        assert_eq!(
+            map_problem(
+                403,
+                Some(PROBLEM_MEDIA_TYPE),
+                hostile,
+                None,
+                Some("01HEADERONLY"),
+            ),
+            EvidenceClientError::Denied {
+                status: 403,
+                code: "not_authorized".to_owned(),
+                operation: Some("01HEADERONLY".to_owned()),
+                retry_after_seconds: None,
+            }
+        );
+
+        // A header value outside the rule is dropped exactly like a body value.
+        assert_eq!(
+            map_problem(
+                400,
+                Some("text/html"),
+                b"<html/>",
+                None,
+                Some("01AB role=subject"),
+            ),
+            EvidenceClientError::Protocol {
+                status: 400,
+                code: None,
+                operation: None,
+                retry_after_seconds: None,
+            }
+        );
     }
 
     #[test]
@@ -211,11 +327,12 @@ mod tests {
             b"".as_slice(),
         ] {
             assert_eq!(
-                map_problem(403, Some(PROBLEM_MEDIA_TYPE), body, None),
+                map_problem(403, Some(PROBLEM_MEDIA_TYPE), body, None, None),
                 EvidenceClientError::Protocol {
                     status: 403,
                     code: None,
                     operation: None,
+                    retry_after_seconds: None,
                 }
             );
         }
@@ -227,20 +344,23 @@ mod tests {
                 403,
                 Some("application/json"),
                 &problem_json(403, "not_authorized"),
-                None
+                None,
+                None,
             ),
             EvidenceClientError::Protocol {
                 status: 403,
                 code: None,
                 operation: None,
+                retry_after_seconds: None,
             }
         );
         assert_eq!(
-            map_problem(403, None, &problem_json(403, "not_authorized"), None),
+            map_problem(403, None, &problem_json(403, "not_authorized"), None, None),
             EvidenceClientError::Protocol {
                 status: 403,
                 code: None,
                 operation: None,
+                retry_after_seconds: None,
             }
         );
     }
@@ -252,20 +372,21 @@ mod tests {
             "a".repeat(MAXIMUM_PROBLEM_BYTES)
         );
         assert_eq!(
-            map_problem(403, Some(PROBLEM_MEDIA_TYPE), padded.as_bytes(), None),
+            map_problem(403, Some(PROBLEM_MEDIA_TYPE), padded.as_bytes(), None, None),
             EvidenceClientError::Protocol {
                 status: 403,
                 code: None,
                 operation: None,
+                retry_after_seconds: None,
             }
         );
     }
 
     #[test]
     fn an_unusable_operation_identifier_is_dropped_not_copied() {
-        let hostile = br#"{"type":"about:blank","title":"t","status":403,"code":"not_authorized","operation":"01AB\nsubject=Amina"}"#;
+        let hostile = br#"{"type":"about:blank","title":"t","status":403,"code":"not_authorized","operation":"01AB\nrole=subject"}"#;
         assert_eq!(
-            map_problem(403, Some(PROBLEM_MEDIA_TYPE), hostile, None),
+            map_problem(403, Some(PROBLEM_MEDIA_TYPE), hostile, None, None),
             EvidenceClientError::Denied {
                 status: 403,
                 code: "not_authorized".to_owned(),
@@ -281,6 +402,7 @@ mod tests {
             403,
             Some("application/problem+json; charset=utf-8"),
             &problem_json(403, "not_authorized"),
+            None,
             None,
         );
         assert!(matches!(mapped, EvidenceClientError::Denied { .. }));

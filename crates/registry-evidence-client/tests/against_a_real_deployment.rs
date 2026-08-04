@@ -439,8 +439,18 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
             deployment.runtime.jwks().clone(),
         ))
         .unwrap();
+        // A prepared request is good for one send, and the one above is spent,
+        // so the replay leg carries its own. The media type is refused before
+        // anything about the request is compared to anything in the response.
+        let replayed_request = replayed
+            .prepare(spec(
+                &definitions,
+                "media-type",
+                SubjectExpectations::AcceptFirstUse,
+            ))
+            .unwrap();
         // Held so the stub outlives the exchange it answers.
-        let refusal = replayed.send(&prepared).await;
+        let refusal = replayed.send(&replayed_request).await;
         drop(replay);
         Ok(refusal)
     }
