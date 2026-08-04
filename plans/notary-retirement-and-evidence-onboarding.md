@@ -266,7 +266,7 @@ channel; it does not get a parallel one.
       `npm run check`.
 - [x] G2. Every removed docs URL redirects; no product-surface page
       describes Notary as current.
-- [ ] G3. All tutorials pass their CI gates.
+- [x] G3. All tutorials pass their CI gates.
 - [ ] G4. Frozen Evidence V1 contracts are byte-identical to the state at
       plan creation, or a re-approval is recorded here.
 - [ ] G5. Review notes exist for every security-sensitive change.
@@ -1143,3 +1143,27 @@ is parallel; B has no upstream dependencies and is the standing priority
   31735 built internal links), `products/evidence/scripts/check-contracts.sh`
   and `check-source-neutrality.sh`. No Rust source changed, only Markdown
   under `crates/`.
+- 2026-08-04: G3 done. Both executing tutorial gates were replayed from this
+  worktree and returned exit status 0.
+  `bash scripts/check-registryctl-tutorials.sh` built `registryctl` 0.16.3 from
+  source and passed all six reader journeys: HTTP reader, spreadsheet reader,
+  adapted spreadsheet reader, public no-credential source offline, OAuth and
+  Rhai reader, and the OpenCRVS Events API case study.
+  `bash scripts/check-evidence-tutorials.sh` checked five tutorials:
+  `first-evidence-assertion`, `author-an-acceptance-definition`,
+  `connect-an-institution-source`, `serve-assertions-over-http`, and
+  `verify-an-assertion-as-a-consumer`.
+  Coverage caveat, recorded rather than closed: the executing gates cover 11 of
+  the tutorial surface's journeys, and six Evidence tutorial pages have no
+  executing gate in this worktree
+  (`move-evidence-to-production-signing`, `prove-an-evidence-project`,
+  `deploy-standalone-with-own-data`, `configure-project-api-key-authentication`,
+  `return-a-governed-value`, `refuse-unsafe-evidence-requests`). G3 as written
+  asks that every tutorial pass the gate it has, which is now true. Extending
+  the Evidence gate to replay the remaining six is separate work, owned outside
+  this plan in the `registry-stack-doc-review-reset` worktree.
+  A first attempt at the Evidence gate reported PASS while silently building
+  from that other worktree, so both runs were repeated with an explicit `pwd`
+  confirming this checkout. Anyone re-running these should do the same: 49 git
+  worktrees are registered for this repo, and a backgrounded gate can inherit
+  the wrong one.
