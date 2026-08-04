@@ -6,14 +6,20 @@
 //! two products ever disagree about claim names, algorithms, token type,
 //! issuer, or audience, this fails.
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+use std::{error::Error, fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc, time::Duration};
 
 use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_evidence::auth::{AuthenticationClaimsConfig, Authenticator};
+use registry_evidence::{
+    auth::{AuthenticationClaimsConfig, Authenticator},
+    config::{
+        AccessTokenAlgorithm, AccessTokenType, AssuranceProfile, AuthenticationConfig,
+        AuthenticationKind,
+    },
+};
 use registry_mint::{
     config::MintConfig,
-    server::{build_app, MintService},
+    server::{build_app, serve, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
 use registry_platform_crypto::PrivateJwk;
@@ -291,6 +297,135 @@ async fn supervised_local_development_tokens_remain_evidence_compatible() {
         .expect("Evidence accepts a token from the supervised local Mint mode");
     assert_eq!(context.principal(), "urn:example:health-ministry");
     assert_eq!(context.requester_tags(), ["health-ministry"]);
+}
+
+#[tokio::test]
+async fn evidence_fetches_keys_from_a_real_supervised_local_mint() {
+    // Hold the OS allocation while the matching deployment is authored and
+    // loaded. Release it only immediately before public `serve` binds it.
+    let reservation =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
+    let port = reservation
+        .local_addr()
+        .expect("read reserved address")
+        .port();
+    let issuer = format!("http://127.0.0.1:{port}");
+    let token_endpoint = format!("{issuer}/token");
+    let jwks_uri = format!("{issuer}/.well-known/jwks.json");
+    let deployment = deployment_with_transport(
+        Some("supervised-local-development"),
+        &issuer,
+        port,
+        &token_endpoint,
+    );
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let service = Arc::clone(&deployment.service);
+    drop(reservation);
+    let server = tokio::spawn(async move {
+        serve(service, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    // Keep every fallible boundary inside this result so Mint is asked to shut
+    // down even when the real HTTP exchange or verification fails.
+    let proof: Result<_, Box<dyn Error>> = async {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(1))
+            .build()?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.is_finished() {
+                    return Err(std::io::Error::other(
+                        "Mint stopped before its readiness endpoint responded",
+                    ));
+                }
+                if client
+                    .get(format!("{issuer}/ready"))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status().is_success())
+                {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+
+        let (private, _, _) = key_pair(1);
+        let claims = assertion_claims_for_audience(
+            "health-ministry",
+            "jti-real-supervised-local",
+            &token_endpoint,
+        );
+        let assertion = sign_assertion(&private, &claims);
+        let response = client
+            .post(&token_endpoint)
+            .form(&token_form(&assertion))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(std::io::Error::other(format!(
+                "Mint token endpoint returned {}",
+                response.status()
+            ))
+            .into());
+        }
+        let body = response.json::<Value>().await?;
+        let access_token = body["access_token"]
+            .as_str()
+            .ok_or_else(|| std::io::Error::other("token response has no access token"))?;
+
+        let authentication = AuthenticationConfig {
+            kind: AuthenticationKind::OidcAccessToken,
+            issuer: issuer.clone(),
+            audiences: vec![EVIDENCE_AUDIENCE.to_owned()],
+            token_types: vec![AccessTokenType::AtJwt],
+            algorithms: vec![AccessTokenAlgorithm::EdDSA],
+            jwks_uri,
+            principal_claim: PRINCIPAL_CLAIM.to_owned(),
+            requester_tags_claim: REQUESTER_TAGS_CLAIM.to_owned(),
+            evidence_audience_claim: EVIDENCE_AUDIENCE_CLAIM.to_owned(),
+            grant_id_claim: GRANT_ID_CLAIM.to_owned(),
+            grant_authority_claim: GRANT_AUTHORITY_CLAIM.to_owned(),
+            actor_claim: None,
+        };
+        Authenticator::from_config(&authentication, AssuranceProfile::Local)
+            .authenticate(access_token)
+            .await
+            .map_err(Into::into)
+    }
+    .await;
+
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("Mint shuts down within the grace period")
+        .expect("Mint server task joins")
+        .expect("Mint shuts down cleanly");
+
+    let context = proof.expect("the real local Mint and Evidence boundary is compatible");
+    assert_eq!(context.principal(), "urn:example:health-ministry");
+    assert_eq!(context.requester_tags(), ["health-ministry"]);
+    assert_eq!(
+        context.claim_path("iss"),
+        Some(&Value::String(issuer.clone()))
+    );
+    assert_eq!(
+        context.claim_path("aud"),
+        Some(&Value::String(EVIDENCE_AUDIENCE.to_owned()))
+    );
+    assert_eq!(
+        context.evidence_audience(),
+        "https://health-ministry.example.org"
+    );
+    assert_eq!(context.grant_id(), Some("grant-7"));
+    assert_eq!(context.grant_authority(), Some("statute-12"));
+    assert_eq!(context.actor(), None);
 }
 
 #[tokio::test]
