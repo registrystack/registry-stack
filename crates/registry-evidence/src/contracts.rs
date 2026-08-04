@@ -13,7 +13,7 @@ use std::{
 };
 
 use jsonschema::{Draft, JSONSchema};
-pub(crate) use registry_evidence_verifier::contracts::{
+use registry_evidence_verifier::contracts::{
     evidence_schema, ContractValidationError, EVIDENCE_SCHEMA_ID, REQUEST_NONCE_PATTERN,
     SCHEMA_DIALECT,
 };
