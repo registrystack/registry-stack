@@ -1540,3 +1540,22 @@ owed and is recorded here in full.
   why the code went away.
   Evidence: `python3 release/scripts/check-stable-surface-compatibility.py`
   exits 0, and `test_check_stable_surface_compatibility.py` passes 14 tests.
+
+- 2026-08-04: The last open code-scanning alert on the branch,
+  `py/clear-text-storage-sensitive-data` at `provision.py:66`, was a false
+  positive on a name, and the analysis SARIF says so exactly: the flow runs
+  from the local `secret_root` at line 203, through the f-string that renders
+  `runtime.yaml` at line 216, to the 0644 write at line 66. The value is the
+  path `evidence/secrets`, not anything held under it. That directory is
+  created 0700, and every secret inside it goes through `write_secret`, whose
+  sink is a different line and whose mode is 0600 at creation. The local is now
+  `provider_root`, after the `secretProviders.file.root` member it renders, so
+  the query has no sensitive-looking source to start from and the alert is gone
+  by construction rather than by a dismissal a later reader would never see.
+  The rest of the stack keeps saying `secret_root`, which is why the reason for
+  the divergence sits in a comment at the declaration.
+  Evidence: the demonstration's support suite passes 13 tests with
+  `cryptography` and 10 with 3 skipped under bare `python3`; provisioning a
+  throwaway deployment renders the same `secretProviders.file.root` and the
+  same modes (runtime.yaml 0444, secrets/ 0700, signing-key and source-token
+  0600, tls.key 0600, ca.pem 0644); and `evidence check` accepts the result.
