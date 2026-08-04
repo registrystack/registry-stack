@@ -7,7 +7,10 @@
 //!
 //! Portable here means free of the service runtime, not target independent.
 //! The crypto stack reaches `aws-lc-sys`, so a build needs a C toolchain and is
-//! limited to the targets `aws-lc-sys` supports, which excludes `wasm32`.
+//! limited to the targets `aws-lc-sys` supports, which excludes `wasm32`. Two
+//! edges lead there: `registry-platform-crypto` uses `aws-lc-rs` for RS256 key
+//! handling and verification, and `registry-platform-sdjwt` reaches the same
+//! library through `jsonwebtoken`.
 
 pub mod contracts;
 pub mod model;

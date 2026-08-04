@@ -71,7 +71,10 @@ so client tooling links none of the service runtime.
 It does not make the crate target independent. The crypto stack reaches
 `aws-lc-sys`, so a build needs a C toolchain and is limited to the targets
 `aws-lc-sys` supports. Native Windows, macOS, and Linux builds work; `wasm32`
-and cross-compiles without a toolchain for the target do not.
+and cross-compiles without a toolchain for the target do not. Two edges lead
+there: `registry-platform-crypto` uses `aws-lc-rs` for RS256 key handling and
+verification, and `registry-platform-sdjwt` reaches the same library through
+`jsonwebtoken`.
 
 ## License
 
