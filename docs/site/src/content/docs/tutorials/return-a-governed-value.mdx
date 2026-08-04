@@ -82,11 +82,11 @@ subject:
 source:
   operation: getPerson
   facts: [date_of_birth]
-answer:
-  concept: age_bracket
-  type: controlled-category
-  values: [under-18, 18-to-24, 25-to-64, 65-or-older]
-  derivation: derivations/age-bracket.rhai
+answers:
+  - concept: age_bracket
+    type: controlled-category
+    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
+derivation: derivations/age-bracket.rhai
 disclosure:
   allow: [age_bracket]
 ```
@@ -103,13 +103,13 @@ Create this new derivation alongside `derivations/adult-status.rhai`:
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
-        "under-18"
+        #{age_bracket: "under-18"}
     } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
-        "18-to-24"
+        #{age_bracket: "18-to-24"}
     } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
-        "25-to-64"
+        #{age_bracket: "25-to-64"}
     } else {
-        "65-or-older"
+        #{age_bracket: "65-or-older"}
     }
 }
 ```

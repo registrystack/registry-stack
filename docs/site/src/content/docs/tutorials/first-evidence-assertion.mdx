@@ -141,10 +141,10 @@ subject:
 source:
   operation: getPerson
   facts: [date_of_birth]
-answer:
-  concept: is_adult
-  type: boolean
-  derivation: derivations/adult-status.rhai
+answers:
+  - concept: is_adult
+    type: boolean
+derivation: derivations/adult-status.rhai
 disclosure:
   allow: [is_adult]
 ```
@@ -152,7 +152,8 @@ disclosure:
 `operation` connects the question to `getPerson` in OpenAPI. `selector` identifies which path
 parameter selects the person. `facts` limits what reaches the derivation to `date_of_birth`; it does
 not change what the registry itself returns. The purpose must match future requests, and the answer
-and disclosure fields permit one boolean named `is_adult`.
+and disclosure fields permit one boolean named `is_adult`. A question can declare up to 16
+governed answers. The disclosure list must name exactly the answers that the derivation returns.
 
 ### `derivations/adult-status.rhai`
 
@@ -162,13 +163,13 @@ Create the answer logic:
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     let adult_on = add_calendar_years(born, 18);
-    compare_dates(context.legal_local_date, adult_on) >= 0
+    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
 }
 ```
 
 The derivation receives the selected fact and the evaluation context. `context.legal_local_date` is
-the date against which the eighteenth birthday is compared. The function returns only the boolean
-declared by the question.
+the date against which the eighteenth birthday is compared. The function returns a map keyed by
+the declared answer name. Evidence validates each value against its declared form before signing.
 
 Start Evidence and Registry Mint:
 
