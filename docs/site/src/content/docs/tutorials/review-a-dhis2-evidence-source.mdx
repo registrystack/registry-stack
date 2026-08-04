@@ -1,0 +1,115 @@
+---
+title: Review a DHIS2-shaped Evidence source
+description: Run the deterministic DHIS2 Tracker reference project, then optionally check one bounded read against an approved public demo.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: how-to
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+Registry Stack maintains a source-neutral Evidence runtime and a DHIS2 Tracker-shaped reference
+project. The reference proves two project-specific requirements offline: adult status and
+professional-licence status with a governed expiry category.
+
+An optional live smoke test checks that one approved DHIS2 demo still accepts the bounded Tracker
+read shape. These are two separate proofs. The live smoke does not serve or sign an Evidence
+assertion.
+
+This page is for source-checkout evaluation after the first tutorials, not for first-time setup.
+
+## Prove the complete project offline
+
+From a Registry Stack source checkout, run the deterministic Evidence package gate:
+
+```sh
+cargo test --locked -p registry-evidence
+```
+
+The gate loads the complete project under
+`products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/` and runs
+its sanitized fixtures through request preparation, response projection, extraction, derivation,
+output validation, signing, and verification.
+
+The fixtures are the authoritative proof of Evidence semantics. They cover exact match, no match,
+ambiguity, missing facts, malformed source data, boundary dates, invalid categories, privacy, and
+anti-reconstruction without depending on a public service.
+
+For focused diagnosis, this test exercises the maintained deployment projects only:
+
+```sh
+cargo test --locked -p registry-evidence --test deployment_projects \
+  reference_deployment_projects_execute_the_closed_fixture_contract -- --exact
+```
+
+It includes all maintained reference projects, not only DHIS2.
+
+## Prepare an optional live source check
+
+Choose an approved instance from the [official DHIS2 demo catalog](https://dhis2.org/demo/). Keep
+its current credentials and one approved demo or synthetic selector outside the repository. Do not
+search broadly for a convenient person.
+
+Create an owner-only file at an absolute path outside the source checkout:
+
+```text
+DHIS2_BASE_URL=<https-base-url>
+DHIS2_USERNAME=<demo-username>
+DHIS2_PASSWORD=<demo-password>
+DHIS2_TEST_PROGRAM_ID=<approved-program-id>
+DHIS2_TEST_ORG_UNIT_ID=<approved-organisation-unit-id>
+DHIS2_TEST_TRACKED_ENTITY_ID=<approved-tracked-entity-id>
+```
+
+Set its mode to `0600`. The file must be a regular file owned by the current user, not a symlink,
+and contain exactly those six nonempty keys. Do not source it into your shell. The test reads it as
+bounded data and never prints the values.
+
+Public demo credentials can change and are intentionally not copied into Registry Stack
+documentation or fixtures.
+
+## Run one bounded live read
+
+Run the live check only after the deterministic package gate passes:
+
+```sh
+EVIDENCE_DHIS2_LIVE_ENV_FILE='/absolute/path/to/dhis2-live.env' \
+  cargo test --locked -p registry-evidence --test live_sources dhis2 \
+  -- --ignored --nocapture
+```
+
+The check authenticates with one safe metadata request, then makes one Tracker request constrained
+by the configured program, organisation unit, and tracked entity. It requests only the tracked
+entity identifier and attribute identifier/value pairs, uses page 1 with a page size of 2, refuses
+redirects, ignores ambient proxies, and bounds the response body.
+
+Read the explicit result marker, not the process exit code alone:
+
+```text
+live-source profile=dhis2 phase=complete outcome=pass ...
+```
+
+- `outcome=pass` means authentication and the bounded response shape still matched.
+- `outcome=skip` means no live file was supplied.
+- `outcome=inconclusive` means configuration, authentication, availability, or rate limits did not
+  establish compatibility.
+- `outcome=fail` means source-shape drift or excess disclosure needs investigation.
+
+Some inconclusive outcomes exit successfully so optional public-demo availability does not decide
+whether the deterministic product is correct.
+
+## Keep the claim narrow
+
+The live check proves neither requirement derivation, caller authorization, audit, signing, nor
+consumer verification. It is not connector certification and not a maintained promise for every
+DHIS2 version or configuration.
+
+To adapt the reference to an institution, return to [Draft an Evidence source from
+OpenAPI](../connect-an-institution-source/) and [Prove and promote an Evidence
+project](../prove-an-evidence-project/). Use your own reviewed fields, selectors, requirements,
+fixtures, credentials, and governance.

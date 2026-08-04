@@ -1,0 +1,125 @@
+---
+title: Verify and interpret the Evidence audit chain
+description: Prove the integrity of retained Evidence audit history, understand what each phase establishes, and keep the subject-correlation boundary explicit.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Evidence writes a keyed, append-only audit chain. The chain is useful for proving which governed
+operation was admitted, what concept was released, and whether retained records were modified. It
+does not repeat source values or automatically provide a citizen-facing access history.
+
+## Verify retained history
+
+Run the integrity check with the deployment stopped when you need to prove both sealed history and
+the active segment:
+
+```sh
+evidence verify-audit --runtime /etc/registry-evidence/runtime.yaml
+```
+
+A successful stopped-deployment check reports only bounded metadata:
+
+```text
+segments: 3
+records: 1842
+sealed-sequence: 1-2
+head: <chain-head>
+active-segment: verified
+```
+
+The runtime file supplies the audit directory and hash-key reference. The command accepts neither
+on the command line, which prevents an operator from accidentally verifying a different chain or
+key than the deployment uses.
+
+If Evidence is still running, the writer keeps the active segment locked. Verification proves the
+sealed history and reports:
+
+```text
+active-segment: not verified: a running writer holds it, so only sealed history was proven
+```
+
+Run this check before and after backup, restore, or audit transfer. A missing sealed segment and a
+broken keyed chain both fail, but only retained and discoverable history can be checked. This is
+not proof that an operator never deleted history before the check or that an off-host receiver
+accepted it.
+
+## Interpret one operation
+
+For an admitted request, the native chain uses closed phases:
+
+| Phase | What it establishes | What it does not establish |
+|---|---|---|
+| `access-attempt` with `authorized` | Authentication and the complete authority path were accepted before source credentials or source data were touched. | The source returned a record or the assertion was released. |
+| `disclosure-release` with `released` | The named concepts were serialized and durably recorded before the exact response bytes were released. | The source fact was true or the caller used the answer correctly. |
+| `denial` or `transient-failure` | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
+
+Failures that happen before Evidence has enough privacy-safe context, such as authentication
+failure or an invalid selector, do not fabricate a native subject event. Do not expect every HTTP
+request to produce two audit records.
+
+Native records can carry the governed requirement, purpose, bundle revision, requester pseudonym,
+subject role and selector-profile pseudonym, source and adapter identifiers, response protection,
+decision, safe failure class, disclosed concept IDs, evidence ID, and signing key ID. They never
+carry the disclosed value, raw selector, source response, access token, or credential.
+
+## Inspect the last local tutorial operation
+
+The local tutorials expose one intentionally small view after the services stop:
+
+```sh
+evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
+DISCLOSURE RELEASED age_bracket
+```
+
+This command verifies the whole retained local chain, then renders only the last operation. It is
+not a production audit browser and has no `--all`, subject filter, or export mode. An access-only
+operation prints only the authorized line rather than claiming a release that did not occur.
+
+## Understand pseudonymous correlation
+
+Requester and subject handles are deterministic keyed pseudonyms. They are protected correlators,
+not anonymous values and not encrypted copies of identifiers.
+
+The subject handle binds the complete selector tuple together with the trust domain, purpose,
+audience, role, selector profile, and key version. The same tuple in the same scope can be
+correlated by protected tooling. A different purpose, audience, or key version produces a
+different handle. A composite selector cannot be reproduced from one field such as `person_id`
+alone.
+
+Registry Stack V1 does not expose supported tooling to answer:
+
+```text
+Show every access for person_id=person-123.
+```
+
+There is no subject-history query, citizen portal, pseudonym derivation command, requester-name
+resolver, or cross-system history assembly. Do not work around this by exposing the audit hash key
+or raw JSONL records. The native chain contains the privacy-preserving correlation primitive that
+future protected tooling would need, but a citizen access request currently requires a separately
+governed operator process.
+
+## Protect the chain
+
+- Allow one Evidence writer per audit path.
+- Put the path on durable storage and monitor capacity before a fail-closed write stops release.
+- Back up every sealed segment and the active segment as one history.
+- Retain the matching audit hash key for as long as the history must remain verifiable.
+- Restrict event access separately from ordinary service operations.
+- Record retention, deletion, recovery, and requester-identity mapping responsibilities outside the
+  Evidence bundle.
+
+Continue with [Retention and persistent state](../retention-and-persistent-state/) and
+[Backup and restore](../backup-and-restore/) for the surrounding operator procedures.

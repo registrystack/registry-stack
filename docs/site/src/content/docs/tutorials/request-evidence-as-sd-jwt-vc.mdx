@@ -1,0 +1,117 @@
+---
+title: Request Evidence as SD-JWT VC
+description: Enable SD-JWT VC on one governed Evidence grant, request the second serialization over HTTP, and verify the stored credential offline.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: how-to
+persona:
+  - assertion provider
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+Evidence can serialize the same stateless assertion as signed JWS or SD-JWT VC. The question,
+source access, derivation, supported values, subject binding, purpose, audience, signing key, and
+audit boundaries remain the same.
+
+Use this path only with a complete governed deployment project. The local `evidencectl dev` helper
+used by the first tutorials intentionally supports signed JWS only.
+
+## Permit the format at both gates
+
+Keep signed JWS enabled and add `sd-jwt-vc` to the bundle-wide response formats:
+
+```yaml
+responseFormats: [signed-jws, sd-jwt-vc]
+```
+
+Add the same format to the exact authority grant allowed to return it:
+
+```yaml
+authorityProfiles:
+  approved-caller:
+    kind: explicit-request
+    requesterTags: [approved-caller]
+    grants:
+      - requirement: urn:example:requirement:age-bracket:v1
+        purpose: service-path-selection
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, sd-jwt-vc]
+        subjects:
+          - role: person
+            selectorProfile: person-reference-v1
+            valueOrigin: request
+```
+
+Both gates must permit the format. Enabling only one returns the ordinary authorization refusal
+before source access. An unknown or malformed `Accept` value returns HTTP 406.
+
+Run the normal candidate checks and deploy the exact reviewed revision:
+
+```sh
+evidencectl fixtures run --project <evidence-project>
+evidence check --runtime <evidence-project>/runtime.yaml
+```
+
+## Request the second serialization
+
+Prepare the same ordinary Evidence request and authorization your application uses for signed JWS.
+Only the response negotiation changes:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config authorization.curl \
+  --request POST \
+  --url https://<evidence-host>/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @request.json \
+  --output assertion.sd-jwt
+```
+
+Treat `assertion.sd-jwt` as untrusted opaque input. Do not decode its disclosures into application
+state before verification.
+
+## Verify offline
+
+Use the same independently retained verification policy as the signed-JWS response. Name the
+format explicitly:
+
+```sh
+evidence verify \
+  --sd-jwt-vc assertion.sd-jwt \
+  --jwks trusted-issuer-keys.json \
+  --policy verification-policy.yaml
+```
+
+The verifier opens no network connection. `trusted-issuer-keys.json` is the complete approved trust
+set for the run, and `verification-policy.yaml` comes from the consumer's request and governance
+records, not from the credential.
+
+The complete issued credential contains one disclosure for each supported value. Evidence's
+current verifier checks that complete stored credential. It does not verify a selectively disclosed
+presentation from a wallet.
+
+## Keep the boundary explicit
+
+This response is not a credential lifecycle:
+
+- no OID4VCI offer, issuance session, token exchange, or wallet onboarding;
+- no status list, revocation, refresh, or reissuance;
+- no presentation exchange or key-binding JWT;
+- no general multi-verifier subject identifier.
+
+The subject binding remains scoped to the assertion's audience and purpose. An optional
+`holderKey` can place a public JWK in `cnf`, but that inclusion alone proves no possession and is
+outside this minimum path.
+
+Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
+`/.well-known/evidence/jwks.json`. Both are discovery. Approve trust independently through
+[Manage Evidence verifier trust](../manage-evidence-verifier-trust/).
+
+For deterministic source-tree proof of the full format and tamper refusals, see the
+[maintained SD-JWT VC demo](https://github.com/registrystack/registry-stack/blob/main/products/evidence/SD-JWT-VC-DEMO.md).

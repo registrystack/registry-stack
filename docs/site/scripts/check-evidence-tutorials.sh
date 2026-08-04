@@ -51,6 +51,7 @@ EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	return-a-governed-value
 	refuse-unsafe-evidence-requests
+	verify-an-assertion-as-a-consumer
 )
 
 load_spec() {
@@ -139,6 +140,23 @@ load_spec() {
 			"VERIFIED"
 			"TAMPER REFUSED"
 			"Local Evidence stopped"
+		)
+		;;
+	verify-an-assertion-as-a-consumer)
+		SPEC_FENCES=3
+		SPEC_STEPS=("run:1-3")
+		SPEC_LITERALS=(
+			'context["trustedJwks"]'
+			'context["verificationPolicy"]'
+			"--jws authorized-response.jws.json"
+			"--jwks trusted-issuer-keys.json"
+			"--policy verification-policy.json"
+			'--at "$verified_at"'
+		)
+		SPEC_OUTPUTS=(
+			"authentic: yes"
+			"currently-valid: yes"
+			'"value": "25-or-older"'
 		)
 		;;
 	*)
@@ -455,6 +473,9 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
 	refuse-unsafe-evidence-requests)
+		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
+		;;
+	verify-an-assertion-as-a-consumer)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
 	*) reader_dir="$WORK_ROOT/reader/$slug" ;;

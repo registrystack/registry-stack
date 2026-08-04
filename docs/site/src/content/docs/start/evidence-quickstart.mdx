@@ -78,11 +78,21 @@ Retain the request expectations and trusted issuer keys before the response arri
 stored response against that independent context, then expose the verified answer to application
 logic.
 
+[Verify Evidence as a consumer](../../tutorials/verify-an-assertion-as-a-consumer/) continues the
+local journey with every service stopped. Then
+[manage verifier trust](../../tutorials/manage-evidence-verifier-trust/) through an independent
+onboarding and rotation process. [SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/) is an
+optional second serialization of the same assertion.
+
 ### Operate Evidence
 
 Bind the provider-approved definition to production identity, source trust, signing keys, and
 durable audit storage. The operator owns readiness, key rotation, audit-chain verification,
 retention, backup, and recovery.
+
+[Verify and interpret the Evidence audit chain](../../operate/evidence-audit/) covers the integrity
+proof, event phases, privacy-preserving pseudonyms, and the current lack of a supported citizen
+history query.
 
 ## Keep the product boundary visible
 

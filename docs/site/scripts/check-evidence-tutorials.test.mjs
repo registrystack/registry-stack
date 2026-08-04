@@ -29,7 +29,8 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.match(output, /first-evidence-assertion: 12 sh fences, 11 executed/u);
   assert.match(output, /return-a-governed-value: 9 sh fences, 9 executed/u);
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
-  assert.match(output, /Checked 3 tutorials\./u);
+  assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
+  assert.match(output, /Checked 4 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -62,17 +63,27 @@ test('--only accepts the refusal follow-up', async () => {
   assert.match(output, /Checked 1 tutorial\./u);
 });
 
+test('--only accepts the consumer follow-up', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'verify-an-assertion-as-a-consumer',
+  ]);
+  assert.equal(code, 0, output);
+  assert.match(output, /Checked 1 tutorial\./u);
+});
+
 test('--only refuses a slug that is not registered', async () => {
   const { code, output } = await runGate({}, ['--dry-run', '--only', 'no-such-tutorial']);
   assert.notEqual(code, 0, 'an unregistered slug must fail the gate');
   assert.match(output, /not a registered Evidence tutorial/u);
 });
 
-test('--only refuses the unpublished consumer tutorial', async () => {
+test('--only refuses an unpublished legacy tutorial', async () => {
   const { code, output } = await runGate({}, [
     '--dry-run',
     '--only',
-    'verify-an-assertion-as-a-consumer',
+    'serve-assertions-over-http',
   ]);
   assert.notEqual(code, 0, 'an unpublished tutorial must not be registered');
   assert.match(output, /not a registered Evidence tutorial/u);
