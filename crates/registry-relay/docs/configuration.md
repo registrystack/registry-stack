@@ -1072,6 +1072,8 @@ For generic sync search, `identifiers` maps DCI `idtype-value` query types to en
 
 For `/dci/{registry}/registry/sync/disabled`, the caller needs the entity `evidence_verification_scope`. Generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer. If a registry entry uses `response_mapping_path`, the binary must also be built with `--features standards-cel-mapping`; otherwise config validation fails with `spdci.config.mapping_feature_disabled`.
 
+A `response_schema_path` schema must be self-contained. Internal `#/` references resolve normally, but an external `$ref` naming an `http(s)://` or `file://` target fails config validation with `spdci.config.schema_compile_failed`, because the schema compiler resolves no remote or file references and validating configuration never makes a network request. Inline the referenced definitions instead.
+
 ## API keys
 
 ```yaml
