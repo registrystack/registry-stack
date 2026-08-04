@@ -72,6 +72,42 @@ const DERIVATION: &str = r#"fn answer(facts, selectors, context) {
 }
 "#;
 
+const AGE_BRACKET_QUESTION: &str = r#"id: age-bracket
+question: Which age bracket does this person belong to?
+purpose: service-path-selection
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: age_bracket
+    type: controlled-category
+    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
+derivation: derivations/age-bracket.rhai
+disclosure:
+  allow: [age_bracket]
+"#;
+
+const AGE_BRACKET_DERIVATION: &str = r#"fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
+        #{age_bracket: "under-18"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
+        #{age_bracket: "18-to-24"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
+        #{age_bracket: "25-to-64"}
+    } else {
+        #{age_bracket: "65-or-older"}
+    }
+}
+"#;
+
 #[test]
 #[ignore = "exact gate: owns fixed 127.0.0.1:8080 and :8081 tutorial ports"]
 fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
@@ -258,6 +294,17 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     let evidence = required_binary("EVIDENCE_BIN");
     let mint = required_binary("MINT_BIN");
     let fixture = Project::new();
+    let source_probe = TcpListener::bind("127.0.0.1:0").expect("source call probe");
+    source_probe
+        .set_nonblocking(true)
+        .expect("nonblocking source call probe");
+    fixture.point_source_at(
+        source_probe
+            .local_addr()
+            .expect("source probe address")
+            .port(),
+    );
+    fixture.add_age_bracket_question();
     fixture.generate_evidence_keys();
     assert_success(
         &evidencectl()
@@ -274,6 +321,22 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
             .output()
             .expect("add policy"),
         "add policy",
+    );
+    assert_success(
+        &evidencectl()
+            .args([
+                "access",
+                "policy",
+                "add",
+                "service-routing",
+                "--question",
+                "age-bracket",
+                "--project",
+            ])
+            .arg(&fixture.root)
+            .output()
+            .expect("add unassigned policy"),
+        "add policy for the ungranted question",
     );
     assert_success(
         &add_local_client(&fixture.root, "client-a", "age-checks"),
@@ -333,6 +396,23 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
             .expect("prepare as client B")
     });
     assert_success(&prepared, "newly added client B token request");
+
+    let client_b_key = fixture.root.join(".evidence/clients/client-b/private.jwk");
+    let token = direct_mint_token(&mint, mint_port, "client-b", &client_b_key);
+    assert_success(&token, "direct token for client B");
+    let token = String::from_utf8(token.stdout)
+        .expect("Mint token is UTF-8")
+        .trim()
+        .to_owned();
+    let status = post_evidence(
+        evidence_port,
+        &token,
+        "urn:registrystack:evidence:local:requirement:age-bracket",
+        "service-path-selection",
+        "local-subject-age-bracket-v1",
+    );
+    assert_eq!(status, 403, "an ungranted authored question is forbidden");
+    assert_source_not_called(&source_probe);
 
     let revoked = evidencectl()
         .args(["access", "client", "revoke", "client-a", "--project"])
@@ -696,6 +776,27 @@ impl Project {
         }
     }
 
+    fn point_source_at(&self, port: u16) {
+        fs::write(
+            self.root.join("source.openapi.yaml"),
+            OPENAPI.replace("http://127.0.0.1:8000", &format!("http://127.0.0.1:{port}")),
+        )
+        .expect("update source origin");
+    }
+
+    fn add_age_bracket_question(&self) {
+        fs::write(
+            self.root.join("questions/age-bracket.yaml"),
+            AGE_BRACKET_QUESTION,
+        )
+        .expect("age-bracket question");
+        fs::write(
+            self.root.join("derivations/age-bracket.rhai"),
+            AGE_BRACKET_DERIVATION,
+        )
+        .expect("age-bracket derivation");
+    }
+
     fn dev_start(&self, evidence: &Path, mint: &Path) -> Output {
         self.dev_start_command(evidence, mint)
             .output()
@@ -795,6 +896,46 @@ fn direct_mint_token(mint: &Path, port: u16, client: &str, key: &Path) -> Output
         .arg(key)
         .output()
         .expect("invoke Mint token client")
+}
+
+fn post_evidence(
+    port: u16,
+    token: &str,
+    requirement: &str,
+    purpose: &str,
+    selector_profile: &str,
+) -> u16 {
+    let body = json!({
+        "requestNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "requirement": requirement,
+        "purpose": purpose,
+        "subjects": [{
+            "role": "person",
+            "selector": {
+                "profile": selector_profile,
+                "values": {"person_id": "person-123"},
+            },
+        }],
+    });
+    let body = body.to_string();
+    match ureq::post(&format!("http://127.0.0.1:{port}/v1/evidence"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Accept", "application/jose+json")
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+    {
+        Ok(response) => response.status(),
+        Err(ureq::Error::Status(status, _)) => status,
+        Err(error) => panic!("Evidence request failed before an HTTP response: {error}"),
+    }
+}
+
+fn assert_source_not_called(source_probe: &TcpListener) {
+    match source_probe.accept() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("Evidence contacted the source for an ungranted question"),
+        Err(error) => panic!("source call probe failed: {error}"),
+    }
 }
 
 fn retry_until_success(label: &str, mut operation: impl FnMut() -> Output) -> Output {
