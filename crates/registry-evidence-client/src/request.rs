@@ -14,33 +14,39 @@ use serde::Serialize;
 
 /// One complete request body.
 ///
+/// The wire types are crate-internal: a caller states what it wants in
+/// [`crate::EvidenceRequestSpec`], and this is the serialization
+/// [`crate::EvidenceClient::prepare`] derives from it. Only
+/// [`SelectorValue`] is part of the public surface, because a caller supplies
+/// the selector values themselves.
+///
 /// `Debug` is redacted: the selector values are the caller's own identifying
 /// input and must not reach a log line, a panic message, or a snapshot.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EvidenceRequestBody {
-    pub request_nonce: String,
-    pub requirement: String,
-    pub purpose: String,
+pub(crate) struct EvidenceRequestBody {
+    pub(crate) request_nonce: String,
+    pub(crate) requirement: String,
+    pub(crate) purpose: String,
     /// Unordered role set encoded as an array. Each configured role appears
     /// exactly once; array position carries no meaning.
-    pub subjects: Vec<RequestedSubject>,
+    pub(crate) subjects: Vec<RequestedSubject>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct RequestedSubject {
-    pub role: String,
-    pub selector: RequestedSelector,
+pub(crate) struct RequestedSubject {
+    pub(crate) role: String,
+    pub(crate) selector: RequestedSelector,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct RequestedSelector {
-    pub profile: String,
+pub(crate) struct RequestedSelector {
+    pub(crate) profile: String,
     /// Values are present only for a selector profile whose values originate
     /// in the request. A profile that reads the authenticated context or an
     /// authenticated grant must carry none.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<BTreeMap<String, SelectorValue>>,
+    pub(crate) values: Option<BTreeMap<String, SelectorValue>>,
 }
 
 /// The three scalar shapes a selector value may take.

@@ -41,6 +41,15 @@ const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 /// The opaque per-request identifier the deployment returns.
 const CORRELATION_HEADER: &str = "x-request-id";
 
+/// Whether an exchange carries the relying party's bearer credential.
+///
+/// Named rather than a boolean, so a call site states which of the two it means
+/// instead of leaving the reader to recover it from a bare `true`.
+enum Credential {
+    Required,
+    None,
+}
+
 /// A relying party's connection to one Evidence deployment.
 #[derive(Debug)]
 pub struct EvidenceClient {
@@ -155,19 +164,8 @@ impl EvidenceClient {
     /// party what it may ask for; it never supplies verification expectations
     /// for a request already in flight.
     pub async fn discover(&self) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
-        let url = self.endpoint(DEFINITIONS_PATH)?;
-        let request = self
-            .http
-            .request(Method::GET, url)
-            .header(ACCEPT, JSON_MEDIA_TYPE);
-        let response = self.exchange(request, true).await?;
-        let body = self.expect_success(response, JSON_MEDIA_TYPE).await?;
-        serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
-            status: StatusCode::OK.as_u16(),
-            code: None,
-            operation: body.operation,
-            retry_after_seconds: None,
-        })
+        self.get_json(DEFINITIONS_PATH, JSON_MEDIA_TYPE, Credential::Required)
+            .await
     }
 
     /// Read the deployment's published verification key set.
@@ -178,19 +176,11 @@ impl EvidenceClient {
     /// calls this. A key set fetched from the same origin as the response it
     /// would verify establishes nothing.
     pub async fn fetch_jwks(&self) -> Result<JwksDocument, EvidenceClientError> {
-        let url = self.endpoint(JWKS_PATH)?;
-        let request = self
-            .http
-            .request(Method::GET, url)
-            .header(ACCEPT, JWKS_MEDIA_TYPE);
-        let response = self.exchange(request, false).await?;
-        let body = self.expect_success(response, JWKS_MEDIA_TYPE).await?;
-        serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
-            status: StatusCode::OK.as_u16(),
-            code: None,
-            operation: body.operation,
-            retry_after_seconds: None,
-        })
+        // The published key set is public, and it is not a trust anchor here, so
+        // there is nothing to gain by presenting the relying party's credential
+        // to fetch it.
+        self.get_json(JWKS_PATH, JWKS_MEDIA_TYPE, Credential::None)
+            .await
     }
 
     /// Send one prepared request and read the signed response.
@@ -219,7 +209,7 @@ impl EvidenceClient {
             .header(ACCEPT, EVIDENCE_JWS_MEDIA_TYPE)
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .body(body);
-        let response = self.exchange(request, true).await?;
+        let response = self.exchange(request, Credential::Required).await?;
         self.expect_success(response, EVIDENCE_JWS_MEDIA_TYPE).await
     }
 
@@ -236,7 +226,7 @@ impl EvidenceClient {
         prepared: &PreparedEvidenceRequest,
         response: &RawEvidenceResponse,
     ) -> Result<VerifiedEvidence, EvidenceClientError> {
-        self.verify_at(prepared, response, Utc::now())
+        self.verify_as_of(prepared, response, Utc::now())
     }
 
     /// Request evidence and verify it, in one step.
@@ -252,8 +242,30 @@ impl EvidenceClient {
         self.verify(prepared, &response)
     }
 
-    /// Verification at an explicit instant, so a test can pin the clock.
-    pub(crate) fn verify_at(
+    /// Verify a retained response as of an explicit instant.
+    ///
+    /// [`EvidenceClient::verify`] judges a response against the current clock,
+    /// which is right when the response has just arrived. This variant lets the
+    /// relying party name the instant instead, and the two cases that need it are
+    /// both about a response the relying party already holds:
+    ///
+    /// - Re-verifying a retained response when the decision is actually made,
+    ///   rather than when the bytes arrived. The assertion's own validity
+    ///   interval, plus the request's stated clock skew, then decides whether it
+    ///   still answers the question.
+    /// - Replaying a retained transaction record: the same bytes, the same
+    ///   retained prepared request, and the instant the original decision was
+    ///   taken, so an audit reaches the same verdict the relying party did.
+    ///
+    /// The instant only moves the clock. Every other expectation is the one the
+    /// request closed, and the trusted key set is the one pinned at
+    /// construction. Passing a future instant does not extend an assertion's
+    /// validity; it only asks whether the assertion would have been acceptable
+    /// then.
+    ///
+    /// The parameter is a [`chrono::DateTime<Utc>`], the same instant type the
+    /// portable verifier's own policy takes.
+    pub fn verify_as_of(
         &self,
         prepared: &PreparedEvidenceRequest,
         response: &RawEvidenceResponse,
@@ -279,6 +291,33 @@ impl EvidenceClient {
         })
     }
 
+    /// Read one JSON document from a GET endpoint under the base URL.
+    ///
+    /// The two documents this serves, discovery and the published key set, are
+    /// both authoring input rather than verification input, and a body that does
+    /// not parse is a protocol failure rather than a refusal: the deployment
+    /// answered, and the answer was not the document it promised.
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        media_type: &str,
+        credential: Credential,
+    ) -> Result<T, EvidenceClientError> {
+        let url = self.endpoint(path)?;
+        let request = self
+            .http
+            .request(Method::GET, url)
+            .header(ACCEPT, media_type);
+        let response = self.exchange(request, credential).await?;
+        let body = self.expect_success(response, media_type).await?;
+        serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
+            status: StatusCode::OK.as_u16(),
+            code: None,
+            operation: body.operation,
+            retry_after_seconds: None,
+        })
+    }
+
     /// Resolve one endpoint under the configured base URL.
     fn endpoint(&self, path: &str) -> Result<Url, EvidenceClientError> {
         // `join` on a base whose path lacks a trailing separator would discard
@@ -301,25 +340,28 @@ impl EvidenceClient {
     async fn exchange(
         &self,
         request: reqwest::RequestBuilder,
-        authenticated: bool,
+        credential: Credential,
     ) -> Result<reqwest::Response, EvidenceClientError> {
-        let request = if authenticated {
-            let token = self.config.token_provider.bearer_token().await?;
-            // The plaintext credential exists in one scrubbed buffer here. The
-            // header value reqwest owns afterwards cannot be zeroized, which is
-            // why it is marked sensitive below.
-            let mut credential = Zeroizing::new(String::with_capacity(7 + token.expose().len()));
-            credential.push_str("Bearer ");
-            credential.push_str(token.expose());
-            let mut value = HeaderValue::from_str(&credential).map_err(|_| {
-                EvidenceClientError::configuration("the credential is not a usable header value")
-            })?;
-            // The credential must never reach a diagnostic, and reqwest honors
-            // this marking when it formats a request.
-            value.set_sensitive(true);
-            request.header(AUTHORIZATION, value)
-        } else {
-            request
+        let request = match credential {
+            Credential::Required => {
+                let token = self.config.token_provider.bearer_token().await?;
+                // The plaintext credential exists in one scrubbed buffer here.
+                // The header value reqwest owns afterwards cannot be zeroized,
+                // which is why it is marked sensitive below.
+                let mut header = Zeroizing::new(String::with_capacity(7 + token.expose().len()));
+                header.push_str("Bearer ");
+                header.push_str(token.expose());
+                let mut value = HeaderValue::from_str(&header).map_err(|_| {
+                    EvidenceClientError::configuration(
+                        "the credential is not a usable header value",
+                    )
+                })?;
+                // The credential must never reach a diagnostic, and reqwest
+                // honors this marking when it formats a request.
+                value.set_sensitive(true);
+                request.header(AUTHORIZATION, value)
+            }
+            Credential::None => request,
         };
         request.send().await.map_err(|error| {
             let kind = if error.is_timeout() {
@@ -389,7 +431,9 @@ impl EvidenceClient {
             ));
         }
         if status != StatusCode::OK.as_u16()
-            || media_type.as_deref().map(essence) != Some(expected_media_type.to_owned())
+            || !media_type
+                .as_deref()
+                .is_some_and(|value| essence(value).eq_ignore_ascii_case(expected_media_type))
         {
             return Err(EvidenceClientError::Protocol {
                 status,
@@ -407,7 +451,15 @@ fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, Eviden
     let mut builder = reqwest::Client::builder()
         .timeout(config.request_timeout)
         .connect_timeout(config.connect_timeout)
+        // A redirect is not part of the response contract, and following one
+        // would present the relying party's credential to a host the integrator
+        // never configured, on the say-so of a response header. The answer is
+        // reported as it stands instead.
         .redirect(reqwest::redirect::Policy::none())
+        // The proxy environment variables are ignored deliberately. An ambient
+        // variable would otherwise route a credential through an intermediary the
+        // integrator did not choose, and terminate the TLS session the pinned
+        // certificate authorities were meant to authenticate.
         .no_proxy()
         // Select rustls explicitly. Cargo unifies reqwest's feature set across
         // a whole build, so another crate enabling reqwest's native-tls feature
@@ -642,7 +694,7 @@ mod tests {
         let response = raw(fixture.sign(prepared.request_nonce()));
 
         let verified = client
-            .verify_at(&prepared, &response, fixture.now)
+            .verify_as_of(&prepared, &response, fixture.now)
             .expect("the response verifies");
         assert_eq!(verified.operation(), Some("01JZZZOPERATION"));
         assert_eq!(verified.evidence().request_nonce, prepared.request_nonce());
@@ -673,7 +725,7 @@ mod tests {
 
         assert_eq!(
             client
-                .verify_at(&prepared, &response, fixture.now)
+                .verify_as_of(&prepared, &response, fixture.now)
                 .expect_err("the response is refused"),
             EvidenceClientError::Verification(VerificationError::Policy)
         );
@@ -689,7 +741,7 @@ mod tests {
         let response = raw(fixture.sign(prepared.request_nonce()));
 
         let verified = client
-            .verify_at(&prepared, &response, fixture.now)
+            .verify_as_of(&prepared, &response, fixture.now)
             .expect("the response verifies");
         let pinned = verified.pinned_subject_expectations();
         assert_eq!(pinned.len(), 1);
@@ -700,7 +752,36 @@ mod tests {
             .prepare(spec(SubjectExpectations::Pinned(pinned)))
             .expect("the specification is accepted");
         let next_response = raw(fixture.sign(next.request_nonce()));
-        assert!(client.verify_at(&next, &next_response, fixture.now).is_ok());
+        assert!(client
+            .verify_as_of(&next, &next_response, fixture.now)
+            .is_ok());
+    }
+
+    /// A retained response is judged again at the instant the decision is made,
+    /// against the same closed policy. The assertion's own validity interval is
+    /// what decides whether it still answers the question.
+    #[test]
+    fn a_retained_response_is_verifiable_at_a_chosen_decision_instant() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        let response = raw(fixture.sign(prepared.request_nonce()));
+        let seconds = |count: i64| {
+            fixture.now + chrono::TimeDelta::try_seconds(count).expect("the offset is valid")
+        };
+        let lifetime = i64::try_from(MAXIMUM_LIFETIME_SECONDS).expect("the lifetime fits");
+
+        client
+            .verify_as_of(&prepared, &response, seconds(lifetime / 2))
+            .expect("the assertion is still within its validity interval");
+        assert_eq!(
+            client
+                .verify_as_of(&prepared, &response, seconds(lifetime * 2))
+                .expect_err("the assertion has expired"),
+            EvidenceClientError::Verification(VerificationError::Time)
+        );
     }
 
     /// First-use acceptance defers the subject question and nothing else.
@@ -718,7 +799,7 @@ mod tests {
             .expect("the specification is accepted");
         assert_eq!(
             client
-                .verify_at(
+                .verify_as_of(
                     &prepared,
                     &raw(fixture.sign(other.request_nonce())),
                     fixture.now
@@ -731,7 +812,7 @@ mod tests {
         let untrusted = signed_evidence();
         assert_eq!(
             client
-                .verify_at(
+                .verify_as_of(
                     &prepared,
                     &raw(untrusted.sign(prepared.request_nonce())),
                     fixture.now
@@ -743,7 +824,7 @@ mod tests {
         // An answer whose stated purpose is not the one asked for.
         assert_eq!(
             client
-                .verify_at(
+                .verify_as_of(
                     &prepared,
                     &raw(fixture.sign_with_purpose(prepared.request_nonce(), "other-decision")),
                     fixture.now
@@ -755,7 +836,7 @@ mod tests {
         // An answer outside its own validity interval.
         assert_eq!(
             client
-                .verify_at(
+                .verify_as_of(
                     &prepared,
                     &raw(fixture.sign(prepared.request_nonce())),
                     fixture.now + chrono::TimeDelta::try_days(2).expect("the offset is valid")
@@ -805,7 +886,7 @@ mod tests {
             let response = raw(fixture.sign_with_subjects(prepared.request_nonce(), subjects));
             assert_eq!(
                 client
-                    .verify_at(&prepared, &response, fixture.now)
+                    .verify_as_of(&prepared, &response, fixture.now)
                     .expect_err("the response is refused"),
                 EvidenceClientError::Verification(expected)
             );
@@ -829,7 +910,7 @@ mod tests {
         ] {
             assert!(untrusted_subject_bindings(&body).is_empty());
             assert!(client
-                .verify_at(&prepared, &raw(body), fixture.now)
+                .verify_as_of(&prepared, &raw(body), fixture.now)
                 .is_err());
         }
     }

@@ -96,6 +96,28 @@ impl EvidenceClientError {
         Self::Transport { kind }
     }
 
+    /// A stable, machine-readable name for which kind of failure this is.
+    ///
+    /// It exists for callers that have to branch or aggregate without matching
+    /// an enum this crate may extend: a metric label, a structured log field, or
+    /// a language binding that carries the discriminant across a boundary. The
+    /// rendered message is for people and may be reworded; these names are part
+    /// of the crate's contract and will not be renamed. A variant added later
+    /// brings a new name rather than reusing one of these.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Configuration { .. } => "configuration",
+            Self::Nonce(_) => "nonce",
+            Self::Token(_) => "token",
+            Self::Transport { .. } => "transport",
+            Self::Denied { .. } => "denied",
+            Self::NotAvailable { .. } => "not_available",
+            Self::Protocol { .. } => "protocol",
+            Self::Verification(_) => "verification",
+        }
+    }
+
     /// The opaque per-request identifier to quote when asking the deployment
     /// operator about this failure.
     #[must_use]
@@ -141,5 +163,55 @@ mod tests {
             "the Evidence request did not complete: the response body exceeded the configured maximum"
         );
         assert_eq!(transport.operation(), None);
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_failure_reports_its_own_stable_kind() {
+        let cases = [
+            (
+                EvidenceClientError::configuration("unusable"),
+                "configuration",
+            ),
+            (EvidenceClientError::Nonce(NonceError::Entropy), "nonce"),
+            (EvidenceClientError::Token(TokenError::Unavailable), "token"),
+            (
+                EvidenceClientError::transport(TransportKind::Connect),
+                "transport",
+            ),
+            (
+                EvidenceClientError::Denied {
+                    status: 403,
+                    code: "not_authorized".to_owned(),
+                    operation: None,
+                    retry_after_seconds: None,
+                },
+                "denied",
+            ),
+            (
+                EvidenceClientError::NotAvailable { operation: None },
+                "not_available",
+            ),
+            (
+                EvidenceClientError::Protocol {
+                    status: 200,
+                    code: None,
+                    operation: None,
+                    retry_after_seconds: None,
+                },
+                "protocol",
+            ),
+            (
+                EvidenceClientError::Verification(VerificationError::Signature),
+                "verification",
+            ),
+        ];
+        for (error, kind) in &cases {
+            assert_eq!(error.kind(), *kind, "{error}");
+        }
+        let kinds: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 }
