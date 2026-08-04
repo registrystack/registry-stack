@@ -714,6 +714,7 @@ fn assert_verification_failure(
 fn fixture_evidence() -> serde_json::Value {
     serde_json::json!({
         "schema": "registry.assertion-evidence/v1",
+        "assuranceProfile": "evidence-grade",
         "requestNonce": FIXTURE_NONCE,
         "id": "urn:ulid:01K1EXAMPLE0000000000000000",
         "type": "Evidence",
@@ -738,7 +739,8 @@ fn fixture_evidence() -> serde_json::Value {
 /// The test simulates that state from the fixture it controls.
 fn fixture_policy() -> String {
     format!(
-        "issuedBy: urn:example:issuer
+        "expectedAssuranceProfile: evidence-grade
+issuedBy: urn:example:issuer
 providedBy: urn:example:provider
 requirement: urn:example:requirement:v1
 evidenceType: urn:example:type:v1

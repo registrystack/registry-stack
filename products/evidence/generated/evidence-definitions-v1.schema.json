@@ -284,6 +284,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "assuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ]
+    },
     "configurationRevision": {
       "pattern": "^sha256:[a-f0-9]{64}$",
       "type": "string"
@@ -312,6 +319,7 @@
   },
   "required": [
     "schema",
+    "assuranceProfile",
     "configurationRevision",
     "issuedBy",
     "providedBy",

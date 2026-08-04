@@ -5,6 +5,7 @@ type: object
 additionalProperties: false
 required:
   - schema
+  - assuranceProfile
   - requestNonce
   - id
   - type
@@ -22,6 +23,7 @@ required:
   - supportedValues
 properties:
   schema: {const: registry.assertion-evidence/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
   requestNonce: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
   id: {type: string, format: uri, maxLength: 512}
   type: {const: Evidence}

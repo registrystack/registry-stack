@@ -39,7 +39,7 @@ use crate::{
         ResponseProtection,
     },
     auth::{AuthenticationClaimsConfig, Authenticator},
-    config::ResponseFormat,
+    config::{AssuranceProfile, ResponseFormat},
     contracts::evidence_contract_accepts,
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
@@ -1207,6 +1207,81 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
         evidence.supported_values[0].value,
         PublicValue::Boolean(true)
     );
+}
+
+#[tokio::test]
+async fn local_runtime_without_fixture_references_keeps_the_real_security_path() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let strict =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    let local = strict
+        .replace(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+        )
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("fixtures:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&configuration_path, local).expect("local configuration is written");
+    let fixture_directory = prepared.bundle_root.join("fixtures");
+    for entry in fs::read_dir(&fixture_directory).expect("fixture directory reads") {
+        fs::remove_file(entry.expect("fixture entry reads").path())
+            .expect("unreferenced fixture is removed");
+    }
+    make_read_only(&prepared.bundle_root);
+
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("local runtime initializes without fixture references"),
+    );
+    assert_eq!(
+        runtime.bundle().config.assurance_profile,
+        AssuranceProfile::Local
+    );
+    assert!(runtime.bundle().fixtures.is_empty());
+
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+    let definitions_response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await;
+    definitions_response.assert_status_ok();
+    let definitions = definitions_response.json::<EvidenceDefinitions>();
+    assert_eq!(definitions.assurance_profile, AssuranceProfile::Local);
+
+    mount_adult_source(&prepared.server, None).await;
+    let request = adult_request();
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&request)
+        .await;
+    response.assert_status_ok();
+    assert_eq!(response.header("content-type"), "application/jose+json");
+    let jws = response.json::<FlattenedJws>();
+    let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let evidence = verify_flattened_jws(
+        &serialized,
+        runtime.jwks(),
+        &verification_policy(&runtime, &request, &serialized),
+    )
+    .expect("local assertion verifies under an explicit local expectation");
+    assert_eq!(evidence.assurance_profile, AssuranceProfile::Local);
+
+    let events = fs::read_to_string(&prepared.audit_path).expect("audit reads");
+    let events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit event parses"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .all(|event| event["record"]["assuranceProfile"] == json!("local")));
 }
 
 #[tokio::test]
@@ -2827,6 +2902,7 @@ fn verification_policy_stub(
         .find(|candidate| candidate.id == request.requirement)
         .expect("requirement is loaded");
     EvidenceVerificationPolicy {
+        assurance_profile: runtime.bundle().config.assurance_profile,
         issued_by: runtime.bundle().config.issuer.id.clone(),
         provided_by: runtime.bundle().config.service.provider_id.clone(),
         requirement: request.requirement.clone(),
@@ -4989,6 +5065,7 @@ fn adult_source_request() -> Value {
 /// probe measures the real serialization, hashing, and fsync path.
 fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
     EvidenceAuditEvent::new(
+        AssuranceProfile::EvidenceGrade,
         format!("audit-throughput-probe-{index:012}"),
         AuditPhase::AccessAttempt,
         "urn:example:fixture:requirement:adult-status:v1".to_owned(),

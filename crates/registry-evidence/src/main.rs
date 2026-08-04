@@ -17,7 +17,7 @@ use rand_core::OsRng;
 use registry_evidence::{
     audit::{verify_audit_chain, AuditChainSummary, EvidenceAuditError},
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
-    config::{ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
+    config::{AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
@@ -429,6 +429,7 @@ const VERIFY_MALFORMED: CliError = CliError("stored response verification failed
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VerificationPolicyDocument {
+    expected_assurance_profile: AssuranceProfile,
     issued_by: String,
     provided_by: String,
     requirement: String,
@@ -500,6 +501,7 @@ struct ExpectedListDocument {
 impl VerificationPolicyDocument {
     fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
         EvidenceVerificationPolicy {
+            assurance_profile: self.expected_assurance_profile,
             issued_by: self.issued_by,
             provided_by: self.provided_by,
             requirement: self.requirement,
@@ -790,7 +792,12 @@ async fn evaluate_fixture(
         .config
         .requirements
         .iter()
-        .filter(|requirement| requirement.fixtures.as_str() == fixture_name)
+        .filter(|requirement| {
+            requirement
+                .fixtures
+                .as_ref()
+                .is_some_and(|fixtures| fixtures.as_str() == fixture_name)
+        })
         .collect::<Vec<_>>();
     if referenced.len() != 1 {
         return Err(CliError(
@@ -2291,10 +2298,12 @@ fn validate_companion_rejection(
             "derivations/fixture-companion-{index}.rhai"
         ))
         .map_err(|_| CliError("fixture companion path is invalid"))?;
-        companion.fixtures = registry_evidence::config::ArtifactPath::parse(&format!(
-            "fixtures/fixture-companion-{index}.yaml"
-        ))
-        .map_err(|_| CliError("fixture companion path is invalid"))?;
+        companion.fixtures = Some(
+            registry_evidence::config::ArtifactPath::parse(&format!(
+                "fixtures/fixture-companion-{index}.yaml"
+            ))
+            .map_err(|_| CliError("fixture companion path is invalid"))?,
+        );
         for concept in &mut companion.concepts {
             concept.id.push_str(&suffix);
         }
@@ -2618,7 +2627,8 @@ mod tests {
     /// One complete policy document whose single expected output states `form`.
     fn verification_policy_document(form: &str) -> String {
         format!(
-            "issuedBy: urn:example:issuer\n\
+            "expectedAssuranceProfile: evidence-grade\n\
+             issuedBy: urn:example:issuer\n\
              providedBy: urn:example:provider\n\
              requirement: urn:example:requirement:v1\n\
              evidenceType: urn:example:evidence-type:v1\n\
@@ -2902,6 +2912,7 @@ mod tests {
 
     fn test_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
         EvidenceAuditEvent::new(
+            AssuranceProfile::EvidenceGrade,
             "01K1EXAMPLE0000000000000000".to_owned(),
             AuditPhase::AccessAttempt,
             "urn:example:requirement:v1".to_owned(),
@@ -3108,7 +3119,13 @@ mod tests {
                 &Default::default(),
             )
             .expect("source plans compile");
-            let fixture = Path::new(bundle.config.requirements[0].fixtures.as_str());
+            let fixture = Path::new(
+                bundle.config.requirements[0]
+                    .fixtures
+                    .as_ref()
+                    .expect("acceptance fixture is declared")
+                    .as_str(),
+            );
             let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
                 .get("cases")
                 .and_then(serde_norway::Value::as_sequence)
@@ -3148,7 +3165,13 @@ mod tests {
         )
         .expect("source plans compile");
         for requirement in &bundle.config.requirements {
-            let fixture = Path::new(requirement.fixtures.as_str());
+            let fixture = Path::new(
+                requirement
+                    .fixtures
+                    .as_ref()
+                    .expect("acceptance fixture is declared")
+                    .as_str(),
+            );
             assert!(
                 evaluate_fixture(&bundle, &kernel, &source_plans, fixture)
                     .await
@@ -3208,8 +3231,12 @@ mod tests {
             )
             .expect("source plans compile");
             for requirement in &bundle.config.requirements {
-                let fixture = Path::new(requirement.fixtures.as_str());
-                let expected_cases = bundle.fixtures[requirement.fixtures.as_str()]
+                let fixture_path = requirement
+                    .fixtures
+                    .as_ref()
+                    .expect("reference fixture is declared");
+                let fixture = Path::new(fixture_path.as_str());
+                let expected_cases = bundle.fixtures[fixture_path.as_str()]
                     .get("cases")
                     .and_then(serde_norway::Value::as_sequence)
                     .expect("cases")

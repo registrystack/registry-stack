@@ -1,4 +1,5 @@
 version: 1
+assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:residence
   trustDomain: urn:gov:example:trust-domain:social-protection

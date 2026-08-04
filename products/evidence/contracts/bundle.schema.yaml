@@ -3,9 +3,10 @@ $id: https://registrystack.org/schemas/evidence/bundle-v1.json
 title: Evidence immutable deployment bundle Version 1
 type: object
 additionalProperties: false
-required: [version, service, issuer, authentication, audit, subjectBinding, rateLimits, signing, selectorProfiles, sources, authorityProfiles, requirements]
+required: [version, assuranceProfile, service, issuer, authentication, audit, subjectBinding, rateLimits, signing, selectorProfiles, sources, authorityProfiles, requirements]
 properties:
   version: {const: 1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
   service:
     type: object
     additionalProperties: false
@@ -63,6 +64,25 @@ properties:
     minItems: 1
     maxItems: 128
     items: {$ref: '#/$defs/requirement'}
+allOf:
+  - if:
+      properties: {assuranceProfile: {const: local}}
+    then:
+      properties:
+        authentication:
+          properties:
+            issuer: {pattern: '^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}$)'}
+            jwksUri: {pattern: '^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}/\.well-known/jwks\.json$)'}
+  - if:
+      properties: {assuranceProfile: {enum: [production, evidence-grade]}}
+    then:
+      properties:
+        authentication:
+          properties:
+            issuer: {pattern: '^https://'}
+            jwksUri: {pattern: '^https://'}
+        requirements:
+          items: {required: [fixtures]}
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   uri: {type: string, format: uri, maxLength: 512}
@@ -87,7 +107,7 @@ $defs:
     required: [kind, issuer, audiences, tokenTypes, algorithms, jwksUri, principalClaim, requesterTagsClaim, evidenceAudienceClaim, grantIdClaim, grantAuthorityClaim]
     properties:
       kind: {const: oidc-access-token}
-      issuer: {type: string, pattern: '^https://', maxLength: 512}
+      issuer: {type: string, pattern: '^https?://', maxLength: 512}
       audiences:
         type: array
         minItems: 1
@@ -106,7 +126,7 @@ $defs:
         maxItems: 3
         uniqueItems: true
         items: {enum: [EdDSA, ES256, RS256]}
-      jwksUri: {type: string, pattern: '^https://', maxLength: 512}
+      jwksUri: {type: string, pattern: '^https?://', maxLength: 512}
       principalClaim: {$ref: '#/$defs/claim-name'}
       requesterTagsClaim: {$ref: '#/$defs/claim-name'}
       evidenceAudienceClaim: {$ref: '#/$defs/claim-name'}
@@ -422,7 +442,7 @@ $defs:
   requirement:
     type: object
     additionalProperties: false
-    required: [id, kind, source, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, fixtures, disclosureGuard, existenceDisclosure]
+    required: [id, kind, source, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, disclosureGuard, existenceDisclosure]
     properties:
       id: {$ref: '#/$defs/uri'}
       kind: {enum: [criterion, information-requirement, constraint]}

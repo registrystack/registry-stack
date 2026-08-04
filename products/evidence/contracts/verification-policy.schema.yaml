@@ -4,6 +4,7 @@ title: Evidence relying-procedure verification policy Version 1
 type: object
 additionalProperties: false
 required:
+  - expectedAssuranceProfile
   - issuedBy
   - providedBy
   - requirement
@@ -16,6 +17,7 @@ required:
   - expectedOutputs
   - maximumAssertionLifetimeSeconds
 properties:
+  expectedAssuranceProfile: {enum: [local, production, evidence-grade]}
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
   requirement: {type: string, format: uri, maxLength: 512}

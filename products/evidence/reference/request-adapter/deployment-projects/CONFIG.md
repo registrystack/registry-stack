@@ -78,6 +78,7 @@ The governed file is `bundle/evidence.yaml`.
 | Key | Required | Meaning |
 |---|---|---|
 | `version` | yes | Bundle schema version. Version 1 requires integer `1`. |
+| `assuranceProfile` | yes | Explicitly `local`, `production`, or `evidence-grade`. Runtime configuration cannot override it. |
 | `service` | yes | Evidence provider identity and trust domain. |
 | `issuer` | yes | Issuer identity placed in evidence. |
 | `authentication` | yes | Closed inbound OIDC access-token verification policy. |
@@ -90,6 +91,20 @@ The governed file is `bundle/evidence.yaml`.
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
 | `requirements` | yes | Evidence semantics, source, derivation, concepts, fixtures, and disclosure family. |
+
+`local` is an authoring profile. A local requirement may omit `fixtures` while
+the provider contract is still being written. This does not disable any other
+runtime boundary: the bundle and runtime remain immutable, authentication and
+authorization remain required, source requests remain fixed and bounded,
+signing and both audit gates remain fail-closed, and assertions are visibly
+marked `local`. Local Mint may use only the exact canonical issuer origin
+`http://127.0.0.1:<non-zero-port>` and the same origin's
+`/.well-known/jwks.json`; other authentication URLs remain HTTPS.
+
+`production` and `evidence-grade` are deployable profiles. Every requirement
+must reference a fixture suite, and the existing complete coverage validation
+must pass before the bundle loads. No receipt, certification command, build
+artifact, or alternate evaluator is introduced by the assurance profile.
 
 ### Service, issuer, and inbound authentication
 
@@ -192,7 +207,7 @@ Each requirement declares these fields:
 | `validitySeconds` | yes | Positive assertion lifetime no greater than the signing maximum. |
 | `derivation` | yes | Script, optional minimized `selectorInputs`, and closed typed parameters. |
 | `concepts` | yes | 1 through 16 exact outputs, each with `id`, `form`, `required`, and closed form-specific `constraints`. |
-| `fixtures` | yes | Bundle-relative sanitized project fixture referenced by exactly one requirement. |
+| `fixtures` | conditional | Bundle-relative sanitized project fixture referenced by exactly one requirement. It may be omitted only under `assuranceProfile: local`; production and evidence-grade require it and complete coverage. |
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
 
@@ -569,8 +584,9 @@ synthetic responses and selectors. Add the smallest provider-shaped
 positive, legitimate-false, boundary, unresolved, malformed-provider,
 transport-failure, and privacy-canary cases.
 
-Run `evidence check` and every referenced `evidence evaluate` command before
-requesting review. Review the complete bundle as one disclosure surface, not
+Run `evidence check` and every currently referenced `evidence evaluate` command
+before requesting review. Before changing to `production` or `evidence-grade`,
+add and complete a fixture suite for every requirement. Review the complete bundle as one disclosure surface, not
 scripts independently. Promote the same reviewed bundle bytes through staging
 and production. Each environment may supply its own runtime file, secret
 files, private CA, and signing key, but may not override governed fields. In

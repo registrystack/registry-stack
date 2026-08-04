@@ -109,6 +109,7 @@ impl PreparedService {
             .expect("requester pseudonymizes");
 
         let mut access = EvidenceAuditEvent::new(
+            self.bundle.config.assurance_profile,
             operation.to_owned(),
             AuditPhase::AccessAttempt,
             request.requirement.clone(),
@@ -222,6 +223,7 @@ impl PreparedService {
             .expect("Evidence signs");
 
         let mut release = EvidenceAuditEvent::new(
+            self.bundle.config.assurance_profile,
             operation.to_owned(),
             AuditPhase::DisclosureRelease,
             request.requirement.clone(),

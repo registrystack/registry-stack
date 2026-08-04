@@ -30,7 +30,8 @@ const ISSUER_OWNED_CLAIMS: [&str; 10] = [
 
 /// The profile's always-disclosed claims that carry Evidence members, in the
 /// sorted order the issuance input uses.
-const ALWAYS_DISCLOSED_CLAIMS: [&str; 9] = [
+const ALWAYS_DISCLOSED_CLAIMS: [&str; 10] = [
+    "assuranceProfile",
     "audience",
     "configurationRevision",
     "issuedBy",
@@ -86,6 +87,10 @@ pub fn issuance_input(
     );
     public_claims.insert("purpose".to_string(), string_claim(&evidence.purpose));
     public_claims.insert("audience".to_string(), string_claim(&evidence.audience));
+    public_claims.insert(
+        "assuranceProfile".to_string(),
+        claim_value(&evidence.assurance_profile)?,
+    );
     public_claims.insert(
         "observedAt".to_string(),
         string_claim(&evidence.observed_at),
@@ -226,6 +231,7 @@ pub fn evidence_payload_from_claims(
 
     Ok(serde_json::json!({
         "schema": EVIDENCE_SCHEMA_V1,
+        "assuranceProfile": claims.get("assuranceProfile").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "requestNonce": claims.get("requestNonce").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "id": id,
         "type": "Evidence",
@@ -279,6 +285,7 @@ mod tests {
     fn evidence() -> Evidence {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
+            assurance_profile: crate::config::AssuranceProfile::EvidenceGrade,
             request_nonce: OFFLINE_EVALUATION_REQUEST_NONCE.to_string(),
             id: "urn:evidence:assertion:v1_2f0a".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -346,6 +353,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "assuranceProfile",
                 "audience",
                 "configurationRevision",
                 "issuedBy",

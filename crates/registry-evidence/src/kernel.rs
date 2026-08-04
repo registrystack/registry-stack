@@ -522,6 +522,7 @@ impl OfflineKernel {
 
         Ok(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
+            assurance_profile: self.bundle.config.assurance_profile,
             request_nonce: input.request_nonce.to_owned(),
             id: input.evidence_id.to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -1217,7 +1218,13 @@ mod tests {
             let requirement = &bundle.config.requirements[0];
             let fixture: Value = serde_norway::from_slice(
                 bundle
-                    .artifact(requirement.fixtures.as_str())
+                    .artifact(
+                        requirement
+                            .fixtures
+                            .as_ref()
+                            .expect("acceptance fixture is declared")
+                            .as_str(),
+                    )
                     .expect("fixture is captured"),
             )
             .expect("fixture parses");

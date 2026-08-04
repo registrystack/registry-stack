@@ -3,9 +3,10 @@ $id: https://registrystack.org/schemas/evidence/definitions-v1.json
 title: Requester-scoped Evidence definitions Version 1
 type: object
 additionalProperties: false
-required: [schema, configurationRevision, issuedBy, providedBy, definitions]
+required: [schema, assuranceProfile, configurationRevision, issuedBy, providedBy, definitions]
 properties:
   schema: {const: registry.evidence-definitions/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
   configurationRevision:
     type: string
     pattern: '^sha256:[a-f0-9]{64}$'

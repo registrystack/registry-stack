@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
+    config::AssuranceProfile,
     contracts::evidence_contract_accepts,
     model::{Evidence, FlattenedJws, JwksDocument},
     sdjwt_vc::evidence_payload_from_claims,
@@ -39,6 +40,7 @@ const MAXIMUM_SALT_BYTES: usize = 64;
 /// Copying values out of the JWS under verification proves nothing.
 #[derive(Debug, Clone)]
 pub struct EvidenceVerificationPolicy {
+    pub assurance_profile: AssuranceProfile,
     pub issued_by: String,
     pub provided_by: String,
     pub requirement: String,
@@ -77,6 +79,7 @@ impl EvidenceVerificationPolicy {
         clock_skew: Duration,
     ) -> Self {
         Self {
+            assurance_profile: evidence.assurance_profile,
             issued_by: evidence.issued_by.clone(),
             provided_by: evidence.provided_by.clone(),
             requirement: evidence.supports_requirement.clone(),
@@ -535,6 +538,7 @@ fn validate_policy(
     policy: &EvidenceVerificationPolicy,
 ) -> Result<bool, VerificationError> {
     if evidence.schema != EVIDENCE_SCHEMA_V1
+        || evidence.assurance_profile != policy.assurance_profile
         || evidence.issued_by != policy.issued_by
         || evidence.provided_by != policy.provided_by
         || evidence.supports_requirement != policy.requirement
@@ -739,6 +743,7 @@ mod tests {
     fn fixture_evidence() -> Evidence {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
             request_nonce: FIXTURE_NONCE.to_string(),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -808,6 +813,34 @@ mod tests {
         assert_eq!(
             evidence.supported_values[0].value,
             PublicValue::Boolean(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn authentic_local_assertions_fail_deployable_assurance_expectations() {
+        let mut local = fixture_evidence();
+        local.assurance_profile = AssuranceProfile::Local;
+        let (jws, jwks, mut strict_policy) = signed_evidence(
+            local.clone(),
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        strict_policy.assurance_profile = AssuranceProfile::Production;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &strict_policy),
+            Err(VerificationError::Policy)
+        );
+
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(&local, None).expect("local evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("local SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &strict_policy),
+            Err(VerificationError::Policy)
         );
     }
 

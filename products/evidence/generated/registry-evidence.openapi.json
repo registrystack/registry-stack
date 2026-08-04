@@ -92,6 +92,14 @@
       "Evidence": {
         "additionalProperties": false,
         "properties": {
+          "assuranceProfile": {
+            "enum": [
+              "local",
+              "production",
+              "evidence-grade"
+            ],
+            "type": "string"
+          },
           "audience": {
             "format": "uri",
             "maxLength": 512,
@@ -177,6 +185,7 @@
         },
         "required": [
           "schema",
+          "assuranceProfile",
           "requestNonce",
           "id",
           "type",
@@ -352,6 +361,14 @@
       "EvidenceDefinitions": {
         "additionalProperties": false,
         "properties": {
+          "assuranceProfile": {
+            "enum": [
+              "local",
+              "production",
+              "evidence-grade"
+            ],
+            "type": "string"
+          },
           "configurationRevision": {
             "pattern": "^sha256:[a-f0-9]{64}$",
             "type": "string"
@@ -383,6 +400,7 @@
         },
         "required": [
           "schema",
+          "assuranceProfile",
           "configurationRevision",
           "issuedBy",
           "providedBy",

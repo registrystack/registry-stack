@@ -337,6 +337,8 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceConfig {
     pub version: u8,
+    /// The governed assurance boundary for this immutable bundle.
+    pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
     pub issuer: IssuerConfig,
     pub authentication: AuthenticationConfig,
@@ -353,6 +355,32 @@ pub struct EvidenceConfig {
     pub sources: OrderedMap<SourceConfig>,
     pub authority_profiles: OrderedMap<AuthorityProfile>,
     pub requirements: Vec<RequirementConfig>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Deserialize,
+    Serialize,
+    schemars::JsonSchema,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum AssuranceProfile {
+    Local,
+    Production,
+    EvidenceGrade,
+}
+
+impl AssuranceProfile {
+    /// Only the explicit local profile may be authored before fixture
+    /// coverage exists. Deployable profiles retain the complete fixture gate.
+    pub fn requires_fixtures(self) -> bool {
+        matches!(self, Self::Production | Self::EvidenceGrade)
+    }
 }
 
 pub type SourceSelectorSet = Vec<(String, String)>;
@@ -376,7 +404,7 @@ impl EvidenceConfig {
         validate_uri(&self.service.provider_id)?;
         validate_uri(&self.service.trust_domain)?;
         validate_uri(&self.issuer.id)?;
-        self.authentication.validate()?;
+        self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
         self.rate_limits.validate()?;
@@ -421,6 +449,9 @@ impl EvidenceConfig {
         }
         for requirement in &self.requirements {
             requirement.validate()?;
+            if self.assurance_profile.requires_fixtures() && requirement.fixtures.is_none() {
+                return invalid("production and evidence-grade requirements must declare fixtures");
+            }
             if !requirement_ids.insert(requirement.id.as_str()) {
                 return invalid("requirement identifiers must be unique");
             }
@@ -936,9 +967,25 @@ pub struct AuthenticationConfig {
 }
 
 impl AuthenticationConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_https_issuer(&self.issuer)?;
-        validate_https_url(&self.jwks_uri, false)?;
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        let issuer = Url::parse(&self.issuer)
+            .map_err(|_| ConfigError::Invalid("authentication issuer is invalid"))?;
+        let jwks_uri = Url::parse(&self.jwks_uri)
+            .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
+        if issuer.scheme() == "http" || jwks_uri.scheme() == "http" {
+            if assurance_profile != AssuranceProfile::Local {
+                return invalid("production and evidence-grade authentication requires HTTPS");
+            }
+            let origin = validate_local_mint_origin(&self.issuer)?;
+            if self.jwks_uri != format!("{origin}{LOCAL_MINT_JWKS_PATH}") {
+                return invalid(
+                    "local authentication JWKS URI must use the issuer origin and Mint JWKS path",
+                );
+            }
+        } else {
+            validate_https_issuer(&self.issuer)?;
+            validate_https_url(&self.jwks_uri, false)?;
+        }
         validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
@@ -957,6 +1004,26 @@ impl AuthenticationConfig {
         }
         Ok(())
     }
+}
+
+const LOCAL_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
+
+fn validate_local_mint_origin(value: &str) -> Result<&str, ConfigError> {
+    let port = value
+        .strip_prefix("http://127.0.0.1:")
+        .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|port| !port.starts_with('0'))
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or(ConfigError::Invalid(
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+        ))?;
+    if value != format!("http://127.0.0.1:{port}") {
+        return invalid(
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+        );
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -1944,7 +2011,8 @@ pub struct RequirementConfig {
     pub validity_seconds: u64,
     pub derivation: DerivationConfig,
     pub concepts: Vec<ConceptConfig>,
-    pub fixtures: ArtifactPath,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixtures: Option<ArtifactPath>,
     pub disclosure_guard: DisclosureGuard,
     pub existence_disclosure: ExistenceDisclosure,
 }
@@ -1995,7 +2063,9 @@ impl RequirementConfig {
                 return invalid("requirement concepts must be unique");
             }
         }
-        require_artifact_prefix(&self.fixtures, "fixtures/")?;
+        if let Some(fixtures) = &self.fixtures {
+            require_artifact_prefix(fixtures, "fixtures/")?;
+        }
         self.disclosure_guard.validate()
     }
 }
@@ -3197,6 +3267,94 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assurance_profile_is_explicit_and_strict_profiles_require_fixtures() {
+        let strict = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8");
+
+        let omitted_profile = strict.replace("assuranceProfile: evidence-grade\n", "");
+        assert_ne!(omitted_profile, strict, "profile mutation must apply");
+        assert!(EvidenceConfig::parse_yaml(omitted_profile.as_bytes()).is_err());
+
+        let without_fixtures = strict
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("fixtures:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for profile in ["production", "evidence-grade"] {
+            let candidate = without_fixtures.replace("evidence-grade", profile);
+            assert!(
+                EvidenceConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "{profile} accepted a requirement without fixtures"
+            );
+        }
+
+        let local = without_fixtures.replace("evidence-grade", "local");
+        let parsed = EvidenceConfig::parse_yaml(local.as_bytes())
+            .expect("local authoring accepts an omitted fixture reference");
+        assert_eq!(parsed.assurance_profile, AssuranceProfile::Local);
+        assert!(parsed.requirements[0].fixtures.is_none());
+    }
+
+    #[test]
+    fn only_local_assurance_accepts_the_exact_loopback_mint_identity() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config.assurance_profile = AssuranceProfile::Local;
+        config.authentication.issuer = "http://127.0.0.1:8081".to_owned();
+        config.authentication.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        config
+            .validate()
+            .expect("local profile accepts the supervised Mint identity");
+
+        for invalid in [
+            "http://localhost:8081",
+            "http://127.0.0.2:8081",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:08081",
+            "http://127.0.0.1:65536",
+            "http://user@127.0.0.1:8081",
+            "http://127.0.0.1:8081/",
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.issuer = invalid.to_owned();
+            assert!(
+                candidate.validate().is_err(),
+                "local assurance accepted issuer {invalid}"
+            );
+        }
+        for invalid in [
+            "http://127.0.0.1:8081/.well-known/keys.json",
+            "http://127.0.0.1:8082/.well-known/jwks.json",
+            "http://localhost:8081/.well-known/jwks.json",
+            "https://127.0.0.1:8081/.well-known/jwks.json",
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.jwks_uri = invalid.to_owned();
+            assert!(
+                candidate.validate().is_err(),
+                "local assurance accepted JWKS URI {invalid}"
+            );
+        }
+
+        for profile in [
+            AssuranceProfile::Production,
+            AssuranceProfile::EvidenceGrade,
+        ] {
+            let mut candidate = config.clone();
+            candidate.assurance_profile = profile;
+            assert!(
+                candidate.validate().is_err(),
+                "{profile:?} inherited the local HTTP exception"
+            );
+        }
+    }
 
     fn bundle_contract_validator() -> jsonschema::JSONSchema {
         let schema: serde_norway::Value = serde_norway::from_slice(include_bytes!(

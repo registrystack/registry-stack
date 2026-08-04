@@ -592,6 +592,7 @@ mod tests {
     /// real audit line rather than an artificially short one.
     fn scrape_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
         EvidenceAuditEvent::new(
+            crate::config::AssuranceProfile::EvidenceGrade,
             "01K1EXAMPLE0000000000000000".to_string(),
             AuditPhase::AccessAttempt,
             "urn:example:requirement:v1".to_string(),

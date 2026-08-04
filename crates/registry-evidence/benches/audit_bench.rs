@@ -22,6 +22,7 @@ use registry_evidence::audit::{
     AuditAuthority, AuditDecision, AuditPhase, AuditSubject, AuthorityKind, EvidenceAuditEvent,
     EvidenceAuditLog, ResponseProtection,
 };
+use registry_evidence::config::AssuranceProfile;
 use tokio::{runtime::Runtime, task::JoinSet};
 
 /// Far above anything an individual benchmark run appends, so the file-size
@@ -41,6 +42,7 @@ fn pseudonym(seed: u8) -> String {
 
 fn sample_event() -> EvidenceAuditEvent {
     EvidenceAuditEvent::new(
+        AssuranceProfile::EvidenceGrade,
         "evidence.request.evaluate".to_string(),
         AuditPhase::AccessAttempt,
         "adult-status".to_string(),

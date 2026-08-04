@@ -338,10 +338,11 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "configurationRevision", "issuedBy", "providedBy", "definitions"
+            "schema", "assuranceProfile", "configurationRevision", "issuedBy", "providedBy", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
+            "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
             "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
@@ -474,12 +475,13 @@ fn evidence_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "requestNonce", "id", "type", "supportsRequirement", "isConformantTo",
+            "schema", "assuranceProfile", "requestNonce", "id", "type", "supportsRequirement", "isConformantTo",
             "issuedBy", "providedBy", "issuedAt", "observedAt", "validUntil",
             "purpose", "audience", "configurationRevision", "subjects", "supportedValues"
         ],
         "properties": {
             "schema": {"const": "registry.assertion-evidence/v1"},
+            "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
             "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
             "id": {"type": "string", "format": "uri", "maxLength": 512},
             "type": {"const": "Evidence"},
@@ -1402,6 +1404,7 @@ mod tests {
                 evidence_schema(),
                 json!({
                     "schema": "registry.assertion-evidence/v1",
+                    "assuranceProfile": "evidence-grade",
                     "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
                     "id": "urn:ulid:01K1EXAMPLE0000000000000000",
                     "type": "Evidence",
@@ -1429,6 +1432,7 @@ mod tests {
                 definitions_schema(),
                 json!({
                     "schema": "registry.evidence-definitions/v1",
+                    "assuranceProfile": "evidence-grade",
                     "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",

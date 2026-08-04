@@ -14,6 +14,13 @@ Focused adapter directories may keep separate JSON input/output files. Complete
 deployment projects use this YAML format so an adopter can review one case
 matrix beside the requirement.
 
+A requirement may omit its fixture reference only while its immutable bundle
+declares `assuranceProfile: local`. Local serving still uses the ordinary
+authenticated, authorized, source-bounded, minimum-disclosure, signed, and
+fail-closed audit path. Production and evidence-grade bundles retain this
+document's complete fixture-coverage requirement and fail to load when a
+reference is absent or its captured suite is incomplete.
+
 ## File shape
 
 ```yaml

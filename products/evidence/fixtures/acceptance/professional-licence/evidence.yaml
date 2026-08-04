@@ -1,4 +1,5 @@
 version: 1
+assuranceProfile: evidence-grade
 service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
 issuer: {id: urn:example:fixture:issuer:authority}
 authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [EdDSA], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, grantIdClaim: evidence_grant_id, grantAuthorityClaim: evidence_authority}

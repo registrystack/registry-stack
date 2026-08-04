@@ -51,6 +51,7 @@ claims:
     supportsRequirement: {source: supportsRequirement}
     purpose: {source: purpose}
     audience: {source: audience}
+    assuranceProfile: {source: assuranceProfile, rule: always disclosed and compared with an independent relying-procedure expectation}
     observedAt: {source: observedAt}
     configurationRevision: {source: configurationRevision}
     requestNonce: {source: requestNonce, rule: exact echo, never stored, never uniqueness-checked}
@@ -134,6 +135,7 @@ verifier_rules:
   - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
   - Recompute every disclosure digest and require an exact match against _sd; reject unmatched disclosures and unmatched digests alike.
   - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
+  - Require the exact independently expected assurance profile; a local assertion never satisfies a production or evidence-grade expectation.
   - Require the exact expected role-bound subject bindings as an unordered set, compared only after signature verification, from independent trusted state.
   - Require the exact request nonce from the independently retained original request. Nonce reuse is not replay prevention and is not rejected by the runtime.
   - Treat exp as an exclusive upper bound and apply only the configured clock skew.
@@ -150,6 +152,7 @@ relying_party_tooling:
 # shared with the signed-JWS profile because this profile changes the
 # serialization, never the release, audit, or verifier expectation rules.
 negative_tests:
+  - expected-assurance-profile-mismatch
   - sec-sd-jwt-projection-integrity
   - sec-sd-jwt-format-requires-bundle-and-grant
   - sec-sd-jwt-holder-key-closed

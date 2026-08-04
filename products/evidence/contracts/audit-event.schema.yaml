@@ -5,6 +5,7 @@ type: object
 additionalProperties: false
 required:
   - schema
+  - assuranceProfile
   - eventId
   - occurredAt
   - operation
@@ -20,6 +21,7 @@ required:
   - durationMilliseconds
 properties:
   schema: {const: registry.evidence.audit/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
   eventId: {type: string, format: uri, maxLength: 512}
   occurredAt: {type: string, format: date-time}
   operation: {type: string, minLength: 16, maxLength: 128}

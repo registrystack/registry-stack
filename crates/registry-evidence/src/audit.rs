@@ -19,6 +19,8 @@ use registry_platform_audit::{
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::config::AssuranceProfile;
+
 const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
 const MAX_AUDIT_LINE_BYTES: usize = 1024 * 1024;
 /// Sealed segments are named `<path>.<sequence>` with a zero-padded,
@@ -96,6 +98,7 @@ pub struct AuditSubject {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceAuditEvent {
     pub schema: &'static str,
+    pub assurance_profile: AssuranceProfile,
     pub event_id: String,
     pub occurred_at: String,
     pub operation: String,
@@ -128,6 +131,7 @@ pub struct EvidenceAuditEvent {
 impl EvidenceAuditEvent {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        assurance_profile: AssuranceProfile,
         operation: String,
         phase: AuditPhase,
         requirement: String,
@@ -142,6 +146,7 @@ impl EvidenceAuditEvent {
     ) -> Self {
         Self {
             schema: AUDIT_SCHEMA,
+            assurance_profile,
             event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             operation,
@@ -1407,6 +1412,7 @@ mod tests {
 
     fn event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
         EvidenceAuditEvent::new(
+            AssuranceProfile::EvidenceGrade,
             "01K1EXAMPLE0000000000000000".to_string(),
             AuditPhase::AccessAttempt,
             "urn:example:requirement:v1".to_string(),
@@ -1446,6 +1452,7 @@ mod tests {
 
         let access = EvidenceAuditEvent {
             schema: AUDIT_SCHEMA,
+            assurance_profile: AssuranceProfile::EvidenceGrade,
             event_id: "urn:example:fixture:audit:access-001".to_owned(),
             occurred_at: "2026-08-02T00:00:00Z".to_owned(),
             operation: "fixture-operation-00000001".to_owned(),

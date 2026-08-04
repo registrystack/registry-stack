@@ -205,7 +205,13 @@ async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
             let fixture_value = project
                 .bundle
                 .fixtures
-                .get(requirement.fixtures.as_str())
+                .get(
+                    requirement
+                        .fixtures
+                        .as_ref()
+                        .expect("reference fixture is declared")
+                        .as_str(),
+                )
                 .unwrap_or_else(|| panic!("{project_name}: fixture artifact missing"));
             let fixture: FixtureContract = serde_json::from_value(
                 serde_json::to_value(fixture_value)

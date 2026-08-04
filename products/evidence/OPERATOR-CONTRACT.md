@@ -66,6 +66,14 @@ identify the exact loaded inputs but are not trust decisions. The operator
 establishes trust through review, distribution controls, read-only mounts, and
 process replacement for every revision.
 
+Every bundle explicitly declares `assuranceProfile: local`, `production`, or
+`evidence-grade`. Local is the only authoring profile and may omit a
+requirement's fixture reference. It changes no other runtime trust boundary and
+is carried in discovery, signed assertions, SD-JWT VC responses, audit, and
+verification policy. Production and evidence-grade require one captured,
+complete fixture suite per requirement under the existing bundle validator.
+There is no fixture receipt, certification command, or second serving path.
+
 There is no runtime upload, editor, approval API, hot reload, merge, mutation,
 governed-field override, or fallback bundle/runtime file. Startup and readiness
 fail if either input is incomplete, inconsistent, mutable, uncompilable, unsafe
@@ -695,7 +703,8 @@ only because its secret and audit invariants require owner, mode, no-follow,
 link-count, and open-file identity checks. A read-only mount is preferred;
 directories use no write bits and files use no write bits. Fixture
 paths are normalized, bundle-relative `fixtures/*.yaml` paths referenced by
-exactly one requirement.
+exactly one requirement. A fixture path may be absent only under the explicit
+local assurance profile.
 
 The reference file-secret provider reads only regular, non-symlink files below
 the configured `secretProviders.file.root`. The secret root is operator-only and
@@ -718,6 +727,11 @@ resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.
+
+For `assuranceProfile: local`, supervised Mint may use the exact canonical
+issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
+same origin plus `/.well-known/jwks.json`. Production and evidence-grade, and
+every other authentication location, remain HTTPS-only.
 
 `disclosureGuard.families` is a trusted bundle-review attestation, not a
 domain-semantic classifier. The runtime rejects two simultaneously enabled
@@ -934,7 +948,7 @@ A relying party or operator re-verifies a stored signed response offline with
 `evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]`.
 The pinned JWKS file is the complete trust set and the policy document carries
 every expectation from independent trusted state: the retained request nonce,
-the expected role-bound subject bindings, and the expected output contract,
+the expected assurance profile, role-bound subject bindings, and output contract,
 under
 [`contracts/verification-policy.schema.yaml`](contracts/verification-policy.schema.yaml).
 The command performs no network access, reports cryptographic authenticity

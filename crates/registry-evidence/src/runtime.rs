@@ -24,8 +24,8 @@ use crate::{
     auth::{AuthenticatedContext, Authenticator},
     bundle::{Bundle, DeploymentInputs},
     config::{
-        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig, SelectorField,
-        SelectorInput, SubjectCardinality, ValueOrigin,
+        AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind, ResponseFormat,
+        RuntimeConfig, SelectorField, SelectorInput, SubjectCardinality, ValueOrigin,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection},
@@ -540,6 +540,7 @@ impl EvidenceRuntime {
         }
         let response = EvidenceDefinitions {
             schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
+            assurance_profile: self.bundle().config.assurance_profile,
             configuration_revision: self.bundle().revision().to_owned(),
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
@@ -1223,6 +1224,7 @@ impl EvidenceRuntime {
             })
             .collect::<Result<Vec<_>, RuntimeFailure>>()?;
         Ok(AuditMaterial {
+            assurance_profile: self.bundle().config.assurance_profile,
             requirement: resolved.requirement.clone(),
             bundle_revision: self.bundle().revision().to_owned(),
             purpose: resolved.purpose.clone(),
@@ -1292,6 +1294,7 @@ impl EvidenceRuntime {
 }
 
 struct AuditMaterial {
+    assurance_profile: AssuranceProfile,
     requirement: String,
     bundle_revision: String,
     purpose: String,
@@ -1311,6 +1314,7 @@ impl AuditMaterial {
         duration_milliseconds: u64,
     ) -> EvidenceAuditEvent {
         let mut event = EvidenceAuditEvent::new(
+            self.assurance_profile,
             operation.to_owned(),
             phase,
             self.requirement.clone(),

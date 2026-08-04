@@ -227,9 +227,16 @@ Bundle checking must validate:
 - derivation parameter types;
 - codelist references and versions;
 - successful Rhai compilation;
-- positive, negative, boundary, missing-data, no-match, ambiguous-match, and
-  anti-reconstruction fixtures;
+- for production and evidence-grade assurance, positive, negative, boundary,
+  missing-data, no-match, ambiguous-match, and anti-reconstruction fixtures;
 - combined disclosure safety of every simultaneously enabled definition.
+
+The governed bundle declares `local`, `production`, or `evidence-grade`
+assurance. Local may omit a requirement fixture reference during authoring but
+retains every runtime authentication, authorization, immutability, source,
+signing, audit, and disclosure control. Production and evidence-grade retain
+the complete fixture gate. The assurance value is part of Evidence, JWS,
+SD-JWT VC, discovery, audit, and strict verification policy.
 
 ## Source and credential boundary
 

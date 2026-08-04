@@ -1,5 +1,15 @@
 contract: registry.evidence.security-test-traceability/v1
 entries:
+  - id: sec-assurance-profile-fixture-boundary
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
+      - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_the_exact_loopback_mint_identity}
+      - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
+      - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_without_fixture_references_keeps_the_real_security_path}
+  - id: expected-assurance-profile-mismatch
+    tests:
+      - {file: crates/registry-evidence/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
   - id: sec-unknown-or-disabled-requirement
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
   - id: sec-caller-query-material-rejected

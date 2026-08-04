@@ -698,7 +698,9 @@ fn validate_file_closure(
     }
     for requirement in &config.requirements {
         expected.insert(requirement.derivation.script.as_str().to_owned());
-        expected.insert(requirement.fixtures.as_str().to_owned());
+        if let Some(fixtures) = &requirement.fixtures {
+            expected.insert(fixtures.as_str().to_owned());
+        }
         for concept in &requirement.concepts {
             if matches!(
                 concept.form,
@@ -1593,7 +1595,10 @@ fn load_fixtures(
 ) -> Result<BTreeMap<String, YamlValue>, BundleError> {
     let mut fixtures = BTreeMap::new();
     for requirement in &config.requirements {
-        let path = requirement.fixtures.as_str();
+        let Some(fixture_path) = &requirement.fixtures else {
+            continue;
+        };
+        let path = fixture_path.as_str();
         if fixtures.contains_key(path) {
             continue;
         }
@@ -1965,6 +1970,7 @@ fn compute_named_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AssuranceProfile;
     use crate::kernel::OfflineKernel;
 
     #[cfg(unix)]
@@ -2035,6 +2041,94 @@ mod tests {
         )
         .expect("fixture parses");
         assert!(validate_fixture_coverage(&fixture).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let config_path = directory.path().join(CONFIG_FILE);
+        let strict = fs::read_to_string(&config_path).expect("configuration reads");
+        let local = strict
+            .replace(
+                "assuranceProfile: evidence-grade",
+                "assuranceProfile: local",
+            )
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("fixtures:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&config_path, local).expect("local configuration writes");
+        fs::remove_file(directory.path().join("fixtures/cases.yaml"))
+            .expect("unreferenced fixture is removed");
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let bundle = Bundle::load(directory.path()).expect("local bundle loads without fixtures");
+        assert_eq!(bundle.config.assurance_profile, AssuranceProfile::Local);
+        assert!(bundle.fixtures.is_empty());
+
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        for profile in ["production", "evidence-grade"] {
+            let candidate = fs::read_to_string(&config_path)
+                .expect("local configuration reads")
+                .replace(
+                    "assuranceProfile: local",
+                    &format!("assuranceProfile: {profile}"),
+                );
+            fs::write(&config_path, candidate).expect("strict configuration writes");
+            set_tree_mode(directory.path(), 0o555, 0o444);
+            assert!(
+                Bundle::load(directory.path()).is_err(),
+                "{profile} bundle loaded without fixtures"
+            );
+            set_tree_mode(directory.path(), 0o755, 0o644);
+            let reset = fs::read_to_string(&config_path)
+                .expect("strict configuration reads")
+                .replace(
+                    &format!("assuranceProfile: {profile}"),
+                    "assuranceProfile: local",
+                );
+            fs::write(&config_path, reset).expect("local configuration restores");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_assurance_rejects_partial_fixture_suites() {
+        for profile in ["production", "evidence-grade"] {
+            let directory = tempfile::tempdir().expect("temporary bundle");
+            copy_acceptance_bundle("adult-status", directory.path());
+
+            let config_path = directory.path().join(CONFIG_FILE);
+            let configuration = fs::read_to_string(&config_path)
+                .expect("configuration reads")
+                .replace(
+                    "assuranceProfile: evidence-grade",
+                    &format!("assuranceProfile: {profile}"),
+                );
+            fs::write(&config_path, configuration).expect("configuration writes");
+
+            let fixtures_path = directory.path().join("fixtures/cases.yaml");
+            let fixtures = fs::read_to_string(&fixtures_path)
+                .expect("fixtures read")
+                .lines()
+                .filter(|line| !line.contains("id: anti-reconstruction"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(&fixtures_path, fixtures).expect("partial fixtures write");
+            set_tree_mode(directory.path(), 0o555, 0o444);
+
+            let error = Bundle::load(directory.path()).expect_err(&format!(
+                "{profile} bundle loaded with incomplete fixture coverage"
+            ));
+            assert!(
+                error
+                    .to_string()
+                    .contains("fixture category coverage is incomplete"),
+                "{profile} failed for an unexpected reason: {error}"
+            );
+        }
     }
 
     #[test]

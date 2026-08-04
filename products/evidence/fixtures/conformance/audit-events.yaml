@@ -2,6 +2,7 @@ fixture: registry.evidence.audit-events/v1
 synthetic_only: true
 access_attempt:
   schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:access-001
   occurredAt: '2026-08-02T00:00:00Z'
   operation: fixture-operation-00000001
@@ -22,6 +23,7 @@ access_attempt:
   durationMilliseconds: 2
 disclosure_release:
   schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:release-001
   occurredAt: '2026-08-02T00:00:01Z'
   operation: fixture-operation-00000001
@@ -45,6 +47,7 @@ disclosure_release:
   durationMilliseconds: 12
 unsigned_disclosure_release:
   schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:release-002
   occurredAt: '2026-08-02T00:00:02Z'
   operation: fixture-operation-00000001

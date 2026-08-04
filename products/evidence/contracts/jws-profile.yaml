@@ -57,7 +57,7 @@ verifier_rules:
   - Resolve kid only in the pinned provider key set and require the allowlisted algorithm.
   - Verify the signature before parsing or acting on payload claims.
   - Validate the strict payload against the complete committed Evidence JSON Schema before deserializing or applying relying-procedure policy.
-  - Require schema, issuer, provider, requirement, Evidence Type, purpose, audience, observation, validity, and configuration revision expected by the relying procedure.
+  - Require the assurance profile, schema, issuer, provider, requirement, Evidence Type, purpose, audience, observation, validity, and configuration revision expected independently by the relying procedure. An authentic local assertion never satisfies a production or evidence-grade expectation.
   - Require the exact request nonce from the independently retained original request. Nonce reuse is not replay prevention and is not rejected by the runtime.
   - Require the exact expected role-bound opaque subject bindings as an unordered set of unique role and binding pairs, compared only after signature and schema verification. Expectations come from independent trusted state, never from the JWS under verification.
   - Require the exact expected concept identifiers, value forms, and cardinalities; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
@@ -70,12 +70,14 @@ durable_verification_record:
   - the exact flattened JWS bytes
   - the original request and its request nonce
   - the expected audience, purpose, requirement, Evidence Type, issuer, and technical provider
+  - the expected assurance profile
   - the expected role-bound subject bindings
   - the expected concept identifiers, forms, and cardinalities or the exact trusted requirement contract that defines them
   - the configuration revision
   - the trusted signing-key or JWKS snapshot selected through governed metadata
   - the trusted time at which current-validity verification was performed
 negative_tests:
+  - expected-assurance-profile-mismatch
   - jws-payload-modification
   - jws-protected-header-modification
   - jws-message-key-url-rejected

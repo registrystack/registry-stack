@@ -167,6 +167,16 @@ invariants:
     threat: A metrics surface becomes a public existence oracle, or per-request labels reconstruct selectors, requirement usage, or registry membership through unbounded series cardinality.
     enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, never from request content.
     negative_test: sec-telemetry-bounded-and-operator-private
+  - id: V1-I34
+    rule: Only the explicit local assurance profile may omit a requirement fixture reference; production and evidence-grade retain complete fixture validation before the bundle can load.
+    threat: An incomplete or absent semantic fixture suite is silently treated as deployable assurance.
+    enforcement: The governed assuranceProfile is required in the closed bundle and Rust requires every production or evidence-grade requirement to reference a captured fixture that passes the existing complete coverage validator. Local changes only that fixture prerequisite.
+    negative_test: sec-assurance-profile-fixture-boundary
+  - id: V1-I35
+    rule: Every assertion encoding, definition response, and audit event carries the governed assurance profile, and verification compares it with an independent relying-procedure expectation.
+    threat: An authentic development-only assertion is accepted where production or evidence-grade assurance is required.
+    enforcement: Rust projects assuranceProfile from the immutable bundle into Evidence, JWS, SD-JWT VC, discovery, and audit, while both protected-format verifiers fail with the generic policy error on a mismatch.
+    negative_test: expected-assurance-profile-mismatch
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.

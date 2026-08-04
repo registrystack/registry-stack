@@ -104,7 +104,8 @@ Evidence should:
 - reuse platform audit and operational logging primitives where they fit;
 - provide privacy-safe, tamper-evident audit records;
 - minimize acquisition when the source supports it and always minimize disclosure;
-- validate all definitions, scripts, schemas, and fixtures before serving;
+- validate all definitions, scripts, and schemas before serving, and require
+  complete fixtures before production or evidence-grade serving;
 - prove source independence against materially different JSON API shapes;
 - complement existing gateways, exchange layers, and workflow systems;
 - remain small enough for a maintainer to trace an evidence request end to end.
@@ -679,7 +680,13 @@ Primitives perform no I/O, authorization, logging, audit, signing, or response c
 
 Rust accepts a derivation result only when its concept identifiers exactly match the selected requirement's permitted output set and every value satisfies its declared type, codelist, cardinality, and size. Arbitrary JSON objects and undeclared metadata are rejected.
 
-This makes the trusted bundle responsible for domain semantics while keeping disclosure enforcement in the core. A trusted script can still be semantically wrong, so every requirement carries positive, negative, boundary, missing-data, and anti-reconstruction fixtures that run before readiness.
+This makes the trusted bundle responsible for domain semantics while keeping
+disclosure enforcement in the core. A trusted script can still be semantically
+wrong, so production and evidence-grade requirements carry positive, negative,
+boundary, missing-data, and anti-reconstruction fixtures that run before
+readiness. The explicit local authoring profile may omit a fixture reference;
+it retains the real authenticated, bounded-source, signed, and audited runtime
+and marks every result as local.
 
 ### 9.5 Source compatibility contract
 
@@ -983,7 +990,10 @@ evidence check
 evidence evaluate --fixture <path>
 ```
 
-Every requirement ships with positive, negative, missing-data, source-failure, existence-disclosure, and anti-reconstruction fixtures. Offline evaluation does not require a running server or source network.
+Before production or evidence-grade use, every requirement ships with positive,
+negative, missing-data, source-failure, existence-disclosure, and
+anti-reconstruction fixtures. Offline evaluation does not require a running
+server or source network.
 
 ### 11.6 Discovery and publication
 

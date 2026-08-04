@@ -1,5 +1,6 @@
 {
   "schema": "registry.assertion-evidence/v1",
+  "assuranceProfile": "evidence-grade",
   "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
   "id": "urn:example:fixture:evidence:relationship-001",
   "type": "Evidence",

@@ -6,6 +6,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{Number, Value};
 use utoipa::ToSchema;
 
+use crate::config::AssuranceProfile;
+
 /// Exact encoded length of the required caller-generated request nonce: the
 /// canonical unpadded base64url form of 32 random bytes.
 pub const REQUEST_NONCE_ENCODED_LENGTH: usize = 43;
@@ -101,6 +103,7 @@ impl HolderPublicKey {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinitions {
     pub schema: String,
+    pub assurance_profile: AssuranceProfile,
     pub configuration_revision: String,
     pub issued_by: String,
     pub provided_by: String,
@@ -202,6 +205,7 @@ pub enum SelectorValue {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Evidence {
     pub schema: String,
+    pub assurance_profile: AssuranceProfile,
     /// Exact echo of the caller's request nonce for request-response
     /// correlation. The runtime does not store it or reject reuse.
     pub request_nonce: String,
@@ -569,6 +573,7 @@ mod tests {
     fn evidence_has_no_selector_echo_field() {
         let serialized = serde_json::to_value(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_string(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
             request_nonce: "A".repeat(43),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -617,6 +622,7 @@ mod tests {
         };
         let evidence = Evidence {
             schema: "protected-schema-canary".to_owned(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
             request_nonce: "protected-request-nonce-canary".to_owned(),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -650,6 +656,7 @@ mod tests {
         };
         let definitions = EvidenceDefinitions {
             schema: "protected-discovery-schema-canary".to_owned(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
             configuration_revision: "protected-discovery-revision-canary".to_owned(),
             issued_by: "protected-discovery-issuer-canary".to_owned(),
             provided_by: "protected-discovery-provider-canary".to_owned(),
