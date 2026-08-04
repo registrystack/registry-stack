@@ -2,6 +2,13 @@
 //! Tamper-evident audit envelopes, async sinks, and redaction helpers.
 
 pub mod pseudonym_keyring;
+#[cfg(unix)]
+mod segmented_jsonl;
+#[cfg(unix)]
+pub use segmented_jsonl::{
+    segmented_audit_paths, verify_segmented_audit_chain, DurableSegmentedJsonlSink,
+    SegmentedAuditSummary,
+};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1001,6 +1008,9 @@ pub enum AuditError {
         expected: OptionalHashHex,
         found: OptionalHashHex,
     },
+    /// A non-destructive segmented chain has a gap inside its retained range.
+    #[error("audit sealed segment {sequence} is archived or missing")]
+    SegmentMissing { sequence: u64 },
 }
 
 /// Display helper for an optional 32-byte hash rendered as lowercase hex (or

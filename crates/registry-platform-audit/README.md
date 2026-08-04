@@ -13,7 +13,8 @@ helpers for registry services.
   stream, operation ULID, and phase.
 - A `cfg(test)` in-memory conformance sink plus a public-API integration test.
   No in-memory sink exists in production builds.
-- Built-in `JsonlFileSink`, `JsonlStdoutSink`, and `SyslogSink`.
+- Built-in `JsonlFileSink`, `DurableSegmentedJsonlSink`, `JsonlStdoutSink`, and
+  `SyslogSink`.
 - `verify_chain` and `verify_jsonl_lines` for retained audit consistency
   checks.
 - `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
@@ -200,6 +201,11 @@ production use.
 
 - `JsonlFileSink::new` rotates at 10 MiB and retains 50 files by default.
 - `JsonlFileSink::with_rotation(path, 0, max_files)` disables size rotation.
+- `DurableSegmentedJsonlSink` is the parallel evidence-grade file contract. It
+  seals the active file as `<path>.<eight-digit-sequence>` when the configured
+  threshold is reached, keeps the keyed chain continuous across segments, and
+  never deletes or compacts sealed history. Use
+  `verify_segmented_audit_chain` for full-chain verification.
 - `AuditProfile::bootstrap_or_start_empty` and
   `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
   new appends, which is the normal startup path for persistent sinks.

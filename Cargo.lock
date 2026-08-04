@@ -5561,6 +5561,7 @@ dependencies = [
  "async-trait",
  "hmac 0.13.0",
  "registry-platform-canonical-json",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

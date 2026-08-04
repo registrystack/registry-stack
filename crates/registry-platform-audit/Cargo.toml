@@ -14,6 +14,7 @@ workspace = true
 async-trait.workspace = true
 hmac.workspace = true
 registry-platform-canonical-json.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
