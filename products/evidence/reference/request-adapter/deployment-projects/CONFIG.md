@@ -94,10 +94,10 @@ The governed file is `bundle/evidence.yaml`.
 
 `local` is an authoring profile. A local requirement may omit `fixtures` while
 the provider contract is still being written. This does not disable any other
-runtime boundary: the bundle and runtime remain immutable, authentication and
-authorization remain required, source requests remain fixed and bounded,
-signing and both audit gates remain fail-closed, and assertions are visibly
-marked `local`. Local Mint may use only the exact canonical issuer origin
+runtime boundary: the bundle and runtime remain immutable, inbound
+authentication and authorization remain required, source requests remain fixed
+and bounded, signing and both audit gates remain fail-closed, and assertions
+are visibly marked `local`. Local Mint may use only the exact canonical issuer origin
 `http://127.0.0.1:<non-zero-port>` and the same origin's
 `/.well-known/jwks.json`; other authentication URLs remain HTTPS.
 
@@ -254,10 +254,10 @@ sources:
 | Key | Required | Meaning |
 |---|---|---|
 | `transport` | yes | Exactly `http-json` in Version 1. |
-| `baseUrl` | yes | Fixed HTTPS origin. No path, query, fragment, user information, wildcard, or runtime substitution. |
+| `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source wire. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
-| `authentication` | yes | One closed source-authentication profile below. |
+| `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
 | `request` | yes | One fixed evidence-data request plan. |
 | `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before `extract/2` runs. |
 | `extractScript` | yes | Bundle-relative Rhai script implementing `extract/2`. |
@@ -288,6 +288,10 @@ durable access audit, and complete request-parts validation. No secret is passed
 to Rhai.
 
 ```yaml
+# No outbound credential, for local authoring only
+authentication:
+  kind: none
+
 # HTTP Basic
 authentication:
   kind: basic
@@ -315,6 +319,15 @@ authentication:
   credentialPlacement: basic-header
   maximumCacheSeconds: 300
 ```
+
+`kind: none` is accepted only when the bundle declares
+`assuranceProfile: local` and `baseUrl` is an exact canonical
+`http://<numeric-loopback>:<non-zero-port>` origin. It accepts no other
+members, cannot use `tlsTrustProfile`, and sends no `Authorization` or other
+authentication header. Hostnames such as `localhost`, omitted or noncanonical
+ports, user information, paths, queries, fragments, HTTPS origins, and
+non-loopback addresses are rejected. Production and evidence-grade bundles
+reject this kind.
 
 `static-api-key.headerName` cannot be `Authorization`, `Host`, `Cookie`,
 `Set-Cookie`, `Content-Length`, `Content-Type`, `Transfer-Encoding`, a

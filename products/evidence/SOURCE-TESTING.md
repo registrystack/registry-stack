@@ -111,6 +111,8 @@ Profile-specific cases include:
 - fixed and selector-bound path expansion, fixed headers, Basic, static Bearer,
   static API-key, OAuth client credentials, system-root and private-CA TLS,
   projection conflicts, and proof that ambient proxy variables are ignored.
+- the explicit local credential-free boundary, including exact numeric-
+  loopback origin validation and absence of an authentication header.
 
 The mocks assert the received wire request. Preparation Rhai sees only the
 source-required authorized selectors and closed parameters. Extraction Rhai

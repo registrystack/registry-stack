@@ -251,3 +251,7 @@ entries:
       - {file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
   - id: sec-sd-jwt-claims-closed
     tests: [{file: crates/registry-evidence/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]
+  - id: sec-local-source-none-boundary
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: unauthenticated_source_is_local_loopback_only_and_matches_the_bundle_schema}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: local_unauthenticated_loopback_source_sends_no_authentication_header}

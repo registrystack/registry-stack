@@ -23,6 +23,8 @@ The supported native deployment has:
   logical private-CA trust profiles, and generic Basic, static Bearer, static
   API-key, or OAuth 2.0 client-credentials authentication through secret
   references;
+- optional credential-free source access only for `assuranceProfile: local`
+  at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
 - one active EdDSA reference signing key, flattened JWS JSON success responses,
   and public key discovery at `/.well-known/evidence/jwks.json`;
 - keyed JSONL audit on storage whose durability the operator has explicitly
@@ -761,6 +763,9 @@ the subject-binding key, signing provider, pinned audit sink, and every source
 credential. Basic, static Bearer, and static API-key credentials are checked
 locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
+An explicit local source with `authentication.kind: none` has no credential
+check or bootstrap and sends no authentication header. Production and
+evidence-grade bundles reject that source kind at startup.
 Neither startup nor readiness sends an evidence-data request or probes a source
 data endpoint. Readiness
 fails when a required local runtime or bundle input, selector binding,

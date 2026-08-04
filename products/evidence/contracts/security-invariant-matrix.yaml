@@ -177,6 +177,11 @@ invariants:
     threat: An authentic development-only assertion is accepted where production or evidence-grade assurance is required.
     enforcement: Rust projects assuranceProfile from the immutable bundle into Evidence, JWS, SD-JWT VC, discovery, and audit, while both protected-format verifiers fail with the generic policy error on a mismatch.
     negative_test: expected-assurance-profile-mismatch
+  - id: V1-I36
+    rule: Credential-free source access exists only for local authoring against an exact numeric-loopback HTTP origin and never sends an authentication header.
+    threat: A local tutorial convenience becomes unauthenticated production access, reaches a remote host, or forwards caller-controlled authorization material.
+    enforcement: Bundle validation binds source authentication kind none to assuranceProfile local, a canonical loopback HTTP origin with an explicit non-zero port, no TLS trust profile, and the core executor's header-free authentication plan; production and evidence-grade reject the kind.
+    negative_test: sec-local-source-none-boundary
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.

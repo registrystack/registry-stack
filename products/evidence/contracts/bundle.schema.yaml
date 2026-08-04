@@ -83,6 +83,14 @@ allOf:
             jwksUri: {pattern: '^https://'}
         requirements:
           items: {required: [fixtures]}
+        sources:
+          additionalProperties:
+            properties:
+              authentication:
+                not:
+                  type: object
+                  required: [kind]
+                  properties: {kind: {const: none}}
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   uri: {type: string, format: uri, maxLength: 512}
@@ -220,8 +228,26 @@ $defs:
       responseSchema: {$ref: '#/$defs/relative-path'}
       extractScript: {$ref: '#/$defs/relative-path'}
       factSchema: {$ref: '#/$defs/relative-path'}
+    allOf:
+      - if:
+          required: [authentication]
+          properties:
+            authentication:
+              type: object
+              required: [kind]
+              properties: {kind: {const: none}}
+        then:
+          properties:
+            baseUrl:
+              type: string
+              pattern: '^http://(?:127\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\[::1\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$'
+          not: {required: [tlsTrustProfile]}
   source-authentication:
     oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind]
+        properties: {kind: {const: none}}
       - type: object
         additionalProperties: false
         required: [kind, usernameRef, passwordRef]

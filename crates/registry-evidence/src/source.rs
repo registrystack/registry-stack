@@ -18,9 +18,9 @@ use url::{Host, Url};
 use zeroize::Zeroizing;
 
 use crate::config::{
-    AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
-    PathBindingConfig, PreparationChannelPolicy, SecretRef, SourceAuthentication, SourceConfig,
-    SourceSelectorSet,
+    validate_local_unauthenticated_source_origin, AcquisitionPosture, CredentialPlacement,
+    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
+    SecretRef, SourceAuthentication, SourceConfig, SourceSelectorSet,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::RequestParts;
@@ -160,6 +160,7 @@ struct PathBindingPlan {
 }
 
 enum AuthenticationPlan {
+    None,
     Basic {
         username_ref: SecretRef,
         password_ref: SecretRef,
@@ -264,6 +265,12 @@ impl SourceExecutor {
         outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
+        if matches!(source.authentication, SourceAuthentication::None {})
+            && (source.tls_trust_profile.is_some()
+                || validate_local_unauthenticated_source_origin(&source.base_url).is_err())
+        {
+            return Err(SourceError::InvalidPlan);
+        }
         let timeout = Duration::from_millis(source.request.timeout_milliseconds);
         if timeout.is_zero()
             || source.request.timeout_milliseconds > 30_000
@@ -304,7 +311,6 @@ impl SourceExecutor {
         let materialized = self.materialize_request(selectors, request_parts)?;
         let _permit =
             acquire_source_slot(&self.concurrency, self.concurrency_admission_timeout).await?;
-        let (authentication_name, authentication_value) = self.authentication_header().await?;
         let method = match self.request.method {
             HttpMethod::GET => reqwest::Method::GET,
             HttpMethod::POST => reqwest::Method::POST,
@@ -312,8 +318,12 @@ impl SourceExecutor {
         let mut request = self
             .client
             .request(method, materialized.url.clone())
-            .headers(self.request.fixed_headers.clone())
-            .header(authentication_name, authentication_value);
+            .headers(self.request.fixed_headers.clone());
+        if let Some((authentication_name, authentication_value)) =
+            self.authentication_header().await?
+        {
+            request = request.header(authentication_name, authentication_value);
+        }
         if !self.request.fixed_headers.contains_key(ACCEPT) {
             request = request.header(ACCEPT, HeaderValue::from_static(JSON_MEDIA_TYPE));
         }
@@ -356,8 +366,11 @@ impl SourceExecutor {
         self.authentication_header().await.map(|_| ())
     }
 
-    async fn authentication_header(&self) -> Result<(HeaderName, HeaderValue), SourceError> {
+    async fn authentication_header(
+        &self,
+    ) -> Result<Option<(HeaderName, HeaderValue)>, SourceError> {
         let value = match &self.authentication {
+            AuthenticationPlan::None => return Ok(None),
             AuthenticationPlan::Basic {
                 username_ref,
                 password_ref,
@@ -375,17 +388,17 @@ impl SourceExecutor {
                 value_ref,
             } => {
                 let secret = resolve(&self.secrets, value_ref)?;
-                return Ok((
+                return Ok(Some((
                     header_name.clone(),
                     sensitive_header(secret.expose_secret())?,
-                ));
+                )));
             }
             AuthenticationPlan::Oauth2(plan) => {
                 let token = plan.access_token(&self.client, &self.secrets).await?;
                 bearer_authorization(token.expose())?
             }
         };
-        Ok((AUTHORIZATION, value))
+        Ok(Some((AUTHORIZATION, value)))
     }
 }
 
@@ -714,6 +727,7 @@ fn compile_authentication(
     admission_timeout: Duration,
 ) -> Result<AuthenticationPlan, SourceError> {
     match authentication {
+        SourceAuthentication::None {} => Ok(AuthenticationPlan::None),
         SourceAuthentication::Basic {
             username_ref,
             password_ref,

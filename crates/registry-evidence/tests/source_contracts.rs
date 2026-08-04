@@ -542,6 +542,72 @@ fn materialized_request_reuses_path_template_query_and_body_without_auth_materia
 }
 
 #[tokio::test]
+async fn local_unauthenticated_loopback_source_sends_no_authentication_header() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (_root, secrets) = resolver(&[]);
+    let source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    let executor = SourceExecutor::new(&source, secrets).expect("local source plan compiles");
+
+    executor
+        .credentials_ready()
+        .await
+        .expect("credential-free readiness has no bootstrap");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request journal")
+            .is_empty(),
+        "readiness must not contact the source"
+    );
+
+    let response = executor
+        .execute(&[selector("synthetic")], &parts())
+        .await
+        .expect("local source request succeeds");
+    assert_eq!(response, json!({"ok": true}));
+
+    let requests = server.received_requests().await.expect("request journal");
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests[0].headers.contains_key("authorization"),
+        "credential-free source must not receive Authorization"
+    );
+
+    let forbidden_header = source_config(
+        &server.uri(),
+        json!({"kind": "none"}),
+        json!(["record_id"]),
+        json!([{"name": "Authorization", "value": "caller-controlled"}]),
+        json!(["/ok"]),
+    );
+    assert_eq!(
+        SourceExecutor::new(&forbidden_header, resolver(&[]).1).err(),
+        Some(SourceError::InvalidPlan),
+        "fixed headers cannot recreate authentication in local mode"
+    );
+
+    for invalid_origin in [
+        "https://127.0.0.1:18081",
+        "http://127.0.0.1",
+        "http://localhost:18081",
+    ] {
+        let invalid = fixed_source(invalid_origin, json!({"kind": "none"}));
+        assert_eq!(
+            SourceExecutor::new(&invalid, resolver(&[]).1).err(),
+            Some(SourceError::InvalidPlan),
+            "executor rejected unauthenticated origin {invalid_origin}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact() {
     let server = MockServer::start().await;
     let (_root, secrets) = resolver(&[("token", "credential-canary")]);

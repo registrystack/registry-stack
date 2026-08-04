@@ -595,6 +595,12 @@ evidence-data source call. Rust owns the fixed token endpoint, grant,
 credential placement, token lifetime handling, bounds, and redaction. Rhai sees
 neither the credential flow nor the resulting token.
 
+The explicit local assurance profile may additionally use `kind: none` for a
+source at one canonical numeric-loopback HTTP origin with an explicit non-zero
+port. Rust sends no authentication header in that mode. Production and
+evidence-grade bundles reject it, so this tutorial convenience is not an
+unauthenticated deployment profile.
+
 Bundle-fixed non-secret headers support media types, API versions, and tenant
 selectors without giving scripts header authority. A source may name a logical
 TLS trust profile whose private-CA file is bound by runtime configuration.
@@ -1347,6 +1353,8 @@ mandatory default and includes:
 - one generic fixed HTTP JSON evidence-data request executor;
 - generic Basic, static Bearer, static API-key header, and OAuth 2.0
   client-credentials source authentication using secret references;
+- credential-free source access only for explicit local authoring at a
+  canonical numeric-loopback HTTP origin;
 - fixed non-secret request headers, Rust-owned selector-bound path templates,
   and logical private-CA trust profiles without script transport authority;
 - explicit `source-derived`, `field-projected`, and `record-transformed`

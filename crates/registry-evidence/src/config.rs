@@ -413,7 +413,9 @@ impl EvidenceConfig {
         validate_named_map(&self.selector_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
-        validate_named_map(&self.sources, 1, 128, SourceConfig::validate)?;
+        validate_named_map(&self.sources, 1, 128, |source| {
+            source.validate(self.assurance_profile)
+        })?;
         validate_named_map(&self.authority_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
@@ -1458,7 +1460,7 @@ pub struct SourceConfig {
 }
 
 impl SourceConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
         validate_source_origin(&self.base_url)?;
         if self
             .tls_trust_profile
@@ -1466,6 +1468,19 @@ impl SourceConfig {
             .is_some_and(|profile| !valid_local_id(profile))
         {
             return invalid("source TLS trust profile identifier is invalid");
+        }
+        if matches!(self.authentication, SourceAuthentication::None {}) {
+            if assurance_profile != AssuranceProfile::Local {
+                return invalid(
+                    "unauthenticated sources are permitted only by the local assurance profile",
+                );
+            }
+            validate_local_unauthenticated_source_origin(&self.base_url)?;
+            if self.tls_trust_profile.is_some() {
+                return invalid(
+                    "an unauthenticated local HTTP source cannot use a TLS trust profile",
+                );
+            }
         }
         self.authentication.validate()?;
         self.request.validate()?;
@@ -1513,6 +1528,12 @@ pub enum AcquisitionPosture {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceAuthentication {
+    /// No outbound credential is sent.
+    ///
+    /// The containing bundle validator admits this only for the local
+    /// assurance profile and a canonical numeric-loopback HTTP origin with an
+    /// explicit non-zero port. It is not a production authentication mode.
+    None {},
     Basic {
         #[serde(rename = "usernameRef")]
         username_ref: SecretRef,
@@ -1561,6 +1582,7 @@ pub enum SourceAuthentication {
 impl SourceAuthentication {
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
+            Self::None {} => Ok(()),
             Self::Basic {
                 username_ref: _,
                 password_ref: _,
@@ -1604,6 +1626,7 @@ impl SourceAuthentication {
 
     pub fn secret_refs(&self) -> Vec<&SecretRef> {
         match self {
+            Self::None {} => Vec::new(),
             Self::Basic {
                 username_ref,
                 password_ref,
@@ -2668,6 +2691,34 @@ fn validate_source_origin(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Validate the only credential-free source boundary.
+///
+/// This is deliberately narrower than the numeric-loopback exception used by
+/// authenticated deterministic source mocks. The unauthenticated local mode
+/// requires one exact origin spelling and an explicit port so a tutorial
+/// bundle cannot silently inherit a default port, path, alias, or userinfo.
+pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Result<(), ConfigError> {
+    let url = validate_source_url(value, true)?;
+    let port = url.port_or_known_default().ok_or(ConfigError::Invalid(
+        "unauthenticated local source origin requires an explicit non-zero port",
+    ))?;
+    let canonical = match url.host() {
+        Some(Host::Ipv4(ip)) if ip.is_loopback() => format!("http://{ip}:{port}"),
+        Some(Host::Ipv6(ip)) if ip.is_loopback() => format!("http://[{ip}]:{port}"),
+        _ => {
+            return invalid(
+                "unauthenticated local source origin must use a numeric loopback HTTP host",
+            )
+        }
+    };
+    if url.scheme() != "http" || value != canonical {
+        return invalid(
+            "unauthenticated local source origin must be a canonical numeric loopback HTTP origin with an explicit non-zero port",
+        );
+    }
+    Ok(())
+}
+
 fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
     let url = Url::parse(value).map_err(|_| ConfigError::Invalid("source URL is invalid"))?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
@@ -3360,6 +3411,100 @@ mod tests {
                 "{profile:?} inherited the local HTTP exception"
             );
         }
+    }
+
+    #[test]
+    fn unauthenticated_source_is_local_loopback_only_and_matches_the_bundle_schema() {
+        let mut local = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        local.assurance_profile = AssuranceProfile::Local;
+        local.sources.0[0].1.authentication = SourceAuthentication::None {};
+
+        for origin in [
+            "http://127.0.0.1:80",
+            "http://127.0.0.1:18081",
+            "http://127.42.5.9:1",
+            "http://[::1]:65535",
+        ] {
+            let mut candidate = local.clone();
+            candidate.sources.0[0].1.base_url = origin.to_owned();
+            candidate
+                .validate()
+                .unwrap_or_else(|_| panic!("local assurance rejected {origin}"));
+            assert!(candidate.sources.0[0]
+                .1
+                .authentication
+                .secret_refs()
+                .is_empty());
+        }
+
+        for origin in [
+            "https://127.0.0.1:18081",
+            "http://localhost:18081",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:018081",
+            "http://127.0.0.1:65536",
+            "http://127.00.0.1:18081",
+            "http://127.0.0.1:18081/",
+            "http://127.0.0.1:18081/data",
+            "http://127.0.0.1:18081?query=true",
+            "http://127.0.0.1:18081#fragment",
+            "http://user@127.0.0.1:18081",
+            "http://192.168.1.2:18081",
+        ] {
+            let mut candidate = local.clone();
+            candidate.sources.0[0].1.base_url = origin.to_owned();
+            assert!(
+                candidate.validate().is_err(),
+                "local assurance accepted unauthenticated origin {origin}"
+            );
+        }
+
+        let mut with_tls_profile = local.clone();
+        with_tls_profile.sources.0[0].1.base_url = "http://127.0.0.1:18081".to_owned();
+        with_tls_profile.sources.0[0].1.tls_trust_profile = Some("unused-local-ca".to_owned());
+        assert!(with_tls_profile.validate().is_err());
+
+        for profile in [
+            AssuranceProfile::Production,
+            AssuranceProfile::EvidenceGrade,
+        ] {
+            let mut candidate = local.clone();
+            candidate.assurance_profile = profile;
+            candidate.sources.0[0].1.base_url = "http://127.0.0.1:18081".to_owned();
+            assert!(
+                candidate.validate().is_err(),
+                "{profile:?} accepted an unauthenticated source"
+            );
+        }
+
+        let validator = bundle_contract_validator();
+        let mut instance = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ));
+        instance["assuranceProfile"] = serde_json::json!("local");
+        instance["sources"]["source-a"]["baseUrl"] = serde_json::json!("http://127.0.0.1:18081");
+        instance["sources"]["source-a"]["authentication"] = serde_json::json!({"kind": "none"});
+        assert!(
+            validator.is_valid(&instance),
+            "schema accepts the local form"
+        );
+        instance["assuranceProfile"] = serde_json::json!("production");
+        assert!(
+            !validator.is_valid(&instance),
+            "schema rejects the local exception in a deployable profile"
+        );
+
+        assert!(
+            serde_json::from_value::<SourceAuthentication>(
+                serde_json::json!({"kind": "none", "tokenRef": "secret:file/unexpected"})
+            )
+            .is_err(),
+            "the none variant is closed"
+        );
     }
 
     fn bundle_contract_validator() -> jsonschema::JSONSchema {
