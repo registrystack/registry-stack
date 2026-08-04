@@ -40,6 +40,7 @@ const EVIDENCE_ORIGIN: &str = "http://127.0.0.1:8080";
 const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
 const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
 const MINT_JWKS_URL: &str = "http://127.0.0.1:8081/.well-known/jwks.json";
+const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
@@ -455,12 +456,16 @@ fn prepare_and_start(
     mint_override: Option<&Path>,
     ready_timeout_seconds: u64,
 ) -> Result<ExitCode> {
-    let evidence_bin = resolve_tool_binary(
+    let evidence_bin = canonical_tool_binary(resolve_tool_binary(
         "evidence",
         evidence_override,
         "EVIDENCECTL_TEST_EVIDENCE_BIN",
-    )?;
-    let mint_bin = resolve_tool_binary("mint", mint_override, "EVIDENCECTL_TEST_MINT_BIN")?;
+    )?)?;
+    let mint_bin = canonical_tool_binary(resolve_tool_binary(
+        "mint",
+        mint_override,
+        "EVIDENCECTL_TEST_MINT_BIN",
+    )?)?;
     let compiled = compile_local_project(project, dev_root, &evidence_bin)?;
 
     let generated = dev_root.join("generated");
@@ -558,9 +563,11 @@ fn stop_dev(project: &Path) -> Result<ExitCode> {
     if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
         bail!("local development state is not an active session");
     }
-    let socket = dev_root.join("control.sock");
+    let socket = dev_root.join(CONTROL_SOCKET_NAME);
     validate_control_socket(&socket)?;
-    let mut stream = UnixStream::connect(&socket)
+    std::env::set_current_dir(&dev_root)
+        .context("failed to enter the private local development directory")?;
+    let mut stream = UnixStream::connect(CONTROL_SOCKET_NAME)
         .context("the recorded local supervisor is unavailable; refusing PID-based recovery")?;
     stream.set_read_timeout(Some(Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5)))?;
     stream.write_all(b"stop\n")?;
@@ -614,7 +621,7 @@ fn publish_supervisor_failure(dev_root: &Path, kind: FailureKind) -> Result<()> 
         state.failure = Some(kind);
         replace_state(&state_path, &state)?;
     }
-    let socket = dev_root.join("control.sock");
+    let socket = dev_root.join(CONTROL_SOCKET_NAME);
     match fs::symlink_metadata(&socket) {
         Ok(_) => remove_control_socket(&socket),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -632,9 +639,11 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
         bail!("supervisor state is not a fresh compiled local session");
     }
 
-    let socket_path = dev_root.join("control.sock");
+    std::env::set_current_dir(&dev_root)
+        .context("failed to enter the private local development directory")?;
+    let socket_path = dev_root.join(CONTROL_SOCKET_NAME);
     injected_supervisor_failure("before-socket")?;
-    let listener = UnixListener::bind(&socket_path)
+    let listener = UnixListener::bind(CONTROL_SOCKET_NAME)
         .context("failed to bind the private local control socket")?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
     validate_control_socket(&socket_path)?;
@@ -1047,6 +1056,11 @@ pub(crate) fn resolve_tool_binary(
         return Ok(PathBuf::from(path));
     }
     Ok(PathBuf::from(name))
+}
+
+fn canonical_tool_binary(path: PathBuf) -> Result<PathBuf> {
+    fs::canonicalize(&path)
+        .with_context(|| format!("failed to resolve tool binary {}", path.display()))
 }
 
 fn canonical_project(path: &Path) -> Result<PathBuf> {

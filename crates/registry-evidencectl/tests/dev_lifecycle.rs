@@ -8,7 +8,10 @@ use std::{
     ffi::OsStr,
     fs,
     net::TcpListener,
-    os::unix::fs::{symlink, MetadataExt as _, PermissionsExt as _},
+    os::unix::{
+        ffi::OsStrExt as _,
+        fs::{symlink, MetadataExt as _, PermissionsExt as _},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Output},
     thread,
@@ -70,7 +73,17 @@ const DERIVATION: &str = r#"fn answer(facts, selectors, context) {
 fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
     let evidence = required_binary("EVIDENCE_BIN");
     let mint = required_binary("MINT_BIN");
-    let fixture = Project::new();
+    let fixture = Project::new_long_path();
+    assert!(
+        fixture
+            .root
+            .join(".evidence/dev/control.sock")
+            .as_os_str()
+            .as_bytes()
+            .len()
+            > 104,
+        "test path must exceed the common sockaddr_un.sun_path limit"
+    );
     fixture.generate_evidence_keys();
 
     let mut unrelated = Command::new("/bin/sleep")
@@ -405,9 +418,19 @@ struct Project {
 
 impl Project {
     fn new() -> Self {
+        Self::at_relative_path(Path::new("tutorial"))
+    }
+
+    fn new_long_path() -> Self {
+        Self::at_relative_path(Path::new(
+            "first-evidence-assertion-with-a-deliberately-long-project-directory/adult-status-with-a-long-adopter-project-name",
+        ))
+    }
+
+    fn at_relative_path(relative: &Path) -> Self {
         let temporary = tempfile::tempdir().expect("tempdir");
-        let root = temporary.path().join("tutorial");
-        fs::create_dir(&root).expect("project");
+        let root = temporary.path().join(relative);
+        fs::create_dir_all(&root).expect("project");
         fs::create_dir(root.join("questions")).expect("questions");
         fs::create_dir(root.join("derivations")).expect("derivations");
         fs::write(root.join("source.openapi.yaml"), OPENAPI).expect("OpenAPI");
