@@ -11,7 +11,7 @@ use registry_evidence_verifier::{
     verifier::{verify_flattened_jws, ExpectedSubjectDocument},
     EVIDENCE_JWS_MEDIA_TYPE,
 };
-use registry_platform_httputil::read_bounded;
+use registry_platform_httputil::{read_bounded, BoundedReadError};
 use reqwest::{
     header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
     Method, StatusCode,
@@ -24,7 +24,7 @@ use crate::{
     definitions::EvidenceDefinitionsDocument,
     error::{EvidenceClientError, TransportKind},
     prepare::{EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations},
-    problem::{essence, map_problem},
+    problem::{essence, map_problem, sanitized_operation},
     request::EvidenceRequestBody,
 };
 
@@ -344,7 +344,11 @@ impl EvidenceClient {
         expected_media_type: &str,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
-        let operation = sanitized_correlation_id(&response);
+        let operation = response
+            .headers()
+            .get(CORRELATION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(sanitized_operation);
         let media_type = response
             .headers()
             .get(CONTENT_TYPE)
@@ -356,14 +360,24 @@ impl EvidenceClient {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<u64>().ok());
 
-        let body = read_bounded(response, self.config.max_response_bytes)
-            .await
-            .map_err(|_| {
-                // Both an oversized body and a failed read collapse here: the
-                // bound is the caller's, and the underlying text is not
-                // something this crate copies into a diagnostic.
-                EvidenceClientError::transport(TransportKind::ResponseTooLarge)
-            })?;
+        let body = match read_bounded(response, self.config.max_response_bytes).await {
+            Ok(body) => body,
+            // The status and the correlation identifier arrived before the body
+            // did. A refusal keeps them, because they are the whole support
+            // workflow this crate offers and the unread body would have carried
+            // nothing else the caller may act on.
+            Err(_) if !(200..300).contains(&status) => {
+                return Err(EvidenceClientError::Protocol {
+                    status,
+                    code: None,
+                    operation,
+                    retry_after_seconds: None,
+                })
+            }
+            // An answer meant as a success has no status or code worth
+            // reporting, only the reason its bytes never arrived.
+            Err(error) => return Err(EvidenceClientError::transport(read_failure_kind(&error))),
+        };
 
         if !(200..300).contains(&status) {
             return Err(map_problem(
@@ -435,20 +449,24 @@ fn serialize_request(body: &EvidenceRequestBody) -> Result<Vec<u8>, EvidenceClie
         .map_err(|_| EvidenceClientError::configuration("the request body cannot be serialized"))
 }
 
-/// The correlation identifier, kept only when it is a bounded alphanumeric
-/// value. A deployment cannot use this header to inject text into a relying
-/// party's records.
-fn sanitized_correlation_id(response: &reqwest::Response) -> Option<String> {
-    let value = response
-        .headers()
-        .get(CORRELATION_HEADER)?
-        .to_str()
-        .ok()?
-        .trim();
-    let acceptable = !value.is_empty()
-        && value.len() <= 64
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric());
-    acceptable.then(|| value.to_owned())
+/// Why a bounded read failed, in the terms the caller can act on.
+///
+/// The distinction matters most for a timeout, which is the likely failure: the
+/// configured total timeout runs until the body finishes, so an answer that
+/// starts and stalls elapses here rather than at connection setup. No part of the
+/// underlying error text is copied into the reported failure.
+fn read_failure_kind(error: &BoundedReadError) -> TransportKind {
+    match error {
+        BoundedReadError::ContentLengthExceeded { .. }
+        | BoundedReadError::BodyTooLarge { .. }
+        | BoundedReadError::LengthOverflow => TransportKind::ResponseTooLarge,
+        BoundedReadError::Transport(error) if error.is_timeout() => TransportKind::Timeout,
+        // The reader's error type is open, so a variant this crate does not know
+        // yet becomes the coarse exchange failure. It must never become a claim
+        // about the response size, which is the one thing an adopter would act on
+        // by raising their own bound.
+        _ => TransportKind::Exchange,
+    }
 }
 
 /// Read the role-bound subject bindings out of a response that has not been
@@ -498,16 +516,39 @@ mod tests {
         },
         AssuranceProfile,
     };
-    use std::sync::Arc;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use registry_platform_httputil::BoundedReadError;
+    use std::{net::TcpListener, sync::Arc, time::Duration};
+    use wiremock::{
+        matchers::{any, header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
-    fn client_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClient {
-        EvidenceClient::new(EvidenceClientConfig::new(
+    /// The identifier shape the deployment publishes: a ULID.
+    const OPERATION: &str = "01JQ0QZ8YHZ0000000000000AB";
+
+    fn config_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClientConfig {
+        EvidenceClientConfig::new(
             Url::parse(base_url).expect("the base URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             fixture.trusted_jwks.clone(),
-        ))
-        .expect("the client is configured")
+        )
+    }
+
+    fn client_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClient {
+        EvidenceClient::new(config_for(base_url, fixture)).expect("the client is configured")
+    }
+
+    /// A loopback origin with nothing listening on it. The port is reserved and
+    /// released, so the connection attempt is refused rather than answered.
+    fn closed_loopback_origin() -> String {
+        let reservation =
+            TcpListener::bind(("127.0.0.1", 0)).expect("a loopback port is available");
+        let port = reservation
+            .local_addr()
+            .expect("the reservation has an address")
+            .port();
+        drop(reservation);
+        format!("http://127.0.0.1:{port}")
     }
 
     fn client(fixture: &SignedEvidenceFixture) -> EvidenceClient {
@@ -804,8 +845,8 @@ mod tests {
         let prepared = client
             .prepare(spec(SubjectExpectations::AcceptFirstUse))
             .expect("the specification is accepted");
-        Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/v1/evidence"))
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 fixture.sign(prepared.request_nonce()),
                 EVIDENCE_JWS_MEDIA_TYPE,
@@ -840,21 +881,120 @@ mod tests {
 
     /// A body the problem contract does not cover leaves the client with nothing
     /// to say about the failure, which is exactly when the deployment's own
-    /// identifier for the exchange matters.
+    /// identifier for the exchange matters. A header value outside the rule is
+    /// still dropped rather than copied into the relying party's records.
     #[tokio::test]
     async fn a_failure_carries_the_correlation_identifier_even_with_an_unreadable_body() {
         let fixture = signed_evidence();
+        for (sent, expected) in [
+            (OPERATION, Some(OPERATION.to_owned())),
+            ("01AB role=subject", None),
+        ] {
+            let server = MockServer::start().await;
+            let client = client_for(&server.uri(), &fixture);
+            let prepared = client
+                .prepare(spec(SubjectExpectations::AcceptFirstUse))
+                .expect("the specification is accepted");
+            Mock::given(method("POST"))
+                .and(path("/v1/evidence"))
+                .respond_with(
+                    ResponseTemplate::new(400)
+                        .insert_header(CORRELATION_HEADER, sent)
+                        .set_body_raw(b"<html>a gateway wrote this</html>".to_vec(), "text/html"),
+                )
+                .mount(&server)
+                .await;
+
+            assert_eq!(
+                client
+                    .send(&prepared)
+                    .await
+                    .expect_err("a body outside the contract is a protocol failure"),
+                EvidenceClientError::Protocol {
+                    status: 400,
+                    code: None,
+                    operation: expected,
+                    retry_after_seconds: None,
+                },
+                "the header carried {sent:?}"
+            );
+        }
+    }
+
+    /// The four ways a bounded read can fail are four different things to tell an
+    /// adopter. A timeout while the body streams is the likely one, because the
+    /// request timeout runs until the body finishes, and reporting it as an
+    /// oversized response would send the adopter to the wrong place.
+    #[tokio::test]
+    async fn a_failed_body_read_reports_its_own_cause() {
+        for error in [
+            BoundedReadError::ContentLengthExceeded {
+                content_length: 2,
+                max_bytes: 1,
+            },
+            BoundedReadError::BodyTooLarge { max_bytes: 1 },
+            BoundedReadError::LengthOverflow,
+        ] {
+            assert_eq!(
+                read_failure_kind(&error),
+                TransportKind::ResponseTooLarge,
+                "{error}"
+            );
+        }
+
+        let fixture = signed_evidence();
         let server = MockServer::start().await;
-        let client = client_for(&server.uri(), &fixture);
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+        let http = build_client(
+            &config_for(&server.uri(), &fixture).with_request_timeout(Duration::from_millis(100)),
+        )
+        .expect("the outbound client builds");
+        let timeout = http
+            .get(server.uri())
+            .send()
+            .await
+            .expect_err("the request timeout elapses");
+        assert!(timeout.is_timeout(), "{timeout:?}");
+        assert_eq!(
+            read_failure_kind(&BoundedReadError::Transport(timeout)),
+            TransportKind::Timeout
+        );
+
+        let refused = http
+            .get(closed_loopback_origin())
+            .send()
+            .await
+            .expect_err("nothing is listening");
+        assert!(!refused.is_timeout(), "{refused:?}");
+        assert_eq!(
+            read_failure_kind(&BoundedReadError::Transport(refused)),
+            TransportKind::Exchange
+        );
+    }
+
+    /// A gateway can answer a refusal with a body far larger than the contract's,
+    /// and the read then fails. The status and the deployment's identifier were
+    /// already in hand, so the failure still carries the support workflow this
+    /// crate advertises.
+    #[tokio::test]
+    async fn a_refusal_whose_body_cannot_be_read_keeps_its_status_and_identifier() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client =
+            EvidenceClient::new(config_for(&server.uri(), &fixture).with_max_response_bytes(32))
+                .expect("the client is configured");
         let prepared = client
             .prepare(spec(SubjectExpectations::AcceptFirstUse))
             .expect("the specification is accepted");
-        Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/v1/evidence"))
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
             .respond_with(
-                ResponseTemplate::new(400)
-                    .insert_header(CORRELATION_HEADER, "01JQ0QZ8YHZ0000000000000AB")
-                    .set_body_raw(b"<html>a gateway wrote this</html>".to_vec(), "text/html"),
+                ResponseTemplate::new(502)
+                    .insert_header(CORRELATION_HEADER, OPERATION)
+                    .set_body_raw(vec![b'a'; 4096], "text/html"),
             )
             .mount(&server)
             .await;
@@ -863,14 +1003,207 @@ mod tests {
             client
                 .send(&prepared)
                 .await
-                .expect_err("a body outside the contract is a protocol failure"),
+                .expect_err("the body is beyond the bound"),
             EvidenceClientError::Protocol {
-                status: 400,
+                status: 502,
                 code: None,
-                operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+                operation: Some(OPERATION.to_owned()),
                 retry_after_seconds: None,
             }
         );
+    }
+
+    /// An answer the deployment meant as a success, whose body cannot be read, is
+    /// a transport failure: there is no status or code worth reporting, only the
+    /// reason the bytes never arrived.
+    #[tokio::test]
+    async fn a_successful_answer_whose_body_cannot_be_read_is_a_transport_failure() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client =
+            EvidenceClient::new(config_for(&server.uri(), &fixture).with_max_response_bytes(32))
+                .expect("the client is configured");
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(vec![b'a'; 4096], EVIDENCE_JWS_MEDIA_TYPE),
+            )
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("the body is beyond the bound"),
+            EvidenceClientError::transport(TransportKind::ResponseTooLarge)
+        );
+    }
+
+    /// A deployment that is not listening is a connection failure, not a refusal
+    /// and not a protocol fault.
+    #[tokio::test]
+    async fn an_unreachable_deployment_reports_a_connection_failure() {
+        let fixture = signed_evidence();
+        let client = client_for(&closed_loopback_origin(), &fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("nothing is listening"),
+            EvidenceClientError::transport(TransportKind::Connect)
+        );
+    }
+
+    /// The configured total timeout is the relying party's own bound on how long
+    /// a decision may wait.
+    #[tokio::test]
+    async fn an_elapsed_request_timeout_reports_a_timeout() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+        let client = EvidenceClient::new(
+            config_for(&server.uri(), &fixture).with_request_timeout(Duration::from_millis(100)),
+        )
+        .expect("the client is configured");
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("the deployment answers too late"),
+            EvidenceClientError::transport(TransportKind::Timeout)
+        );
+    }
+
+    /// Pinning the certificate authorities replaces the platform store, so
+    /// material the client cannot use has to fail at construction. Falling back to
+    /// the platform store would quietly widen who may vouch for the deployment.
+    #[tokio::test]
+    async fn unusable_pinned_certificate_material_is_refused_at_construction() {
+        let fixture = signed_evidence();
+        for (bundle, reason) in [
+            (
+                b"".to_vec(),
+                "the pinned certificate authority bundle carries no certificate",
+            ),
+            (
+                b"not a certificate".to_vec(),
+                "the pinned certificate authority bundle carries no certificate",
+            ),
+            // The PEM framing is accepted and the content is rejected later, when
+            // the outbound client is built, so this one surfaces as the coarse
+            // options failure. It is still refused at construction, which is what
+            // keeps the platform store from quietly taking over.
+            (
+                b"-----BEGIN CERTIFICATE-----\nnot base64 at all\n-----END CERTIFICATE-----\n"
+                    .to_vec(),
+                "the outbound client options are not usable",
+            ),
+        ] {
+            assert_eq!(
+                EvidenceClient::new(
+                    config_for("https://evidence.example.org", &fixture)
+                        .with_trusted_root_certificates(bundle.clone())
+                )
+                .map(|_| ())
+                .expect_err("unusable trust material is refused"),
+                EvidenceClientError::configuration(reason),
+                "{:?}",
+                String::from_utf8_lossy(&bundle)
+            );
+        }
+    }
+
+    /// A redirect is not part of the response contract. Following one would carry
+    /// the credential to a host the relying party never configured, so the client
+    /// reports the answer as it stands and sends nothing onward.
+    #[tokio::test]
+    async fn a_redirect_is_refused_and_the_credential_never_follows_it() {
+        let fixture = signed_evidence();
+        let elsewhere = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/v1/evidence", elsewhere.uri()).as_str(),
+            ))
+            .mount(&server)
+            .await;
+        let client = client_for(&server.uri(), &fixture);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+
+        assert_eq!(
+            client
+                .send(&prepared)
+                .await
+                .expect_err("a redirect is not an Evidence response"),
+            EvidenceClientError::Protocol {
+                status: 302,
+                code: None,
+                operation: None,
+                retry_after_seconds: None,
+            }
+        );
+        assert!(
+            elsewhere
+                .received_requests()
+                .await
+                .expect("the stub records what it received")
+                .is_empty(),
+            "the credential must not follow a redirect"
+        );
+    }
+
+    /// An adopter's own user agent is how a deployment operator recognizes the
+    /// relying party in its logs, so it has to reach the wire.
+    #[tokio::test]
+    async fn the_configured_user_agent_reaches_the_deployment() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = EvidenceClient::new(
+            config_for(&server.uri(), &fixture).with_user_agent("relying-party/1.0"),
+        )
+        .expect("the client is configured");
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the specification is accepted");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .and(header("user-agent", "relying-party/1.0"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                fixture.sign(prepared.request_nonce()),
+                EVIDENCE_JWS_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .send(&prepared)
+            .await
+            .expect("the deployment recognized the user agent");
     }
 
     #[test]

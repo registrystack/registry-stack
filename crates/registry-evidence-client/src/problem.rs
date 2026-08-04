@@ -36,11 +36,12 @@ pub(crate) struct ProblemBody {
 /// the two answers the contract permits a bounded wait on: the rate-limited
 /// refusal, and a transient dependency or service failure.
 ///
-/// `header_operation` is the identifier the response header carried. It is the
+/// `header_operation` is the identifier the response header carried, already put
+/// through [`sanitized_operation`] by the caller that read the header. It is the
 /// fallback for every failure that can name one, because the case where the body
 /// cannot be read is exactly the case where the deployment's own identifier for
 /// the exchange is all a relying party can take to support. A readable body's own
-/// identifier wins when it satisfies the rule; both are held to the same rule.
+/// identifier wins when it satisfies the same rule.
 pub(crate) fn map_problem(
     status: u16,
     media_type: Option<&str>,
@@ -48,16 +49,16 @@ pub(crate) fn map_problem(
     retry_after_seconds: Option<u64>,
     header_operation: Option<&str>,
 ) -> EvidenceClientError {
-    let header_operation = header_operation.and_then(sanitized_operation);
     let Some(problem) = parse_problem(media_type, body) else {
         return EvidenceClientError::Protocol {
             status,
             code: None,
-            operation: header_operation,
+            operation: header_operation.map(str::to_owned),
             retry_after_seconds: None,
         };
     };
-    let operation = sanitized_operation(&problem.operation).or(header_operation);
+    let operation =
+        sanitized_operation(&problem.operation).or_else(|| header_operation.map(str::to_owned));
     match (status, problem.code.as_str()) {
         (401 | 403 | 429, code) => EvidenceClientError::Denied {
             status,
@@ -119,7 +120,14 @@ fn is_contract_code(code: &str) -> bool {
 /// The operation identifier is an opaque support-correlation value. Only a
 /// bounded alphanumeric value is kept, so a hostile deployment cannot use it to
 /// inject text into a relying party's records.
-fn sanitized_operation(operation: &str) -> Option<String> {
+///
+/// This is the one rule, applied to both places the identifier can arrive from:
+/// the problem body's own member, and the response header the client reads. The
+/// value is judged exactly as received, with no trimming. HTTP field parsing has
+/// already removed the optional whitespace the field grammar permits around a
+/// header value, and a body member is exact data, so trimming here would only
+/// rewrite a value the deployment chose rather than refuse it.
+pub(crate) fn sanitized_operation(operation: &str) -> Option<String> {
     let acceptable = !operation.is_empty()
         && operation.len() <= 64
         && operation.bytes().all(|byte| byte.is_ascii_alphanumeric());
@@ -294,22 +302,41 @@ mod tests {
                 retry_after_seconds: None,
             }
         );
+    }
 
-        // A header value outside the rule is dropped exactly like a body value.
+    /// One rule, for the body's own member and for the header the client reads.
+    /// A hostile deployment must not be able to write text of its choosing into a
+    /// relying party's records through either.
+    #[test]
+    fn only_a_bounded_alphanumeric_identifier_is_kept() {
         assert_eq!(
-            map_problem(
-                400,
-                Some("text/html"),
-                b"<html/>",
+            sanitized_operation(OPERATION),
+            Some(OPERATION.to_owned()),
+            "the deployment's own identifier shape is kept"
+        );
+        for hostile in [
+            "",
+            "01AB\nrole=subject",
+            "01AB role=subject",
+            "01AB\trole=subject",
+            // Surrounding whitespace is not trimmed away, so a value carrying it
+            // is refused rather than rewritten.
+            " 01AB",
+            "01AB ",
+            "01AB;binding=urn:evidence:subject:v1_AAA",
+            "01AB\u{00e9}",
+            &"A".repeat(65),
+        ] {
+            assert_eq!(
+                sanitized_operation(hostile),
                 None,
-                Some("01AB role=subject"),
-            ),
-            EvidenceClientError::Protocol {
-                status: 400,
-                code: None,
-                operation: None,
-                retry_after_seconds: None,
-            }
+                "{hostile:?} was kept as an identifier"
+            );
+        }
+        assert_eq!(
+            sanitized_operation(&"A".repeat(64)),
+            Some("A".repeat(64)),
+            "the bound itself is acceptable"
         );
     }
 
