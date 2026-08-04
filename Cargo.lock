@@ -5474,6 +5474,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "signal-hook",
  "tempfile",
  "ureq",
  "url",

@@ -970,6 +970,18 @@ jobs:
             cargo build --locked --profile ci \
             -p registry-evidence -p registry-evidencectl -p registry-mint
 
+      - name: Test the exact local Evidence lifecycle
+        shell: bash
+        env:
+          EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
+          MINT_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/mint
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
+            cargo test --locked --profile ci \
+            -p registry-evidencectl --test dev_lifecycle -- \
+            --ignored --test-threads=1
+
       - name: Execute the Evidence tutorials in a clean container
         shell: bash
         run: |

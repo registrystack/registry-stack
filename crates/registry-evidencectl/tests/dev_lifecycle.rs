@@ -5,6 +5,7 @@
 //! and Evidence binaries, supplies their paths, and runs this test exactly.
 
 use std::{
+    ffi::OsStr,
     fs,
     net::TcpListener,
     os::unix::fs::{symlink, MetadataExt as _, PermissionsExt as _},
@@ -230,6 +231,117 @@ fn evidence_child_failure_stops_mint_and_cleans_the_fresh_session() {
 }
 
 #[test]
+#[ignore = "exact gate: starts real services on fixed tutorial ports"]
+fn ready_state_publication_failure_stops_children_and_allows_a_fresh_start() {
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+
+    let failed = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+        OsStr::new("before-ready-state"),
+    );
+    assert!(
+        !failed.status.success(),
+        "state publication fault must fail"
+    );
+    wait_unavailable("127.0.0.1:8080");
+    wait_unavailable("127.0.0.1:8081");
+    assert!(
+        !fixture.root.join(".evidence/dev").exists(),
+        "failed fresh state cleaned"
+    );
+
+    let restarted = fixture.dev_start(&evidence, &mint);
+    assert_success(&restarted, "fresh start after rollback");
+    assert_success(&fixture.dev_stop(), "stop fresh start");
+}
+
+#[test]
+#[ignore = "exact gate: starts real services on fixed tutorial ports"]
+fn catchable_supervisor_signals_stop_owned_children_and_publish_terminal_state() {
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let mut unrelated = Command::new("/bin/sleep")
+        .arg("60")
+        .spawn()
+        .expect("start unrelated process");
+
+    for signal in [
+        rustix::process::Signal::TERM,
+        rustix::process::Signal::HUP,
+        rustix::process::Signal::INT,
+    ] {
+        let fixture = Project::new();
+        fixture.generate_evidence_keys();
+        let pid_file = fixture.root.join("supervisor.pid");
+        let started = fixture.dev_start_with_env(
+            &evidence,
+            &mint,
+            "EVIDENCECTL_TEST_SUPERVISOR_PID_FILE",
+            pid_file.as_os_str(),
+        );
+        assert_success(&started, "dev --detach before supervisor signal");
+
+        let pid: i32 = fs::read_to_string(&pid_file)
+            .expect("supervisor pid file")
+            .trim()
+            .parse()
+            .expect("supervisor pid");
+        let pid = rustix::process::Pid::from_raw(pid).expect("positive supervisor pid");
+        rustix::process::kill_process(pid, signal).expect("signal supervisor");
+
+        let dev = fixture.root.join(".evidence/dev");
+        wait_for_failed_state(&dev);
+        wait_unavailable("127.0.0.1:8080");
+        wait_unavailable("127.0.0.1:8081");
+        assert!(!dev.join("control.sock").exists());
+        assert!(unrelated.try_wait().expect("unrelated status").is_none());
+    }
+    stop_child(&mut unrelated);
+}
+
+#[test]
+fn every_pre_socket_supervisor_failure_rolls_back_without_wedging_the_project() {
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let check_only = fixture.root.join("check-only-tool");
+    fs::write(
+        &check_only,
+        "#!/bin/sh\ncase \"$*\" in *check*) exit 0;; *) exit 1;; esac\n",
+    )
+    .expect("write check-only tool");
+    fs::set_permissions(&check_only, fs::Permissions::from_mode(0o700)).expect("tool mode");
+
+    let missing_supervisor = fixture.root.join("missing-supervisor");
+    let failed = fixture.dev_start_with_env(
+        &check_only,
+        &check_only,
+        "EVIDENCECTL_TEST_SUPERVISOR_BIN",
+        missing_supervisor.as_os_str(),
+    );
+    assert!(!failed.status.success(), "supervisor spawn fault must fail");
+    assert!(!fixture.root.join(".evidence/dev").exists());
+
+    for stage in ["before-setsid", "before-socket", "after-socket"] {
+        let failed = fixture.dev_start_with_env(
+            &check_only,
+            &check_only,
+            "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+            OsStr::new(stage),
+        );
+        assert!(!failed.status.success(), "{stage} fault must fail");
+        assert!(
+            !fixture.root.join(".evidence/dev").exists(),
+            "{stage} rollback must permit the next fresh start"
+        );
+    }
+}
+
+#[test]
 fn public_symlink_and_stale_state_fail_before_binary_or_process_access() {
     let public = Project::new();
     fs::create_dir(public.root.join(".evidence")).expect("generated root");
@@ -331,7 +443,27 @@ impl Project {
     }
 
     fn dev_start(&self, evidence: &Path, mint: &Path) -> Output {
-        evidencectl()
+        self.dev_start_command(evidence, mint)
+            .output()
+            .expect("dev --detach")
+    }
+
+    fn dev_start_with_env(
+        &self,
+        evidence: &Path,
+        mint: &Path,
+        name: &str,
+        value: &OsStr,
+    ) -> Output {
+        self.dev_start_command(evidence, mint)
+            .env(name, value)
+            .output()
+            .expect("dev --detach with test fault")
+    }
+
+    fn dev_start_command(&self, evidence: &Path, mint: &Path) -> Command {
+        let mut command = evidencectl();
+        command
             .args(["dev", "--detach", "--project"])
             .arg(&self.root)
             .arg("--evidence-bin")
@@ -339,9 +471,8 @@ impl Project {
             .arg("--mint-bin")
             .arg(mint)
             .arg("--ready-timeout-seconds")
-            .arg("20")
-            .output()
-            .expect("dev --detach")
+            .arg("20");
+        command
     }
 
     fn dev_stop(&self) -> Output {
@@ -428,6 +559,21 @@ fn wait_unavailable(address: &str) {
         thread::sleep(Duration::from_millis(50));
     }
     panic!("{address} remained occupied");
+}
+
+fn wait_for_failed_state(dev: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while Instant::now() < deadline {
+        if let Ok(bytes) = fs::read(dev.join("state.json")) {
+            if let Ok(state) = serde_json::from_slice::<Value>(&bytes) {
+                if state["status"] == "failed" && state["failure"] == "supervisor-signal" {
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("supervisor did not publish terminal failed state");
 }
 
 fn stop_child(child: &mut Child) {

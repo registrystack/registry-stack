@@ -29,6 +29,7 @@ rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+signal-hook.workspace = true
 ureq.workspace = true
 url.workspace = true
 zeroize.workspace = true

@@ -16,6 +16,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, ExitCode, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -37,6 +41,11 @@ const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
 const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
 const MINT_JWKS_URL: &str = "http://127.0.0.1:8081/.well-known/jwks.json";
 const CALLER_ID: &str = "local-tutorial-caller";
+const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
+const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
+const LOCAL_REQUESTER_TAG: &str = "local-caller";
+const LOCAL_SELECTOR_PROFILE: &str = "local-subject-v1";
+const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const MINT_KEY_ID: &str = "local-mint-signing-key-1";
 const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
 const PRIVATE_DIR_MODE: u32 = 0o700;
@@ -117,6 +126,7 @@ enum FailureKind {
     EvidenceReadiness,
     ChildExited,
     Supervisor,
+    SupervisorSignal,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -206,6 +216,26 @@ struct LifecycleLock {
     _file: File,
 }
 
+#[derive(Default)]
+struct OwnedChildren {
+    evidence: Option<Child>,
+    mint: Option<Child>,
+}
+
+impl OwnedChildren {
+    fn stop(&mut self) {
+        stop_children(self.evidence.as_mut(), self.mint.as_mut());
+        self.evidence = None;
+        self.mint = None;
+    }
+}
+
+impl Drop for OwnedChildren {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 pub fn run(args: DevArgs) -> Result<ExitCode> {
     match args.action {
         Some(DevAction::Stop(stop)) => {
@@ -229,8 +259,28 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
 }
 
 pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
-    rustix::process::setsid().context("failed to detach the local supervisor session")?;
-    supervise(args)?;
+    let dev_root = args.dev_root.clone();
+    let terminate = Arc::new(AtomicBool::new(false));
+    let result = (|| {
+        // SIGKILL cannot be observed and is intentionally not part of this
+        // tutorial lifecycle. Catchable operator signals use owned cleanup.
+        for signal in [
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+            signal_hook::consts::SIGINT,
+        ] {
+            signal_hook::flag::register(signal, Arc::clone(&terminate))
+                .context("failed to install the local supervisor signal handler")?;
+        }
+        injected_supervisor_failure("before-setsid")?;
+        rustix::process::setsid().context("failed to detach the local supervisor session")?;
+        publish_test_supervisor_pid()?;
+        supervise(args, &terminate)
+    })();
+    if let Err(error) = result {
+        let _ = publish_supervisor_failure(&dev_root, FailureKind::Supervisor);
+        return Err(error);
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -243,21 +293,17 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
     let state = read_state(&dev_root.join("state.json"))?;
     let caller = state
         .caller
+        .as_ref()
         .ok_or_else(|| anyhow!("the local development session has no active caller"))?;
-    if state.status != DevStatus::Ready
-        || state.project != project
-        || state.runtime_path != dev_root.join("runtime.yaml")
-        || state.evidence_origin != EVIDENCE_ORIGIN
-        || state.mint_origin != MINT_ORIGIN
-        || state.token_url != TOKEN_URL
-        || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
-        || caller.assertion_audience != TOKEN_URL
-    {
+    if state.status != DevStatus::Ready || state.failure.is_some() {
         bail!("the local development state is not the closed ready session");
     }
+    validate_closed_state(&state, &project, &dev_root)?;
+    validate_closed_caller(caller, &dev_root)?;
     require_owned_regular_file(&state.runtime_path, 0o400)?;
     require_owned_regular_file(&caller.private_key_path, PRIVATE_FILE_MODE)?;
     validate_control_socket(&dev_root.join("control.sock"))?;
+    let caller = state.caller.expect("active caller was validated");
     Ok(ReadyDevState {
         project,
         runtime_path: state.runtime_path,
@@ -291,13 +337,10 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
     let dev_root = generated_root.join("dev");
     validate_private_directory(&dev_root)?;
     let state = read_state(&dev_root.join("state.json"))?;
-    if state.status != DevStatus::Stopped
-        || state.project != project
-        || state.caller.is_some()
-        || state.runtime_path != dev_root.join("runtime.yaml")
-    {
+    if state.status != DevStatus::Stopped || state.caller.is_some() || state.failure.is_some() {
         bail!("the local development state is not the closed stopped session");
     }
+    validate_closed_state(&state, &project, &dev_root)?;
     require_owned_regular_file(&state.runtime_path, 0o400)?;
     match fs::symlink_metadata(dev_root.join("control.sock")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -308,6 +351,60 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
         runtime_path: state.runtime_path,
         question: ready_question(state.question),
     })
+}
+
+fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> Result<()> {
+    let question = &state.question;
+    let identifiers_are_closed = [
+        question.alias.as_str(),
+        question.purpose.as_str(),
+        question.subject_role.as_str(),
+        question.selector_field.as_str(),
+        question.concept_alias.as_str(),
+    ]
+    .into_iter()
+    .all(valid_local_identifier);
+    let requirement_uri = format!("{LOCAL_URI_PREFIX}requirement:{}", question.alias);
+    let concept_uri = format!(
+        "{LOCAL_URI_PREFIX}concept:{}:{}",
+        question.alias, question.concept_alias
+    );
+    if state.project != project
+        || state.runtime_path != dev_root.join("runtime.yaml")
+        || state.evidence_origin != EVIDENCE_ORIGIN
+        || state.mint_origin != MINT_ORIGIN
+        || state.token_url != TOKEN_URL
+        || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
+        || !identifiers_are_closed
+        || question.requirement_uri != requirement_uri
+        || question.selector_profile != LOCAL_SELECTOR_PROFILE
+        || question.concept_uri != concept_uri
+        || question.concept_form != "boolean"
+    {
+        bail!("the local development state contains values outside the closed lifecycle profile");
+    }
+    Ok(())
+}
+
+fn validate_closed_caller(caller: &CallerState, dev_root: &Path) -> Result<()> {
+    if caller.client_id != CALLER_ID
+        || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
+        || caller.assertion_audience != TOKEN_URL
+        || caller.evidence_audience != LOCAL_CALLER_EVIDENCE_AUDIENCE
+        || caller.requester_tag != LOCAL_REQUESTER_TAG
+    {
+        bail!("the local development caller is outside the closed lifecycle profile");
+    }
+    Ok(())
+}
+
+fn valid_local_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes.len() <= 64
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
 }
 
 fn start_detached(
@@ -340,14 +437,13 @@ fn start_detached(
         mint_override,
         ready_timeout_seconds,
     );
-    if result.is_err() {
-        let state = read_state(&dev_root.join("state.json")).ok();
-        if state
-            .as_ref()
-            .is_none_or(|state| matches!(state.status, DevStatus::Failed | DevStatus::Stopped))
-        {
-            let _ = cleanup_new_dev_root(&dev_root);
+    if let Err(error) = result {
+        if let Err(cleanup) = cleanup_new_dev_root(&dev_root) {
+            return Err(error.context(format!(
+                "failed to roll back the incomplete local session: {cleanup:#}"
+            )));
         }
+        return Err(error);
     }
     result
 }
@@ -418,8 +514,8 @@ fn prepare_and_start(
 
     let supervisor_log = create_private_file(&logs.join("supervisor.log"))?;
     let supervisor_error = supervisor_log.try_clone()?;
-    let executable = std::env::current_exe().context("failed to resolve evidencectl")?;
-    let mut supervisor = Command::new(executable)
+    let executable = supervisor_executable()?;
+    let mut supervisor = match Command::new(executable)
         .arg("__dev-supervisor")
         .arg("--dev-root")
         .arg(dev_root)
@@ -433,11 +529,18 @@ fn prepare_and_start(
         .stdout(Stdio::from(supervisor_log))
         .stderr(Stdio::from(supervisor_error))
         .spawn()
-        .context("failed to start the local supervisor")?;
+    {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
+            return Err(error).context("failed to start the local supervisor");
+        }
+    };
 
     if let Err(error) = wait_for_supervisor_ready(dev_root, &mut supervisor, ready_timeout_seconds)
     {
-        abort_start(dev_root, &mut supervisor);
+        abort_start(&mut supervisor)?;
+        publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
         return Err(error);
     }
     println!("Evidence ready at {EVIDENCE_ORIGIN}");
@@ -475,7 +578,52 @@ fn stop_dev(project: &Path) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn supervise(args: SupervisorArgs) -> Result<()> {
+fn supervisor_executable() -> Result<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("EVIDENCECTL_TEST_SUPERVISOR_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+    std::env::current_exe().context("failed to resolve evidencectl")
+}
+
+fn injected_supervisor_failure(stage: &str) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::var("EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE").as_deref() == Ok(stage) {
+        bail!("injected local supervisor failure at {stage}");
+    }
+    let _ = stage;
+    Ok(())
+}
+
+fn publish_test_supervisor_pid() -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("EVIDENCECTL_TEST_SUPERVISOR_PID_FILE") {
+        let path = PathBuf::from(path);
+        let mut file = create_private_file(&path)?;
+        writeln!(file, "{}", std::process::id())?;
+        file.sync_all()?;
+    }
+    Ok(())
+}
+
+fn publish_supervisor_failure(dev_root: &Path, kind: FailureKind) -> Result<()> {
+    let state_path = dev_root.join("state.json");
+    let mut state = read_state(&state_path)?;
+    if !matches!(state.status, DevStatus::Failed | DevStatus::Stopped) {
+        state.status = DevStatus::Failed;
+        state.failure = Some(kind);
+        replace_state(&state_path, &state)?;
+    }
+    let socket = dev_root.join("control.sock");
+    match fs::symlink_metadata(&socket) {
+        Ok(_) => remove_control_socket(&socket),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
+    ensure_supervisor_active(terminate)?;
     validate_private_directory(&args.dev_root)?;
     let dev_root = fs::canonicalize(&args.dev_root)?;
     let state_path = dev_root.join("state.json");
@@ -485,73 +633,87 @@ fn supervise(args: SupervisorArgs) -> Result<()> {
     }
 
     let socket_path = dev_root.join("control.sock");
+    injected_supervisor_failure("before-socket")?;
     let listener = UnixListener::bind(&socket_path)
         .context("failed to bind the private local control socket")?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
     validate_control_socket(&socket_path)?;
     listener.set_nonblocking(true)?;
+    injected_supervisor_failure("after-socket")?;
 
-    let mut mint = match spawn_service(
-        &args.mint_bin,
-        &["serve", "--config"],
-        &dev_root.join("generated/mint.yaml"),
-        &dev_root.join("logs/mint.log"),
-    ) {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!("Mint start failed before child ownership: {error:#}");
-            return fail_before_evidence(&state_path, &mut state, FailureKind::MintStart);
-        }
-    };
+    let mut children = OwnedChildren::default();
+    children.mint = Some(
+        match spawn_service(
+            &args.mint_bin,
+            &["serve", "--config"],
+            &dev_root.join("generated/mint.yaml"),
+            &dev_root.join("logs/mint.log"),
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("Mint start failed before child ownership: {error:#}");
+                return fail_before_evidence(&state_path, &mut state, FailureKind::MintStart);
+            }
+        },
+    );
     if wait_for_http(
         MINT_JWKS_URL,
-        &mut mint,
+        children.mint.as_mut().expect("Mint child was assigned"),
         HttpProof::MintKey(MINT_KEY_ID),
         args.ready_timeout_seconds,
+        terminate,
     )
     .is_err()
     {
         eprintln!("Mint did not reach its fixed local JWKS readiness proof");
-        stop_children(None, Some(&mut mint));
         return fail_before_evidence(&state_path, &mut state, FailureKind::MintReadiness);
     }
 
-    let mut evidence = match spawn_evidence(
-        &args.evidence_bin,
-        &state.runtime_path,
-        &dev_root.join("logs/evidence.log"),
-    ) {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!("Evidence start failed before child ownership: {error:#}");
-            stop_children(None, Some(&mut mint));
-            return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceStart);
-        }
-    };
+    children.evidence = Some(
+        match spawn_evidence(
+            &args.evidence_bin,
+            &state.runtime_path,
+            &dev_root.join("logs/evidence.log"),
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("Evidence start failed: {error:#}");
+                return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceStart);
+            }
+        },
+    );
     if wait_for_http(
         &format!("{EVIDENCE_ORIGIN}/ready"),
-        &mut evidence,
+        children
+            .evidence
+            .as_mut()
+            .expect("Evidence child was assigned"),
         HttpProof::EvidenceReady,
         args.ready_timeout_seconds,
+        terminate,
     )
     .is_err()
     {
         eprintln!("Evidence did not reach its fixed local readiness proof");
-        stop_children(Some(&mut evidence), Some(&mut mint));
         return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceReadiness);
     }
 
     state.status = DevStatus::Ready;
-    if let Err(error) = replace_state(&state_path, &state) {
-        stop_children(Some(&mut evidence), Some(&mut mint));
-        let _ = remove_control_socket(&socket_path);
-        return Err(error);
-    }
-    let outcome = supervisor_loop(&listener, &mut evidence, &mut mint)
-        .unwrap_or(SupervisorOutcome::Failed(FailureKind::Supervisor));
+    injected_supervisor_failure("before-ready-state")?;
+    replace_state(&state_path, &state)?;
+    let outcome = supervisor_loop(
+        &listener,
+        children
+            .evidence
+            .as_mut()
+            .expect("Evidence child was assigned"),
+        children.mint.as_mut().expect("Mint child was assigned"),
+        terminate,
+    )
+    .unwrap_or(SupervisorOutcome::Failed(FailureKind::Supervisor));
     state.status = DevStatus::Stopping;
     let stopping_state = replace_state(&state_path, &state);
-    stop_children(Some(&mut evidence), Some(&mut mint));
+    children.stop();
     stopping_state?;
 
     match outcome {
@@ -590,8 +752,12 @@ fn supervisor_loop(
     listener: &UnixListener,
     evidence: &mut Child,
     mint: &mut Child,
+    terminate: &AtomicBool,
 ) -> Result<SupervisorOutcome> {
     loop {
+        if terminate.load(Ordering::Relaxed) {
+            return Ok(SupervisorOutcome::Failed(FailureKind::SupervisorSignal));
+        }
         if evidence.try_wait()?.is_some() || mint.try_wait()?.is_some() {
             return Ok(SupervisorOutcome::Failed(FailureKind::ChildExited));
         }
@@ -645,7 +811,13 @@ enum HttpProof<'a> {
     EvidenceReady,
 }
 
-fn wait_for_http(url: &str, child: &mut Child, proof: HttpProof<'_>, seconds: u64) -> Result<()> {
+fn wait_for_http(
+    url: &str,
+    child: &mut Child,
+    proof: HttpProof<'_>,
+    seconds: u64,
+    terminate: &AtomicBool,
+) -> Result<()> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(250))
         .timeout_read(Duration::from_millis(500))
@@ -654,6 +826,7 @@ fn wait_for_http(url: &str, child: &mut Child, proof: HttpProof<'_>, seconds: u6
         .build();
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
+        ensure_supervisor_active(terminate)?;
         if child.try_wait()?.is_some() {
             bail!("service exited before readiness");
         }
@@ -679,6 +852,13 @@ fn wait_for_http(url: &str, child: &mut Child, proof: HttpProof<'_>, seconds: u6
         thread::sleep(Duration::from_millis(100));
     }
     bail!("service readiness timed out")
+}
+
+fn ensure_supervisor_active(terminate: &AtomicBool) -> Result<()> {
+    if terminate.load(Ordering::Relaxed) {
+        bail!("local supervisor received a termination signal");
+    }
+    Ok(())
 }
 
 fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
@@ -707,6 +887,8 @@ fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
         thread::sleep(Duration::from_millis(50));
     }
     for child in [evidence, mint].into_iter().flatten() {
+        // A child that ignores TERM is killed only after the bounded graceful
+        // deadline. Child::kill is SIGKILL on Unix and cannot run child cleanup.
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -749,25 +931,17 @@ fn wait_for_supervisor_ready(dev_root: &Path, child: &mut Child, seconds: u64) -
     }
 }
 
-fn abort_start(dev_root: &Path, supervisor: &mut Child) {
-    let socket = dev_root.join("control.sock");
-    if validate_control_socket(&socket).is_ok() {
-        if let Ok(mut stream) = UnixStream::connect(&socket) {
-            let _ =
-                stream.set_read_timeout(Some(Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5)));
-            let _ = stream.write_all(b"stop\n");
-            let _ = stream.shutdown(std::net::Shutdown::Write);
-            let mut response = Vec::new();
-            let _ = (&mut stream).take(64).read_to_end(&mut response);
-        }
+fn abort_start(supervisor: &mut Child) -> Result<()> {
+    if supervisor.try_wait()?.is_some() {
+        return Ok(());
     }
-    let deadline = Instant::now() + Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5);
-    while Instant::now() < deadline {
-        if supervisor.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
+    signal_child(supervisor).context("failed to terminate the local supervisor after startup")?;
+    // SIGKILL is deliberately outside this tutorial lifecycle because it
+    // cannot run the supervisor's child cleanup. TERM is bounded by the
+    // supervisor's own child shutdown deadline, and the creating command
+    // waits for that cleanup instead of abandoning the owner process.
+    supervisor.wait()?;
+    Ok(())
 }
 
 fn mint_documents(
@@ -956,7 +1130,7 @@ fn open_owner_rw(path: &Path) -> Result<File> {
     require_owner_file(path)?;
     let fd = rustix::fs::open(
         path,
-        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )?;
     let file = File::from(fd);
@@ -1157,17 +1331,18 @@ mod tests {
         CompiledQuestion {
             question_alias: "adult-status".to_owned(),
             runtime_path: runtime.to_path_buf(),
-            requirement_uri: "urn:local:requirement:adult-status".to_owned(),
+            requirement_uri: "urn:registrystack:evidence:local:requirement:adult-status".to_owned(),
             purpose: "age-check".to_owned(),
             subject_role: "person".to_owned(),
             selector_profile: "local-subject-v1".to_owned(),
             selector_field: "person_id".to_owned(),
             concept_alias: "is_adult".to_owned(),
-            concept_uri: "urn:local:concept:is-adult".to_owned(),
+            concept_uri: "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+                .to_owned(),
             concept_form: CompiledConceptForm::Boolean,
             local_audience: "registry-evidence-local".to_owned(),
             requester_tag: "local-caller".to_owned(),
-            caller_evidence_audience: "urn:local:caller".to_owned(),
+            caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
         }
     }
 
@@ -1266,6 +1441,17 @@ mod tests {
         let ready = load_ready_state(&project).expect("ready handoff");
         assert_eq!(ready.runtime_path, runtime);
         assert_eq!(ready.question.alias, "adult-status");
+
+        let valid_ready = state.clone();
+        state.access_token_audience = "tampered-audience".to_owned();
+        replace_state(&dev.join("state.json"), &state).expect("tampered state");
+        assert!(load_ready_state(&project).is_err());
+        state = valid_ready.clone();
+        state.question.requirement_uri = "urn:tampered".to_owned();
+        replace_state(&dev.join("state.json"), &state).expect("tampered canonical value");
+        assert!(load_ready_state(&project).is_err());
+        state = valid_ready;
+        replace_state(&dev.join("state.json"), &state).expect("restore ready state");
 
         drop(listener);
         remove_control_socket(&socket).expect("remove socket");
