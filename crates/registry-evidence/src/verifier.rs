@@ -9,7 +9,7 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use registry_platform_crypto::{parse_json_strict, verify, PublicJwk, SigningAlgorithm};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -59,6 +59,149 @@ pub struct EvidenceVerificationPolicy {
     pub maximum_assertion_lifetime: Duration,
     pub now: DateTime<Utc>,
     pub clock_skew: Duration,
+}
+
+/// Closed wire document for independently retained verification expectations.
+///
+/// The runtime-facing policy keeps an explicit verification instant and Rust
+/// durations. This document is the serializable form used by offline operator
+/// boundaries, including the local pre-response context. It never learns
+/// expectations from the response it is asked to verify.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceVerificationPolicyDocument {
+    pub(crate) expected_assurance_profile: AssuranceProfile,
+    pub(crate) issued_by: String,
+    pub(crate) provided_by: String,
+    pub(crate) requirement: String,
+    pub(crate) evidence_type: String,
+    pub(crate) purpose: String,
+    pub(crate) audience: String,
+    pub(crate) configuration_revision: String,
+    /// The exact nonce from the independently retained original request.
+    pub(crate) request_nonce: String,
+    pub(crate) expected_subjects: Vec<ExpectedSubjectDocument>,
+    pub(crate) expected_outputs: Vec<ExpectedOutputDocument>,
+    pub(crate) maximum_assertion_lifetime_seconds: u64,
+    #[serde(default)]
+    pub(crate) clock_skew_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ExpectedSubjectDocument {
+    pub(crate) role: String,
+    pub(crate) binding: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ExpectedOutputDocument {
+    pub(crate) concept: String,
+    pub(crate) form: ExpectedFormDocument,
+}
+
+/// The closed expected value-form vocabulary as written in a policy document.
+///
+/// The two alternatives are untagged because the policy schema writes a scalar
+/// form as a plain string and the list form as a mapping under `list`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum ExpectedFormDocument {
+    Scalar(ExpectedScalarFormDocument),
+    List(ExpectedListFormDocument),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ExpectedScalarFormDocument {
+    Boolean,
+    Integer,
+    String,
+    DateBucket,
+    TimeBucket,
+    EntityReference,
+    Structured,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExpectedListFormDocument {
+    pub(crate) list: ExpectedListDocument,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ExpectedListDocument {
+    pub(crate) minimum_items: usize,
+    pub(crate) maximum_items: usize,
+}
+
+impl EvidenceVerificationPolicyDocument {
+    pub fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
+        EvidenceVerificationPolicy {
+            assurance_profile: self.expected_assurance_profile,
+            issued_by: self.issued_by,
+            provided_by: self.provided_by,
+            requirement: self.requirement,
+            evidence_type: self.evidence_type,
+            purpose: self.purpose,
+            audience: self.audience,
+            configuration_revision: self.configuration_revision,
+            request_nonce: self.request_nonce,
+            expected_subjects: self
+                .expected_subjects
+                .into_iter()
+                .map(|subject| ExpectedSubject {
+                    role: subject.role,
+                    binding: subject.binding,
+                })
+                .collect(),
+            expected_outputs: self
+                .expected_outputs
+                .into_iter()
+                .map(|output| ExpectedOutput {
+                    concept: output.concept,
+                    form: expected_value_form_document(output.form),
+                })
+                .collect(),
+            maximum_assertion_lifetime: Duration::from_secs(
+                self.maximum_assertion_lifetime_seconds,
+            ),
+            now,
+            clock_skew: Duration::from_secs(self.clock_skew_seconds),
+        }
+    }
+}
+
+fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValueForm {
+    match document {
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => {
+            ExpectedValueForm::Boolean
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => {
+            ExpectedValueForm::Integer
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => {
+            ExpectedValueForm::String
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
+            ExpectedValueForm::DateBucket
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::TimeBucket) => {
+            ExpectedValueForm::TimeBucket
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::EntityReference) => {
+            ExpectedValueForm::EntityReference
+        }
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Structured) => {
+            ExpectedValueForm::Structured
+        }
+        ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
+            minimum_items: wrapper.list.minimum_items,
+            maximum_items: wrapper.list.maximum_items,
+        },
+    }
 }
 
 impl EvidenceVerificationPolicy {

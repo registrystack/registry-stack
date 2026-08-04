@@ -147,6 +147,15 @@ pub struct ValidatedSecretMaterial {
     pub jwks: JwksDocument,
 }
 
+/// Secret-derived material needed to prepare an independent verification
+/// context. Unlike complete startup validation, this boundary never resolves
+/// the audit key or opens audit storage.
+pub struct ValidatedVerificationMaterial {
+    pub subject_binding_secret: ProtectedSecret,
+    pub signer: EvidenceSigner,
+    pub jwks: JwksDocument,
+}
+
 /// Resolve and validate the audit, subject-binding, and signing secret
 /// material a bundle names, with no side effects: nothing is written and no
 /// audit chain is opened. Startup builds its runtime state from the returned
@@ -164,6 +173,23 @@ pub async fn validate_secret_material(
     AuditHashSecret::new(audit_secret.expose_secret().to_vec())
         .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
 
+    let verification = validate_verification_material(bundle, secrets).await?;
+
+    Ok(ValidatedSecretMaterial {
+        audit_secret,
+        subject_binding_secret: verification.subject_binding_secret,
+        signer: verification.signer,
+        jwks: verification.jwks,
+    })
+}
+
+/// Resolve and validate only the binding and signing material required to
+/// create a pre-response verification context. This deliberately excludes
+/// source credentials and the audit boundary.
+pub async fn validate_verification_material(
+    bundle: &Bundle,
+    secrets: &SecretResolver,
+) -> Result<ValidatedVerificationMaterial, RuntimeInitializationError> {
     let subject_binding_secret = secrets
         .resolve(bundle.config.subject_binding.secret_ref.as_str())
         .map_err(|_| RuntimeInitializationError::Secrets)?;
@@ -201,8 +227,7 @@ pub async fn validate_secret_material(
     let jwks = jwks_document(signer.public_jwk(), retired)
         .map_err(|_| RuntimeInitializationError::Signing)?;
 
-    Ok(ValidatedSecretMaterial {
-        audit_secret,
+    Ok(ValidatedVerificationMaterial {
         subject_binding_secret,
         signer,
         jwks,

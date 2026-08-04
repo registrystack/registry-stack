@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use axum::{body::Body, http::Request as HttpRequest};
 use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
 use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher, AuditHashSecret};
 use registry_platform_crypto::{
@@ -39,11 +39,17 @@ use crate::{
         ResponseProtection,
     },
     auth::{AuthenticationClaimsConfig, Authenticator},
+    bundle::DeploymentInputs,
     config::{AssuranceProfile, ResponseFormat},
     contracts::evidence_contract_accepts,
+    local_verification::{
+        prepare_local_verification_context, verify_local_response, verify_local_response_at,
+        LocalVerificationContext,
+    },
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
-        PublicValue, RequestedSelector, RequestedSubject, SelectorValue, UnsignedEvidenceEnvelope,
+        HolderPublicKey, PublicValue, RequestedSelector, RequestedSubject, SelectorValue,
+        UnsignedEvidenceEnvelope,
     },
     observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
@@ -1219,7 +1225,6 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"keys": [auth_private.public()]})),
         )
-        .expect(1)
         .mount(&prepared.server)
         .await;
     make_writable(&prepared.bundle_root);
@@ -1255,6 +1260,86 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     }
     make_read_only(&prepared.bundle_root);
 
+    // Close independent expectations before the source exists and before a
+    // response or audit record can exist. Preparation uses the deployed
+    // profile-aware authenticator, not the in-memory test override.
+    let request = adult_request();
+    let token = access_token_for_issuer(&local_issuer, "requester-principal-canary", None);
+    let deployment = DeploymentInputs::load(&prepared.runtime_path)
+        .expect("the immutable local deployment reloads");
+    let context = prepare_local_verification_context(&deployment, &request, &token)
+        .await
+        .expect("real local token closes the verification context");
+    assert!(
+        !prepared.audit_path.exists(),
+        "context preparation never opens audit storage"
+    );
+    let preparation_requests = prepared
+        .server
+        .received_requests()
+        .await
+        .expect("authentication request journal is available");
+    assert!(
+        preparation_requests.iter().all(|request| {
+            request.method.as_str() == "GET" && request.url.path() == "/.well-known/jwks.json"
+        }),
+        "context preparation reaches only the configured authentication JWKS"
+    );
+
+    let mut bad_token = token.clone();
+    let last = bad_token.pop().expect("token has a signature");
+    bad_token.push(if last == 'A' { 'B' } else { 'A' });
+    assert!(
+        prepare_local_verification_context(&deployment, &request, &bad_token)
+            .await
+            .is_err(),
+        "a token that fails real signature verification cannot create context"
+    );
+
+    let mut holder_request = request.clone();
+    holder_request.holder_key = Some(HolderPublicKey {
+        kty: "OKP".to_owned(),
+        crv: "Ed25519".to_owned(),
+        x: "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc".to_owned(),
+        alg: Some("EdDSA".to_owned()),
+        kid: Some("acceptable-holder-key".to_owned()),
+    });
+    assert!(
+        holder_request
+            .holder_key
+            .as_ref()
+            .is_some_and(HolderPublicKey::is_acceptable),
+        "the negative exercises an otherwise acceptable holder key"
+    );
+    assert!(
+        prepare_local_verification_context(&deployment, &holder_request, &token)
+            .await
+            .is_err(),
+        "the signed-JWS-only seam rejects even an acceptable holder key"
+    );
+
+    let mut wrong_request = request.clone();
+    wrong_request.request_nonce = URL_SAFE_NO_PAD.encode([0x22; 32]);
+    let wrong_request_context =
+        prepare_local_verification_context(&deployment, &wrong_request, &token)
+            .await
+            .expect("an independently valid request creates its own context");
+
+    let mut wrong_subject = request.clone();
+    wrong_subject.subjects[0]
+        .selector
+        .values
+        .as_mut()
+        .expect("adult selectors are request-owned")
+        .insert(
+            "family_name".to_owned(),
+            SelectorValue::String("Different".to_owned()),
+        );
+    let wrong_subject_context =
+        prepare_local_verification_context(&deployment, &wrong_subject, &token)
+            .await
+            .expect("an authorized different subject creates a different binding");
+
     let runtime = Arc::new(
         EvidenceRuntime::initialize(&prepared.runtime_path)
             .await
@@ -1267,7 +1352,6 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert!(runtime.bundle().fixtures.is_empty());
 
     let http = TestServer::new(build_app(Arc::clone(&runtime)));
-    let token = access_token_for_issuer(&local_issuer, "requester-principal-canary", None);
     let definitions_response = http
         .get("/v1/evidence-definitions")
         .add_header("authorization", format!("Bearer {token}"))
@@ -1277,7 +1361,6 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert_eq!(definitions.assurance_profile, AssuranceProfile::Local);
 
     mount_adult_source(&prepared.server, None).await;
-    let request = adult_request();
     let response = http
         .post("/v1/evidence")
         .add_header("authorization", format!("Bearer {token}"))
@@ -1287,6 +1370,86 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert_eq!(response.header("content-type"), "application/jose+json");
     let jws = response.json::<FlattenedJws>();
     let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let verified = verify_local_response(context.clone(), &serialized)
+        .expect("the response strictly verifies against pre-response state");
+    assert_eq!(verified.request_nonce, request.request_nonce);
+    assert_eq!(
+        verified.supported_values[0].value,
+        PublicValue::Boolean(true)
+    );
+    assert!(
+        verify_local_response(wrong_request_context, &serialized).is_err(),
+        "a response cannot verify against another retained request"
+    );
+    assert!(
+        verify_local_response(wrong_subject_context, &serialized).is_err(),
+        "a response cannot verify against another subject binding"
+    );
+
+    let context_json = serde_json::to_value(&context).expect("context serializes");
+    assert_eq!(
+        context_json["trustedJwks"],
+        serde_json::to_value(runtime.jwks()).expect("runtime JWKS serializes"),
+        "the closed context pins the exact public signing JWKS"
+    );
+    for (pointer, replacement, reason) in [
+        (
+            "/verificationPolicy/configurationRevision",
+            json!("sha256:wrong-bundle"),
+            "another bundle revision",
+        ),
+        (
+            "/verificationPolicy/expectedSubjects/0/binding",
+            json!(format!("urn:evidence:subject:v1_{}", "A".repeat(43))),
+            "a changed retained subject binding",
+        ),
+        (
+            "/verificationPolicy/expectedAssuranceProfile",
+            json!("production"),
+            "a production assurance expectation",
+        ),
+        (
+            "/trustedJwks/keys/0/x",
+            json!(URL_SAFE_NO_PAD.encode([0x44; 32])),
+            "a changed trust key",
+        ),
+    ] {
+        let mut changed = context_json.clone();
+        *changed
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("context pointer {pointer} exists")) = replacement;
+        let changed: LocalVerificationContext =
+            serde_json::from_value(changed).expect("changed context remains structurally closed");
+        assert!(
+            verify_local_response(changed, &serialized).is_err(),
+            "response must fail against {reason}"
+        );
+    }
+
+    let mut tampered_response = serde_json::to_value(&jws).expect("flattened response serializes");
+    tampered_response["signature"] = json!("A".repeat(86));
+    assert!(
+        verify_local_response(
+            context.clone(),
+            &serde_json::to_vec(&tampered_response).expect("tampered response serializes"),
+        )
+        .is_err(),
+        "response tampering fails closed"
+    );
+
+    let expired_at = DateTime::parse_from_rfc3339(&verified.valid_until)
+        .expect("validUntil parses")
+        .with_timezone(&Utc)
+        + chrono::Duration::seconds(
+            i64::try_from(runtime.bundle().config.signing.verifier_clock_skew_seconds)
+                .expect("clock skew fits i64")
+                + 1,
+        );
+    assert!(
+        verify_local_response_at(context, &serialized, expired_at).is_err(),
+        "an expired response fails strict local verification"
+    );
+
     let evidence = verify_flattened_jws(
         &serialized,
         runtime.jwks(),

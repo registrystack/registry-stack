@@ -10,6 +10,7 @@ pub mod bundle;
 pub mod config;
 pub mod contracts;
 pub mod kernel;
+pub mod local_verification;
 pub mod model;
 pub mod observability;
 pub mod problem;

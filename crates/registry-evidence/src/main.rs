@@ -3,6 +3,8 @@
 use std::{
     collections::BTreeMap,
     fmt, fs,
+    fs::File,
+    io::{Read as _, Write as _},
     path::{Component, Path, PathBuf},
     process::ExitCode,
     str::FromStr,
@@ -17,14 +19,17 @@ use rand_core::OsRng;
 use registry_evidence::{
     audit::{verify_audit_chain, AuditChainSummary, EvidenceAuditError},
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
-    config::{AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
+    config::{ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
     },
+    local_verification::{
+        prepare_local_verification_context, verify_local_response, LocalVerificationContext,
+    },
     model::{
-        JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
-        SubjectBinding,
+        EvidenceRequest, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
+        SelectorValue, SubjectBinding,
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
@@ -44,13 +49,11 @@ use registry_evidence::{
     },
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
-        EvidenceVerificationPolicy, ExpectedOutput, ExpectedSubject, ExpectedValueForm,
-        VerificationError,
+        EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
     },
 };
 use registry_platform_audit::{AuditHashSecret, OptionalHashHex};
-use registry_platform_crypto::{parse_json_strict, LocalJwkSigner, PrivateJwk};
-use serde::Deserialize;
+use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
 
@@ -119,9 +122,26 @@ enum Command {
     /// already sealed segment is not caught there. This is the counterpart
     /// check that catches it, meant to run out of band.
     VerifyAudit,
+    /// Internal local-adopter seam. Bearer bytes are accepted only on stdin.
+    #[command(hide = true)]
+    PrepareLocalVerificationContext {
+        /// Owner-only JSON file containing the exact request to retain.
+        #[arg(long)]
+        request: PathBuf,
+    },
+    /// Internal offline response-verification seam.
+    #[command(hide = true)]
+    VerifyLocalResponse {
+        /// Owner-only closed context produced before the response existed.
+        #[arg(long)]
+        context: PathBuf,
+        /// Bounded flattened JWS JSON returned by Evidence.
+        #[arg(long)]
+        response: PathBuf,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CliError(&'static str);
 
 impl fmt::Display for CliError {
@@ -270,6 +290,12 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )?)
         }
         Command::VerifyAudit => run_verify_audit(&cli.runtime),
+        Command::PrepareLocalVerificationContext { request } => {
+            prepare_local_context_command(&cli.runtime, &request).await
+        }
+        Command::VerifyLocalResponse { context, response } => {
+            verify_local_response_command(&context, &response)
+        }
     }
 }
 
@@ -414,155 +440,154 @@ async fn shutdown_signal() {
 /// small documents, so a larger file is refused before it is read rather than
 /// pulled into memory because a path was mistyped.
 const MAX_VERIFY_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_LOCAL_REQUEST_BYTES: u64 = 64 * 1024;
+const MAX_LOCAL_CONTEXT_BYTES: u64 = 256 * 1024;
+const MAX_LOCAL_RESPONSE_BYTES: u64 = 256 * 1024;
+const MAX_LOCAL_BEARER_BYTES: usize = 64 * 1024;
 
 /// Exit status for a response that is authentic but no longer current.
 const NOT_CURRENT_EXIT_CODE: u8 = 3;
 
 /// The one class reported for an input document that cannot be read or parsed.
 const VERIFY_MALFORMED: CliError = CliError("stored response verification failed (malformed)");
+const LOCAL_CONTEXT_FAILED: CliError = CliError("local verification context preparation failed");
+const LOCAL_RESPONSE_FAILED: CliError = CliError("local response verification failed");
 
-/// One relying-procedure verification policy document.
-///
-/// Every expectation is required. An optional expectation would silently skip
-/// a comparison, so the document is closed and complete; only the clock skew
-/// may be omitted, and omitting it means zero tolerance.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VerificationPolicyDocument {
-    expected_assurance_profile: AssuranceProfile,
-    issued_by: String,
-    provided_by: String,
-    requirement: String,
-    evidence_type: String,
-    purpose: String,
-    audience: String,
-    configuration_revision: String,
-    /// The exact nonce from the independently retained original request.
-    request_nonce: String,
-    expected_subjects: Vec<ExpectedSubjectDocument>,
-    expected_outputs: Vec<ExpectedOutputDocument>,
-    maximum_assertion_lifetime_seconds: u64,
-    #[serde(default)]
-    clock_skew_seconds: u64,
+/// Prepare one closed context from trusted deployment state and a retained
+/// request. The bearer is read only from stdin and is never echoed.
+async fn prepare_local_context_command(
+    runtime_path: &Path,
+    request_path: &Path,
+) -> Result<ExitCode, CommandError> {
+    let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    let request_bytes =
+        read_owner_only_input(request_path, MAX_LOCAL_REQUEST_BYTES, LOCAL_CONTEXT_FAILED)?;
+    let request_value = parse_json_strict(&request_bytes).map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    let request: EvidenceRequest =
+        serde_json::from_value(request_value).map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    let bearer = read_local_bearer(std::io::stdin()).map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    let context = prepare_local_verification_context(&deployment, &request, &bearer)
+        .await
+        .map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    write_canonical_json_line(&context, LOCAL_CONTEXT_FAILED)?;
+    Ok(ExitCode::SUCCESS)
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExpectedSubjectDocument {
-    role: String,
-    binding: String,
+/// Verify from closed local state only. In particular, `--runtime` is not
+/// loaded on this path and no network, source, secret, or audit boundary is
+/// reachable after the context has been created.
+fn verify_local_response_command(
+    context_path: &Path,
+    response_path: &Path,
+) -> Result<ExitCode, CommandError> {
+    let context_bytes =
+        read_owner_only_input(context_path, MAX_LOCAL_CONTEXT_BYTES, LOCAL_RESPONSE_FAILED)?;
+    let context_value = parse_json_strict(&context_bytes).map_err(|_| LOCAL_RESPONSE_FAILED)?;
+    let context: LocalVerificationContext =
+        serde_json::from_value(context_value).map_err(|_| LOCAL_RESPONSE_FAILED)?;
+    let response = read_untrusted_response_input(
+        response_path,
+        MAX_LOCAL_RESPONSE_BYTES,
+        LOCAL_RESPONSE_FAILED,
+    )?;
+    let evidence = verify_local_response(context, &response).map_err(|_| LOCAL_RESPONSE_FAILED)?;
+    write_canonical_json_line(&evidence, LOCAL_RESPONSE_FAILED)?;
+    Ok(ExitCode::SUCCESS)
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExpectedOutputDocument {
-    concept: String,
-    form: ExpectedFormDocument,
+/// Open one operator input without following a symlink, then enforce the same
+/// owner, mode, link-count, and bounded-read posture as secret files.
+fn read_owner_only_input(
+    path: &Path,
+    maximum_bytes: u64,
+    failure: CliError,
+) -> Result<Vec<u8>, CliError> {
+    read_bounded_regular_input(path, maximum_bytes, true, failure)
 }
 
-/// The closed expected value-form vocabulary, as written in a policy document.
-///
-/// The two alternatives are untagged because the policy schema writes a scalar
-/// form as a plain string and the list form as a mapping under `list`. An
-/// externally tagged enum would instead demand the YAML tag `!list`, which no
-/// relying party writing to the published schema would ever produce.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ExpectedFormDocument {
-    Scalar(ExpectedScalarFormDocument),
-    List(ExpectedListFormDocument),
+/// A signed response is untrusted input, not a trust anchor. Normal
+/// `curl --output` permissions are accepted, while file identity and size
+/// checks still prevent path tricks and blocking or unbounded reads.
+fn read_untrusted_response_input(
+    path: &Path,
+    maximum_bytes: u64,
+    failure: CliError,
+) -> Result<Vec<u8>, CliError> {
+    read_bounded_regular_input(path, maximum_bytes, false, failure)
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum ExpectedScalarFormDocument {
-    Boolean,
-    Integer,
-    String,
-    DateBucket,
-    TimeBucket,
-    EntityReference,
-    Structured,
-}
+fn read_bounded_regular_input(
+    path: &Path,
+    maximum_bytes: u64,
+    require_owner_only: bool,
+    failure: CliError,
+) -> Result<Vec<u8>, CliError> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExpectedListFormDocument {
-    list: ExpectedListDocument,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExpectedListDocument {
-    minimum_items: usize,
-    maximum_items: usize,
-}
-
-impl VerificationPolicyDocument {
-    fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
-        EvidenceVerificationPolicy {
-            assurance_profile: self.expected_assurance_profile,
-            issued_by: self.issued_by,
-            provided_by: self.provided_by,
-            requirement: self.requirement,
-            evidence_type: self.evidence_type,
-            purpose: self.purpose,
-            audience: self.audience,
-            configuration_revision: self.configuration_revision,
-            request_nonce: self.request_nonce,
-            expected_subjects: self
-                .expected_subjects
-                .into_iter()
-                .map(|subject| ExpectedSubject {
-                    role: subject.role,
-                    binding: subject.binding,
-                })
-                .collect(),
-            expected_outputs: self
-                .expected_outputs
-                .into_iter()
-                .map(|output| ExpectedOutput {
-                    concept: output.concept,
-                    form: expected_value_form(output.form),
-                })
-                .collect(),
-            maximum_assertion_lifetime: std::time::Duration::from_secs(
-                self.maximum_assertion_lifetime_seconds,
-            ),
-            now,
-            clock_skew: std::time::Duration::from_secs(self.clock_skew_seconds),
-        }
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|_| failure)?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata().map_err(|_| failure)?;
+    if !metadata.is_file()
+        || (require_owner_only
+            && (metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.permissions().mode() & 0o7777 != 0o600))
+        || metadata.nlink() != 1
+        || metadata.len() > maximum_bytes
+    {
+        return Err(failure);
     }
+    let mut bytes = Vec::new();
+    file.take(maximum_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| failure)?;
+    if bytes.is_empty() || bytes.len() as u64 > maximum_bytes {
+        return Err(failure);
+    }
+    Ok(bytes)
 }
 
-fn expected_value_form(document: ExpectedFormDocument) -> ExpectedValueForm {
-    match document {
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => {
-            ExpectedValueForm::Boolean
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => {
-            ExpectedValueForm::Integer
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => {
-            ExpectedValueForm::String
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
-            ExpectedValueForm::DateBucket
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::TimeBucket) => {
-            ExpectedValueForm::TimeBucket
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::EntityReference) => {
-            ExpectedValueForm::EntityReference
-        }
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Structured) => {
-            ExpectedValueForm::Structured
-        }
-        ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
-            minimum_items: wrapper.list.minimum_items,
-            maximum_items: wrapper.list.maximum_items,
-        },
+/// Read exactly one compact bearer from stdin with at most one shell line
+/// ending. Other whitespace, control bytes, empty values, and oversize input
+/// are rejected before authentication.
+fn read_local_bearer(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    reader
+        .take((MAX_LOCAL_BEARER_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    if bytes.len() > MAX_LOCAL_BEARER_BYTES {
+        return Err(LOCAL_CONTEXT_FAILED);
     }
+    let body = bytes
+        .strip_suffix(b"\r\n")
+        .or_else(|| bytes.strip_suffix(b"\n"))
+        .unwrap_or(bytes.as_slice());
+    let bearer = std::str::from_utf8(body).map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    if bearer.is_empty()
+        || bearer
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return Err(LOCAL_CONTEXT_FAILED);
+    }
+    Ok(Zeroizing::new(bearer.to_owned()))
+}
+
+fn write_canonical_json_line<T: serde::Serialize>(
+    value: &T,
+    failure: CliError,
+) -> Result<(), CliError> {
+    let value = serde_json::to_value(value).map_err(|_| failure)?;
+    let bytes = canonicalize_json(&value).map_err(|_| failure)?;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&bytes).map_err(|_| failure)?;
+    stdout.write_all(b"\n").map_err(|_| failure)
 }
 
 /// The one stored response an operator named, and the format its bytes are
@@ -608,7 +633,7 @@ fn verify_stored_response(
         parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
     )
     .map_err(|_| VERIFY_MALFORMED)?;
-    let document: VerificationPolicyDocument =
+    let document: EvidenceVerificationPolicyDocument =
         serde_norway::from_slice(&read_verification_input(policy_path)?)
             .map_err(|_| VERIFY_MALFORMED)?;
     let policy = document.into_policy(instant);
@@ -2569,11 +2594,107 @@ fn safe_fixture_name(path: &Path) -> Result<&str, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory as _;
     use registry_evidence::audit::{
         audit_segment_paths, AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind, EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
     };
+    use registry_evidence::config::AssuranceProfile;
+    use registry_evidence::verifier::ExpectedValueForm;
     use std::fs;
+
+    #[test]
+    fn local_shell_seams_are_hidden_from_adopter_help() {
+        let command = Cli::command();
+        for name in [
+            "prepare-local-verification-context",
+            "verify-local-response",
+        ] {
+            assert!(
+                command
+                    .get_subcommands()
+                    .find(|candidate| candidate.get_name() == name)
+                    .is_some_and(clap::Command::is_hide_set),
+                "{name} remains an internal shell seam"
+            );
+        }
+    }
+
+    #[test]
+    fn local_bearer_is_bounded_and_accepts_only_one_shell_line() {
+        assert_eq!(
+            read_local_bearer("header.payload.signature\n".as_bytes())
+                .expect("one shell line is accepted")
+                .as_str(),
+            "header.payload.signature"
+        );
+        for invalid in [
+            "",
+            "\n",
+            "header.payload.signature\n\n",
+            "header.payload. signature",
+        ] {
+            assert!(read_local_bearer(invalid.as_bytes()).is_err());
+        }
+        assert!(read_local_bearer(vec![b'a'; MAX_LOCAL_BEARER_BYTES + 1].as_slice()).is_err());
+    }
+
+    #[test]
+    fn local_documents_require_one_owner_only_regular_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let safe = directory.path().join("request.json");
+        fs::write(&safe, b"{}").expect("input is written");
+        fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
+            .expect("input becomes owner-only");
+        assert_eq!(
+            read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).expect("owner-only input reads"),
+            b"{}"
+        );
+
+        fs::set_permissions(&safe, fs::Permissions::from_mode(0o640))
+            .expect("input becomes group-readable");
+        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
+            .expect("input becomes owner-only again");
+
+        let link = directory.path().join("second-link.json");
+        fs::hard_link(&safe, &link).expect("hard link is created");
+        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        fs::remove_file(&link).expect("hard link is removed");
+
+        let symbolic = directory.path().join("symbolic.json");
+        symlink(&safe, &symbolic).expect("symbolic link is created");
+        assert!(read_owner_only_input(&symbolic, 2, LOCAL_CONTEXT_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 1, LOCAL_CONTEXT_FAILED).is_err());
+    }
+
+    #[test]
+    fn local_response_accepts_curl_permissions_but_rejects_file_identity_tricks() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let response = directory.path().join("assertion.jws.json");
+        fs::write(&response, b"{}").expect("response is written");
+        fs::set_permissions(&response, fs::Permissions::from_mode(0o644))
+            .expect("response uses ordinary curl output permissions");
+        assert_eq!(
+            read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED)
+                .expect("ordinary curl output reads"),
+            b"{}"
+        );
+
+        let link = directory.path().join("response-link.json");
+        fs::hard_link(&response, &link).expect("hard link is created");
+        assert!(read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED).is_err());
+        fs::remove_file(&link).expect("hard link is removed");
+
+        let symbolic = directory.path().join("response-symbolic.json");
+        symlink(&response, &symbolic).expect("symbolic link is created");
+        assert!(read_untrusted_response_input(&symbolic, 2, LOCAL_RESPONSE_FAILED).is_err());
+        assert!(read_untrusted_response_input(&response, 1, LOCAL_RESPONSE_FAILED).is_err());
+    }
 
     /// Every expected form the published policy schema accepts must parse the
     /// way that schema writes it. The list form is a mapping under `list`, not
@@ -2597,7 +2718,7 @@ mod tests {
             ),
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
-            let policy: VerificationPolicyDocument = serde_norway::from_str(&document)
+            let policy: EvidenceVerificationPolicyDocument = serde_norway::from_str(&document)
                 .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
             assert_eq!(
                 policy.into_policy(Utc::now()).expected_outputs[0].form,
@@ -2618,7 +2739,7 @@ mod tests {
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
             assert!(
-                serde_norway::from_str::<VerificationPolicyDocument>(&document).is_err(),
+                serde_norway::from_str::<EvidenceVerificationPolicyDocument>(&document).is_err(),
                 "`{written}` is not a policy form but parsed as one"
             );
         }
