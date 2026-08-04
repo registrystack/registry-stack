@@ -1,7 +1,7 @@
 //! Response-side wire types: the Evidence payload, its public value forms, and
 //! the three response serializations a relying party can receive.
 
-use std::{collections::BTreeMap, fmt};
+use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use schemars::JsonSchema;
@@ -265,13 +265,15 @@ pub struct JwksDocument {
 
 /// Replace the derived `Debug` of a wire type with a redacted placeholder so
 /// disclosed material cannot reach a log line, a panic message, or a snapshot.
-/// Callers must have `std::fmt` in scope.
 #[macro_export]
 macro_rules! redacted_debug {
     ($($type_name:ty),+ $(,)?) => {
         $(
-            impl fmt::Debug for $type_name {
-                fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            impl ::core::fmt::Debug for $type_name {
+                fn fmt(
+                    &self,
+                    formatter: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
                     formatter
                         .debug_struct(stringify!($type_name))
                         .field("protected", &"<redacted>")
