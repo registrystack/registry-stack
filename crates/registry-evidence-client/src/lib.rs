@@ -57,6 +57,14 @@
 //! answer to that request. Neither this crate nor its HTTP client retries
 //! anything: a second attempt is a second [`EvidenceClient::prepare`] with a
 //! fresh nonce.
+//!
+//! The rule is enforced rather than advised. A prepared request allows one send,
+//! and a second [`EvidenceClient::send`] or
+//! [`EvidenceClient::request_and_verify`] with it fails locally, before any I/O.
+//! A deployment never uniqueness-checks a nonce, so a resend would earn a second
+//! source access and a second audit entry there for one relying-party decision.
+//! Verification is exempt: it is offline and idempotent, so a retained response
+//! may be re-verified as often as the relying party likes.
 
 pub mod client;
 pub mod config;
