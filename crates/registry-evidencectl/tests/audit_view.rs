@@ -56,7 +56,7 @@ fn audit_help_is_nested_required_and_hides_test_seams() {
 fn successful_view_delegates_to_stopped_core_and_prints_only_aliases() {
     let fixture = Fixture::new();
     fixture.write_core_json(&successful_view());
-    let output = fixture.show_public();
+    let output = fixture.show();
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -320,15 +320,6 @@ impl Fixture {
             .arg(&self.evidence)
             .output()
             .expect("audit show")
-    }
-
-    fn show_public(&self) -> Output {
-        command()
-            .current_dir(&self.root)
-            .env("EVIDENCECTL_TEST_EVIDENCE_BIN", &self.evidence)
-            .args(["audit", "show", "--last-operation"])
-            .output()
-            .expect("public audit show")
     }
 }
 
