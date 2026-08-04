@@ -16,9 +16,11 @@
 //! everywhere else, and never any credential in the authority. Two tools
 //! reading the same rule is one rule to review.
 //!
-//! Nothing fetched is written anywhere except the draft the operator sees,
-//! and no request carries authentication. A description behind a token is
-//! fetched by the operator with their own client and passed as a file.
+//! A new project retains the validated response exactly; `source suggest`
+//! interprets it later, when an adopter is ready to select fields. Nothing is
+//! written outside the authoring project the operator names, and no request
+//! carries authentication. A description behind a token is fetched by the
+//! operator with their own client and passed as a file.
 
 use std::{io::Read, path::PathBuf, time::Duration};
 

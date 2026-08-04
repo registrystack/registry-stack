@@ -78,8 +78,8 @@ fn is_page_size_name(name: &str) -> bool {
 
 /// A loaded, dialect-checked OpenAPI document.
 ///
-/// `load` accepts OpenAPI 3.0.x and 3.1.x, in YAML or JSON, from a local
-/// file. It does not otherwise validate the document against the OpenAPI
+/// `open` accepts OpenAPI 3.0.x and 3.1.x, in YAML or JSON, from a local file
+/// or URL. It does not otherwise validate the document against the OpenAPI
 /// meta-schema; malformed structure surfaces as an error from whichever
 /// accessor first needs the missing or mistyped piece.
 #[derive(Debug, Clone)]
@@ -93,11 +93,22 @@ impl Spec {
     /// purpose, so both are parsed the same way) and requires a top-level
     /// `openapi: 3.0.x` or `3.1.x` version string.
     pub fn open(source: &SpecSource) -> Result<Spec> {
+        Self::open_retained(source).map(|(spec, _)| spec)
+    }
+
+    /// Read and validate a document once while retaining its exact UTF-8 text.
+    ///
+    /// `evidencectl new` stores this text for the later question-authoring
+    /// step. Returning it from the same read that produced `Spec` prevents a
+    /// file change or a second network response from making the retained
+    /// document differ from the one that was validated.
+    pub(crate) fn open_retained(source: &SpecSource) -> Result<(Spec, String)> {
         let text = match source {
             SpecSource::File(path) => read_local(path)?,
             SpecSource::Url(url) => fetch::get(url, MAX_DOCUMENT_BYTES)?,
         };
-        Spec::parse(&text, &source.display())
+        let spec = Spec::parse(&text, &source.display())?;
+        Ok((spec, text))
     }
 
     /// Parses one already-read document, naming it `origin` in any error so

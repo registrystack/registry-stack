@@ -4,6 +4,8 @@
 
 use std::{
     fs,
+    io::{Read as _, Write as _},
+    net::TcpListener,
     os::unix::fs::{symlink, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -11,29 +13,7 @@ use std::{
 
 use tempfile::TempDir;
 
-const OPENAPI: &str = r#"openapi: 3.1.0
-info:
-  title: Records
-  version: 1.0.0
-servers:
-  - url: http://127.0.0.1:8765/api
-paths:
-  /records/{person_id}:
-    get:
-      responses:
-        '200':
-          description: one record
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [status]
-                properties:
-                  status:
-                    type: string
-                    minLength: 1
-                    maxLength: 16
-"#;
+const OPENAPI: &str = "# retained comment\r\nopenapi: 3.1.0\r\ninfo:\r\n  title: Records\r\n  version: 1.0.0\r\npaths: {}\r\n";
 
 #[test]
 fn bare_new_points_to_openapi_and_writes_nothing() {
@@ -49,18 +29,9 @@ fn bare_new_points_to_openapi_and_writes_nothing() {
 #[test]
 fn openapi_requires_the_explicit_local_profile_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
-    let spec = write_spec(workspace.path());
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
-    let output = evidencectl(&[
-        "new",
-        path(&project),
-        "--openapi",
-        path(&spec),
-        "--operation",
-        "GET /records/{person_id}",
-        "--select",
-        "/status",
-    ]);
+    let output = evidencectl(&["new", path(&project), "--openapi", path(&spec)]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("--profile local"));
@@ -81,125 +52,66 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
 }
 
 #[test]
-fn invalid_or_incomplete_openapi_input_writes_nothing() {
+fn local_openapi_is_retained_byte_for_byte_without_premature_artifacts() {
     let workspace = TempDir::new().expect("temporary directory");
-    let spec = write_spec(workspace.path());
-    let missing_decisions = workspace.path().join("missing-decisions");
-    let output = evidencectl(&[
-        "new",
-        path(&missing_decisions),
-        "--openapi",
-        path(&spec),
-        "--profile",
-        "local",
-    ]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("needs --operation and --select"));
-    assert!(!missing_decisions.exists());
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
+    let project = workspace.path().join("project");
+    let output = openapi_new(&project, path(&spec), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
 
-    let invalid_spec = workspace.path().join("invalid.yaml");
-    fs::write(&invalid_spec, "not: openapi\n").expect("invalid spec");
+    assert_eq!(
+        fs::read(project.join("source.openapi.yaml")).expect("retained OpenAPI"),
+        OPENAPI.as_bytes()
+    );
+    assert_minimal_project(&project, false);
+    assert!(stdout(&output).contains("retained exactly"));
+    assert!(stdout(&output).contains("No question, source policy, runtime, fixture"));
+}
+
+#[test]
+fn remote_openapi_is_retained_byte_for_byte() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let mut remote = OPENAPI.as_bytes().to_vec();
+    remote.extend_from_slice(b"# remote trailing bytes\n");
+    let url = serve_once(200, remote.clone());
+    let project = workspace.path().join("remote-project");
+
+    let output = openapi_new(&project, &url, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        fs::read(project.join("source.openapi.yaml")).expect("retained remote OpenAPI"),
+        remote
+    );
+    assert_minimal_project(&project, false);
+}
+
+#[test]
+fn invalid_local_or_remote_openapi_writes_nothing_and_cleans_staging() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let invalid = write_spec(workspace.path(), b"not: openapi\n");
     let invalid_project = workspace.path().join("invalid-project");
-    let output = evidencectl(&[
-        "new",
-        path(&invalid_project),
-        "--openapi",
-        path(&invalid_spec),
-        "--profile",
-        "local",
-        "--operation",
-        "GET /records/{person_id}",
-        "--select",
-        "/status",
-    ]);
+    let output = openapi_new(&invalid_project, path(&invalid), &["--generate-keys"]);
     assert!(!output.status.success());
     assert!(!invalid_project.exists());
+
+    let failed_url = serve_once(500, b"failure\n".to_vec());
+    let failed_project = workspace.path().join("failed-project");
+    let output = openapi_new(&failed_project, &failed_url, &[]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("HTTP 500"));
+    assert!(!failed_project.exists());
     assert_no_staging_directories(workspace.path());
 }
 
 #[test]
-fn openapi_new_emits_only_mechanical_authoring_artifacts() {
+fn generate_keys_is_transactional_unbound_owner_only_and_prints_no_secret() {
     let workspace = TempDir::new().expect("temporary directory");
-    let spec = write_spec(workspace.path());
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
-    let output = openapi_new(&project, &spec, &[]);
+    let output = openapi_new(&project, path(&spec), &["--generate-keys"]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    assert_eq!(entries(&project), ["bundle"]);
-    assert_eq!(
-        entries(&project.join("bundle")),
-        ["adapters", "evidence.yaml", "schemas"]
-    );
-    assert_eq!(
-        entries(&project.join("bundle/adapters")),
-        ["records-extract.rhai"]
-    );
-    assert_eq!(
-        entries(&project.join("bundle/schemas")),
-        ["records-facts.schema.yaml", "records-response.schema.yaml"]
-    );
-
-    let text = fs::read_to_string(project.join("bundle/evidence.yaml")).expect("source draft");
-    let yaml: serde_norway::Value = serde_norway::from_str(&text).expect("draft YAML");
-    let root = yaml.as_mapping().expect("draft mapping");
-    assert_eq!(root.len(), 3, "unexpected generated root keys: {text}");
-    assert_eq!(yaml["version"], 1);
-    assert_eq!(yaml["assuranceProfile"], "local");
-    let source = &yaml["sources"]["records"];
-    assert_eq!(source["transport"], "http-json");
-    assert_eq!(source["request"]["method"], "GET");
-    assert_eq!(
-        source["request"]["pathTemplate"],
-        "/api/records/{person_id}"
-    );
-    assert_eq!(source["request"]["projection"][0], "/status");
-    assert_eq!(
-        source["request"]["fixedHeaders"][0]["value"],
-        "application/json"
-    );
-
-    assert!(text.contains("# baseUrl: http://127.0.0.1:8765"));
-    for absent in [
-        "baseUrl:",
-        "posture:",
-        "authentication:",
-        "selectorInputs:",
-        "prepareScript:",
-        "preparationLimits:",
-        "redirects:",
-        "timeoutMilliseconds:",
-        "requirements:",
-        "authorityProfiles:",
-        "signing:",
-        "audit:",
-    ] {
-        if absent == "baseUrl:" {
-            assert_eq!(
-                text.matches(absent).count(),
-                1,
-                "origin must be comment-only"
-            );
-        } else {
-            assert!(!text.contains(absent), "draft invented `{absent}`:\n{text}");
-        }
-    }
-    for absent in ["README.md", "runtime.yaml", "fixtures", "derivations"] {
-        assert!(
-            !project.join(absent).exists(),
-            "unexpected generated {absent}"
-        );
-    }
-    assert!(stdout(&output).contains("not a runnable deployment"));
-}
-
-#[test]
-fn generate_keys_is_unbound_owner_only_and_prints_no_secret() {
-    let workspace = TempDir::new().expect("temporary directory");
-    let spec = write_spec(workspace.path());
-    let project = workspace.path().join("project");
-    let output = openapi_new(&project, &spec, &["--generate-keys"]);
-    assert!(output.status.success(), "{}", stderr(&output));
-
+    assert_minimal_project(&project, true);
     assert_eq!(
         fs::metadata(project.join("secrets"))
             .expect("secret directory")
@@ -223,10 +135,6 @@ fn generate_keys_is_unbound_owner_only_and_prints_no_secret() {
             mode
         );
     }
-    assert_eq!(
-        fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
-        "secrets/\n"
-    );
 
     let private = fs::read_to_string(project.join("secrets/signing-ed25519-private-jwk"))
         .expect("private JWK");
@@ -234,25 +142,18 @@ fn generate_keys_is_unbound_owner_only_and_prints_no_secret() {
     let secret = private["d"].as_str().expect("private key member");
     assert!(!stdout(&output).contains(secret));
     assert!(!stderr(&output).contains(secret));
-
-    let draft = fs::read_to_string(project.join("bundle/evidence.yaml")).expect("source draft");
-    for binding in ["signing:", "activeKeyRef:", "audit:", "secret:file/"] {
-        assert!(
-            !draft.contains(binding),
-            "generated keys were bound by `{binding}`"
-        );
-    }
+    assert_no_staging_directories(workspace.path());
 }
 
 #[test]
 fn existing_paths_and_force_are_refused_without_changes() {
     let workspace = TempDir::new().expect("temporary directory");
-    let spec = write_spec(workspace.path());
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
 
     let directory = workspace.path().join("existing");
     fs::create_dir(&directory).expect("existing directory");
     fs::write(directory.join("sentinel"), b"unchanged").expect("sentinel");
-    let output = openapi_new(&directory, &spec, &[]);
+    let output = openapi_new(&directory, path(&spec), &[]);
     assert!(!output.status.success());
     assert_eq!(
         fs::read(directory.join("sentinel")).expect("sentinel"),
@@ -264,7 +165,7 @@ fn existing_paths_and_force_are_refused_without_changes() {
     fs::write(external.join("sentinel"), b"external").expect("external sentinel");
     let symlinked = workspace.path().join("symlinked");
     symlink(&external, &symlinked).expect("project symlink");
-    let output = openapi_new(&symlinked, &spec, &["--generate-keys"]);
+    let output = openapi_new(&symlinked, path(&spec), &["--generate-keys"]);
     assert!(!output.status.success());
     assert_eq!(
         fs::read(external.join("sentinel")).expect("external sentinel"),
@@ -273,27 +174,61 @@ fn existing_paths_and_force_are_refused_without_changes() {
     assert_eq!(entries(&external), ["sentinel"]);
 
     let forced = workspace.path().join("forced");
-    let output = openapi_new(&forced, &spec, &["--force"]);
+    let output = openapi_new(&forced, path(&spec), &["--force"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("unexpected argument '--force'"));
     assert!(!forced.exists());
     assert_no_staging_directories(workspace.path());
 }
 
-fn openapi_new(project: &Path, spec: &Path, extra: &[&str]) -> Output {
+fn assert_minimal_project(project: &Path, with_keys: bool) {
+    let expected = if with_keys {
+        vec![
+            ".gitignore",
+            "derivations",
+            "questions",
+            "secrets",
+            "source.openapi.yaml",
+        ]
+    } else {
+        vec![
+            ".gitignore",
+            "derivations",
+            "questions",
+            "source.openapi.yaml",
+        ]
+    };
+    assert_eq!(entries(project), expected);
+    assert!(entries(&project.join("questions")).is_empty());
+    assert!(entries(&project.join("derivations")).is_empty());
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
+        "secrets/\n"
+    );
+    for absent in [
+        "bundle",
+        "runtime.yaml",
+        "fixtures",
+        "adapters",
+        "schemas",
+        "evidence.yaml",
+        "README.md",
+    ] {
+        assert!(
+            !project.join(absent).exists(),
+            "unexpected generated {absent}"
+        );
+    }
+}
+
+fn openapi_new(project: &Path, openapi: &str, extra: &[&str]) -> Output {
     let mut arguments = vec![
         "new",
         path(project),
         "--openapi",
-        path(spec),
+        openapi,
         "--profile",
         "local",
-        "--operation",
-        "GET /records/{person_id}",
-        "--select",
-        "/status",
-        "--source-id",
-        "records",
     ];
     arguments.extend_from_slice(extra);
     evidencectl(&arguments)
@@ -306,10 +241,33 @@ fn evidencectl(arguments: &[&str]) -> Output {
         .expect("running evidencectl")
 }
 
-fn write_spec(root: &Path) -> PathBuf {
+fn write_spec(root: &Path, contents: &[u8]) -> PathBuf {
     let path = root.join("records.openapi.yaml");
-    fs::write(&path, OPENAPI).expect("OpenAPI fixture");
+    fs::write(&path, contents).expect("OpenAPI fixture");
     path
+}
+
+fn serve_once(status: u16, body: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback server");
+    let address = listener.local_addr().expect("server address");
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        let reason = if status == 200 {
+            "OK"
+        } else {
+            "Internal Server Error"
+        };
+        write!(
+            stream,
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .expect("response headers");
+        stream.write_all(&body).expect("response body");
+    });
+    format!("http://{address}/openapi.yaml")
 }
 
 fn entries(root: &Path) -> Vec<String> {

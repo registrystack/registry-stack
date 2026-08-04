@@ -1,9 +1,8 @@
 //! Minimal OpenAPI-assisted Evidence project authoring.
 //!
-//! OpenAPI can describe a source operation and response shape. It cannot
-//! decide an adopter's evidence question, authorization, disclosure policy,
-//! runtime, or acceptance cases, so this command deliberately emits none of
-//! them.
+//! `new` retains the API description for a later question-authoring step. It
+//! does not select an operation or invent Evidence semantics, source policy,
+//! runtime configuration, or acceptance cases.
 
 use std::{
     fs,
@@ -17,6 +16,7 @@ use clap::{Args, ValueEnum};
 
 use crate::{keygen, suggest};
 
+const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
 const SIGNING_KEY_ID: &str = "local-signing-key-1";
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -38,30 +38,6 @@ pub struct NewArgs {
     #[arg(long, value_enum, requires = "openapi")]
     pub profile: Option<AuthoringProfile>,
 
-    /// OpenAPI operation as "METHOD /path/template"; prompted if absent.
-    #[arg(long, requires = "openapi")]
-    pub operation: Option<String>,
-
-    /// Response projection pointer; repeat once per selected field.
-    #[arg(long = "select", requires = "openapi")]
-    pub selection: Vec<String>,
-
-    /// Response status code whose schema is drafted.
-    #[arg(long, default_value = "200", requires = "openapi")]
-    pub status: String,
-
-    /// Response media type whose schema is drafted.
-    #[arg(long, default_value = "application/json", requires = "openapi")]
-    pub media_type: String,
-
-    /// Sample response used only to suggest schema bounds.
-    #[arg(long, requires = "openapi")]
-    pub sample: Option<PathBuf>,
-
-    /// Source identifier for the drafted artifacts.
-    #[arg(long, requires = "openapi")]
-    pub source_id: Option<String>,
-
     /// Generate disposable, unbound local signing and HMAC material.
     #[arg(long, requires = "openapi")]
     pub generate_keys: bool,
@@ -76,48 +52,34 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
     }
 
     validate_new_destination(&args.directory)?;
-    let prepared = suggest::prepare(&suggest::SuggestArgs {
-        openapi: openapi.clone(),
-        operation: args.operation.clone(),
-        status: args.status,
-        media_type: args.media_type,
-        selection: args.selection,
-        sample: args.sample,
-        source_id: args.source_id,
-        project: None,
-        evidence_bin: None,
-    })?;
-
     let parent = destination_parent(&args.directory)?;
+    let source = suggest::fetch::spec_source(openapi)?;
+    let (_, document) = suggest::openapi::Spec::open_retained(&source)?;
+
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-new-")
         .tempdir_in(parent)
         .with_context(|| format!("staging the project in {}", parent.display()))?;
     let staged_root = staging.path();
 
+    write_new_file(&staged_root.join(".gitignore"), b"secrets/\n", 0o644)?;
     write_new_file(
-        &staged_root.join("bundle/evidence.yaml"),
-        render_authoring_bundle(&prepared.artifacts.source_block).as_bytes(),
+        &staged_root.join(RETAINED_OPENAPI_FILE),
+        document.as_bytes(),
         0o644,
     )?;
-    let written = suggest::emit::write_into_project(staged_root, &prepared.artifacts.files)?;
+    for directory in ["questions", "derivations"] {
+        fs::create_dir(staged_root.join(directory))
+            .with_context(|| format!("creating the empty {directory} directory"))?;
+    }
 
     if args.generate_keys {
-        write_new_file(&staged_root.join(".gitignore"), b"secrets/\n", 0o644)?;
         keygen::generate_scaffold_key_material(&staged_root.join("secrets"), SIGNING_KEY_ID)
             .context("generating unbound local authoring key material")?;
     }
 
     fs::set_permissions(staged_root, fs::Permissions::from_mode(0o755))
         .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
-    let written = written
-        .into_iter()
-        .map(|path| {
-            path.strip_prefix(staged_root)
-                .expect("a drafted artifact is inside the staging project")
-                .to_path_buf()
-        })
-        .collect::<Vec<_>>();
     publish(staging, &args.directory)?;
 
     println!(
@@ -125,21 +87,24 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         args.directory.display()
     );
     println!(
-        "  source draft: {}",
-        args.directory.join("bundle/evidence.yaml").display()
+        "  OpenAPI: {} (retained exactly for question authoring)",
+        args.directory.join(RETAINED_OPENAPI_FILE).display()
     );
-    for relative in written {
-        println!("  artifact: {}", args.directory.join(relative).display());
-    }
+    println!(
+        "  questions: {}",
+        args.directory.join("questions").display()
+    );
+    println!(
+        "  derivations: {}",
+        args.directory.join("derivations").display()
+    );
     if args.generate_keys {
         println!(
-            "  keys: {} (owner-only, disposable, and not bound to this draft)",
+            "  keys: {} (owner-only, disposable, and unbound)",
             args.directory.join("secrets").display()
         );
     }
-    println!(
-        "This is not a runnable deployment. Define and review the evidence question separately."
-    );
+    println!("No question, source policy, runtime, fixture, or deployment bundle was generated.");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -189,16 +154,6 @@ fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()>
         .with_context(|| format!("writing {}", path.display()))?;
     file.sync_all()
         .with_context(|| format!("persisting {}", path.display()))
-}
-
-fn render_authoring_bundle(source_block: &str) -> String {
-    format!(
-        "# INCOMPLETE AUTHORING DRAFT. OpenAPI supplies only the source operation\n\
-# and response shape. This file is not a runnable Evidence deployment.\n\
-version: 1\n\
-assuranceProfile: local\n\
-{source_block}"
-    )
 }
 
 fn publish(staging: tempfile::TempDir, destination: &Path) -> anyhow::Result<()> {

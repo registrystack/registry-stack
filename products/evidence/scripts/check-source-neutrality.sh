@@ -130,22 +130,18 @@ sys.stdout.write(source[cursor:])
 PY
 done
 
-evidencectl_templates="$repository_root/crates/registry-evidencectl/templates"
-
 if rg -n -i 'dhis2|opencrvs' \
   "$production_text" \
-  "$evidencectl_templates" \
   "$repository_root/crates/registry-evidence/Cargo.toml" \
   "$repository_root/crates/registry-evidencectl/Cargo.toml" \
   "$repository_root/Cargo.toml"; then
-  echo 'Evidence production code, tooling templates, or Cargo metadata contains a prohibited source-product name.' >&2
+  echo 'Evidence production code, adopter tooling, or Cargo metadata contains a prohibited source-product name.' >&2
   exit 1
 fi
 
 if rg -n -i 'adult|age[_ -]?at|residence|licen[cs]e|parentage|legal[_ -]?parent|given_name|family_name|birth_date|national[_ -]?identifier' \
-  "$production_text" \
-  "$evidencectl_templates"; then
-  echo 'Evidence production Rust or tooling templates contain acceptance-case or jurisdiction-specific vocabulary.' >&2
+  "$production_text"; then
+  echo 'Evidence production Rust or adopter tooling contains acceptance-case or jurisdiction-specific vocabulary.' >&2
   exit 1
 fi
 
