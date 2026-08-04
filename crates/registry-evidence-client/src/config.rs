@@ -127,6 +127,19 @@ impl EvidenceClientConfig {
                 "the base URL must carry no credentials, query, or fragment",
             ));
         }
+        if let Some(mut segments) = self.base_url.path_segments().map(Iterator::peekable) {
+            // A single trailing separator is the ordinary way to write a
+            // deployment prefix, and `endpoint` drops it. Any other empty
+            // segment would put `//` in every request path, which the deployment
+            // answers with a confusing 404.
+            while let Some(segment) = segments.next() {
+                if segment.is_empty() && segments.peek().is_some() {
+                    return Err(EvidenceClientError::configuration(
+                        "the base URL path must carry no empty segment other than a trailing separator",
+                    ));
+                }
+            }
+        }
         // A bearer credential in cleartext is only acceptable when it cannot
         // leave the host, which is the local development and tutorial case. The
         // accepted forms are the ones an adopter types: either loopback numeric
@@ -145,6 +158,14 @@ impl EvidenceClientConfig {
         if !transport_protects_the_credential {
             return Err(EvidenceClientError::configuration(
                 "the base URL must use HTTPS, or HTTP with a loopback host",
+            ));
+        }
+        // The pinned key set is the load-bearing decision, so it fails here
+        // rather than once per request inside the verifier, where an empty set
+        // looks to an adopter like a deployment fault.
+        if self.trusted_jwks.keys.is_empty() {
+            return Err(EvidenceClientError::configuration(
+                "the pinned key set must carry at least one verification key",
             ));
         }
         if self.max_response_bytes == 0 {
@@ -185,8 +206,21 @@ mod tests {
         EvidenceClientConfig::new(
             Url::parse(base_url).expect("the test URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
-            JwksDocument { keys: Vec::new() },
+            one_key(),
         )
+    }
+
+    /// A key set with one member. Only its presence matters here; the verifier
+    /// owns everything about a key's content.
+    fn one_key() -> JwksDocument {
+        JwksDocument {
+            keys: vec![serde_json::json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": "test-key",
+                "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            })],
+        }
     }
 
     /// Every loopback form an adopter or a tutorial actually types.
@@ -241,6 +275,54 @@ mod tests {
                 "{base_url} was accepted"
             );
         }
+    }
+
+    /// An empty segment in the base path would put `//` in every request path,
+    /// and the deployment would answer each one with a confusing 404. A single
+    /// trailing separator is the ordinary way to write a prefix.
+    #[test]
+    fn a_base_url_path_with_an_empty_segment_is_refused() {
+        for base_url in [
+            "https://evidence.example.org//",
+            "https://evidence.example.org/registry//",
+            "https://evidence.example.org//registry",
+            "https://evidence.example.org/registry//tenant",
+        ] {
+            assert_eq!(
+                config(base_url)
+                    .validate()
+                    .expect_err("{base_url} was accepted"),
+                EvidenceClientError::configuration(
+                    "the base URL path must carry no empty segment other than a trailing separator"
+                ),
+                "{base_url}"
+            );
+        }
+        for base_url in [
+            "https://evidence.example.org",
+            "https://evidence.example.org/",
+            "https://evidence.example.org/registry",
+            "https://evidence.example.org/registry/",
+        ] {
+            config(base_url)
+                .validate()
+                .unwrap_or_else(|error| panic!("{base_url} was refused: {error}"));
+        }
+    }
+
+    /// The pinned key set is the load-bearing decision, so an empty one fails
+    /// here rather than once per request inside the verifier, where it looks like
+    /// a deployment fault.
+    #[test]
+    fn an_empty_pinned_key_set_is_refused() {
+        let mut config = config("https://evidence.example.org");
+        config.trusted_jwks = JwksDocument { keys: Vec::new() };
+        assert_eq!(
+            config.validate().expect_err("an empty key set is refused"),
+            EvidenceClientError::configuration(
+                "the pinned key set must carry at least one verification key"
+            )
+        );
     }
 
     #[test]
