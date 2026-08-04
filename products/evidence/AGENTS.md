@@ -153,6 +153,7 @@ cargo test --locked --workspace
 cargo deny check
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
 
 Use the repository Cargo wrapper if one is added. Otherwise, in Codex-managed

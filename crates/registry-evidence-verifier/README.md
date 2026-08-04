@@ -61,7 +61,12 @@ with cryptographic authenticity reported separately from current validity.
 
 ```sh
 cargo test -p registry-evidence-verifier
+products/evidence/scripts/check-verifier-portability.sh
 ```
+
+The second command proves the normal dependency tree still carries no async
+runtime, HTTP stack, script engine, command line parser, or logging framework,
+so client tooling can link this crate on any platform.
 
 ## License
 

@@ -460,6 +460,9 @@ jobs:
       - name: Enforce Evidence source-product neutrality
         run: products/evidence/scripts/check-source-neutrality.sh
 
+      - name: Enforce Evidence verifier portability
+        run: products/evidence/scripts/check-verifier-portability.sh
+
   relay-contracts:
     name: Relay API contracts
     needs: changes
