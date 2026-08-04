@@ -25,6 +25,12 @@ Registry Notary and must not depend on or copy abstractions from
 `registry-platform-pdp`, `registry-platform-oid4vci`,
 `registry-platform-replay`, or `registry-platform-sts`.
 
+The runtime depends on the portable `registry-evidence-verifier` library, which
+owns the response formats, the Evidence payload contract, and relying-party
+verification so client tooling can verify a signed response without the runtime.
+The verifier library sits beside the runtime and is not a second runtime; its
+source is covered by the same source-product and domain neutrality checks.
+
 Selected `registry-platform-*` primitives may be reused only when their existing
 contracts fit Evidence directly. The approved candidates are audit, crypto,
 OIDC, HTTP security, testing, and the `registry-platform-sdjwt` serialization

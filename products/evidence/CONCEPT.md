@@ -1345,7 +1345,10 @@ derivation, special route, or preferred implementation order.
 Version one is one synchronous assertion service with signed JWS as the
 mandatory default and includes:
 
-- one `registry-evidence` crate, one `evidence` binary, and one serving process;
+- one `registry-evidence` crate, one `evidence` binary, and one serving process,
+  with the portable `registry-evidence-verifier` library the runtime depends on
+  for the response formats, the payload contract, and relying-party
+  verification;
 - one operator-controlled trust domain;
 - all four initial assertion cases as complete test-only acceptance bundles;
 - conformance fixtures for every Version 1 Supported Value form;
@@ -1620,7 +1623,9 @@ This concept fixes the following decisions:
     envelope only when the immutable bundle and complete matched grant permit
     it. No signed-path failure falls back to unsigned output.
 11. One process serves one operator-controlled trust domain.
-12. The reference implementation is one `registry-evidence` crate and one `evidence` binary.
+12. The reference implementation is one `registry-evidence` crate and one `evidence` binary,
+    beside the portable `registry-evidence-verifier` response-verification
+    library the runtime depends on. The library is not a second runtime.
 13. The governed evidence bundle is the disclosure-review boundary; closed
     runtime bindings cannot override it.
 14. General identity resolution, broad candidate retrieval, scoring or
