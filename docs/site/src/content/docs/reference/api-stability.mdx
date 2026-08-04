@@ -54,7 +54,6 @@ The enforcement column names the repository CI checks so the mechanism is audita
 | Command-line interfaces | Documented commands and flags of `registryctl`, `registry-relay`, `registry-manifest`, and `evidence`, and their machine-readable output modes (`--format json`, `openapi`, `schema`) | CLI reference pages; `registryctl` version test; the `evidence` command surface is stated in `products/evidence/OPERATOR-CONTRACT.md` and exercised end to end against the built binary in `crates/registry-evidence/tests/cli.rs` |
 | Release artifacts and verification interface | Released binary and image names (`ghcr.io/registrystack/registry-relay`), signature and provenance layout per `release/VERIFY.md` | Release workflow; signed assets verified as documented in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.13.0/SECURITY.md) |
 | Selected Prometheus metrics | Family name, type, label keys, and label meaning in `release/contracts/selected-metrics.json` | `release/scripts/check-stable-surface-compatibility.py` permits additive families and rejects incompatible changes; product tests verify bounded labels and rendering |
-| Registry Notary HTTP API, CLI, config schema, and released image | None. Registry Notary is retired: it is not a surface an adopter can start on, and no compatibility promise applies to it or to the `ghcr.io/registrystack/registry-notary` image name | None. The retirement is not a deprecation with a migration window inside the promise; the product is gone |
 
 Metric help text, output ordering, and corrections to observed values are not covered.
 New families and new values for an existing bounded label are additive changes.
@@ -68,14 +67,6 @@ This specifically keeps CSV and SDMX-JSON aggregate output experimental and feat
 JSON aggregate output and the core protected entity record routes remain stable.
 The compatibility filter reads the roster's machine selectors; it does not maintain another
 format list.
-
-Registry Notary is retired, so a reader arriving with a Notary integration should stop here rather
-than plan an upgrade: its HTTP API, CLI, config schema, and image name are no longer covered
-surfaces, and no future release of this stack restores them. Nothing in this promise, including
-the deprecation policy, gives that surface a migration window, because the promise never took
-effect before the product was retired. The stack's evidence-shaped answer is now Evidence, which
-answers one bounded question about one subject with a signed assertion and shares neither Notary's
-API nor its credential lifecycle.
 
 Registry Mint is deliberately absent from the table. It is a supporting service whose
 configuration fields, token endpoint shape, and CLI flags may still change without a major

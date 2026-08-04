@@ -5,11 +5,21 @@ import { fileURLToPath } from 'node:url';
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultSiteRoot = resolve(import.meta.dirname, '..');
 
-// Registry Notary is retired. Current product-surface pages may still name it,
-// but only to say it is gone. A block that names Notary without saying so is
-// describing a product an adopter cannot start on.
-const retirementFraming =
-  /\bretir(?:e|ed|es|ing|ement)\b|\bno longer\b|\bremov(?:e|ed|es|al)\b|\bwas replaced\b|\bsuperseded\b/iu;
+// Registry Notary is retired, and no adopter ever ran it, so a current page has
+// nobody to orient: naming the product only to say it is gone leaves the reader
+// carrying a name that means nothing to them. The record of the retirement
+// lives on the history pages. Two things survive on the product surface.
+//
+// The identifier outlived the product. A frozen posture shape, a Relay startup
+// validator, a manifest access kind, and a pinned image name all still spell
+// `registry-notary`, and a page documenting one of those has to write it down.
+// Written as code, the word is an identifier and not a product on offer.
+const codeSpan = /`[^`]*`/gu;
+
+// A specification's version table is that document's own history, held to the
+// same rule as the changelog and the decision records. `blocks()` gives each
+// table row separately, so this matches a row and never the prose around it.
+const versionHistoryRow = /^\|\s*\d+\.\d+(?:\.\d+)?\s*\|\s*\d{4}-\d{2}-\d{2}\s*\|/u;
 
 async function markdownFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -76,7 +86,7 @@ function lineNumber(source, index) {
   return source.slice(0, index).split('\n').length;
 }
 
-export async function findUnframedNotaryMentions(siteRoot = defaultSiteRoot) {
+export async function findNotaryMentions(siteRoot = defaultSiteRoot) {
   const contentRoot = resolve(siteRoot, 'src/content/docs');
   const findings = [];
   for (const path of await markdownFiles(contentRoot)) {
@@ -93,7 +103,8 @@ export async function findUnframedNotaryMentions(siteRoot = defaultSiteRoot) {
     }
     for (const block of blocks(source)) {
       if (!/notary/iu.test(block.text)) continue;
-      if (retirementFraming.test(block.text)) continue;
+      if (versionHistoryRow.test(block.text.trim())) continue;
+      if (!/notary/iu.test(block.text.replace(codeSpan, ''))) continue;
       findings.push({
         path: siteRelative,
         line: lineNumber(source, block.start),
@@ -107,19 +118,21 @@ export async function findUnframedNotaryMentions(siteRoot = defaultSiteRoot) {
 }
 
 export async function checkNotarySurface(siteRoot = defaultSiteRoot) {
-  const findings = await findUnframedNotaryMentions(siteRoot);
+  const findings = await findNotaryMentions(siteRoot);
   if (findings.length === 0) return;
   throw new Error(
     [
-      'Current documentation describes Registry Notary as a product to use.',
+      'Current documentation names Registry Notary, which no adopter can meet.',
       ...findings.map(({ path, line, excerpt }) => `${path}:${line}: ${excerpt}`),
-      'Rewrite the page around Registry Relay, Evidence, and Registry Mint, or',
-      'say in the same block that Registry Notary is retired.',
+      'Rewrite the page around Registry Relay, Evidence, and Registry Mint. Leave',
+      'the retirement itself to the decision record and the changelog. Where a',
+      'shipped schema, validator, or image name still spells the identifier,',
+      'write it as code and say nothing about the product behind it.',
     ].join('\n'),
   );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   await checkNotarySurface();
-  console.log('Notary surface check passed: every current page frames Notary as retired.');
+  console.log('Notary surface check passed: no current page names Registry Notary.');
 }

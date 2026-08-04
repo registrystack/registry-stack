@@ -32,7 +32,7 @@ anchors, approved sets, deployment packages, and anti-rollback state.
 | Pre-1.0 concept | Registry Stack 1.0 |
 | --- | --- |
 | `registryctl init --from <starter>` or `registryctl init relay` | `registryctl init <directory> --template http` or `registryctl init <directory> --template spreadsheet` |
-| `registryctl add notary` | No replacement; Registry Notary is retired. A 1.0 project declares Relay lanes only. To answer a bounded question instead of serving records, use [Evidence](../evaluate-evidence/) and its own `evidencectl` tooling |
+| `registryctl add notary` | No replacement. A 1.0 project declares Relay lanes only. To answer a bounded question instead of serving records, use [Evidence](../evaluate-evidence/) and its own `evidencectl` tooling |
 | `registryctl start` | `registryctl dev` or `registryctl dev --detach` |
 | `registryctl stop` | `registryctl dev down` |
 | `registryctl restart` | Run `registryctl dev down`, then `registryctl dev` |

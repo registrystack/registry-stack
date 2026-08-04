@@ -114,10 +114,10 @@ Run these from your Solmara Lab checkout, in order, with `REGISTRY_STACK_SOURCE_
 lab's own certificate authority under `config/evidence/tls/`. Skipping it is the most common first
 failure; see the troubleshooting table. `just up-evidence` builds the Evidence and Mint images from
 your Registry Stack checkout, builds the `portal`, `home`, and `scenario-runner` images, and pulls
-the digest-pinned Relay and Notary images; expect the first run to take most of this tutorial's
-time. The lab still runs the retired Registry Notary alongside Evidence until its own migration
-lands, so Notary containers appear here and in the topology below. `just smoke` runs story-preview
-checks plus live checks against the running Relay, Notary, and portal services. `just smoke-evidence` runs four cases against the Evidence path: an adult, a
+the digest-pinned Relay and `registry-notary` images; expect the first run to take most of this
+tutorial's time. The lab still runs `registry-notary` containers alongside Evidence until its own
+migration lands, so they appear here and in the topology below. `just smoke` runs story-preview
+checks plus live checks against the running Relay, `registry-notary`, and portal services. `just smoke-evidence` runs four cases against the Evidence path: an adult, a
 minor, a reference no record resolves, and an unusable access token.
 
 ## What is running
@@ -167,7 +167,7 @@ The rest of the topology, which this tutorial does not call:
 | Workload identity agents | 12 | One per Relay, issuing that Relay's short-lived caller credential. |
 | Evidence gateway service | 1 | The TLS proxy described above. |
 | Records workload agent | 1 | The caller credential for `cra-records-relay`. |
-| Notary instances and the child benefit federator | 7 | The country's own evidence gateway services, on `4321` for the federator, still running the retired Registry Notary. |
+| `registry-notary` instances and the child benefit federator | 7 | The country's own evidence gateway services, on `4321` for the federator, still running a retired product the lab has not migrated off yet. |
 | Portal, Visitor's Center, static metadata | 3 | The experience layer. |
 | Postgres and the scenario runner | 2 | Shared state on `54329`, and the service backing the portal's guided demos. |
 
@@ -324,7 +324,7 @@ record, which is the point of the whole arrangement.
 | `just evidence-token` reports `missing SOLMARA_EVIDENCE_CALLER_JWK` | `.env` predates the Evidence overlay, so it has no caller key. | Run `just gen-secrets`, then `just up-evidence` again so Mint picks up the new registration. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
 | `docker compose ps -a` lists lab containers you did not start | The lab derives a per-checkout Compose project name (`solmara-lab-` plus a hash of the checkout path), so two checkouts never share a project. Leftover containers come from a lab version that used the shared project name `solmara-lab`. | Inspect the old project with `docker compose -p solmara-lab ps`, then remove it with `docker compose -p solmara-lab down` (add `-v` only if you also want its volumes deleted). |
-| The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and retired-Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up-evidence`; later runs are faster once the images are cached. |
+| The Relay and `registry-notary` containers start slowly or show high CPU on Apple Silicon | Both pinned images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up-evidence`; later runs are faster once the images are cached. |
 | The first `just up-evidence` appears to hang | The first run compiles Evidence and Mint from source, pulls the pinned images, and builds the local application images. | Let it finish; do not interrupt it. |
 
 ## Cleanup
@@ -336,7 +336,7 @@ just down-evidence
 ```
 
 `just down-evidence` runs `docker compose ... down`, keeping the Postgres data volume, the Relay
-and retired-Notary state volumes, and the Evidence and Mint secret volumes, so a later `just up-evidence`
+and `registry-notary` state volumes, and the Evidence and Mint secret volumes, so a later `just up-evidence`
 resumes with the same data. Do not rerun `just generate` before that: it rotates the Postgres
 password, and the kept volume still holds the old one.
 

@@ -201,8 +201,16 @@ residue the workstream did not reach, not new scope.
       approve-initial-baseline, rotate-credentials-and-trust,
       inspect-and-diagnose, environment-variables, errors, api-stability).
 - [x] E2. Light-touch pages updated (~25 pages with 1-9 Notary mentions).
-- [ ] E3. Final sweep: a case-insensitive Notary search over the docs
+- [x] E3. Final sweep: a case-insensitive Notary search over the docs
       product surface matches only history pages and the retirement page.
+      Amended 2026-08-04: the literal bar is unreachable, because
+      `registry-notary` is a live identifier in the frozen
+      `registry.ops.posture.v1` component enum, a manifest `access.kind`,
+      Relay's startup binding validator, `registryctl`'s lane refusal, and a
+      pinned image name. Achieved instead, and mechanically enforced: on a
+      current product-surface page the word appears only inside a code span
+      or in a specification version-history row. Prose naming the product,
+      even to say it is retired, now fails the check.
 
 ### F. Adopter distribution and experience
 
@@ -934,3 +942,33 @@ is parallel; B has no upstream dependencies and is the standing priority
   llms 166 passed), `node scripts/check-notary-surface.mjs` passed with no
   waiver, and `bash scripts/check-registryctl-tutorials.sh` PASS across all six
   reader journeys.
+- 2026-08-04: E3 done. Tightened `scripts/check-notary-surface.mjs` from E2's
+  "same-block retirement framing" rule to "code span or specification
+  version-history row only" (test first: `check-notary-surface.test.mjs`
+  rewritten to 8 cases, red on the renamed `findNotaryMentions` export, then
+  green). The literal DoD bar cannot be met: `registry-notary` is still spelled
+  in the frozen `registry.ops.posture.v1` component enum and `notary` section,
+  RS-DM-MANIFEST's `access.kind` and `registry-notary-federation/v0.1`, Relay's
+  startup binding validator, `registryctl`'s pre-retirement approved-set
+  refusal, and the pinned image name, so a reference page that stops writing it
+  becomes wrong. The checker now enforces the reachable rule instead, and E3 is
+  amended above to record it. 81 findings across 34 files went to zero: ~25
+  pages lost transitional orientation prose outright (nobody ever ran the
+  product, so there is no reader to orient), five specifications now write the
+  surviving identifier as a code span, `spec/rs-terms.mdx` and
+  `reference/glossary.mdx` lost 20 retired vocabulary entries between them (no
+  page anchors into either, checked), and `tutorials/first-run-with-solmara-lab.mdx`
+  names the lab's containers by image name. Two claims deleted along the way
+  were also factually stale: `registryctl` no longer accepts a Notary topology
+  or compiles an evidence service (`crates/registryctl/src/approved_set.rs`,
+  `deployment.rs`, `release_lock.rs`). `src/components/DocsList.astro` is live
+  copy the checker cannot see; its dead `registry-notary` docset card is gone
+  and the Platform blurb now reads "Relay, Evidence". Gates: `npm test` 296/296
+  pass, `npm run check` clean (31735 links, llms 166 passed),
+  `node scripts/check-notary-surface.mjs` passed, and
+  `bash scripts/check-registryctl-tutorials.sh` PASS across all six journeys.
+  Residual, deliberate: `src/content/docs/products/registry-relay/*` (synced
+  product docsets, outside checker scope), `src/data/docsets.yaml` (22 archived
+  pins that `notary-retirement.test.mjs` requires), `src/data/standards.yaml`,
+  `src/data/generated/configuration-reference.json` (generated from a Relay
+  Rust doc string), and the history pages.

@@ -28,10 +28,6 @@ use `code` for the stack-wide meaning.
 The additive compatibility gate uses this reference as the error-code registry and the committed
 OpenAPI documents for operation mappings they enumerate.
 
-Registry Notary is retired, and the codes it returned (its evidence-evaluation taxonomy and its
-federation, credential-status, admin, readiness, and request-handling codes) are no longer part of
-this registry.
-
 ## Evidence
 
 Evidence has its own closed problem set, documented at
@@ -268,7 +264,7 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `runtime.binding.filter_missing` | runtime filter missing from metadata | A runtime filter binding is absent from the metadata manifest. |
 | `runtime.binding.scope_missing` | runtime scope missing or invalid | A runtime scope is missing or uses an unsupported shape. |
 | `runtime.binding.relationship_missing` | runtime relationship missing from metadata | A runtime relationship binding is absent from the metadata manifest. |
-| `runtime.binding.unsupported_evidence_offering` | runtime evidence offering kind is unsupported | The offering's `access.kind` is not the one value the startup validator accepts, `registry-notary`. Registry Notary is retired, so a new deployment should not declare an evidence offering at all. |
+| `runtime.binding.unsupported_evidence_offering` | runtime evidence offering kind is unsupported | The offering's `access.kind` is not the one value the startup validator accepts, `registry-notary`. Nothing maintained sits behind that access kind, so a new deployment should not declare an evidence offering at all. |
 | `runtime.binding.ecosystem_binding_missing` | runtime ecosystem binding missing from metadata | The configured ecosystem binding selector is absent from the metadata manifest. |
 | `runtime.binding.ecosystem_binding_invalid` | runtime ecosystem binding is invalid | The ecosystem binding does not reference a governed-evidence binding with policy identity and ODRL enforcement. |
 

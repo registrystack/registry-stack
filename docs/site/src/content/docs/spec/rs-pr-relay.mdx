@@ -152,7 +152,7 @@ Registry Relay publishes evidence-offering metadata describing where a caller re
 
 REQ-PR-RELAY-012: Registry Relay MAY publish evidence-offering metadata at `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`, naming the external endpoint, the offered claim ids, and the supported disclosure modes and formats for an offering. Registry Relay MUST NOT evaluate an offering or issue credentials itself. This is the protocol-level form of REQ-ARC-G-007.
 
-Registry Notary is retired, and Relay's evidence-offering surface still carries its vocabulary: runtime binding validation accepts an offering only when `access.kind` is `registry-notary`, and it rejects the configuration otherwise. An operator therefore cannot publish an offering that points at an Evidence deployment without that access kind being widened first. Treat this section as describing published surface with no maintained destination behind it.
+Relay's evidence-offering surface still carries a retired product's vocabulary: runtime binding validation accepts an offering only when `access.kind` is `registry-notary`, and it rejects the configuration otherwise. An operator therefore cannot publish an offering that points at an Evidence deployment without that access kind being widened first. Treat this section as describing published surface with no maintained destination behind it.
 
 ## 8. Credential issuance boundary
 

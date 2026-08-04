@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { checkNotarySurface, findUnframedNotaryMentions } from './check-notary-surface.mjs';
+import { checkNotarySurface, findNotaryMentions } from './check-notary-surface.mjs';
 
 async function writePage(root, relative, frontmatter, body) {
   const path = resolve(root, 'src/content/docs', relative);
@@ -35,7 +35,7 @@ test('rejects a current page that describes Notary as a product to use', async (
       ].join('\n'),
     );
 
-    const findings = await findUnframedNotaryMentions(root);
+    const findings = await findNotaryMentions(root);
     assert.deepEqual(
       findings.map(({ line }) => line),
       [5, 8],
@@ -47,7 +47,10 @@ test('rejects a current page that describes Notary as a product to use', async (
   });
 });
 
-test('accepts a mention that says in the same block that Notary is retired', async () => {
+// The light-touch pass framed each mention as retired. The final sweep goes
+// further: an adopter meets a product whose name is gone, so a current page
+// carries no retirement note at all.
+test('rejects a current page that names Notary only to say it is retired', async () => {
   await withSite(async (root) => {
     await writePage(
       root,
@@ -61,8 +64,69 @@ test('accepts a mention that says in the same block that Notary is retired', asy
       ].join('\n'),
     );
 
-    assert.deepEqual(await findUnframedNotaryMentions(root), []);
+    const findings = await findNotaryMentions(root);
+    assert.deepEqual(
+      findings.map(({ line }) => line),
+      [5, 8],
+    );
+  });
+});
+
+// The identifier outlived the product: a frozen schema, a validator, and a
+// pinned image name still spell it. A page documenting one of those has to be
+// able to write it down.
+test('accepts a shipped identifier written as code', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'spec/rs-op-posture.mdx',
+      'status: draft',
+      [
+        'A document declares `component` as exactly one of `registry-relay` and',
+        '`registry-notary`, the retired component whose shape the frozen v1',
+        'contract still models.',
+        '',
+        '| `registry-notary` | `notary` | `relay` |',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(await findNotaryMentions(root), []);
     await assert.doesNotReject(checkNotarySurface(root));
+  });
+});
+
+test('rejects a block that pairs a shipped identifier with the product name', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'reference/errors.mdx',
+      'status: current',
+      '| The offering is not `registry-notary`, and Registry Notary is retired. |',
+    );
+
+    assert.deepEqual(
+      (await findNotaryMentions(root)).map(({ path }) => path),
+      ['src/content/docs/reference/errors.mdx'],
+    );
+  });
+});
+
+// A specification's version table is that document's own history, held to the
+// same rule as the changelog and the decision records.
+test('accepts a specification version-history row', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'spec/rs-sec-g.mdx',
+      'status: draft',
+      [
+        '| Version | Date | Status | Change |',
+        '| --- | --- | --- | --- |',
+        '| 0.5.0 | 2026-08-03 | draft | Registry Notary is retired. Removed Section 7. |',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(await findNotaryMentions(root), []);
   });
 });
 
@@ -76,7 +140,7 @@ test('skips the marked past, unpublished pages, and synced product docsets', asy
     await writePage(root, 'decisions/rename-2026-05-23.mdx', 'status: current', claim);
     await writePage(root, 'products/registry-notary/migration.mdx', 'status: current', claim);
 
-    assert.deepEqual(await findUnframedNotaryMentions(root), []);
+    assert.deepEqual(await findNotaryMentions(root), []);
   });
 });
 
@@ -90,7 +154,7 @@ test('holds status: draft pages to the same rule, because they are still publish
         'Registry Notary owns claim evaluation and credential issuance.',
       );
 
-      const findings = await findUnframedNotaryMentions(root);
+      const findings = await findNotaryMentions(root);
       assert.deepEqual(
         findings.map(({ path }) => path),
         ['src/content/docs/explanation/threat-model.mdx'],
@@ -108,7 +172,7 @@ test('holds every current product-surface page, with no page-level waiver', asyn
     await writePage(root, 'operate/backup-and-restore.mdx', 'status: current', claim);
     await writePage(root, 'operate/single-node-compose-behind-proxy.mdx', 'status: current', claim);
 
-    const findings = await findUnframedNotaryMentions(root);
+    const findings = await findNotaryMentions(root);
     assert.deepEqual(findings.map(({ path }) => path), [
       'src/content/docs/operate/backup-and-restore.mdx',
       'src/content/docs/operate/single-node-compose-behind-proxy.mdx',

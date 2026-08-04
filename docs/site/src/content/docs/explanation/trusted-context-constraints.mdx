@@ -19,11 +19,9 @@ supplies shared types and redacted reporting conventions to the products that us
 product still owns the decision made at its own boundary.
 
 Read one thing before the rest: Registry Relay and Evidence do not share an authorization model.
-Older versions of this page described a chain in which Registry Notary authorized an evidence
-caller and then consulted Relay on its behalf under a compiler-pinned contract. Registry Notary is
-retired and nothing in the stack inherits that role. Evidence enforces its own boundary, and when
-it reads a Relay-protected API it does so as an ordinary fixed HTTP source, no differently from any
-other client of that API.
+No service in this stack authorizes a caller and then consults another service on its behalf.
+Evidence enforces its own boundary, and when it reads a Relay-protected API it does so as an
+ordinary fixed HTTP source, no differently from any other client of that API.
 
 ## The shared vocabulary
 

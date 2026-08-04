@@ -58,17 +58,6 @@ Second, aligning with an external standard is not the same as conforming to it: 
 of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to any of them.
 The [standards register](../../reference/standards/) records how each one is actually adopted.
 
-## Registry Notary is retired
-
-Registry Notary was the stack's claim-evaluation and credential-issuance service. It is retired: it
-is not a supported starting point, not a fallback, and not a deprecated-but-usable option, and its
-credential lifecycle, delegated subject access, and peer federation are gone with it. If you are
-running it today, the closest supported replacement is Evidence, which answers one bounded question
-about one subject with a signed assertion carrying the answer and not the record. Evidence does not
-reproduce Notary's issuance sessions, holder binding, status lists, revocation, wallet-facing
-issuance, or peer-to-peer evaluation, so a move is a redesign of the integration rather than a
-configuration change. The limits in the next section are Evidence's own, stated on their own terms.
-
 ## Evidence limits
 
 Evidence releases one stateless assertion per request under a frozen Version 1 contract.

@@ -35,9 +35,8 @@ minimized typed outputs one protected read route may return.
 *Minimized evidence* means a response shaped by data minimization or selective disclosure; a
 *purpose-bound request* is a request that carries or is evaluated against a stated purpose.
 
-Registry Notary, which used to stand between the caller and Relay and owned the claim model this
-page was originally written around, is retired. Two runtime patterns remain, Registry Relay and
-Evidence, and each enforces these principles at its own boundary rather than in one chain.
+Two runtime patterns carry these principles, Registry Relay and Evidence, and each enforces them
+at its own boundary rather than in one chain.
 
 ## How the requirement model limits collection at the source
 
@@ -80,10 +79,8 @@ lists them.
 
 ## Minimization at the output: closed value forms
 
-Minimization also applies to what leaves the boundary, and this is the part of the design that
-changed most when Registry Notary was retired. Notary let a caller select one of three disclosure
-modes per claim (`value`, `predicate`, `redacted`). Evidence has no caller-selectable disclosure
-at all, so there is no request-time negotiation to review.
+Minimization also applies to what leaves the boundary. Evidence has no caller-selectable
+disclosure at all, so there is no request-time negotiation to review.
 
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
 form* its fact takes: a boolean, a code from a reviewed codelist, a bounded number, a date or time

@@ -30,8 +30,9 @@ protected admin surface. It gives operators and tooling authors one stable,
 versioned document for observing build, runtime, configuration, deployment, audit, and
 component-specific status without treating that observation as an authorization decision or a
 source of secrets.
-The `registry.ops.posture.v1` contract is frozen and still models a second component, Registry
-Notary, which is retired. Section 1 states which components produce a posture document today.
+The `registry.ops.posture.v1` contract is frozen and still models a second component,
+`registry-notary`, which is retired. Section 1 states which components produce a posture document
+today.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
@@ -63,7 +64,7 @@ The product route and authorization details remain with the
 [Registry Relay API reference](../../reference/apis/registry-relay/).
 
 Registry Relay is the only producer of a posture document in a supported deployment. The v1
-contract also models Registry Notary, which is retired: no supported deployment emits a
+contract also models a second, retired component: no supported deployment emits a
 `registry-notary` document, and the shape is kept only so a consumer can still validate one it
 has retained.
 
@@ -120,8 +121,8 @@ REQ-OP-POSTURE-003: A `registry-relay` document MUST contain `relay` and MUST NO
 A `registry-notary` document MUST contain `notary` and MUST NOT contain `relay`.
 A consumer MUST reject a document that does not satisfy this pairing, even when the shared
 envelope itself appears complete.
-Registry Notary is retired and no supported deployment produces the second document; the pairing
-rule stays part of the frozen v1 contract so a consumer can still validate a retained one.
+No supported deployment produces the second document; the pairing rule stays part of the frozen v1
+contract so a consumer can still validate a retained one.
 
 The shared sections state the following categories of observation:
 

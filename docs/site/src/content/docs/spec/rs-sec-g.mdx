@@ -209,7 +209,7 @@ A registry stack deployment conforms to this specification when it:
 - reports errors as problem+json outside route-specific error envelopes, and applies the shared HTTP-security and outbound-policy primitives (REQ-SEC-G-011, REQ-SEC-G-012);
 - keeps secrets out of distributable artifacts and leaves provisioning to the operator (REQ-SEC-G-013).
 
-REQ-SEC-G-010 is retired. It required delegated evaluation to be static-peer only and fully verified before any Relay consultation or claim evaluation. Registry Notary held the only delegated-evaluation surface in this stack, and Registry Notary is retired, so no service here evaluates on behalf of a peer and nothing implements that requirement. Per RS-DOC REQ-DOC-008 the identifier is not reused.
+REQ-SEC-G-010 is retired. It required delegated evaluation to be static-peer only and fully verified before any Relay consultation or claim evaluation. The retired `registry-notary` component held the only delegated-evaluation surface in this stack, so no service here evaluates on behalf of a peer and nothing implements that requirement. Per RS-DOC REQ-DOC-008 the identifier is not reused.
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field, nor to OpenID Connect, OAuth 2.0, or any other authentication or authorization framework named in prose. Each cited standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 

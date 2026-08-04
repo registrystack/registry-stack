@@ -25,11 +25,6 @@ A requirement is deliberately narrow and reusable. A requirement that returned a
 over-collect, and a requirement that embedded one consumer's eligibility or action rules could not
 be reused as neutral evidence.
 
-Older versions of this page described Registry Notary and its three caller-selectable disclosure
-modes (`value`, `predicate`, and `redacted`, with a per-claim `allowed` set and a `downgrade`
-policy). Registry Notary is retired, and Evidence does not have that mechanism or an analogue of
-it. What follows describes what Evidence actually does.
-
 ## Evidence has no caller-selectable disclosure modes
 
 The most important difference is a subtraction.
@@ -47,8 +42,7 @@ same answer, revealed at three levels of detail."
 How much a requirement reveals is fixed when the requirement is authored and reviewed, and it is
 identical for every caller and every purpose authorized to invoke it.
 
-That is a narrower mechanism than the retired Notary modes, and deliberately so. It moves the
-disclosure decision
+That is deliberately narrow. It moves the disclosure decision
 from request time, where a caller could argue for more, to authoring and review time, where an
 operator has to justify it once and can be held to it.
 
@@ -122,9 +116,8 @@ is required.
 
 ## There is no redacted answer
 
-The retired Notary `redacted` mode returned neither a value nor a satisfaction outcome. Evidence
-has no
-equivalent, and this is structural rather than an omission: an assertion must carry at least one
+Evidence cannot return an answer that carries neither a value nor a satisfaction outcome, and this
+is structural rather than an omission: an assertion must carry at least one
 supported value, so an assertion with nothing in it cannot be produced
 (`products/evidence/contracts/evidence.schema.yaml`).
 
@@ -137,8 +130,7 @@ or as a coarser value form on the same requirement, and is reviewed as such.
 
 ## A refusal is not an existence oracle
 
-The nearest thing Evidence has to the retired Notary collapse behavior is not optional and not a
-mode.
+Collapsing an unresolved outcome is not optional and not a mode.
 Every requirement declares `existenceDisclosure: collapse-unresolved`, and that enum has exactly
 one permitted value (`products/evidence/contracts/bundle.schema.yaml`).
 

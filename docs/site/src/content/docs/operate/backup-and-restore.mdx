@@ -61,9 +61,8 @@ anti-rollback and audit state, complete Relay consultation PostgreSQL correctnes
 state, role and key-lifecycle records, and retained key material. Its members are the
 consultation Relay lane and PostgreSQL.
 
-Registry Notary is retired, so a generated package no longer contains its lane, its
-consistency-group membership, its state check, or its secret stager. A package
-generated before its removal is not covered by this procedure; regenerate it first.
+A package generated against an earlier product set is not covered by this procedure;
+regenerate it first.
 
 For audited SnapshotExact materializations, freeze source updates and dependent traffic
 before stopping the Relay fence holder and its callers.

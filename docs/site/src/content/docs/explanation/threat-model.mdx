@@ -64,9 +64,8 @@ beside them. A separate adopter demo sits outside the production trust boundary:
   are integration examples, not a production freshness or replay-protection profile, and a
   team copying them into production must add request freshness, expiry, or nonce checks itself.
 
-Registry Notary is retired. Its claim-evaluation, credential-issuance, and peer-federation
-boundaries are no longer part of this model, and nothing in Evidence replaces them: Evidence
-issues no credential lifecycle and evaluates nothing on a peer's behalf.
+This model has no credential-issuance or peer-federation boundary, because no product here has
+one: Evidence issues no credential lifecycle and evaluates nothing on a peer's behalf.
 
 Security-critical primitives are concentrated in Registry Platform so that the behavior is
 identical across services and reviewable in one place. This is a deliberate attack-surface

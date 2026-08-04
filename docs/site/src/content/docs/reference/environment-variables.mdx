@@ -18,8 +18,6 @@ This page lists the environment variables read directly by the Evidence binary, 
 
 The stack's other kind of environment variable is operator-named. Secret material such as credential hashes and upstream tokens is not read from a fixed variable name: a config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration reference rather than repeated on this page. Registry Relay is the product that works that way; see the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables. Evidence and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
-Registry Notary is retired, and the `REGISTRY_NOTARY_*` variables this page used to list are gone with it.
-
 ## Configuration expansion
 
 Registry Relay expands `${VAR}` expressions before YAML parsing, using the shared

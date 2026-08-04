@@ -27,7 +27,7 @@ The public Relay and consultation Relay lanes keep separate anchors, signing key
 and approval decisions.
 The approved-set owner assembles verified lane outputs but does not sign on behalf of a lane.
 
-Registry Notary is retired and no longer has a lane in this procedure. Evidence and Registry Mint
+Evidence and Registry Mint
 are not registryctl-generated products and do not participate in this trust-anchor and
 approved-set pipeline at all: each validates its own deployment inputs directly, with
 `evidence check` (or the `evidencectl` project scaffold and fixture commands that drive it) and
@@ -221,9 +221,9 @@ Registryctl verifies the two lane bundles and writes one approved-set file.
 It reports the approved-set digest and the next `registryctl deploy generate` command.
 
 The assembled document declares approved-set schema version `2.0`.
-Current registryctl refuses an approved set issued before the Registry Notary retirement, whether
-it declares schema version `1.0`, carries a `notary` lane, or binds cross-lane interface digests.
-It reports that the document predates the retirement and names re-approval as the remedy.
+Current registryctl refuses an approved set that declares schema version `1.0`, carries a `notary`
+lane, or binds cross-lane interface digests.
+It reports why the document is refused and names re-approval as the remedy.
 A refused set cannot be repaired by editing the file: the removed cross-lane interface digests are
 no longer verified, so honoring the old approval would keep a signed integrity claim that nothing
 enforces.

@@ -57,9 +57,6 @@ Product names are always in English, including on future translated pages.
   <dt>caller</dt>
   <dd>The technical client that invokes Registry Relay or Evidence. A caller can be the evidence consumer or an intermediary, portal, or workflow connector acting for it.</dd>
 
-  <dt>claim evaluation</dt>
-  <dd>Retired Registry Notary process that evaluated configured evidence rules over compiler-pinned Registry Relay outputs and returned a structured claim result. Registry Notary is retired, so no current service performs claim evaluation. Evidence answers a predefined requirement instead, running one fixed source request and a bounded derivation behind an output gate, and returns a signed assertion.</dd>
-
   <dt>claim level</dt>
   <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`.</dd>
 
@@ -77,9 +74,6 @@ Product names are always in English, including on future translated pages.
 
   <dt>crosswalk</dt>
   <dd>The Relay feature that maps source field names and values to canonical domain terms using configured CEL expressions. Replaces the former `cel-mapping` name. Enabled by the `crosswalk-runtime` Cargo feature and the `standards-cel-mapping` feature alias. Config key: `crosswalk`.</dd>
-
-  <dt>credential profile</dt>
-  <dd>Retired Registry Notary configuration that named which registry-backed claims could be issued as a credential. Registry Notary is retired, so no current service holds a credential profile. Evidence's nearest control is much narrower: the `responseFormats` permission on the immutable bundle and on the one matched grant decides which serializations may carry the assertion, which authorizes a response format and never a credential lifecycle.</dd>
 
   <dt>deployment bundle</dt>
   <dd>A deferred project-root packaging concept tracked by <a href="https://github.com/registrystack/registry-stack/issues/361">registry-stack issue #361</a>. Current source does not generate, sign, verify, or activate a project-root bundle. Each product instead uses its own product-owned bundle, and no Registry Stack coordinator binds or atomically activates them. Not the same thing as an Evidence deployment project's governed bundle, which is one product's immutable startup input.</dd>
@@ -99,12 +93,6 @@ Product names are always in English, including on future translated pages.
   <dt>DID</dt>
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a `did:web` document, and no current service in the stack resolves, publishes, or issues DIDs. Evidence accepts an optional holder public key as a bare JSON Web Key, not as a DID.</dd>
 
-  <dt id="delegated-subject access">delegated subject access</dt>
-  <dd>Retired Registry Notary authorization mode `delegated_subject_access`, under which a requester could continue a dependent subject's claim only after a compiler-pinned Relay relationship proof evaluated to boolean `true`. Registry Notary is retired, so the mode has no current runtime. Evidence's surviving idea is far smaller: one authorization decision can include an optional actor alongside the principal, both read from the already verified access token, with no relationship proof and no delegated evaluation between services.</dd>
-
-  <dt>disclosure profile</dt>
-  <dd>Retired Registry Notary control over what the caller received from a claim evaluation: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden). Registry Notary is retired, so no current service selects a disclosure profile per claim. Evidence has no equivalent dial: a requirement declares its concepts and their forms once, the output gate rejects anything else, and purpose does not narrow what is disclosed.</dd>
-
   <dt>distributed custody</dt>
   <dd>The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody.</dd>
 
@@ -118,10 +106,7 @@ Product names are always in English, including on future translated pages.
   <dd>Private bindings and operational settings for one Registry Stack project deployment target. An environment does not change the project's stable intent.</dd>
 
   <dt>Evidence (product)</dt>
-  <dd>The minimum-disclosure assertion service in this monorepo. Crate: `crates/registry-evidence`; product material: `products/evidence/`. Given authenticated authority, an authorized purpose, and a predefined requirement, Evidence serves a signed assertion that answers the requirement, not the source record, plus an SD-JWT VC serialization of that same stateless assertion under a frozen Version 1 profile. The SD-JWT VC format is never a credential lifecycle: no issuance session, holder-binding ceremony, status list, or revocation. Evidence is not a Registry Notary mode, rewrite, or reduced configuration and does not inherit the Notary product model; Registry Notary is retired, and Evidence is a separate greenfield product rather than its successor configuration.</dd>
-
-  <dt>evidence credential (Registry Notary)</dt>
-  <dd>Registry Notary usage of "evidence": in the Evidence Gateway runtime, a Notary claim evaluation can result in credential issuance, governed by a credential profile and delivered through OID4VCI and SD-JWT VC. This Notary-scoped meaning is distinct from Evidence (product): Registry Notary evidence names a credential with an issuance lifecycle, while Evidence names a stateless signed assertion with none. Registry Notary is retired, so this sense of the word describes deployments that already run it rather than a path to start on; new work that needs a signed answer uses Evidence (product).</dd>
+  <dd>The minimum-disclosure assertion service in this monorepo. Crate: `crates/registry-evidence`; product material: `products/evidence/`. Given authenticated authority, an authorized purpose, and a predefined requirement, Evidence serves a signed assertion that answers the requirement, not the source record, plus an SD-JWT VC serialization of that same stateless assertion under a frozen Version 1 profile. The SD-JWT VC format is never a credential lifecycle: no issuance session, holder-binding ceremony, status list, or revocation. Evidence is a separate greenfield product, not a reduced configuration of anything that came before it.</dd>
 
   <dt>Evidence toolset</dt>
   <dd>The three released binaries `evidence`, `evidencectl`, and `mint`. Releases that include the toolset publish reproducible binaries alongside a cosign-signed `SHA256SUMS` file, and the installer installs all three together or not at all after verifying every asset. `evidencectl` shells out to `evidence` for every Evidence semantic decision and never re-implements evaluation, signing, or verification. `mint`, built from the `registry-mint` crate, issues the access tokens `evidence` verifies.</dd>
@@ -132,20 +117,14 @@ Product names are always in English, including on future translated pages.
   <dt>evidence consumer</dt>
   <dd>A service or process that uses returned evidence. Examples include a social-protection programme, admissions service, licensing authority, healthcare workflow, lender, insurer, or credential verifier. The evidence consumer, caller, and decision owner can be the same component or separate components.</dd>
 
-  <dt>evidence service</dt>
-  <dd>A Registry Notary-owned service containing service policy, claims, disclosure, optional Registry Relay consultations, and optional credential profiles. `registryctl` still compiles one for a project that already declares it, but the output is Registry Notary product input and Registry Notary is retired, so an evidence service is not something to author now. The comparable unit for Evidence is a deployment project's bundle: requirements, sources, scripts, authority profiles, and grants, reviewed together as one disclosure surface.</dd>
-
   <dt>ecosystem binding</dt>
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
 
   <dt>eSignet</dt>
-  <dd>Open-source identity and authentication service (part of MOSIP). The Registry Notary integration that used eSignet as an authorization server for subject-bound evaluation is retired with the product. Evidence authenticates callers against one configured OIDC issuer and key set named in its immutable bundle, and names no specific identity product.</dd>
+  <dd>Open-source identity and authentication service (part of MOSIP). No current Registry Stack service integrates with it. Evidence authenticates callers against one configured OIDC issuer and key set named in its immutable bundle, and names no specific identity product.</dd>
 
   <dt>evidence offering</dt>
   <dd>Metadata entry in a Registry Manifest dataset that describes a verification capability and the access path a client uses to reach it (schema versions `registry-manifest-evidence-offering/v1` and `registry-manifest-evidence-offerings/v1`). Registry Manifest compiles and publishes offerings and Registry Relay serves them in its metadata; the offering is a pointer, and Relay does not evaluate the capability behind it.</dd>
-
-  <dt>Notary evidence claim</dt>
-  <dd>Retired Registry Notary term for an atomic, precise, reusable evidence statement evaluated from compiler-pinned Relay outputs, with Notary owning its evidence semantics, authorization, and disclosure policy. Registry Notary is retired, so no service evaluates one. Evidence's comparable unit is the requirement: a predefined, versioned question whose answer leaves as declared concepts in an assertion.</dd>
 
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
@@ -205,7 +184,7 @@ Product names are always in English, including on future translated pages.
   <dd>Open Geospatial Consortium API specification for Environmental Data Retrieval. Registry Relay exposes profiled area queries over configured spatial aggregates behind the `ogcapi-edr` feature flag.</dd>
 
   <dt id="oid4vci">OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. No current Registry Stack service implements it. The profiled registry-backed issuer subset belonged to Registry Notary and is retired with the product, and OID4VCI in any part is a frozen Evidence Version 1 non-goal, so the SD-JWT VC serialization has no offer, pre-authorized code, token or nonce endpoint, or wallet grant.</dd>
+  <dd>OpenID for Verifiable Credential Issuance. No current Registry Stack service implements it, and OID4VCI in any part is a frozen Evidence Version 1 non-goal, so the SD-JWT VC serialization has no offer, pre-authorized code, token or nonce endpoint, or wallet grant.</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
@@ -229,7 +208,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>
 
   <dt>registry stack</dt>
-  <dd>The formal stack products: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, and Evidence, with Registry Mint as supporting token issuance. Registry Notary was a fifth product and is retired. Use lowercase when referring to the concept.</dd>
+  <dd>The formal stack products: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, and Evidence, with Registry Mint as supporting token issuance. Use lowercase when referring to the concept.</dd>
 
   <dt>purpose</dt>
   <dd>The authorized reason a caller gives for one Evidence request. A purpose is a configured code drawn from the requirement's declared `purposes` list and from the caller's grant, never caller-defined prose. It is part of the single authorization decision, is echoed into the assertion, and does not narrow disclosure. A declared purpose is an authorized selection from the granted set, not an identity-provider attestation.</dd>
@@ -258,11 +237,8 @@ Product names are always in English, including on future translated pages.
   <dt>Registry Relay</dt>
   <dd>Config-driven Rust service that owns registry source access, product-neutral HTTP and script adaptation, immutable snapshot lookups, and protected read-only consultation APIs. Repo slug: `registry-relay`.</dd>
 
-  <dt>Registry Notary</dt>
-  <dd>Retired standalone Rust service for claim evaluation from compiler-pinned Relay consultations, disclosure policy, credential issuance from exact Relay-backed evaluation provenance, and audit. It is no longer a formal Registry Stack product and is not a path an adopter can start on. Deployments that already run it keep the repo slug `registry-notary`; new work that needs protected reads uses Registry Relay, and new work that needs a signed answer uses Evidence.</dd>
-
   <dt>Registry Stack project</dt>
-  <dd>The authored root for one registry trust domain, compiled by `registryctl` into separate product configuration inputs. It is not a deployment bundle or an activation coordinator. The compiler still accepts the Registry Notary topology for a project that already declares it, but Registry Notary is retired, so a new project describes a Registry Relay deployment. An Evidence deployment is authored separately, as a deployment project.</dd>
+  <dd>The authored root for one registry trust domain, compiled by `registryctl` into separate product configuration inputs. It is not a deployment bundle or an activation coordinator. A project describes a Registry Relay deployment and declares Relay lanes only. An Evidence deployment is authored separately, as a deployment project.</dd>
 
   <dt>Registry Stack project workspace</dt>
   <dd>The local directory containing one Registry Stack project's authored YAML, scripts, fixtures, and generated review and build outputs.</dd>
@@ -303,9 +279,6 @@ Product names are always in English, including on future translated pages.
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Evidence serializes the same stateless assertion as an SD-JWT VC under the frozen profile in `products/evidence/contracts/sd-jwt-vc-profile.yaml`, when the immutable bundle and the one matched grant both permit that response format. The subject binding stays audience-scoped, so the credential is meaningful only to the relying party named in the assertion's audience. Media type: `application/dc+sd-jwt`.</dd>
 
-  <dt>subject access</dt>
-  <dd>Retired Registry Notary authorization pattern where an authenticated OIDC principal was the protected requester for a configured claim evaluation, directly or on behalf of a configured dependent. Registry Notary is retired, so neither mode has a current runtime. Evidence holds the same underlying rule differently: caller data never creates authority, and possession of an identifier or a demographic tuple authorizes no lookup.</dd>
-
   <dt>signed response credentials</dt>
   <dd>Removed Registry Relay feature that attached a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts `provenance` or entity `publicschema` credential mapping config, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. No current stack service issues W3C VCDM credentials.</dd>
 
@@ -340,13 +313,13 @@ Product names are always in English, including on future translated pages.
   <dd>The institutional boundary whose operators, runtime identities, policy, and deployment approval govern one Registry Stack project. A country can contain several trust domains, and a trust domain does not need to represent a country. One Evidence serving process serves exactly one operator-controlled trust domain.</dd>
 
   <dt>wallet</dt>
-  <dd>Holder-owned application that stores credentials and presents them to verifiers. No current Registry Stack service integrates with one: the Registry Notary issuance path that delivered credentials to a wallet is retired, and wallet onboarding, wallet attestation, and presentation verification are frozen Evidence Version 1 non-goals.</dd>
+  <dd>Holder-owned application that stores credentials and presents them to verifiers. No current Registry Stack service integrates with one, and wallet onboarding, wallet attestation, and presentation verification are frozen Evidence Version 1 non-goals.</dd>
 </dl>
 
 ## Style notes
 
-- Formal product names (Registry Platform, Registry Relay, Registry Manifest, Registry Mint) and the adopter demo name (Solmara Lab) are always title case. The assertion product's name is Evidence, capitalized as a proper noun. Registry Notary keeps its title case where a page records its retirement, but it is no longer a formal product name.
-- Repo slugs and crate names (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-evidence`, `registry-mint`, `solmara-lab`) are always lowercase and monospace. The retired `registry-notary` slug follows the same rule where it appears.
+- Formal product names (Registry Platform, Registry Relay, Registry Manifest, Registry Mint) and the adopter demo name (Solmara Lab) are always title case. The assertion product's name is Evidence, capitalized as a proper noun.
+- Repo slugs and crate names (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-evidence`, `registry-mint`, `solmara-lab`) are always lowercase and monospace. A retired product's slug, such as `registry-notary` where a shipped schema or image name still spells it, follows the same rule.
 - Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields.
 - The glossary provides a reference for standards acronyms but does not replace per-page first-use expansion.
 

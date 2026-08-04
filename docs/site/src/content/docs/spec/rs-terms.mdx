@@ -74,11 +74,9 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **Registry Manifest** (`registry-manifest`): Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a command-line interface (`registry-manifest-cli`).
 
-**Evidence** (`registry-evidence`): Single-crate minimum-disclosure assertion service and its `evidence` binary. Given authenticated authority, an authorized purpose, and a predefined requirement, it returns a signed assertion that answers the requirement rather than the source record. Evidence does not inherit the retired Registry Notary product model and has no credential issuance lifecycle.
+**Evidence** (`registry-evidence`): Single-crate minimum-disclosure assertion service and its `evidence` binary. Given authenticated authority, an authorized purpose, and a predefined requirement, it returns a signed assertion that answers the requirement rather than the source record. Evidence has no credential issuance lifecycle.
 
 **Registry Mint** (`registry-mint`): Supporting service, not a fifth product pattern. It issues short-lived, audience-bound access tokens to registered machine clients so a resource server such as Evidence can require signed tokens without a general-purpose identity provider. The dependency runs one way only: Registry Mint's tests drive Evidence's authenticator, and Evidence does not depend on Registry Mint.
-
-**Registry Notary** (`registry-notary`): Retired standalone Rust service for claim evaluation from compiler-pinned Relay consultations, disclosure policy, credential issuance, and audit. It is no longer a formal Registry Stack product, carries no conformance weight in these specifications, and is not an adoption path. Terms below that name it describe deployments that already run it.
 
 **Solmara Lab** (`solmara-lab`): Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies. Solmara Lab is not a formal Registry Stack product and has no conformance weight in the Registry Stack specifications.
 
@@ -104,21 +102,11 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **signed response credentials**: Removed Registry Relay feature that attached a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts the legacy `provenance` configuration key, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. No current stack service issues W3C VCDM credentials.
 
-**claim evaluation**: Retired Registry Notary process that evaluated configured evidence rules over compiler-pinned Relay outputs and returned a structured claim result. Registry Notary is retired, so no current service performs claim evaluation; Evidence answers a predefined requirement instead. Registry Stack product term, retained for readers of deployments that already run Registry Notary.
+**wallet**: A holder-owned application that stores credentials and presents them to verifiers. No current stack service integrates with one, and wallet onboarding, wallet attestation, and presentation verification are frozen Evidence Version 1 non-goals.
 
-**evidence claim**: Retired Registry Notary term for a verifiable claim, attestation, credential claim, or status assertion evaluated from compiler-pinned Relay outputs. Registry Notary is retired, so no current service evaluates one. Distinct from Evidence (the product), whose comparable unit is the requirement. Registry Stack product term.
+**OID4VCI**: OpenID for Verifiable Credential Issuance. No current stack service implements it, and OID4VCI in any part is a frozen Evidence Version 1 non-goal, so the SD-JWT VC serialization has no credential offer, pre-authorized code, token endpoint, nonce endpoint, or wallet grant.
 
-**disclosure profile**: Retired Registry Notary control over what a caller received from a claim evaluation result: `value` (full value disclosed), `predicate` (only true/false satisfaction), or `redacted` (value fully hidden). Registry Notary is retired, and Evidence has no per-request equivalent: a requirement declares its concepts and forms once and the output gate rejects anything else. Registry Stack product term.
-
-**subject access**: Retired Registry Notary authorization pattern in which an authenticated OIDC principal was the protected requester for a configured claim evaluation, either as the subject (`subject_bound`) or on behalf of a configured dependent (`delegated_subject_access`). Registry Notary is retired, so neither mode has a current runtime. Registry Stack product term.
-
-**delegated subject access**: Retired Registry Notary authorization mode in which a dependent claim could continue only after a compiler-pinned Relay relationship proof evaluated to boolean `true`. Registry Notary is retired, so the mode has no current runtime. Evidence's surviving idea is narrower: one authorization decision MAY include an optional actor alongside the principal, both read from the verified access token, with no relationship proof and no delegated evaluation between services. Registry Stack product term.
-
-**wallet**: A holder-owned application that stores credentials and presents them to verifiers. No current stack service integrates with one: the Registry Notary issuance path that delivered credentials to a wallet is retired, and wallet onboarding, wallet attestation, and presentation verification are frozen Evidence Version 1 non-goals.
-
-**OID4VCI**: OpenID for Verifiable Credential Issuance. No current stack service implements it. The profiled registry-backed issuer subset belonged to Registry Notary and is retired with that product, and OID4VCI in any part is a frozen Evidence Version 1 non-goal, so the SD-JWT VC serialization has no credential offer, pre-authorized code, token endpoint, nonce endpoint, or wallet grant.
-
-**eSignet**: Open-source identity and authentication service (part of MOSIP). The Registry Notary integration that used it for the browser authentication leg of a pre-authorized credential transaction is retired with that product. Evidence authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. Not a Registry Stack product term.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). No current stack service integrates with it. Evidence authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. Not a Registry Stack product term.
 
 ## 3. Metadata and standards terms
 
@@ -146,7 +134,7 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **JWKS**: JSON Web Key Set. Evidence publishes its signing keys at `GET /.well-known/evidence/jwks.json` and Registry Mint publishes its own at a configured path, default `/.well-known/jwks.json`. Both are served without authentication so a verifier can obtain the public key without holding a credential.
 
-**Registry Stack project**: The authored root for one registry trust domain, compiled by `registryctl` into separate product configuration inputs for the selected topology. The compiler still accepts the Registry Notary topology for a project that already declares it, but Registry Notary is retired, so a new project describes a Registry Relay deployment. An Evidence deployment is authored separately as a deployment project. Registry Stack product term.
+**Registry Stack project**: The authored root for one registry trust domain, compiled by `registryctl` into separate product configuration inputs for the selected topology. A project describes a Registry Relay deployment and declares Relay lanes only. An Evidence deployment is authored separately as a deployment project. Registry Stack product term.
 
 **trust domain**: The institutional boundary whose operators, runtime identities, policy, and
 deployment approval govern one Registry Stack project. A geographic jurisdiction can contain
@@ -198,19 +186,7 @@ input. Registry Stack product term.
 topology stages each product's separately verified configuration and admits traffic only after
 both products are ready; this is not atomic project activation. Registry Stack product term.
 
-**claim definition**: Retired Registry Notary configuration artifact that declared a named claim capability: its identity, evidence mode, typed inputs, compiler-pinned Relay consultations, the rule that decided its value, and the disclosure, format, and credential rules that shaped what left the service. Registry Notary is retired, so no current service loads one. Registry Stack product term.
-
-**credential profile**: Retired Registry Notary configuration naming which claims could be issued as a credential. Registry Notary is retired, so no current service holds a credential profile. Evidence's nearest control is narrower: the permitted response formats on the immutable bundle and on the matched grant decide which serializations may carry an assertion, which authorizes a format and never a lifecycle. Registry Stack product term.
-
 **issuer mode**: Removed Registry Relay signed response credentials configuration axis. Registry Relay no longer signs under a gateway DID or a delegated ministry DID, and no current stack service exposes an issuer-mode configuration axis. Registry Stack product term.
-
-**Relay consultation**: Retired Registry Notary term for a compiler-pinned request from Registry Notary to Registry Relay, naming a Relay profile id and contract hash. Registry Notary is retired, so no service issues one under that name; the surviving term is consultation, defined above. Registry Stack product term.
-
-**evidence service**: A Registry Notary-owned service containing service policy, claims, disclosure, optional Registry Relay consultations, and optional credential profiles. `registryctl` still compiles one for a project that already declares it, but the output is Registry Notary product input and Registry Notary is retired, so an evidence service is not a unit to author now. Registry Stack product term.
-
-**claim**: Retired Registry Notary-owned, purpose-specific value or predicate derived from consultation outcome and outputs. Registry Notary is retired, so no service derives one; the comparable current unit is the concept an Evidence requirement declares. Registry Stack product term.
-
-**static-peer federation**: Retired Registry Notary delegated evaluation between peers loaded from configuration at startup, carried over `POST /federation/v1/evaluations`. Registry Notary is retired, so no current service federates evaluation, and delegated or federated evaluation between peers is a frozen Evidence Version 1 non-goal. Registry Stack product term.
 
 **DCAT**: Data Catalog Vocabulary. W3C recommendation. Registry Relay and Registry Manifest emit DCAT-shaped JSON-LD catalogs. Spell out on first use per document.
 
@@ -332,14 +308,14 @@ These terms classify a documentation page so a reader, human or AI agent, can te
 - **metadata**: the portable metadata layer (Registry Manifest and the static discovery bundle).
 - **consultation**: Registry Relay's protected, read-only consultation APIs.
 - **evaluation**: Evidence requirement evaluation and assertion issuance.
-- **credential**: retired. It named Registry Notary credential issuance, direct and over OID4VCI; no current page should declare it.
-- **federation**: retired. It named Registry Notary delegated (static-peer) evaluation; no current page should declare it.
+- **credential**: retired. It named a retired product's credential issuance, direct and over OID4VCI; no current page should declare it.
+- **federation**: retired. It named a retired product's delegated (static-peer) evaluation; no current page should declare it.
 - **administration**: operator administration surfaces, including configuration and the key and reload boundaries.
 - **operations**: runtime operation and recovery, including audit sinks, deployment, and runbooks.
 
 {/* TODO[evidence]: `scripts/check-doc-frontmatter.mjs` still accepts `credential` and `federation`
     in its `validLayer` set. That validator is outside this page's assignment; retiring the two
-    values there is a follow-up once the Notary page cascade lands. */}
+    values there is a follow-up. */}
 
 **audience**: The reader role or roles a page serves. The defined values are `integrator` (a developer integrating against a stack surface), `operator` (an operator configuring or running a deployment), `maintainer` (a contributor to a stack component), `specification editor` (an author of this formal layer), and `tooling` (an AI coding agent or other automated reader that consumes the page as input).
 
