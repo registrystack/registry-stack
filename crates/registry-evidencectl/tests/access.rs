@@ -235,33 +235,29 @@ fn unsafe_or_symlinked_access_directory_publishes_no_access_artifact() {
 }
 
 #[test]
-fn mismatched_private_and_public_client_keys_fail_before_revocation() {
+fn public_clients_without_local_keys_can_be_added_alongside_and_revoked() {
     let fixture = tempfile::tempdir().expect("tempdir");
     let project = fixture.path();
     write_question(project, "adult-status");
     success(&add_policy(project, "age-checks", &["adult-status"]));
-    success(&add_client(project, "first-client", &["age-checks"]));
-    success(&add_client(project, "second-client", &["age-checks"]));
+    success(&add_client(project, "governed-client", &["age-checks"]));
+    fs::remove_dir_all(project.join(".evidence/clients/governed-client"))
+        .expect("remove local-only key as in a fresh clone");
 
-    let first_path = project.join("access/clients/first-client.yaml");
-    let second: Value = serde_norway::from_slice(
-        &fs::read(project.join("access/clients/second-client.yaml")).expect("second client"),
-    )
-    .expect("second client yaml");
-    let mut first: Value = serde_norway::from_slice(&fs::read(&first_path).expect("first client"))
-        .expect("first client yaml");
-    first["keys"] = second["keys"].clone();
-    fs::write(
-        &first_path,
-        serde_norway::to_string(&first).expect("mismatched client yaml"),
-    )
-    .expect("mismatched client");
+    let local = add_client(project, "local-client", &["age-checks"]);
+    assert_eq!(
+        success(&local),
+        "Added client local-client with policy age-checks.\n"
+    );
+    assert!(project
+        .join(".evidence/clients/local-client/private.jwk")
+        .is_file());
 
-    let revoke = evidencectl(project, &["access", "client", "revoke", "first-client"]);
-    assert!(!revoke.status.success());
-    assert!(String::from_utf8_lossy(&revoke.stderr).contains("does not match"));
-    let retained: Value =
-        serde_norway::from_slice(&fs::read(&first_path).expect("retained client"))
-            .expect("retained client yaml");
-    assert_eq!(retained["status"], "active");
+    let revoke = evidencectl(project, &["access", "client", "revoke", "governed-client"]);
+    assert_eq!(success(&revoke), "Revoked client governed-client.\n");
+    let governed: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/governed-client.yaml")).expect("governed client"),
+    )
+    .expect("governed client yaml");
+    assert_eq!(governed["status"], "revoked");
 }

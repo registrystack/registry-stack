@@ -143,7 +143,6 @@ pub(crate) struct ActiveClient {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ActiveClientRegistration {
     pub(crate) client_id: String,
-    pub(crate) private_key_path: PathBuf,
     pub(crate) registration: Value,
 }
 
@@ -224,9 +223,6 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
     let existing_clients = load_client_documents_if_present(&project)?;
     for existing in existing_clients.values() {
         validate_client_policies(&existing.policies, &policies)?;
-        if existing.status == ClientStatus::Active {
-            validate_private_client_key(&project, existing)?;
-        }
     }
     if existing_clients.len() >= MAX_CLIENTS {
         bail!("a project may define at most {MAX_CLIENTS} clients");
@@ -341,7 +337,6 @@ fn revoke_client(args: &ClientRevokeArgs) -> Result<ExitCode> {
     if document.status == ClientStatus::Revoked {
         bail!("client {} is already revoked", args.client);
     }
-    validate_private_client_key(&project, &document)?;
     if let Some(context) = &live {
         validate_path_mode(
             &context
@@ -380,9 +375,12 @@ pub(crate) fn resolve_ready_client(
         .into_iter()
         .find(|registration| registration.client_id == client_id)
         .ok_or_else(|| anyhow::anyhow!("unknown or revoked active client {client_id}"))?;
+    let project = canonical_project(project)?;
+    let document = read_client_document(&client_document_path(&project, client_id))?;
+    let private_key_path = validate_private_client_key(&project, &document)?;
     Ok(ActiveClient {
         client_id: registration.client_id,
-        private_key_path: registration.private_key_path,
+        private_key_path,
     })
 }
 
@@ -412,7 +410,6 @@ pub(crate) fn load_active_clients(
         if document.status == ClientStatus::Revoked {
             continue;
         }
-        let private_key_path = validate_private_client_key(&project, document)?;
         let requester_tags = document
             .policies
             .iter()
@@ -425,7 +422,6 @@ pub(crate) fn load_active_clients(
             .collect::<Result<Vec<_>>>()?;
         registrations.push(ActiveClientRegistration {
             client_id: document.client_id.clone(),
-            private_key_path,
             registration: mint_registration(document, requester_tags),
         });
     }

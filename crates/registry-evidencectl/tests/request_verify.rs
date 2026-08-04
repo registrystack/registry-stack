@@ -309,6 +309,34 @@ fn unusable_named_clients_and_mint_refusal_publish_no_request_artifacts() {
     assert!(!output.status.success());
     assert_no_request_artifacts(&unsafe_key.root, "unsafe-client");
 
+    let missing_key = Fixture::new();
+    missing_key.add_named_client("missing-key-client", "active", 0o600);
+    missing_key.use_explicit_access();
+    fs::remove_dir_all(
+        missing_key
+            .root
+            .join(".evidence/clients/missing-key-client"),
+    )
+    .unwrap();
+    let output = missing_key.prepare_as("missing-key-client", "missing-key-client");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&missing_key.root, "missing-key-client");
+
+    let mismatched_key = Fixture::new();
+    mismatched_key.add_named_client("mismatched-key-client", "active", 0o600);
+    mismatched_key.use_explicit_access();
+    let registration = mismatched_key
+        .root
+        .join("access/clients/mismatched-key-client.yaml");
+    let text = fs::read_to_string(&registration).unwrap().replace(
+        "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    );
+    fs::write(&registration, text).unwrap();
+    let output = mismatched_key.prepare_as("mismatched-key-client", "mismatched-key-client");
+    assert!(!output.status.success());
+    assert_no_request_artifacts(&mismatched_key.root, "mismatched-key-client");
+
     let refused = Fixture::new();
     refused.add_named_client("refused-client", "active", 0o600);
     refused.use_explicit_access();

@@ -349,6 +349,17 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     );
     let client_a_key = fixture.root.join(".evidence/clients/client-a/private.jwk");
     assert_mode(&client_a_key, 0o600);
+    let external_client_a_key = fixture
+        ._temporary
+        .path()
+        .join("external-client-a-private.jwk");
+    fs::copy(&client_a_key, &external_client_a_key).expect("retain external client A key");
+    fs::remove_dir_all(client_a_key.parent().unwrap())
+        .expect("remove local-only client A key as in a fresh clone");
+    assert!(
+        !client_a_key.exists(),
+        "the cloned project has only client A's public registration"
+    );
 
     let pid_directory = fixture.root.join("service-pids");
     fs::create_dir(&pid_directory).expect("PID directory");
@@ -444,10 +455,14 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     assert_eq!(read_pid(&pid_directory.join("mint.pid")), mint_pid);
     assert!(process_is_alive(evidence_pid));
     assert!(process_is_alive(mint_pid));
-    assert!(client_a_key.is_file(), "revocation retains client A's key");
+    assert!(
+        !client_a_key.exists(),
+        "revocation does not require or recreate client A's local key"
+    );
 
-    let direct_refusal =
-        retry_until_mint_refuses(|| direct_mint_token(&mint, mint_port, "client-a", &client_a_key));
+    let direct_refusal = retry_until_mint_refuses(|| {
+        direct_mint_token(&mint, mint_port, "client-a", &external_client_a_key)
+    });
     assert!(direct_refusal.stdout.is_empty());
 
     let refused = evidencectl()
