@@ -55,8 +55,11 @@ pub enum ConfigError {
 }
 
 fn default_jwks_path() -> String {
-    "/.well-known/jwks.json".to_owned()
+    MINT_JWKS_PATH.to_owned()
 }
+
+pub(crate) const MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
+pub(crate) const MINT_TOKEN_PATH: &str = "/token";
 
 fn default_maximum_request_bytes() -> u32 {
     16 * 1024
@@ -207,10 +210,25 @@ pub struct ClientsConfig {
     pub directory: PathBuf,
 }
 
+/// The transport validation boundary selected for this Mint process.
+///
+/// The strict default preserves Mint's HTTPS-only deployment contract.
+/// `SupervisedLocalDevelopment` is an explicit exception for a supervised
+/// process pair on one canonical loopback origin.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ValidationMode {
+    #[default]
+    Strict,
+    SupervisedLocalDevelopment,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MintConfig {
     pub version: u32,
+    #[serde(default)]
+    pub validation_mode: ValidationMode,
     pub issuer: String,
     pub listener: ListenerConfig,
     pub signing: SigningConfig,
@@ -258,7 +276,12 @@ impl MintConfig {
                 "only configuration version 1 is supported",
             ));
         }
-        validate_https_issuer(&self.issuer)?;
+        match self.validation_mode {
+            ValidationMode::Strict => validate_https_issuer(&self.issuer)?,
+            ValidationMode::SupervisedLocalDevelopment => {
+                self.validate_supervised_local_development_transport()?;
+            }
+        }
         self.listener.bind_address()?;
 
         if self.signing.active_key_id.trim().is_empty() || self.signing.active_key_id.len() > 256 {
@@ -287,12 +310,8 @@ impl MintConfig {
         }
         self.access_tokens.claims.validate()?;
 
-        let assertion_audience = Url::parse(&self.client_assertion.audience)
-            .map_err(|_| ConfigError::Invalid("client assertion audience must be a URL"))?;
-        if !assertion_audience.has_host() {
-            return Err(ConfigError::Invalid(
-                "client assertion audience must have a host",
-            ));
+        if self.validation_mode == ValidationMode::Strict {
+            validate_https_endpoint(&self.client_assertion.audience)?;
         }
         if !(30..=600).contains(&self.client_assertion.maximum_lifetime_seconds) {
             return Err(ConfigError::Invalid(
@@ -311,6 +330,48 @@ impl MintConfig {
         }
         Ok(())
     }
+
+    fn validate_supervised_local_development_transport(&self) -> Result<(), ConfigError> {
+        let port = parse_canonical_supervised_local_origin(&self.issuer)?;
+        if self.listener.address != "127.0.0.1" || self.listener.port != port {
+            return Err(ConfigError::Invalid(
+                "supervised local development listener must exactly match its canonical issuer origin",
+            ));
+        }
+        if self.signing.jwks_path != MINT_JWKS_PATH {
+            return Err(ConfigError::Invalid(
+                "supervised local development JWKS path must match the fixed Mint path",
+            ));
+        }
+        if self.client_assertion.audience != format!("{}{MINT_TOKEN_PATH}", self.issuer) {
+            return Err(ConfigError::Invalid(
+                "supervised local development client assertion audience must match the fixed Mint token endpoint",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Parse the only HTTP origin admitted for supervised local development.
+///
+/// Exact reconstruction rejects URL-parser aliases such as a trailing slash,
+/// leading-zero port, alternate IPv4 spelling, credentials, query, or fragment.
+fn parse_canonical_supervised_local_origin(value: &str) -> Result<u16, ConfigError> {
+    let port = value
+        .strip_prefix("http://127.0.0.1:")
+        .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|port| !port.starts_with('0'))
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or(ConfigError::Invalid(
+            "supervised local development issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+        ))?;
+    if value != format!("http://127.0.0.1:{port}") {
+        return Err(ConfigError::Invalid(
+            "supervised local development issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+        ));
+    }
+    Ok(port)
 }
 
 /// Require an issuer that is `https`, has a host, and carries no credentials,
@@ -331,6 +392,32 @@ pub fn validate_https_issuer(issuer: &str) -> Result<(), ConfigError> {
     if url.query().is_some() || url.fragment().is_some() {
         return Err(ConfigError::Invalid(
             "issuer must not carry a query or fragment",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_https_endpoint(endpoint: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(endpoint)
+        .map_err(|_| ConfigError::Invalid("client assertion audience must be an absolute URL"))?;
+    if url.scheme() != "https" {
+        return Err(ConfigError::Invalid(
+            "client assertion audience must use https",
+        ));
+    }
+    if !url.has_host() {
+        return Err(ConfigError::Invalid(
+            "client assertion audience must have a host",
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(ConfigError::Invalid(
+            "client assertion audience must not carry credentials",
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(ConfigError::Invalid(
+            "client assertion audience must not carry a query or fragment",
         ));
     }
     Ok(())
@@ -390,6 +477,7 @@ clients:
         let config = MintConfig::load(&path).expect("valid config loads");
 
         assert_eq!(config.issuer, "https://mint.example.org");
+        assert_eq!(config.validation_mode, ValidationMode::Strict);
         assert_eq!(
             config.signing.active_key_file,
             directory.path().join("secrets/signing.jwk")
@@ -419,6 +507,146 @@ clients:
             assert!(
                 matches!(load_from(&text), Err(ConfigError::Invalid(_))),
                 "issuer {issuer} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn supervised_local_development_accepts_only_the_exact_mint_transport() {
+        let local = VALID
+            .replace(
+                "version: 1",
+                "version: 1\nvalidationMode: supervised-local-development",
+            )
+            .replace(
+                "issuer: https://mint.example.org",
+                "issuer: http://127.0.0.1:8081",
+            )
+            .replace(
+                "audience: https://mint.example.org/token",
+                "audience: http://127.0.0.1:8081/token",
+            );
+        let config = load_from(&local).expect("the supervised local transport is valid");
+        assert_eq!(
+            config.validation_mode,
+            ValidationMode::SupervisedLocalDevelopment
+        );
+
+        for port in [1_u16, u16::MAX] {
+            let boundary = local.replace("8081", &port.to_string());
+            load_from(&boundary).unwrap_or_else(|error| {
+                panic!("canonical boundary port {port} must be accepted: {error}")
+            });
+        }
+
+        for invalid_issuer in [
+            "http://localhost:8081",
+            "http://[::1]:8081",
+            "http://127.0.0.2:8081",
+            "http://127.00.0.1:8081",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:08081",
+            "http://127.0.0.1:65536",
+            "http://user@127.0.0.1:8081",
+            "http://127.0.0.1:8081/",
+            "http://127.0.0.1:8081?tenant=x",
+            "http://127.0.0.1:8081#fragment",
+            "https://127.0.0.1:8081",
+        ] {
+            let invalid = local.replace(
+                "issuer: http://127.0.0.1:8081",
+                &format!("issuer: {invalid_issuer}"),
+            );
+            assert!(
+                load_from(&invalid).is_err(),
+                "accepted supervised local issuer {invalid_issuer}"
+            );
+        }
+
+        for invalid_audience in [
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8081/token/",
+            "http://127.0.0.1:8081/TOKEN",
+            "http://127.0.0.1:8081/oauth/token",
+            "http://127.0.0.1:8081/token?tenant=x",
+            "http://127.0.0.1:8081/token#fragment",
+            "http://127.0.0.1:8082/token",
+        ] {
+            let invalid = local.replace(
+                "audience: http://127.0.0.1:8081/token",
+                &format!("audience: {invalid_audience}"),
+            );
+            assert!(
+                load_from(&invalid).is_err(),
+                "accepted supervised local assertion audience {invalid_audience}"
+            );
+        }
+
+        for replacement in [
+            "listener: {address: 127.0.0.2, port: 8081}",
+            "listener: {address: 127.0.0.1, port: 8082}",
+            "listener: {address: 127.0.0.1, port: 0}",
+        ] {
+            let invalid = local.replace("listener: {address: 127.0.0.1, port: 8081}", replacement);
+            assert!(
+                load_from(&invalid).is_err(),
+                "accepted mismatched listener {replacement}"
+            );
+        }
+
+        let wrong_jwks = local.replace(
+            "activeKeyFile: secrets/signing.jwk",
+            "activeKeyFile: secrets/signing.jwk\n  jwksPath: /.well-known/keys.json",
+        );
+        assert!(
+            load_from(&wrong_jwks).is_err(),
+            "accepted a non-Mint JWKS path"
+        );
+    }
+
+    #[test]
+    fn strict_mode_is_the_https_only_default() {
+        let default = load_from(VALID).expect("the existing strict document remains valid");
+        assert_eq!(default.validation_mode, ValidationMode::Strict);
+
+        let explicit = VALID.replace("version: 1", "version: 1\nvalidationMode: strict");
+        assert_eq!(
+            load_from(&explicit)
+                .expect("the explicit strict mode is valid")
+                .validation_mode,
+            ValidationMode::Strict
+        );
+
+        let local_without_mode = VALID
+            .replace(
+                "issuer: https://mint.example.org",
+                "issuer: http://127.0.0.1:8081",
+            )
+            .replace(
+                "audience: https://mint.example.org/token",
+                "audience: http://127.0.0.1:8081/token",
+            );
+        assert!(
+            load_from(&local_without_mode).is_err(),
+            "strict Mint inherited the local HTTP exception"
+        );
+
+        for invalid_audience in [
+            "http://127.0.0.1:8081/token",
+            "https://user:pass@mint.example.org/token",
+            "https://mint.example.org/token?tenant=x",
+            "https://mint.example.org/token#fragment",
+            "mint.example.org/token",
+            "https://",
+        ] {
+            let invalid = VALID.replace(
+                "audience: https://mint.example.org/token",
+                &format!("audience: {invalid_audience}"),
+            );
+            assert!(
+                load_from(&invalid).is_err(),
+                "strict Mint accepted assertion audience {invalid_audience}"
             );
         }
     }

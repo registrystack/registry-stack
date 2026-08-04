@@ -37,7 +37,7 @@ use tokio::net::TcpListener;
 use crate::{
     assertion::ClientAuthenticator,
     clients::{ClientRegistry, ClientRegistryError},
-    config::MintConfig,
+    config::{MintConfig, MINT_TOKEN_PATH},
     error::TokenError,
     replay::ReplayCache,
     token::{MinterError, TokenMinter},
@@ -48,7 +48,6 @@ const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 const METADATA_PATH: &str = "/.well-known/oauth-authorization-server";
-const TOKEN_PATH: &str = "/token";
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -239,7 +238,7 @@ fn build_metadata(config: &MintConfig) -> Value {
     };
     json!({
         "issuer": config.issuer,
-        "token_endpoint": format!("{issuer}{TOKEN_PATH}"),
+        "token_endpoint": format!("{issuer}{MINT_TOKEN_PATH}"),
         "jwks_uri": format!("{issuer}{}", config.signing.jwks_path),
         "grant_types_supported": [GRANT_TYPE_CLIENT_CREDENTIALS],
         "token_endpoint_auth_methods_supported": ["private_key_jwt"],
@@ -297,7 +296,7 @@ fn parse_token_request(body: &[u8]) -> Result<TokenRequest, TokenError> {
 pub fn build_app(service: Arc<MintService>) -> Router {
     let jwks_path = service.config.signing.jwks_path.clone();
     let routes = Router::new()
-        .route(TOKEN_PATH, post(token))
+        .route(MINT_TOKEN_PATH, post(token))
         .route(&jwks_path, get(jwks))
         .route(METADATA_PATH, get(metadata))
         .route("/health", get(health))

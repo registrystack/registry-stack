@@ -22,6 +22,8 @@ use serde_json::{json, Value};
 
 const ISSUER: &str = "https://mint.example.org";
 const ASSERTION_AUDIENCE: &str = "https://mint.example.org/token";
+const LOCAL_ISSUER: &str = "http://127.0.0.1:18081";
+const LOCAL_ASSERTION_AUDIENCE: &str = "http://127.0.0.1:18081/token";
 const EVIDENCE_AUDIENCE: &str = "evidence.example.org";
 
 /// The claim names shared by the two configuration documents. Evidence reads
@@ -56,6 +58,24 @@ struct Deployment {
 /// Write a complete Mint deployment to disk and load it exactly as the binary
 /// would, including the owner-only permission requirement on the signing key.
 fn deployment() -> Deployment {
+    deployment_with_transport(None, ISSUER, 0, ASSERTION_AUDIENCE)
+}
+
+fn supervised_local_development_deployment() -> Deployment {
+    deployment_with_transport(
+        Some("supervised-local-development"),
+        LOCAL_ISSUER,
+        18081,
+        LOCAL_ASSERTION_AUDIENCE,
+    )
+}
+
+fn deployment_with_transport(
+    validation_mode: Option<&str>,
+    issuer: &str,
+    listener_port: u16,
+    assertion_audience: &str,
+) -> Deployment {
     let directory = tempfile::tempdir().expect("temp dir");
     let root = directory.path();
     fs::create_dir(root.join("secrets")).expect("create secrets directory");
@@ -78,13 +98,16 @@ fn deployment() -> Deployment {
     write_client(root, "statistics-office", &statistics_public, None);
 
     let config_path = root.join("mint.yaml");
+    let validation_mode = validation_mode
+        .map(|mode| format!("validationMode: {mode}\n"))
+        .unwrap_or_default();
     fs::write(
         &config_path,
         format!(
             r#"
 version: 1
-issuer: {ISSUER}
-listener: {{address: 127.0.0.1, port: 0}}
+{validation_mode}issuer: {issuer}
+listener: {{address: 127.0.0.1, port: {listener_port}}}
 signing:
   algorithm: EdDSA
   activeKeyId: key-9
@@ -99,7 +122,7 @@ accessTokens:
     grantId: {GRANT_ID_CLAIM}
     grantAuthority: {GRANT_AUTHORITY_CLAIM}
 clientAssertion:
-  audience: {ASSERTION_AUDIENCE}
+  audience: {assertion_audience}
   algorithms: [EdDSA]
 clients:
   directory: clients
@@ -140,11 +163,15 @@ fn sign_assertion(private: &PrivateJwk, claims: &Value) -> String {
 }
 
 fn assertion_claims(client_id: &str, jti: &str) -> Value {
+    assertion_claims_for_audience(client_id, jti, ASSERTION_AUDIENCE)
+}
+
+fn assertion_claims_for_audience(client_id: &str, jti: &str, audience: &str) -> Value {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     json!({
         "iss": client_id,
         "sub": client_id,
-        "aud": ASSERTION_AUDIENCE,
+        "aud": audience,
         "iat": now,
         "exp": now + 120,
         "jti": jti,
@@ -168,10 +195,14 @@ fn token_form(assertion: &str) -> Vec<(String, String)> {
 /// Build the Evidence authenticator the way `Authenticator::from_config` does,
 /// but over the key set Mint actually published rather than an HTTPS fetch.
 fn evidence_authenticator(jwks: &Value) -> Authenticator {
+    evidence_authenticator_for_issuer(jwks, ISSUER)
+}
+
+fn evidence_authenticator_for_issuer(jwks: &Value, issuer: &str) -> Authenticator {
     let key_set: jsonwebtoken::jwk::JwkSet =
         serde_json::from_value(jwks.clone()).expect("Mint publishes a parsable JWK set");
     let verifier_config = TokenVerifierConfig::access_token_profile(
-        ISSUER.to_owned(),
+        issuer.to_owned(),
         vec![EVIDENCE_AUDIENCE.to_owned()],
         vec![jsonwebtoken::Algorithm::EdDSA],
         vec!["at+jwt".to_owned()],
@@ -232,6 +263,34 @@ async fn a_client_signing_with_its_own_key_receives_a_token_evidence_accepts() {
     assert_eq!(context.grant_id(), Some("grant-7"));
     assert_eq!(context.grant_authority(), Some("statute-12"));
     assert_eq!(context.actor(), None);
+}
+
+#[tokio::test]
+async fn supervised_local_development_tokens_remain_evidence_compatible() {
+    let deployment = supervised_local_development_deployment();
+    let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
+    let published = http.get("/.well-known/jwks.json").await.json::<Value>();
+
+    let (private, _, _) = key_pair(1);
+    let claims = assertion_claims_for_audience(
+        "health-ministry",
+        "jti-supervised-local",
+        LOCAL_ASSERTION_AUDIENCE,
+    );
+    let assertion = sign_assertion(&private, &claims);
+    let response = http.post("/token").form(&token_form(&assertion)).await;
+    response.assert_status_ok();
+    let access_token = response.json::<Value>()["access_token"]
+        .as_str()
+        .expect("the response carries an access token")
+        .to_owned();
+
+    let context = evidence_authenticator_for_issuer(&published, LOCAL_ISSUER)
+        .authenticate(&access_token)
+        .await
+        .expect("Evidence accepts a token from the supervised local Mint mode");
+    assert_eq!(context.principal(), "urn:example:health-ministry");
+    assert_eq!(context.requester_tags(), ["health-ministry"]);
 }
 
 #[tokio::test]
