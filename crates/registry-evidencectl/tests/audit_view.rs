@@ -354,7 +354,7 @@ impl Fixture {
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v4",
+            "schema": "registry.evidencectl.dev-state/v5",
             "status": "stopped",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -363,6 +363,7 @@ impl Fixture {
             "tokenUrl": "http://127.0.0.1:8081/token",
             "accessTokenAudience": "registry-evidence-local",
             "caller": null,
+            "accessPolicies": [],
             "questions": [
                 {
                     "alias": "age-bracket",

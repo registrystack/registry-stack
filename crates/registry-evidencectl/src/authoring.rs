@@ -14,6 +14,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
@@ -32,6 +33,8 @@ const DERIVATIONS_DIRECTORY: &str = "derivations";
 const SCHEMAS_DIRECTORY: &str = "schemas";
 const FIXTURES_DIRECTORY: &str = "fixtures";
 const SECRETS_DIRECTORY: &str = "secrets";
+const ACCESS_DIRECTORY: &str = "access";
+const ACCESS_POLICIES_DIRECTORY: &str = "policies";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const SIGNING_KEY_ID: &str = "local-signing-key-1";
@@ -39,6 +42,7 @@ const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_QUESTION_BYTES: u64 = 64 * 1024;
+const MAX_ACCESS_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
 const MAX_SOURCE_ARTIFACT_BYTES: u64 = 1024 * 1024;
 const MAX_QUESTIONS: usize = 128;
@@ -86,6 +90,14 @@ pub(crate) struct CompiledProject {
     pub(crate) local_audience: String,
     pub(crate) requester_tag: String,
     pub(crate) caller_evidence_audience: String,
+    pub(crate) access_policies: Vec<CompiledAccessPolicy>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CompiledAccessPolicy {
+    pub(crate) id: String,
+    pub(crate) requester_tag: String,
+    pub(crate) questions: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -352,6 +364,22 @@ struct Inputs {
     sources: BTreeMap<String, Value>,
     schemas: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
+    access_policies: Vec<AuthoredAccessPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AccessPolicyDocument {
+    version: u8,
+    id: String,
+    questions: Vec<String>,
+}
+
+#[derive(Clone)]
+struct AuthoredAccessPolicy {
+    id: String,
+    requester_tag: String,
+    questions: Vec<String>,
 }
 
 struct AuthoredQuestion {
@@ -361,6 +389,7 @@ struct AuthoredQuestion {
 
 struct CompilePlan {
     questions: Vec<QuestionPlan>,
+    access_policies: Vec<AuthoredAccessPolicy>,
     bundle: Value,
 }
 
@@ -543,6 +572,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             derivation,
         });
     }
+    let access_policies = read_access_policies(project_root, &question_ids)?;
 
     if require_local_secrets {
         let secrets = project_root.join(SECRETS_DIRECTORY);
@@ -563,6 +593,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         sources,
         schemas,
         questions,
+        access_policies,
     })
 }
 
@@ -658,6 +689,120 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn read_access_policies(
+    project_root: &Path,
+    question_ids: &BTreeSet<String>,
+) -> Result<Vec<AuthoredAccessPolicy>> {
+    let access_root = project_root.join(ACCESS_DIRECTORY);
+    let access_metadata = match fs::symlink_metadata(&access_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspecting access directory {}", access_root.display()))
+        }
+    };
+    if access_metadata.file_type().is_symlink() || !access_metadata.is_dir() {
+        bail!("access must be held in a plain project directory");
+    }
+    let directory = access_root.join(ACCESS_POLICIES_DIRECTORY);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if access_root.join("clients").exists() {
+                bail!("client access configuration requires at least one access policy");
+            }
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("inspecting access policy directory {}", directory.display())
+            })
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("access policies must be held in a plain access/policies directory");
+    }
+    let mut paths = fs::read_dir(&directory)
+        .with_context(|| format!("reading access policy directory {}", directory.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+    if !(1..=MAX_QUESTIONS).contains(&paths.len()) {
+        bail!("explicit access configuration requires 1..={MAX_QUESTIONS} access policies");
+    }
+
+    let mut ids = BTreeSet::new();
+    let mut policies = Vec::with_capacity(paths.len());
+    for path in paths {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            bail!("access-policies may contain only <id>.yaml files");
+        }
+        let bytes = read_regular_file(&path, MAX_ACCESS_POLICY_BYTES, "access policy")?;
+        let policy: AccessPolicyDocument = serde_norway::from_slice(&bytes)
+            .with_context(|| format!("parsing access policy {}", path.display()))?;
+        if policy.version != 1 {
+            bail!("access policy version must be 1");
+        }
+        if !valid_local_identifier(&policy.id) {
+            bail!("access policy id must be a lowercase local identifier");
+        }
+        if path.file_stem().and_then(|value| value.to_str()) != Some(&policy.id) {
+            bail!("access policy id must match its access/policies/<id>.yaml filename");
+        }
+        if !ids.insert(policy.id.clone()) {
+            bail!("access policy ids must be unique");
+        }
+        if !(1..=MAX_QUESTIONS).contains(&policy.questions.len()) {
+            bail!("an access policy must name 1..={MAX_QUESTIONS} questions");
+        }
+        if !policy.questions.windows(2).all(|pair| pair[0] < pair[1]) {
+            bail!("access policy questions must be sorted and unique");
+        }
+        if policy
+            .questions
+            .iter()
+            .any(|question| !question_ids.contains(question))
+        {
+            bail!("access policy names a question that does not exist in this project");
+        }
+        let questions = policy.questions;
+        let requester_tag = access_policy_requester_tag(&policy.id, &questions)?;
+        policies.push(AuthoredAccessPolicy {
+            id: policy.id,
+            requester_tag,
+            questions,
+        });
+    }
+    Ok(policies)
+}
+
+pub(crate) fn access_policy_requester_tag(id: &str, questions: &[String]) -> Result<String> {
+    if !valid_local_identifier(id) || questions.is_empty() || questions.len() > MAX_QUESTIONS {
+        bail!("access policy is outside the closed local profile");
+    }
+    if !questions.windows(2).all(|pair| pair[0] < pair[1])
+        || questions
+            .iter()
+            .any(|question| !valid_local_identifier(question))
+    {
+        bail!("access policy questions must be unique lowercase local identifiers");
+    }
+    let canonical = canonicalize_json(&json!({
+        "version": 1,
+        "id": id,
+        "questions": questions,
+    }))
+    .context("canonicalizing access policy")?;
+    let digest = domain_separated_sha256(b"registry-evidencectl-access-policy-v1\0", &canonical);
+    let mut tag = String::from("policy-v1-");
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut tag, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    Ok(tag)
 }
 
 fn read_named_objects(
@@ -1139,11 +1284,16 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
             authored,
         )?);
     }
+    let access_policies = inputs.access_policies;
     let bundle = match profile {
-        CompileProfile::Local(ports) => render_local_bundle(&questions, ports),
+        CompileProfile::Local(ports) => render_local_bundle(&questions, &access_policies, ports),
         CompileProfile::Production(governance) => render_production_bundle(&questions, governance)?,
     };
-    Ok(CompilePlan { questions, bundle })
+    Ok(CompilePlan {
+        questions,
+        access_policies,
+        bundle,
+    })
 }
 
 fn compile_question_plan(
@@ -2508,7 +2658,11 @@ fn render_governance_parts(
     (grant, requirement_value)
 }
 
-fn render_local_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value {
+fn render_local_bundle(
+    questions: &[QuestionPlan],
+    access_policies: &[AuthoredAccessPolicy],
+    ports: LocalServicePorts,
+) -> Value {
     let mint_origin = ports.mint_origin();
     let selector_profiles = questions
         .iter()
@@ -2524,10 +2678,46 @@ fn render_local_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> 
         .iter()
         .map(|question| (question.source_id.clone(), question.source_value.clone()))
         .collect::<Map<_, _>>();
-    let grants = questions
-        .iter()
-        .map(|question| question.grant.clone())
-        .collect::<Vec<_>>();
+    let authority_profiles = if access_policies.is_empty() {
+        let grants = questions
+            .iter()
+            .map(|question| question.grant.clone())
+            .collect::<Vec<_>>();
+        Map::from_iter([(
+            AUTHORITY_PROFILE_ID.to_owned(),
+            json!({
+                "kind": "explicit-request",
+                "requesterTags": [AUTHORITY_PROFILE_ID],
+                "grants": grants,
+            }),
+        )])
+    } else {
+        access_policies
+            .iter()
+            .map(|policy| {
+                let grants = policy
+                    .questions
+                    .iter()
+                    .map(|question_id| {
+                        questions
+                            .iter()
+                            .find(|question| question.question_id == *question_id)
+                            .expect("access policy questions were validated")
+                            .grant
+                            .clone()
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    policy.requester_tag.clone(),
+                    json!({
+                        "kind": "explicit-request",
+                        "requesterTags": [policy.requester_tag],
+                        "grants": grants,
+                    }),
+                )
+            })
+            .collect::<Map<_, _>>()
+    };
     let requirements = questions
         .iter()
         .map(|question| question.requirement.clone())
@@ -2590,13 +2780,7 @@ fn render_local_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> 
         "responseFormats": response_formats,
         "selectorProfiles": selector_profiles,
         "sources": sources,
-        "authorityProfiles": {
-            AUTHORITY_PROFILE_ID: {
-                "kind": "explicit-request",
-                "requesterTags": [AUTHORITY_PROFILE_ID],
-                "grants": grants,
-            }
-        },
+        "authorityProfiles": authority_profiles,
         "requirements": requirements,
     })
 }
@@ -2708,6 +2892,15 @@ fn write_plan(
         local_audience: LOCAL_AUDIENCE.to_owned(),
         requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
         caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
+        access_policies: plan
+            .access_policies
+            .iter()
+            .map(|policy| CompiledAccessPolicy {
+                id: policy.id.clone(),
+                requester_tag: policy.requester_tag.clone(),
+                questions: policy.questions.clone(),
+            })
+            .collect(),
     })
 }
 
@@ -3352,6 +3545,7 @@ properties:
         );
         assert_eq!(compiled.local_audience, LOCAL_AUDIENCE);
         assert_eq!(compiled.requester_tag, AUTHORITY_PROFILE_ID);
+        assert!(compiled.access_policies.is_empty());
         assert_eq!(
             compiled.caller_evidence_audience,
             LOCAL_CALLER_EVIDENCE_AUDIENCE
@@ -4033,6 +4227,98 @@ factSchema: schemas/source-facts.schema.yaml
     }
 
     #[test]
+    fn explicit_access_policies_replace_the_implicit_caller_profile() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
+        fixture.add_access_policy("age-checks", &["adult-status", "age-bracket"]);
+        fixture.add_access_policy("service-routing", &["age-bracket"]);
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("explicit access policies compile");
+
+        assert_eq!(
+            compiled
+                .access_policies
+                .iter()
+                .map(|policy| (policy.id.as_str(), policy.questions.as_slice()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "age-checks",
+                    ["adult-status".to_owned(), "age-bracket".to_owned()].as_slice()
+                ),
+                ("service-routing", ["age-bracket".to_owned()].as_slice()),
+            ]
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let profiles = bundle["authorityProfiles"]
+            .as_object()
+            .expect("authority profiles");
+        assert_eq!(profiles.len(), 2);
+        assert!(!profiles.contains_key(AUTHORITY_PROFILE_ID));
+        for policy in &compiled.access_policies {
+            let profile = &profiles[&policy.requester_tag];
+            assert_eq!(profile["kind"], "explicit-request");
+            assert_eq!(profile["requesterTags"], json!([policy.requester_tag]));
+            let grants = profile["grants"].as_array().unwrap();
+            assert_eq!(grants.len(), policy.questions.len());
+            for (grant, question) in grants.iter().zip(&policy.questions) {
+                assert_eq!(
+                    grant["requirement"],
+                    local_uri(&format!("requirement:{question}"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_policy_tags_are_stable_and_revision_bound() {
+        let first = access_policy_requester_tag("age-checks", &["adult-status".to_owned()])
+            .expect("first tag");
+        let same = access_policy_requester_tag("age-checks", &["adult-status".to_owned()])
+            .expect("same tag");
+        let changed = access_policy_requester_tag(
+            "age-checks",
+            &["adult-status".to_owned(), "age-bracket".to_owned()],
+        )
+        .expect("changed tag");
+
+        assert_eq!(first, same);
+        assert_ne!(first, changed);
+        assert!(first.starts_with("policy-v1-"));
+        assert_eq!(first.len(), "policy-v1-".len() + 64);
+    }
+
+    #[test]
+    fn explicit_access_policies_reject_unknown_questions_before_writing() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.add_access_policy("unknown-access", &["missing-question"]);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("unknown question must fail");
+
+        assert!(error.to_string().contains("does not exist"));
+        assert!(fixture.staging_is_empty());
+    }
+
+    #[test]
+    fn explicit_access_directory_cannot_escape_through_a_symlink() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let outside = fixture.project.parent().unwrap().join("outside-access");
+        fs::create_dir(&outside).expect("outside access");
+        symlink(&outside, fixture.project.join("access")).expect("access symlink");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("access symlink must fail");
+
+        assert!(error.to_string().contains("plain project directory"));
+        assert!(fixture.staging_is_empty());
+    }
+
+    #[test]
     fn referenced_v1_source_and_selector_are_reused_by_questions() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         for directory in ["sources", "selectors", "adapters", "schemas"] {
@@ -4598,13 +4884,15 @@ factSchema: schemas/family-facts.schema.yaml
 
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
+        fixture.add_access_policy("age-checks", &["adult-status"]);
+        fixture.add_access_policy("service-routing", &["age-bracket"]);
         crate::keygen::generate_scaffold_key_material(
             &fixture.project.join("secrets"),
             SIGNING_KEY_ID,
         )
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts multiple questions");
+            .expect("real Evidence loader accepts explicit access profiles");
 
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
         crate::keygen::generate_scaffold_key_material(
@@ -4741,6 +5029,18 @@ factSchema: schemas/family-facts.schema.yaml
             )
             .expect("question");
             fs::write(self.project.join(&parsed.derivation), derivation).expect("derivation");
+        }
+
+        fn add_access_policy(&self, id: &str, questions: &[&str]) {
+            fs::create_dir_all(self.project.join("access/policies")).expect("policy directory");
+            let policy = json!({"version": 1, "id": id, "questions": questions});
+            fs::write(
+                self.project
+                    .join("access/policies")
+                    .join(format!("{id}.yaml")),
+                serde_norway::to_string(&policy).expect("policy YAML"),
+            )
+            .expect("policy");
         }
 
         fn staging_is_empty(&self) -> bool {

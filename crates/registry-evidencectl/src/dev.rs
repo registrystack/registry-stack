@@ -5,11 +5,12 @@
 //! children and is the only process allowed to stop them.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, Metadata, OpenOptions},
     io::{Read as _, Write as _},
     os::unix::{
         fs::{
-            DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
+            symlink, DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
             PermissionsExt as _,
         },
         net::{UnixListener, UnixStream},
@@ -31,14 +32,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
+    access,
     authoring::{
-        compile_local_project_with_ports, CompiledConceptForm, CompiledProject, CompiledQuestion,
-        LocalServicePorts,
+        access_policy_requester_tag, compile_local_project_with_ports, CompiledAccessPolicy,
+        CompiledConceptForm, CompiledProject, CompiledQuestion, LocalServicePorts,
     },
     keygen,
 };
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v4";
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v5";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
@@ -48,7 +50,7 @@ const MINT_KEY_ID: &str = "local-mint-signing-key-1";
 const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
-const MAX_STATE_BYTES: u64 = 64 * 1024;
+const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
 const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
@@ -155,6 +157,7 @@ struct DevState {
     token_url: String,
     access_token_audience: String,
     caller: Option<CallerState>,
+    access_policies: Vec<AccessPolicyState>,
     questions: Vec<QuestionState>,
     failure: Option<FailureKind>,
 }
@@ -167,6 +170,14 @@ struct CallerState {
     assertion_audience: String,
     evidence_audience: String,
     requester_tag: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccessPolicyState {
+    id: String,
+    requester_tag: String,
+    questions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -208,12 +219,25 @@ pub(crate) struct ReadyDevState {
     pub(crate) mint_origin: String,
     pub(crate) token_url: String,
     pub(crate) access_token_audience: String,
-    pub(crate) caller_id: String,
-    pub(crate) caller_private_key_path: PathBuf,
-    pub(crate) caller_assertion_audience: String,
-    pub(crate) caller_evidence_audience: String,
-    pub(crate) requester_tag: String,
+    pub(crate) caller: Option<ReadyCallerState>,
+    pub(crate) access_policies: Vec<ReadyAccessPolicy>,
     pub(crate) questions: Vec<ReadyQuestionState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadyCallerState {
+    pub(crate) client_id: String,
+    pub(crate) private_key_path: PathBuf,
+    pub(crate) assertion_audience: String,
+    pub(crate) evidence_audience: String,
+    pub(crate) requester_tag: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadyAccessPolicy {
+    pub(crate) id: String,
+    pub(crate) requester_tag: String,
+    pub(crate) questions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -245,7 +269,7 @@ pub(crate) struct StoppedDevState {
     pub(crate) questions: Vec<ReadyQuestionState>,
 }
 
-struct LifecycleLock {
+pub(crate) struct LifecycleLock {
     _file: File,
 }
 
@@ -332,19 +356,15 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
     let dev_root = generated_root.join("dev");
     validate_private_directory(&dev_root)?;
     let state = read_state(&dev_root.join("state.json"))?;
-    let caller = state
-        .caller
-        .as_ref()
-        .ok_or_else(|| anyhow!("the local development session has no active caller"))?;
     if state.status != DevStatus::Ready || state.failure.is_some() {
         bail!("the local development state is not the closed ready session");
     }
     validate_closed_state(&state, &project, &dev_root)?;
-    validate_closed_caller(caller, &dev_root, &state.token_url)?;
     require_owned_regular_file(&state.runtime_path, 0o400)?;
-    require_owned_regular_file(&caller.private_key_path, PRIVATE_FILE_MODE)?;
+    if let Some(caller) = &state.caller {
+        require_owned_regular_file(&caller.private_key_path, PRIVATE_FILE_MODE)?;
+    }
     validate_control_socket(&dev_root.join("control.sock"))?;
-    let caller = state.caller.expect("active caller was validated");
     Ok(ReadyDevState {
         project,
         runtime_path: state.runtime_path,
@@ -352,13 +372,50 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
         mint_origin: state.mint_origin,
         token_url: state.token_url,
         access_token_audience: state.access_token_audience,
-        caller_id: caller.client_id,
-        caller_private_key_path: caller.private_key_path,
-        caller_assertion_audience: caller.assertion_audience,
-        caller_evidence_audience: caller.evidence_audience,
-        requester_tag: caller.requester_tag,
+        caller: state.caller.map(|caller| ReadyCallerState {
+            client_id: caller.client_id,
+            private_key_path: caller.private_key_path,
+            assertion_audience: caller.assertion_audience,
+            evidence_audience: caller.evidence_audience,
+            requester_tag: caller.requester_tag,
+        }),
+        access_policies: state
+            .access_policies
+            .into_iter()
+            .map(|policy| ReadyAccessPolicy {
+                id: policy.id,
+                requester_tag: policy.requester_tag,
+                questions: policy.questions,
+            })
+            .collect(),
         questions: state.questions.into_iter().map(ready_question).collect(),
     })
+}
+
+#[allow(dead_code)] // Consumed by the access-management CLI slice.
+pub(crate) fn try_load_ready_state(project: &Path) -> Result<Option<ReadyDevState>> {
+    let project = canonical_project(project)?;
+    let generated_root = project.join(".evidence");
+    match fs::symlink_metadata(&generated_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(_) => validate_private_directory(&generated_root)?,
+        Err(error) => return Err(error.into()),
+    }
+    let dev_root = generated_root.join("dev");
+    match fs::symlink_metadata(&dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Ok(_) => validate_private_directory(&dev_root)?,
+        Err(error) => return Err(error.into()),
+    }
+    let state = read_state(&dev_root.join("state.json"))?;
+    match state.status {
+        DevStatus::Ready if state.failure.is_none() => load_ready_state(&project).map(Some),
+        DevStatus::Stopped if state.caller.is_none() && state.failure.is_none() => {
+            load_stopped_state(&project)?;
+            Ok(None)
+        }
+        _ => bail!("local development state exists but is neither ready nor cleanly stopped"),
+    }
 }
 
 #[allow(dead_code)] // Crate-private handoff for the immediately following audit slice.
@@ -384,6 +441,50 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
     })
 }
 
+/// Ask the private local supervisor to make Mint reload its complete client
+/// registry. This confirms only that SIGHUP was delivered. The next token
+/// request remains the functional proof that Mint accepted the new registry.
+#[allow(dead_code)] // Consumed by the access-management CLI slice.
+pub(crate) fn request_mint_reload(project: &Path) -> Result<()> {
+    let project = canonical_project(project)?;
+    let generated_root = existing_private_generated_root(&project)?;
+    let dev_root = generated_root.join("dev");
+    validate_private_directory(&dev_root)?;
+    let state = read_state(&dev_root.join("state.json"))?;
+    if state.status != DevStatus::Ready || state.failure.is_some() {
+        bail!("the local development state is not ready for a Mint reload");
+    }
+    validate_closed_state(&state, &project, &dev_root)?;
+    let socket = dev_root.join(CONTROL_SOCKET_NAME);
+    validate_control_socket(&socket)?;
+    send_control_request(&socket, b"reload-mint\n", b"reload-requested\n")
+        .context("the local supervisor did not accept the Mint reload request")
+}
+
+fn send_control_request(socket: &Path, request: &[u8], expected: &[u8]) -> Result<()> {
+    let parent = socket
+        .parent()
+        .ok_or_else(|| anyhow!("local control socket has no parent"))?;
+    let bridge = tempfile::Builder::new()
+        .prefix("ec-")
+        .tempdir()
+        .context("creating a short private control path")?;
+    fs::set_permissions(bridge.path(), fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
+    let link = bridge.path().join("d");
+    symlink(parent, &link).context("creating a short private control path")?;
+    let mut stream = UnixStream::connect(link.join(CONTROL_SOCKET_NAME))
+        .context("the local supervisor is unavailable")?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.write_all(request)?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut response = Vec::new();
+    (&mut stream).take(64).read_to_end(&mut response)?;
+    if response != expected {
+        bail!("the local supervisor returned an unexpected control response");
+    }
+    Ok(())
+}
+
 fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> Result<()> {
     let evidence_port = local_origin_port(&state.evidence_origin);
     let mint_port = local_origin_port(&state.mint_origin);
@@ -400,15 +501,64 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             .len()
             == state.questions.len()
         && questions_match_sealed_bundle(&state.questions, dev_root).unwrap_or(false);
+    let question_aliases = state
+        .questions
+        .iter()
+        .map(|question| question.alias.as_str())
+        .collect::<BTreeSet<_>>();
+    let access_policies_are_closed = state.access_policies.len() <= 128
+        && state
+            .access_policies
+            .windows(2)
+            .all(|pair| pair[0].id < pair[1].id)
+        && state
+            .access_policies
+            .iter()
+            .all(|policy| valid_access_policy_state(policy, &question_aliases))
+        && state
+            .access_policies
+            .iter()
+            .map(|policy| policy.requester_tag.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == state.access_policies.len();
+    let caller_is_closed = match state.status {
+        DevStatus::Starting | DevStatus::Ready => {
+            state.access_policies.is_empty() == state.caller.is_some()
+        }
+        DevStatus::Stopped => state.caller.is_none(),
+        DevStatus::Stopping | DevStatus::Failed => true,
+    } && state
+        .caller
+        .as_ref()
+        .is_none_or(|caller| validate_closed_caller(caller, dev_root, &state.token_url).is_ok());
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
         || !origins_are_closed
         || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
         || !questions_are_closed
+        || !access_policies_are_closed
+        || !caller_is_closed
     {
         bail!("the local development state contains values outside the closed lifecycle profile");
     }
     Ok(())
+}
+
+fn valid_access_policy_state(
+    policy: &AccessPolicyState,
+    question_aliases: &BTreeSet<&str>,
+) -> bool {
+    valid_local_identifier(&policy.id)
+        && !policy.questions.is_empty()
+        && policy.questions.len() <= 128
+        && policy.questions.windows(2).all(|pair| pair[0] < pair[1])
+        && policy
+            .questions
+            .iter()
+            .all(|question| question_aliases.contains(question.as_str()))
+        && access_policy_requester_tag(&policy.id, &policy.questions)
+            .is_ok_and(|tag| tag == policy.requester_tag)
 }
 
 fn valid_question_state(question: &QuestionState) -> bool {
@@ -678,18 +828,46 @@ fn prepare_and_start(
         "mint-private.jwk",
         "mint-public.jwk.json",
     )?;
-    let (caller_private, caller_public) = keygen::generate_dev_keypair(
-        &keys,
-        CALLER_KEY_ID,
-        "caller-private.jwk",
-        "caller-public.jwk.json",
-    )?;
-    let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
-    let (mint_config, caller_registration) =
-        mint_documents(&compiled, &mint_private, caller_public, ports);
+    let mint_config = mint_config(&compiled, &mint_private, ports);
     let mint_config_path = generated.join("mint.yaml");
     write_private_yaml(&mint_config_path, &mint_config)?;
-    write_private_yaml(&clients.join("caller.yaml"), &caller_registration)?;
+    let caller = if compiled.access_policies.is_empty() {
+        let (caller_private, caller_public) = keygen::generate_dev_keypair(
+            &keys,
+            CALLER_KEY_ID,
+            "caller-private.jwk",
+            "caller-public.jwk.json",
+        )?;
+        let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
+        write_private_yaml(
+            &clients.join("caller.yaml"),
+            &local_caller_registration(&compiled, caller_public),
+        )?;
+        Some(CallerState {
+            client_id: CALLER_ID.to_owned(),
+            private_key_path: caller_private,
+            assertion_audience: token_url.clone(),
+            evidence_audience: compiled.caller_evidence_audience.clone(),
+            requester_tag: compiled.requester_tag.clone(),
+        })
+    } else {
+        let policy_tags = compiled
+            .access_policies
+            .iter()
+            .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let registrations = access::load_active_clients(project, &policy_tags)?;
+        if registrations.is_empty() {
+            bail!("explicit access policies require at least one active client");
+        }
+        for registration in registrations {
+            write_private_yaml(
+                &clients.join(format!("{}.yaml", registration.client_id)),
+                &registration.registration,
+            )?;
+        }
+        None
+    };
     run_check(&mint_bin, &["check", "--config"], &mint_config_path, "Mint")?;
 
     let state = DevState {
@@ -701,13 +879,12 @@ fn prepare_and_start(
         mint_origin: mint_origin.clone(),
         token_url: token_url.clone(),
         access_token_audience: compiled.local_audience.clone(),
-        caller: Some(CallerState {
-            client_id: CALLER_ID.to_owned(),
-            private_key_path: caller_private,
-            assertion_audience: token_url,
-            evidence_audience: compiled.caller_evidence_audience.clone(),
-            requester_tag: compiled.requester_tag.clone(),
-        }),
+        caller,
+        access_policies: compiled
+            .access_policies
+            .iter()
+            .map(AccessPolicyState::from)
+            .collect(),
         questions: compiled.questions.iter().map(QuestionState::from).collect(),
         failure: None,
     };
@@ -809,6 +986,19 @@ fn publish_test_supervisor_pid() -> Result<()> {
     Ok(())
 }
 
+fn publish_test_service_pid(name: &str, child: &Child) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Some(directory) = std::env::var_os("EVIDENCECTL_TEST_SERVICE_PID_DIRECTORY") {
+        let directory = PathBuf::from(directory);
+        validate_private_directory(&directory)?;
+        let mut file = create_private_file(&directory.join(format!("{name}.pid")))?;
+        writeln!(file, "{}", child.id())?;
+        file.sync_all()?;
+    }
+    let _ = (name, child);
+    Ok(())
+}
+
 fn publish_supervisor_failure(dev_root: &Path, kind: FailureKind) -> Result<()> {
     let state_path = dev_root.join("state.json");
     let mut state = read_state(&state_path)?;
@@ -866,6 +1056,10 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
             }
         },
     );
+    publish_test_service_pid(
+        "mint",
+        children.mint.as_ref().expect("Mint child was assigned"),
+    )?;
     if wait_for_http(
         &format!("{}/.well-known/jwks.json", state.mint_origin),
         children.mint.as_mut().expect("Mint child was assigned"),
@@ -892,6 +1086,13 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
             }
         },
     );
+    publish_test_service_pid(
+        "evidence",
+        children
+            .evidence
+            .as_ref()
+            .expect("Evidence child was assigned"),
+    )?;
     if wait_for_http(
         &format!("{}/ready", state.evidence_origin),
         children
@@ -978,6 +1179,11 @@ fn supervisor_loop(
                 (&mut stream).take(16).read_to_end(&mut request)?;
                 if request == b"stop\n" {
                     return Ok(SupervisorOutcome::Stop(stream));
+                }
+                if request == b"reload-mint\n" {
+                    signal_child_with(mint, rustix::process::Signal::HUP)?;
+                    stream.write_all(b"reload-requested\n")?;
+                    continue;
                 }
                 let _ = stream.write_all(b"invalid\n");
             }
@@ -1105,10 +1311,14 @@ fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
 }
 
 fn signal_child(child: &Child) -> Result<()> {
+    signal_child_with(child, rustix::process::Signal::TERM)
+}
+
+fn signal_child_with(child: &Child, signal: rustix::process::Signal) -> Result<()> {
     let raw = i32::try_from(child.id()).context("child identifier is not a process id")?;
     let pid =
         rustix::process::Pid::from_raw(raw).ok_or_else(|| anyhow!("invalid child process"))?;
-    rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
+    rustix::process::kill_process(pid, signal)?;
     Ok(())
 }
 
@@ -1154,15 +1364,10 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
     Ok(())
 }
 
-fn mint_documents(
-    compiled: &CompiledProject,
-    mint_private: &Path,
-    caller_public: Value,
-    ports: LocalServicePorts,
-) -> (Value, Value) {
+fn mint_config(compiled: &CompiledProject, mint_private: &Path, ports: LocalServicePorts) -> Value {
     let mint_origin = ports.mint_origin();
     let token_url = format!("{mint_origin}/token");
-    let mint_config = json!({
+    json!({
         "version": 1,
         "validationMode": "supervised-local-development",
         "issuer": mint_origin,
@@ -1197,15 +1402,27 @@ fn mint_documents(
             "replayCacheEntries": 256,
         },
         "clients": {"directory": "clients"},
-    });
-    let caller = json!({
+    })
+}
+
+fn local_caller_registration(compiled: &CompiledProject, caller_public: Value) -> Value {
+    json!({
         "clientId": CALLER_ID,
         "principal": "urn:registrystack:evidence:local:caller",
         "evidenceAudience": compiled.caller_evidence_audience,
         "requesterTags": [compiled.requester_tag],
         "keys": [caller_public],
-    });
-    (mint_config, caller)
+    })
+}
+
+impl From<&CompiledAccessPolicy> for AccessPolicyState {
+    fn from(compiled: &CompiledAccessPolicy) -> Self {
+        Self {
+            id: compiled.id.clone(),
+            requester_tag: compiled.requester_tag.clone(),
+            questions: compiled.questions.clone(),
+        }
+    }
 }
 
 impl From<&CompiledQuestion> for QuestionState {
@@ -1348,6 +1565,13 @@ fn lock_lifecycle(root: &Path) -> Result<LifecycleLock> {
     rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
         .context("another local lifecycle operation is already active")?;
     Ok(LifecycleLock { _file: file })
+}
+
+#[allow(dead_code)] // Consumed by the access-management CLI slice.
+pub(crate) fn lock_project_lifecycle(project: &Path) -> Result<LifecycleLock> {
+    let project = canonical_project(project)?;
+    let generated_root = ensure_private_generated_root(&project)?;
+    lock_lifecycle(&generated_root)
 }
 
 fn create_private_rw_file(path: &Path) -> std::io::Result<File> {
@@ -1570,7 +1794,6 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::symlink;
 
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
@@ -1595,17 +1818,21 @@ mod tests {
             local_audience: "registry-evidence-local".to_owned(),
             requester_tag: "local-caller".to_owned(),
             caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
+            access_policies: Vec::new(),
         }
     }
 
     #[test]
     fn mint_documents_are_closed_and_derive_authority_from_the_compiler() {
         let compiled = compiled(Path::new("/private/runtime.yaml"));
-        let (config, caller) = mint_documents(
+        let config = mint_config(
             &compiled,
             Path::new("/private/mint-private.jwk"),
-            json!({"kty":"OKP","crv":"Ed25519","kid":"caller","alg":"EdDSA","x":"public"}),
             LocalServicePorts::default(),
+        );
+        let caller = local_caller_registration(
+            &compiled,
+            json!({"kty":"OKP","crv":"Ed25519","kid":"caller","alg":"EdDSA","x":"public"}),
         );
         assert_eq!(config["validationMode"], "supervised-local-development");
         assert_eq!(config["issuer"], "http://127.0.0.1:8081");
@@ -1724,6 +1951,7 @@ requirements:
                 evidence_audience: compiled.caller_evidence_audience.clone(),
                 requester_tag: compiled.requester_tag.clone(),
             }),
+            access_policies: Vec::new(),
             questions: compiled.questions.iter().map(QuestionState::from).collect(),
             failure: None,
         };
@@ -1731,6 +1959,8 @@ requirements:
         let ready = load_ready_state(&project).expect("ready handoff");
         assert_eq!(ready.runtime_path, runtime);
         assert_eq!(ready.questions[0].alias, "adult-status");
+        assert!(ready.caller.is_some());
+        assert!(ready.access_policies.is_empty());
         assert!(
             clean_dev(&project).is_err(),
             "active state is never removed"
@@ -1752,6 +1982,29 @@ requirements:
         state = valid_ready;
         replace_state(&dev.join("state.json"), &state).expect("restore ready state");
 
+        let policy_questions = vec!["adult-status".to_owned()];
+        let policy_tag =
+            access_policy_requester_tag("age-checks", &policy_questions).expect("policy tag");
+        state.caller = None;
+        state.access_policies = vec![AccessPolicyState {
+            id: "age-checks".to_owned(),
+            requester_tag: policy_tag.clone(),
+            questions: policy_questions,
+        }];
+        replace_state(&dev.join("state.json"), &state).expect("explicit policy state");
+        let explicit = load_ready_state(&project).expect("explicit ready handoff");
+        assert!(explicit.caller.is_none());
+        assert_eq!(explicit.access_policies[0].requester_tag, policy_tag);
+        assert!(try_load_ready_state(&project)
+            .expect("optional ready handoff")
+            .is_some());
+        let valid_explicit = state.clone();
+        state.access_policies[0].requester_tag = "policy-v1-tampered".to_owned();
+        replace_state(&dev.join("state.json"), &state).expect("tampered policy state");
+        assert!(load_ready_state(&project).is_err());
+        state = valid_explicit;
+        replace_state(&dev.join("state.json"), &state).expect("restore explicit state");
+
         drop(listener);
         remove_control_socket(&socket).expect("remove socket");
         remove_private_tree(&dev.join("generated")).expect("remove generated");
@@ -1759,6 +2012,9 @@ requirements:
         state.caller = None;
         replace_state(&dev.join("state.json"), &state).expect("stopped state");
         let stopped = load_stopped_state(&project).expect("stopped handoff");
+        assert!(try_load_ready_state(&project)
+            .expect("stopped optional handoff")
+            .is_none());
         assert_eq!(stopped.runtime_path, runtime);
         assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
 
@@ -1774,5 +2030,94 @@ requirements:
         let _held = lock_lifecycle(&root).expect("first lock");
         assert!(lock_lifecycle(&root).is_err(), "second operation must fail");
         require_owner_file(&root.join("lifecycle.lock")).expect("private sentinel");
+    }
+
+    #[test]
+    fn supervisor_reload_control_signals_only_mint_and_keeps_serving() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let socket = temporary.path().join("control.sock");
+        let listener = UnixListener::bind(&socket).expect("control listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+
+        let mint_script = temporary.path().join("mint-child");
+        let mint_ready = temporary.path().join("mint-ready");
+        fs::write(
+            &mint_script,
+            "#!/bin/sh\ntrap ':' HUP\nprintf ready > \"$MINT_READY\"\nwhile :; do sleep 1; done\n",
+        )
+        .expect("mint script");
+        fs::set_permissions(&mint_script, fs::Permissions::from_mode(0o700)).expect("script mode");
+        let mut mint = Command::new(&mint_script)
+            .env("MINT_READY", &mint_ready)
+            .spawn()
+            .expect("mint child");
+        let mut evidence = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("evidence child");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !mint_ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(mint_ready.is_file(), "mint child installed its HUP handler");
+
+        let client_socket = socket.clone();
+        let client = thread::spawn(move || {
+            send_control_request(&client_socket, b"reload-mint\n", b"reload-requested\n")
+                .expect("reload response");
+            send_control_request(&client_socket, b"stop\n", b"stopped\n").expect("stop response");
+        });
+        let outcome = supervisor_loop(&listener, &mut evidence, &mut mint, &AtomicBool::new(false))
+            .expect("supervisor loop");
+        match outcome {
+            SupervisorOutcome::Stop(mut stream) => {
+                stream.write_all(b"stopped\n").expect("stop confirmation");
+            }
+            SupervisorOutcome::Failed(kind) => panic!("unexpected supervisor failure: {kind:?}"),
+        }
+        client.join().expect("control client");
+        assert!(evidence.try_wait().expect("evidence status").is_none());
+        assert!(mint.try_wait().expect("mint status").is_none());
+        signal_child(&evidence).expect("stop evidence");
+        signal_child(&mint).expect("stop mint");
+        evidence.wait().expect("wait evidence");
+        mint.wait().expect("wait mint");
+    }
+
+    #[test]
+    fn control_requests_bridge_paths_longer_than_sockaddr_un() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let short = temporary.path().join("short");
+        fs::create_dir(&short).expect("short directory");
+        let socket = short.join(CONTROL_SOCKET_NAME);
+        let listener = UnixListener::bind(&socket).expect("listener");
+
+        let mut long_parent = temporary.path().join("long");
+        fs::create_dir(&long_parent).expect("long root");
+        for _ in 0..6 {
+            long_parent = long_parent.join("component-with-a-deliberately-long-name");
+            fs::create_dir(&long_parent).expect("long component");
+        }
+        let alias = long_parent.join("target");
+        symlink(&short, &alias).expect("short target alias");
+        let long_socket = alias.join(CONTROL_SOCKET_NAME);
+        assert!(long_socket.as_os_str().as_encoded_bytes().len() > 104);
+        assert!(UnixStream::connect(&long_socket).is_err());
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = Vec::new();
+            (&mut stream)
+                .take(16)
+                .read_to_end(&mut request)
+                .expect("request");
+            assert_eq!(request, b"reload-mint\n");
+            stream.write_all(b"reload-requested\n").expect("response");
+        });
+        send_control_request(&long_socket, b"reload-mint\n", b"reload-requested\n")
+            .expect("long control path");
+        server.join().expect("server");
     }
 }

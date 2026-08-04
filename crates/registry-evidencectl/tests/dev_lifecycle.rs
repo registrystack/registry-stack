@@ -135,10 +135,11 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
 
     let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).expect("state"))
         .expect("state JSON");
-    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v4");
+    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v5");
     assert_eq!(state["status"], "ready");
     assert_eq!(state["accessTokenAudience"], "registry-evidence-local");
     assert_eq!(state["caller"]["requesterTag"], "local-caller");
+    assert_eq!(state["accessPolicies"], json!([]));
     assert_eq!(state["questions"][0]["alias"], "adult-status");
     assert_eq!(
         state["questions"][0]["requirementUri"],
@@ -249,6 +250,146 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
     wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
     wait_unavailable(&format!("127.0.0.1:{mint_port}"));
     assert_success(&fixture.dev_clean(), "clean configured ports");
+}
+
+#[test]
+#[ignore = "exact gate: starts real Mint and Evidence services"]
+fn explicit_access_clients_reload_mint_without_restarting_services() {
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    assert_success(
+        &evidencectl()
+            .args([
+                "access",
+                "policy",
+                "add",
+                "age-checks",
+                "--question",
+                "adult-status",
+                "--project",
+            ])
+            .arg(&fixture.root)
+            .output()
+            .expect("add policy"),
+        "add policy",
+    );
+    assert_success(
+        &add_local_client(&fixture.root, "client-a", "age-checks"),
+        "add client A",
+    );
+
+    let pid_directory = fixture.root.join("service-pids");
+    fs::create_dir(&pid_directory).expect("PID directory");
+    fs::set_permissions(&pid_directory, fs::Permissions::from_mode(0o700))
+        .expect("PID directory mode");
+    let (evidence_port, mint_port) = unused_port_pair();
+    let started = fixture
+        .dev_start_command(&evidence, &mint)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--mint-port", &mint_port.to_string()])
+        .env("EVIDENCECTL_TEST_SERVICE_PID_DIRECTORY", &pid_directory)
+        .output()
+        .expect("start explicit access generation");
+    assert_success(&started, "start explicit access generation");
+    let evidence_pid = read_pid(&pid_directory.join("evidence.pid"));
+    let mint_pid = read_pid(&pid_directory.join("mint.pid"));
+    let generated_clients = fixture.root.join(".evidence/dev/generated/clients");
+    assert_eq!(sorted_names(&generated_clients), ["client-a.yaml"]);
+
+    let added = add_local_client(&fixture.root, "client-b", "age-checks");
+    assert_success(&added, "live add client B");
+    assert!(String::from_utf8_lossy(&added.stdout).contains("Registry Mint reload requested."));
+    assert_eq!(
+        sorted_names(&generated_clients),
+        ["client-a.yaml", "client-b.yaml"]
+    );
+    assert_eq!(read_pid(&pid_directory.join("evidence.pid")), evidence_pid);
+    assert_eq!(read_pid(&pid_directory.join("mint.pid")), mint_pid);
+    assert!(process_is_alive(evidence_pid));
+    assert!(process_is_alive(mint_pid));
+
+    let prepared = evidencectl()
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+            "--client",
+            "client-b",
+            "--name",
+            "client-b-live",
+            "--project",
+        ])
+        .arg(&fixture.root)
+        .output()
+        .expect("prepare as client B");
+    assert_success(&prepared, "newly added client B token request");
+
+    let revoked = evidencectl()
+        .args(["access", "client", "revoke", "client-a", "--project"])
+        .arg(&fixture.root)
+        .output()
+        .expect("revoke client A");
+    assert_success(&revoked, "live revoke client A");
+    assert!(String::from_utf8_lossy(&revoked.stdout).contains("Registry Mint reload requested."));
+    assert_eq!(sorted_names(&generated_clients), ["client-b.yaml"]);
+    assert_eq!(read_pid(&pid_directory.join("evidence.pid")), evidence_pid);
+    assert_eq!(read_pid(&pid_directory.join("mint.pid")), mint_pid);
+    assert!(process_is_alive(evidence_pid));
+    assert!(process_is_alive(mint_pid));
+
+    let refused = evidencectl()
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+            "--client",
+            "client-a",
+            "--name",
+            "client-a-revoked",
+            "--project",
+        ])
+        .arg(&fixture.root)
+        .output()
+        .expect("prepare as revoked client A");
+    assert!(
+        !refused.status.success(),
+        "revoked client A must be refused"
+    );
+    assert!(String::from_utf8_lossy(&refused.stderr)
+        .contains("unknown or revoked active client client-a"));
+    assert!(!fixture
+        .root
+        .join(".evidence/requests/client-a-revoked")
+        .exists());
+
+    let last_revoked = evidencectl()
+        .args(["access", "client", "revoke", "client-b", "--project"])
+        .arg(&fixture.root)
+        .output()
+        .expect("revoke last client B");
+    assert_success(&last_revoked, "live revoke last client B");
+    assert!(
+        String::from_utf8_lossy(&last_revoked.stdout).contains("Registry Mint reload requested.")
+    );
+    assert!(sorted_names(&generated_clients).is_empty());
+    wait_mint_without_clients(mint_port);
+    assert!(process_is_alive(evidence_pid));
+    assert!(process_is_alive(mint_pid));
+
+    assert_success(&fixture.dev_stop(), "stop explicit access generation");
+    wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
+    wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+    assert_success(&fixture.dev_clean(), "clean explicit access generation");
 }
 
 #[test]
@@ -614,6 +755,38 @@ fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
 }
 
+fn add_local_client(project: &Path, client: &str, policy: &str) -> Output {
+    evidencectl()
+        .args([
+            "access",
+            "client",
+            "add",
+            client,
+            "--policy",
+            policy,
+            "--generate-local-key",
+            "--project",
+        ])
+        .arg(project)
+        .output()
+        .expect("add local client")
+}
+
+fn read_pid(path: &Path) -> u32 {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .trim()
+        .parse()
+        .expect("numeric PID")
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn required_binary(name: &str) -> PathBuf {
     std::env::var_os(name)
         .map(PathBuf::from)
@@ -700,6 +873,20 @@ fn wait_unavailable(address: &str) {
         thread::sleep(Duration::from_millis(50));
     }
     panic!("{address} remained occupied");
+}
+
+fn wait_mint_without_clients(port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if matches!(
+            ureq::get(&format!("http://127.0.0.1:{port}/ready")).call(),
+            Err(ureq::Error::Status(503, _))
+        ) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("Mint did not publish its empty-registry readiness state");
 }
 
 fn wait_for_failed_state(dev: &Path) {
