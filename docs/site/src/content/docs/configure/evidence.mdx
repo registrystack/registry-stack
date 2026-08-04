@@ -33,16 +33,21 @@ evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
 <dir>/
   .gitignore
   source.openapi.yaml  retained OpenAPI document
+  selectors/           reusable Version 1 selector-profile objects
+  sources/             reusable Version 1 source objects
+  adapters/            source preparation and extraction scripts
+  schemas/             source parameter, response, and fact schemas
   questions/           empty question-authoring directory
   derivations/         empty derivation-authoring directory
   secrets/             optional owner-only, unbound local keys
 ```
 
-The command retains the OpenAPI bytes exactly and creates no question, source policy, runtime file,
-fixture, Mint configuration, README, or deployable bundle. Add `--generate-keys` to create
-disposable local signing and HMAC material, but the command does not bind those keys to a runtime.
-The current toolset does not compile this workspace into the complete deployment layout described
-in the rest of this page.
+The command retains the OpenAPI bytes exactly and creates no question, source policy, fixture,
+Mint configuration, README, or deployable bundle. Add `--generate-keys` to create disposable local
+signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
+editable artifacts from the retained contract. After you add a question, `evidencectl dev`
+compiles the authoring objects into a private local runtime and delegates validation to the real
+Evidence loader.
 
 ## The runtime file
 

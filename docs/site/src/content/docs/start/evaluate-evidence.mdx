@@ -53,11 +53,13 @@ project_root/
   audit/                  audit records written by the service
 ```
 
-The current `evidencectl new <dir> --openapi <file-or-url> --profile local` command does not create
-this layout. It starts an incomplete authoring workspace containing the retained OpenAPI document
-and empty `questions/` and `derivations/` directories. `--generate-keys` can add disposable,
-owner-only local keys, but the command creates no bundle, runtime, fixtures, Mint configuration,
-or runnable deployment (`crates/registry-evidencectl/src/scaffold.rs`).
+`evidencectl new <dir> --openapi <file-or-url> --profile local` starts an editable authoring
+workspace. It retains the OpenAPI document and creates directories for reusable selector and
+source objects, source scripts and schemas, questions, and derivations. `--generate-keys` adds
+disposable owner-only local keys. `evidencectl source suggest --project <dir>` drafts one source
+from the retained contract, and `evidencectl dev` compiles complete authoring objects into the
+private local runtime layout shown here (`crates/registry-evidencectl/src/scaffold.rs`,
+`crates/registry-evidencectl/src/authoring.rs`).
 
 ## Dependencies
 
