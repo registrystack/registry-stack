@@ -30,6 +30,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use zeroize::Zeroizing;
 
 use crate::{
     access,
@@ -48,6 +49,7 @@ const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:c
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
 const MINT_KEY_ID: &str = "local-mint-signing-key-1";
 const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
+const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
@@ -906,8 +908,9 @@ fn prepare_and_start(
     let generated = dev_root.join("generated");
     let keys = generated.join("keys");
     let clients = generated.join("clients");
+    let mint_audit = generated.join("audit");
     let logs = dev_root.join("logs");
-    for directory in [&generated, &keys, &clients, &logs] {
+    for directory in [&generated, &keys, &clients, &mint_audit, &logs] {
         create_private_directory(directory)?;
     }
 
@@ -917,7 +920,9 @@ fn prepare_and_start(
         "mint-private.jwk",
         "mint-public.jwk.json",
     )?;
-    let mint_config = mint_config(&compiled, &mint_private, ports);
+    let mint_audit_key = keys.join(MINT_AUDIT_KEY_FILENAME);
+    generate_mint_audit_key(&mint_audit_key)?;
+    let mint_config = mint_config(&compiled, &mint_private, &mint_audit_key, ports);
     let mint_config_path = generated.join("mint.yaml");
     write_private_yaml(&mint_config_path, &mint_config)?;
     let caller = if compiled.access_policies.is_empty() {
@@ -1453,7 +1458,12 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
     Ok(())
 }
 
-fn mint_config(compiled: &CompiledProject, mint_private: &Path, ports: LocalServicePorts) -> Value {
+fn mint_config(
+    compiled: &CompiledProject,
+    mint_private: &Path,
+    mint_audit_key: &Path,
+    ports: LocalServicePorts,
+) -> Value {
     let mint_origin = ports.mint_origin();
     let token_url = format!("{mint_origin}/token");
     json!({
@@ -1472,6 +1482,11 @@ fn mint_config(compiled: &CompiledProject, mint_private: &Path, ports: LocalServ
             "activeKeyFile": mint_private,
             "retiredPublicJwkFiles": [],
             "jwksPath": "/.well-known/jwks.json",
+        },
+        "audit": {
+            "path": "audit/mint.jsonl",
+            "hashKeyFile": mint_audit_key,
+            "hashKeyVersion": 1,
         },
         "accessTokens": {
             "audiences": [compiled.local_audience],
@@ -1492,6 +1507,17 @@ fn mint_config(compiled: &CompiledProject, mint_private: &Path, ports: LocalServ
         },
         "clients": {"directory": "clients"},
     })
+}
+
+fn generate_mint_audit_key(path: &Path) -> Result<()> {
+    let mut entropy = Zeroizing::new([0_u8; 32]);
+    getrandom::fill(entropy.as_mut_slice())
+        .context("failed to generate local Mint audit key material")?;
+    let key = Zeroizing::new(URL_SAFE_NO_PAD.encode(entropy.as_slice()));
+    let mut file = create_private_file(path)?;
+    file.write_all(key.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 fn local_caller_registration(compiled: &CompiledProject, caller_public: Value) -> Value {
@@ -1917,6 +1943,7 @@ mod tests {
         let config = mint_config(
             &compiled,
             Path::new("/private/mint-private.jwk"),
+            Path::new("/private/mint-audit-hmac-key"),
             LocalServicePorts::default(),
         );
         let caller = local_caller_registration(
@@ -1935,6 +1962,14 @@ mod tests {
         assert_eq!(
             config["accessTokens"]["audiences"],
             json!([compiled.local_audience])
+        );
+        assert_eq!(
+            config["audit"],
+            json!({
+                "path": "audit/mint.jsonl",
+                "hashKeyFile": "/private/mint-audit-hmac-key",
+                "hashKeyVersion": 1,
+            })
         );
         assert_eq!(caller["requesterTags"], json!([compiled.requester_tag]));
         assert_eq!(

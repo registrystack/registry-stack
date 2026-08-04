@@ -154,10 +154,13 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
     let dev = fixture.root.join(".evidence/dev");
     assert_mode(&fixture.root.join(".evidence"), 0o700);
     assert_mode(&dev, 0o700);
+    assert_mode(&dev.join("generated/audit"), 0o700);
     for path in [
         "state.json",
         "generated/mint.yaml",
         "generated/clients/caller.yaml",
+        "generated/audit/mint.jsonl",
+        "generated/keys/mint-audit-hmac-key",
         "generated/keys/mint-private.jwk",
         "generated/keys/mint-public.jwk.json",
         "generated/keys/caller-private.jwk",
@@ -277,6 +280,8 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
             .expect("Mint YAML");
     assert_eq!(runtime["listener"]["port"], evidence_port);
     assert_eq!(mint_config["listener"]["port"], mint_port);
+    assert_eq!(mint_config["audit"]["path"], "audit/mint.jsonl");
+    assert_eq!(mint_config["audit"]["hashKeyVersion"], 1);
     assert_eq!(
         mint_config["clientAssertion"]["audience"],
         format!("http://127.0.0.1:{mint_port}/token")
@@ -361,6 +366,19 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     let evidence_pid = read_pid(&pid_directory.join("evidence.pid"));
     let mint_pid = read_pid(&pid_directory.join("mint.pid"));
     let generated_clients = fixture.root.join(".evidence/dev/generated/clients");
+    assert_mode(&fixture.root.join(".evidence/dev/generated/audit"), 0o700);
+    assert_mode(
+        &fixture
+            .root
+            .join(".evidence/dev/generated/keys/mint-audit-hmac-key"),
+        0o600,
+    );
+    assert_mode(
+        &fixture
+            .root
+            .join(".evidence/dev/generated/audit/mint.jsonl"),
+        0o600,
+    );
     assert_eq!(sorted_names(&generated_clients), ["client-a.yaml"]);
 
     let added = add_local_client(&fixture.root, "client-b", "age-checks");
