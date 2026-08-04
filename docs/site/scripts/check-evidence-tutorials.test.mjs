@@ -23,16 +23,21 @@ async function runGate(env = {}, args = ['--dry-run']) {
   }
 }
 
-test('the dry-run gate reports that no current Evidence tutorial is registered', async () => {
+test('the dry-run gate registers the current first Evidence tutorial', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /Checked 0 tutorials\./u);
+  assert.match(output, /first-evidence-assertion: 12 sh fences, 11 executed/u);
+  assert.match(output, /Checked 1 tutorial\./u);
 });
 
-test('the full gate skips toolset setup when no current tutorial is registered', async () => {
-  const { code, output } = await runGate({}, []);
+test('--only accepts the current first Evidence tutorial', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'first-evidence-assertion',
+  ]);
   assert.equal(code, 0, output);
-  assert.match(output, /Checked 0 tutorials\./u);
+  assert.match(output, /Checked 1 tutorial\./u);
 });
 
 test('--only refuses a slug that is not registered', async () => {
@@ -60,7 +65,10 @@ test('the gate depends on no interpreter beyond the replay userland', async () =
   const offenders = source
     .split('\n')
     .map((line, index) => [index + 1, line])
-    .filter(([, line]) => /\b(?:node|npm|npx|python3?|ruby|perl)\b/u.test(line));
+    .filter(([, line]) => /\b(?:node|npm|npx|python3?|ruby|perl)\b/u.test(line))
+    // A save step names the Markdown fence language as data. It extracts that
+    // fence with the shell helper and does not execute the named interpreter.
+    .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line));
   assert.deepEqual(offenders, [], 'the gate must not reach for an interpreter');
 });
 

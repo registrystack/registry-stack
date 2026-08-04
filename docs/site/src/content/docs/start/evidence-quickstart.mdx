@@ -1,11 +1,11 @@
 ---
 title: Evidence quickstart
-description: What Evidence answers, what the current authoring tool creates, and where to go next.
+description: What Evidence answers, how to verify a first local assertion, and where to go next.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-04"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -16,19 +16,17 @@ without releasing the record the answer came from. A relying service asks
 whether a person meets a condition and receives a signed assertion carrying
 the answer, not the row that settled it.
 
-The current `evidencectl new` command starts an incomplete authoring workspace
-from an OpenAPI document. It does not create a runnable deployment. This page
-maps the current authoring, operation, and verification material without
-presenting that workspace as a completed first-assertion workflow.
+The quickest way to see that boundary is the
+[first Evidence assertion tutorial](../../tutorials/first-evidence-assertion/). It starts with an
+OpenAPI description, adds one question and derivation, sends a real HTTP request, and verifies the
+signed response before showing its answer.
 
 ## Four questions, none of them privileged
 
 Adult status, residence region, professional licence status, and legal-parent
 relationship are coequal acceptance definitions. None is a built-in type, a
 special route, or a first phase that the others follow. Whichever one your
-institution needs, you author it the same way. The tutorials switch between
-them deliberately: the source tutorial answers a legal-parent relationship,
-and the authoring tutorial covers all four.
+institution needs, you author it the same way.
 
 An acceptance definition is a reviewed artifact, not code you ship. Evidence
 compiles the definition at startup from an immutable bundle, and refuses to
@@ -36,6 +34,9 @@ start if the definition does not compile.
 
 ## The current path
 
+- [Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
+  goes from OpenAPI to an authored adult-status question, a real `curl`, strict
+  verification, and a minimized audit view using synthetic local data.
 - [Evaluate Evidence](../evaluate-evidence/) explains the complete deployment
   layout and its runtime dependencies.
 - [Configure Evidence](../../configure/evidence/) documents the governed
@@ -44,11 +45,8 @@ start if the definition does not compile.
 - [Move to production signing](../../tutorials/move-evidence-to-production-signing/)
   applies after an operator already has a complete deployment project.
 
-The in-repository docs do not connect the incomplete `evidencectl new`
-workspace to a runnable first assertion. The scaffold-dependent authoring,
-source, serving, and stored-response verification tutorials remain unpublished
-because their commands or embedded artifacts do not match the supported
-product flow.
+The first tutorial is intentionally local. It demonstrates the complete assertion boundary without
+presenting its disposable keys, loopback source, or Registry Mint setup as a production deployment.
 
 ## If you are deciding rather than building
 
@@ -62,6 +60,8 @@ product flow.
 
 ## Next
 
+- [Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
+  is the runnable local starting point.
 - [Configure Evidence](../../configure/evidence/) is the configuration
   reference for a complete deployment project.
 - [Registry Mint reference](../../reference/mint/) covers the short-lived

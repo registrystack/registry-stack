@@ -47,7 +47,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # Registered tutorials
 # ---------------------------------------------------------------------------
 
-EVIDENCE_TUTORIALS=()
+EVIDENCE_TUTORIALS=(first-evidence-assertion)
 
 load_spec() {
 	SPEC_FENCES=0
@@ -56,6 +56,36 @@ load_spec() {
 	SPEC_OUTPUTS=()
 
 	case "$1" in
+	first-evidence-assertion)
+		SPEC_FENCES=12
+		SPEC_STEPS=(
+			"run:2"
+			"save:Start a small registry|python|1|registry.py"
+			"background:3"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:4-5"
+			"save:Create the Evidence project|yaml|1|questions/adult-status.yaml"
+			"save:Create the Evidence project|rhai|1|derivations/adult-status.rhai"
+			"run:6-12"
+		)
+		SPEC_LITERALS=(
+			"releases/latest/download/evidencectl-install.sh | bash"
+			"evidencectl new adult-status"
+			"evidencectl request prepare adult-status"
+			"--config .evidence/requests/first-assertion/authorization.curl"
+			"evidencectl verify assertion.jws.json"
+			"evidencectl audit show --last-operation"
+		)
+		SPEC_OUTPUTS=(
+			"Created an incomplete OpenAPI authoring project in adult-status"
+			"Evidence ready at http://127.0.0.1:8080"
+			"Prepared request: .evidence/requests/first-assertion/request.json"
+			"VERIFIED"
+			"Local Evidence stopped"
+			"ACCESS AUTHORIZED adult-status age-check requester="
+			"DISCLOSURE RELEASED is_adult"
+		)
+		;;
 	*)
 		printf '%s is not a registered Evidence tutorial\n' "$1" >&2
 		exit 2
@@ -216,6 +246,52 @@ emit_edit_step() {
 	printf 'bash "$FENCE" replace-block %q %q %q\n' "${parts[6]}" "$before" "$after"
 }
 
+# Save a documented non-shell fence as the file the reader is instructed to
+# create. The maintained Markdown remains the single source of those bytes.
+emit_save_step() {
+	local slug="$1" spec="$2"
+	local IFS='|'
+	# shellcheck disable=SC2206  # deliberate split on the field separator
+	local parts=($spec)
+	if ((${#parts[@]} != 4)); then
+		printf 'tutorial spec error in %s: save step needs 4 fields, got %d: %s\n' \
+			"$slug" "${#parts[@]}" "$spec" >&2
+		exit 2
+	fi
+	printf '\nprintf "==> %s save %s\\n"\n' "$slug" "${parts[3]}"
+	# shellcheck disable=SC2016  # FENCE and TUTORIAL expand in the emitted script
+	printf 'bash "$FENCE" write-fence "$TUTORIAL" %q %q %q %q\n' \
+		"${parts[0]}" "${parts[1]}" "${parts[2]}" "${parts[3]}"
+}
+
+# A tutorial may ask the reader to leave one foreground command running in a
+# second terminal. CI runs that exact one-line command in the background and
+# retains its PID for cleanup.
+emit_background_step() {
+	local slug="$1" number="$2" fence_dir="$3"
+	local fence
+	fence="$(printf '%s/fence-%02d.sh' "$fence_dir" "$number")"
+	if [[ ! -f "$fence" ]] || [[ "$(wc -l <"$fence")" -ne 1 ]]; then
+		printf 'tutorial spec error in %s: background step needs one sh line at fence %s\n' \
+			"$slug" "$number" >&2
+		exit 2
+	fi
+	local command
+	IFS= read -r command <"$fence"
+	printf '\nprintf "==> %s fence %02d (background)\\n"\n' "$slug" "$number"
+	printf '%s &\n' "$command"
+	printf 'BACKGROUND_PIDS+=("$!")\n'
+}
+
+emit_wait_http_step() {
+	local url="$1"
+	printf '\nfor attempt in {1..50}; do\n'
+	printf '  if curl -fs %q >/dev/null 2>&1; then break; fi\n' "$url"
+	printf '  if [[ "$attempt" -eq 50 ]]; then printf "tutorial service did not become ready\\n" >&2; exit 1; fi\n'
+	printf '  sleep 0.1\n'
+	printf 'done\n'
+}
+
 emit_journey() {
 	local slug="$1" fence_dir="$2" tutorial_file="$3"
 	local edit_dir="$WORK_ROOT/edits/$slug"
@@ -223,11 +299,23 @@ emit_journey() {
 	EDIT_INDEX=0
 	printf 'set -euo pipefail\n'
 	printf 'FENCE=%q\n' "$FENCE"
+	printf 'TUTORIAL=%q\n' "$tutorial_file"
+	printf 'BACKGROUND_PIDS=()\n'
+	printf 'cleanup_journey() {\n'
+	printf '  if [[ -S .evidence/dev/control.sock ]]; then evidencectl dev stop >/dev/null 2>&1 || true; fi\n'
+	printf '  local pid\n'
+	printf '  for pid in "${BACKGROUND_PIDS[@]}"; do kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; done\n'
+	printf '}\n'
+	printf 'trap cleanup_journey EXIT\n'
+	printf 'trap "exit 130" HUP INT TERM\n'
 	local step
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
+		save:*) emit_save_step "$slug" "${step#save:}" ;;
+		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
+		wait-http:*) emit_wait_http_step "${step#wait-http:}" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2
 			exit 2
@@ -247,6 +335,7 @@ executed_fence_count() {
 			last="${range##*-}"
 			total=$((total + last - first + 1))
 			;;
+		background:*) total=$((total + 1)) ;;
 		esac
 	done
 	printf '%d' "$total"
