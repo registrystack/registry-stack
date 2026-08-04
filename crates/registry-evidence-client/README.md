@@ -21,6 +21,12 @@ judgement about a response is made by `registry-evidence-verifier`.
   out-of-band pinning workflow only.
 - `TokenProvider` and `StaticToken` for the bearer credential the deployment's
   resource-server authentication expects.
+- `EvidenceClient::verify_as_of`: the same verification at an instant the caller
+  names, for re-verifying a response it retained.
+
+Preparing and verifying are synchronous. The HTTP methods are `reqwest` calls, so
+awaiting them requires a tokio-compatible reactor even though nothing in this
+crate names a runtime.
 
 ## Typical Use
 
@@ -79,6 +85,10 @@ async fn accept(
   failure carries the deployment's operation identifier for support correlation.
 - Every response is read under a caller-configured byte bound before it is
   parsed.
+- Redirects are not followed, and the proxy environment variables are ignored. A
+  redirect or an ambient proxy variable would otherwise present the credential to
+  a host the integrator never configured, and a proxy would terminate the TLS
+  session the pinned certificate authorities were meant to authenticate.
 
 ## Testing
 

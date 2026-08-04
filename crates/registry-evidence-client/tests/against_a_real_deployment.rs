@@ -91,23 +91,19 @@ async fn first_use_acceptance_then_pinning_completes_two_verified_exchanges() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let first = client
-            .prepare(spec(
-                &definitions,
-                "first-use",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let first = client.prepare(spec(
+            &definitions,
+            "first-use",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         let accepted = client.request_and_verify(&first).await?;
 
         let pinned = accepted.pinned_subject_expectations();
-        let second = client
-            .prepare(spec(
-                &definitions,
-                "first-use",
-                SubjectExpectations::Pinned(pinned.clone()),
-            ))
-            .unwrap();
+        let second = client.prepare(spec(
+            &definitions,
+            "first-use",
+            SubjectExpectations::Pinned(pinned.clone()),
+        ))?;
         let repinned = client.request_and_verify(&second).await?;
         Ok((
             accepted,
@@ -171,24 +167,20 @@ async fn a_pinned_binding_refuses_an_assertion_about_another_subject() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let known = client
-            .prepare(spec(
-                &definitions,
-                "known-subject",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
-        let known = client.request_and_verify(&known).await?;
+        let request = client.prepare(spec(
+            &definitions,
+            "known-subject",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        let known = client.request_and_verify(&request).await?;
 
         // The same request shape, a different subject, and the first subject's
         // binding pinned.
-        let other = client
-            .prepare(spec(
-                &definitions,
-                "other-subject",
-                SubjectExpectations::Pinned(known.pinned_subject_expectations()),
-            ))
-            .unwrap();
+        let other = client.prepare(spec(
+            &definitions,
+            "other-subject",
+            SubjectExpectations::Pinned(known.pinned_subject_expectations()),
+        ))?;
         Ok((
             known.pinned_subject_expectations(),
             client.request_and_verify(&other).await,
@@ -309,13 +301,11 @@ async fn a_credential_without_the_configured_tag_is_refused() {
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = entitled.discover().await?;
         let visible = unentitled.discover().await?;
-        let prepared = unentitled
-            .prepare(spec(
-                &definitions,
-                "unentitled",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let prepared = unentitled.prepare(spec(
+            &definitions,
+            "unentitled",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         Ok((visible, unentitled.request_and_verify(&prepared).await))
     }
     .await;
@@ -343,13 +333,11 @@ async fn a_request_the_deployment_cannot_answer_reports_no_evidence() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let prepared = client
-            .prepare(spec(
-                &definitions,
-                "unresolved",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let prepared = client.prepare(spec(
+            &definitions,
+            "unresolved",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         Ok(client.request_and_verify(&prepared).await)
     }
     .await;
@@ -373,20 +361,16 @@ async fn a_response_cannot_verify_against_another_prepared_request() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let sent = client
-            .prepare(spec(
-                &definitions,
-                "nonce-check",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
-        let other = client
-            .prepare(spec(
-                &definitions,
-                "nonce-check",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let sent = client.prepare(spec(
+            &definitions,
+            "nonce-check",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        let other = client.prepare(spec(
+            &definitions,
+            "nonce-check",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         let response = client.send(&sent).await?;
         Ok((
             client.verify(&sent, &response),
@@ -414,13 +398,11 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let prepared = client
-            .prepare(spec(
-                &definitions,
-                "media-type",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let prepared = client.prepare(spec(
+            &definitions,
+            "media-type",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         let response = client.send(&prepared).await?;
         client.verify(&prepared, &response)?;
 
@@ -437,22 +419,16 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
             Url::parse(&replay.uri())?,
             Arc::new(StaticToken::new(deployment.token())?),
             deployment.runtime.jwks().clone(),
-        ))
-        .unwrap();
+        ))?;
         // A prepared request is good for one send, and the one above is spent,
         // so the replay leg carries its own. The media type is refused before
         // anything about the request is compared to anything in the response.
-        let replayed_request = replayed
-            .prepare(spec(
-                &definitions,
-                "media-type",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
-        // Held so the stub outlives the exchange it answers.
-        let refusal = replayed.send(&replayed_request).await;
-        drop(replay);
-        Ok(refusal)
+        let replayed_request = replayed.prepare(spec(
+            &definitions,
+            "media-type",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        Ok(replayed.send(&replayed_request).await)
     }
     .await;
     let refusal = proof.expect("the deployment answers and the stub replays");
@@ -476,13 +452,11 @@ async fn a_response_beyond_the_configured_bound_is_refused() {
 
     let proof: Result<_, Box<dyn Error>> = async {
         let definitions = client.discover().await?;
-        let prepared = bounded
-            .prepare(spec(
-                &definitions,
-                "bounded",
-                SubjectExpectations::AcceptFirstUse,
-            ))
-            .unwrap();
+        let prepared = bounded.prepare(spec(
+            &definitions,
+            "bounded",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
         Ok(bounded.send(&prepared).await)
     }
     .await;
