@@ -1,8 +1,8 @@
 ---
-title: Verify a registered parent with OpenCRVS
+title: Issue registered-parent evidence from OpenCRVS
 description: >-
-  Connect Evidence to the public OpenCRVS demo and verify a registered-parent relationship
-  without disclosing civil-registration identifiers.
+  Connect Evidence to the public OpenCRVS demo, verify a registered-parent relationship, and
+  return governed parent identifiers when the use case requires them.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,12 +17,12 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Connect Evidence to the public OpenCRVS Farajaland demo and answer, "Is this candidate registered
-as a parent of this child?" The request identifies both people, but the signed assertion contains
-only a boolean answer and two pseudonymous subject bindings.
+Connect Evidence to the public OpenCRVS Farajaland demo and answer two questions from the same
+registered birth. First verify, "Is this candidate registered as a parent of this child?" Then
+return the recorded mother and father national IDs for a caller authorized to receive them.
 
 <QuickstartMeta
-  outcome="A verified registered-parent assertion derived from a synthetic OpenCRVS birth."
+  outcome="Verified relationship and parent-identifier assertions from a synthetic OpenCRVS birth."
   time="About 30 minutes"
   level="Institution integration with synthetic data"
   prerequisites={[
@@ -36,7 +36,7 @@ only a boolean answer and two pseudonymous subject bindings.
 This tutorial uses synthetic data from a public demonstration system. Do not substitute a real
 person. The demo maintainers can reset its data, accounts, and integrations.
 
-## Understand the relationship
+## Understand the two disclosure paths
 
 The tutorial uses this provider-published synthetic registration:
 
@@ -51,14 +51,15 @@ The registered birth contains an authenticated national ID for Josh's mother. It
 father's details are unavailable. You will copy the mother's national ID from the web application
 and use it as the candidate-parent selector.
 
-The Evidence question has two distinct subject roles:
+The relationship question has two distinct subject roles:
 
 - `child`, selected by the child's national ID
 - `candidate-parent`, selected by the candidate's national ID
 
-The source searches for one registered birth by `child.nid`, reads the bounded `mother.nid` and
-`father.nid` fields when present, and compares them with the candidate. It does not return either
-national ID to the requester.
+The source searches for one registered birth by `child.nid` and reads the bounded `mother.nid` and
+`father.nid` fields when present. One question compares those values with a candidate and returns
+only a boolean. A second question returns the parent identifiers in a closed, role-labeled value.
+The two questions use separate purposes and disclosure rules.
 
 ## Inspect the synthetic registration
 
@@ -376,7 +377,7 @@ fn extract(source_response, parameters) {
         throw("source_protocol_error");
     }
 
-    let parent_ids = [];
+    let parent_ids = #{};
     let mother_field = parameters["motherNationalIdField"];
     if declaration.contains(mother_field) {
         let verification = parameters["motherVerificationField"];
@@ -384,7 +385,7 @@ fn extract(source_response, parameters) {
            declaration[verification] != parameters["authenticatedValue"] {
             throw("source_protocol_error");
         }
-        parent_ids.push(declaration[mother_field]);
+        parent_ids["mother_national_id"] = declaration[mother_field];
     }
 
     let father_field = parameters["fatherNationalIdField"];
@@ -394,7 +395,12 @@ fn extract(source_response, parameters) {
            declaration[verification] != parameters["authenticatedValue"] {
             throw("source_protocol_error");
         }
-        parent_ids.push(declaration[father_field]);
+        let father_id = declaration[father_field];
+        if parent_ids.contains("mother_national_id") &&
+           parent_ids["mother_national_id"] == father_id {
+            throw("source_protocol_error");
+        }
+        parent_ids["father_national_id"] = father_id;
     }
 
     if parent_ids.len == 0 || parent_ids.len > 2 {
@@ -428,18 +434,22 @@ properties:
     minLength: 1
     maxLength: 128
   registered_parent_national_ids:
-    type: array
-    minItems: 1
-    maxItems: 2
-    uniqueItems: true
-    items:
-      type: string
-      minLength: 1
-      maxLength: 128
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      mother_national_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+      father_national_id:
+        type: string
+        minLength: 1
+        maxLength: 128
 ```
 
-These facts are the complete input to the relationship logic. Names, dates, addresses, and other
-birth fields cannot reach the derivation.
+These facts are the complete input to both questions. Names, dates, addresses, and other birth
+fields cannot reach either derivation.
 
 ## Author the relationship question
 
@@ -482,16 +492,92 @@ fn answer(facts, selectors, context) {
     }
 
     let candidate = selectors["candidate-parent"]["values"]["national_id"];
-    let confirmed = false;
-    for parent_id in facts.registered_parent_national_ids {
-        if parent_id == candidate { confirmed = true; }
-    }
+    let parents = facts.registered_parent_national_ids;
+    let confirmed =
+        (parents.contains("mother_national_id") &&
+         parents["mother_national_id"] == candidate) ||
+        (parents.contains("father_national_id") &&
+         parents["father_national_id"] == candidate);
     #{relationship_confirmed: confirmed}
 }
 ```
 
-The first check binds the returned birth to the requested child. The loop compares the candidate
-with at most two authenticated parent identifiers, then returns only the declared boolean.
+The first check binds the returned birth to the requested child. The comparison checks the
+candidate against at most two authenticated parent identifiers, then returns only the declared
+boolean.
+
+## Author the parent-identifier question
+
+Create `schemas/registered-parent-national-ids.schema.yaml`:
+
+```yaml
+$id: urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1
+type: object
+additionalProperties: false
+minProperties: 1
+properties:
+  mother_national_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  father_national_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+```
+
+This closed schema preserves each parent's role and rejects extra fields. Either identifier may
+be absent from a registration, but Evidence will not issue the assertion unless the source
+establishes at least one authenticated parent identifier.
+
+Create `questions/registered-parent-identifiers.yaml`:
+
+```yaml
+id: registered-parent-identifiers
+question: Which national IDs are recorded for the child's parents?
+purpose: family-case-record
+subject:
+  role: child
+  selector: national_id
+  profile: opencrvs-national-id-v1
+  derivation: true
+source:
+  ref: opencrvs-birth-parents
+answers:
+  - concept: registered_parent_national_ids
+    type: reviewed-structured-value
+    schema: schemas/registered-parent-national-ids.schema.yaml
+    maximumSerializedBytes: 512
+derivation: derivations/registered-parent-identifiers.rhai
+disclosure:
+  allow: [registered_parent_national_ids]
+```
+
+This question has no candidate-parent subject. The caller asks for the registered identifiers and
+must be authorized for the separate `family-case-record` purpose. In production, grant this
+question only to relying parties with a justified need for the identifiers. The boolean question
+remains available to callers that need only a relationship decision.
+
+Create `derivations/registered-parent-identifiers.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    if facts.child_national_id != selectors.child.values.national_id {
+        throw("derivation_input_error");
+    }
+
+    #{
+        registered_parent_national_ids: #{
+            form: "reviewed-structured-value",
+            schema: "urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1",
+            fields: facts.registered_parent_national_ids
+        }
+    }
+}
+```
+
+Evidence validates the returned object against the reviewed schema before signing it. The
+derivation cannot add names, dates, addresses, or any other birth-registration field.
 
 ## Start the project
 
@@ -587,6 +673,73 @@ The assertion contains pseudonymous `child` and `candidate-parent` bindings. It 
 either national ID, the tracking ID, registration number, names, birth date, parent list, or exact
 source response. The civil-registration record stayed behind the source boundary.
 
+## Return the registered parent identifiers
+
+Prepare the second question. This request needs only the child because the answer returns the
+recorded parent identifiers instead of comparing one with a candidate:
+
+```sh
+evidencectl request prepare registered-parent-identifiers \
+  --purpose family-case-record \
+  --subject child:national_id=3617402568 \
+  --name opencrvs-parent-identifiers
+```
+
+Send the request across the same HTTP boundary:
+
+```sh
+curl -fsS \
+  --config .evidence/requests/opencrvs-parent-identifiers/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/opencrvs-parent-identifiers/request.json \
+  --output opencrvs-parent-identifiers.jws.json
+```
+
+Verify the signature and the expectations recorded for this question before reading its value:
+
+```sh
+evidencectl verify opencrvs-parent-identifiers.jws.json \
+  --context .evidence/requests/opencrvs-parent-identifiers/verification.json \
+  --output opencrvs-parent-identifiers.verified.json
+```
+
+```text
+VERIFIED
+```
+
+Inspect the verified payload:
+
+```sh
+python3 -m json.tool opencrvs-parent-identifiers.verified.json
+```
+
+Josh's public registration has an authenticated mother identifier but reports the father's
+details as unavailable. Its supported value therefore contains the mother field only:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:registered-parent-identifiers:registered_parent_national_ids",
+  "value": {
+    "form": "reviewed-structured-value",
+    "schema": "urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1",
+    "fields": {
+      "mother_national_id": "<mother-national-id>"
+    }
+  }
+}
+```
+
+For a synthetic registration with two authenticated parent identifiers, `fields` contains both
+`mother_national_id` and `father_national_id`. You can create such a registration in the demo and
+prepare the same question with that child's national ID.
+
+This assertion intentionally discloses identifiers. Store and transmit the verified result as
+sensitive civil-registration data. Callers that need only a relationship decision must use the
+boolean question instead.
+
 ## Inspect the audit and clean up
 
 Stop the services, verify the audit chain, and remove the sealed local generation:
@@ -597,8 +750,9 @@ evidencectl audit show --last-operation
 evidencectl dev clean
 ```
 
-The audit identifies the authorized question, purpose, requester pseudonym, decision, and
-disclosed concept. It does not record either selector, the OpenCRVS token, response, or boolean.
+The audit identifies each authorized question, purpose, requester pseudonym, decision, and
+disclosed concept. It does not record selectors, the OpenCRVS token, source response, boolean, or
+returned national IDs.
 
 Delete the Record Search client in OpenCRVS when you finish. Remove the two local credential files
 when you no longer need the project.

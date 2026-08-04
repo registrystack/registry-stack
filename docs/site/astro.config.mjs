@@ -310,7 +310,7 @@ export default defineConfig({
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Return an age bracket', slug: 'tutorials/return-a-governed-value' },
             { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
-            { label: 'Verify a parent with OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
+            { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
             { label: 'Issue DHIS2 immunization evidence', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
             { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
             { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },
