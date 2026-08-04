@@ -122,6 +122,9 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
                 Self::Chain
             }
             EvidenceAuditError::Audit(audit) => match audit {
+                AuditError::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    Self::Chain
+                }
                 AuditError::Io(_) => Self::Storage,
                 AuditError::SinkLocked { .. } => Self::Locked,
                 AuditError::EmptyEnvVarName
