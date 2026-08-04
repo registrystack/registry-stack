@@ -5427,6 +5427,7 @@ dependencies = [
  "jsonwebtoken",
  "rand_core 0.6.4",
  "rcgen",
+ "registry-evidence-verifier",
  "registry-platform-audit",
  "registry-platform-crypto",
  "registry-platform-httpsec",
@@ -5455,6 +5456,25 @@ dependencies = [
  "utoipa",
  "wiremock",
  "zeroize",
+]
+
+[[package]]
+name = "registry-evidence-verifier"
+version = "0.17.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "jsonschema 0.18.3",
+ "registry-platform-crypto",
+ "registry-platform-sdjwt",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "utoipa",
 ]
 
 [[package]]

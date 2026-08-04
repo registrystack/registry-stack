@@ -15,11 +15,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    config::AssuranceProfile,
     contracts::evidence_contract_accepts,
     model::{Evidence, FlattenedJws, JwksDocument},
     sdjwt_vc::evidence_payload_from_claims,
-    EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1, EVIDENCE_SD_JWT_VC_TYP,
+    AssuranceProfile, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
+    EVIDENCE_SD_JWT_VC_TYP,
 };
 
 const MAX_JWS_BYTES: usize = 256 * 1024;
@@ -70,35 +70,35 @@ pub struct EvidenceVerificationPolicy {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceVerificationPolicyDocument {
-    pub(crate) expected_assurance_profile: AssuranceProfile,
-    pub(crate) issued_by: String,
-    pub(crate) provided_by: String,
-    pub(crate) requirement: String,
-    pub(crate) evidence_type: String,
-    pub(crate) purpose: String,
-    pub(crate) audience: String,
-    pub(crate) configuration_revision: String,
+    pub expected_assurance_profile: AssuranceProfile,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub requirement: String,
+    pub evidence_type: String,
+    pub purpose: String,
+    pub audience: String,
+    pub configuration_revision: String,
     /// The exact nonce from the independently retained original request.
-    pub(crate) request_nonce: String,
-    pub(crate) expected_subjects: Vec<ExpectedSubjectDocument>,
-    pub(crate) expected_outputs: Vec<ExpectedOutputDocument>,
-    pub(crate) maximum_assertion_lifetime_seconds: u64,
+    pub request_nonce: String,
+    pub expected_subjects: Vec<ExpectedSubjectDocument>,
+    pub expected_outputs: Vec<ExpectedOutputDocument>,
+    pub maximum_assertion_lifetime_seconds: u64,
     #[serde(default)]
-    pub(crate) clock_skew_seconds: u64,
+    pub clock_skew_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedSubjectDocument {
-    pub(crate) role: String,
-    pub(crate) binding: String,
+pub struct ExpectedSubjectDocument {
+    pub role: String,
+    pub binding: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedOutputDocument {
-    pub(crate) concept: String,
-    pub(crate) form: ExpectedFormDocument,
+pub struct ExpectedOutputDocument {
+    pub concept: String,
+    pub form: ExpectedFormDocument,
 }
 
 /// The closed expected value-form vocabulary as written in a policy document.
@@ -107,14 +107,14 @@ pub(crate) struct ExpectedOutputDocument {
 /// form as a plain string and the list form as a mapping under `list`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
-pub(crate) enum ExpectedFormDocument {
+pub enum ExpectedFormDocument {
     Scalar(ExpectedScalarFormDocument),
     List(ExpectedListFormDocument),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum ExpectedScalarFormDocument {
+pub enum ExpectedScalarFormDocument {
     Boolean,
     Integer,
     String,
@@ -126,15 +126,15 @@ pub(crate) enum ExpectedScalarFormDocument {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ExpectedListFormDocument {
-    pub(crate) list: ExpectedListDocument,
+pub struct ExpectedListFormDocument {
+    pub list: ExpectedListDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedListDocument {
-    pub(crate) minimum_items: usize,
-    pub(crate) maximum_items: usize,
+pub struct ExpectedListDocument {
+    pub minimum_items: usize,
+    pub maximum_items: usize,
 }
 
 impl EvidenceVerificationPolicyDocument {
@@ -913,12 +913,10 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::{
-        model::{
-            EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
-            SupportedValue,
-        },
-        signing::{jwks_document, EvidenceSigner},
+    use crate::fixtures::{jwks_document, EvidenceSigner};
+    use crate::model::{
+        EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
+        SupportedValue,
     };
 
     const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
