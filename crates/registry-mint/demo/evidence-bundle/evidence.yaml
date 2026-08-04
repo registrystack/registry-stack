@@ -8,6 +8,7 @@
 #
 # Synthetic identifiers only. Nothing here describes a real person or source.
 version: 1
+assuranceProfile: production
 service: {providerId: urn:example:demo:provider:evidence, trustDomain: urn:example:demo:trust-domain:delegation}
 issuer: {id: urn:example:demo:issuer:authority}
 authentication:
