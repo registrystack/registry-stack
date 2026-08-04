@@ -3348,6 +3348,20 @@ fn validation_rejects_blank_registry_evidence_conforms_to() {
 }
 
 #[test]
+fn validation_accepts_a_registry_evidence_conforms_to_that_is_not_a_uri() {
+    // conforms_to names the response profile the endpoint returns, and the
+    // portable manifest layer deliberately does not pin it to a product's
+    // contract version, so a bare profile identifier is a legitimate value.
+    // Requiring a URI here would reject what the Evidence runtime returns.
+    let mut manifest = evidence_offering_manifest();
+    manifest.datasets[0].evidence_offerings[0]
+        .access
+        .conforms_to = Some("registry.assertion-evidence/v1".to_string());
+
+    validate_manifest(&manifest).expect("a profile identifier is a valid conformance target");
+}
+
+#[test]
 fn validation_rejects_duplicate_evaluation_profile_ids() {
     let mut manifest = evidence_offering_manifest();
     manifest

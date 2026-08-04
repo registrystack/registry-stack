@@ -1475,3 +1475,37 @@ owed and is recorded here in full.
   step green, including `Execute the Evidence tutorials in a clean container`,
   the step that failed before the port. The tick now rests on the container
   replay rather than on a host stand-in for it.
+- 2026-08-04: the Relay API contract gate is closed, and my first reading of it
+  was wrong. oasdiff reported two breaking errors: `format: uri` dropped from
+  an evidence offering's `access.conforms_to` on both
+  `/metadata/evidence-offerings` routes. I took that for collateral damage of
+  the retirement and expected to restore it. It is neither accidental nor
+  restorable. Retargeting the offering from Notary to Evidence made
+  `conforms_to` name a response profile rather than a document location,
+  `registry.assertion-evidence/v1`, so that the portable manifest layer stays
+  independent of any one product's contract version. `registry-manifest-core`
+  validates the member as present and non-blank for kind `registry-evidence`
+  and as a URI for every other kind, and Relay refuses at startup to serve an
+  offering of any other kind, so every value these two routes can return is a
+  profile identifier. Restoring the annotation would have declared a
+  constraint that the server's own legitimate values fail.
+  Recorded the way this repository already records an accepted breaking diff,
+  as a dated entry with its reasoning in
+  `crates/registry-relay/openapi/oasdiff-err-ignore.txt`, beside the issue #362
+  entry from 2026-07-20. The two `access/kind` warnings are the intended
+  `registry-evidence` enum addition and stay.
+  Security review note. Threat: a relying party that pinned `conforms_to` to a
+  URI, or a future change that reinstates the URI requirement, would reject
+  responses the Evidence runtime legitimately returns. Enforcement point:
+  `validate_registry_evidence_access` in `crates/registry-manifest-core`, plus
+  Relay's startup refusal of any offering whose `access.kind` is not
+  `registry-evidence` (`RuntimeBindingError::UnsupportedEvidenceOffering`).
+  Tests: `validation_rejects_blank_registry_evidence_conforms_to` keeps the
+  member mandatory, and a new
+  `validation_accepts_a_registry_evidence_conforms_to_that_is_not_a_uri` pins
+  the absence of a URI requirement. The new guard was checked against a
+  deliberately reinstated URI check and failed as it should, so it is not
+  vacuous.
+  Evidence: `just openapi-contract` against the pull request's base now exits 0
+  with 0 errors and the 2 intended warnings, `cargo fmt --check` is clean, and
+  `cargo test --locked -p registry-manifest-core` passes 98 tests.
