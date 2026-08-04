@@ -169,6 +169,31 @@ fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     .expect("state writes");
     fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
 
+    let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
+    let mut bundle: Value = serde_norway::from_slice(
+        &fs::read(&bundle_path).expect("bundle"),
+    )
+    .expect("bundle YAML");
+    bundle["requirements"][1]["concepts"] = json!([
+        {
+            "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+            "form": "boolean"
+        },
+        {
+            "id": "urn:registrystack:evidence:local:concept:adult-status:age_years",
+            "form": "bounded-integer"
+        }
+    ]);
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+        .expect("open bundle for fixture update");
+    fs::write(
+        &bundle_path,
+        serde_norway::to_string(&bundle).expect("bundle renders"),
+    )
+    .expect("bundle writes");
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+        .expect("seal updated bundle");
+
     let mut view = successful_view();
     view["events"][1]["disclosedConcepts"] = json!([
         "urn:registrystack:evidence:local:concept:adult-status:is_adult",
@@ -327,6 +352,7 @@ impl Fixture {
         private_directory(&root);
         private_directory(&root.join(".evidence"));
         private_directory(&root.join(".evidence/dev"));
+        private_directory(&root.join(".evidence/dev/bundle"));
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
         let state = json!({
@@ -377,6 +403,49 @@ impl Fixture {
             &root.join(".evidence/dev/state.json"),
             &serde_json::to_vec(&state).expect("state renders"),
             0o600,
+        );
+        let bundle = json!({
+            "selectorProfiles": {
+                "local-subject-age-bracket-v1": {
+                    "fields": {"person_id": {"type": "string"}}
+                },
+                "local-subject-adult-status-v1": {
+                    "fields": {"person_id": {"type": "string"}}
+                }
+            },
+            "requirements": [
+                {
+                    "id": "urn:registrystack:evidence:local:requirement:age-bracket",
+                    "purposes": ["service-path-selection"],
+                    "subjectRoles": [{
+                        "role": "person",
+                        "selectorProfiles": ["local-subject-age-bracket-v1"]
+                    }],
+                    "concepts": [{
+                        "id": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                        "form": "controlled-category"
+                    }]
+                },
+                {
+                    "id": "urn:registrystack:evidence:local:requirement:adult-status",
+                    "purposes": ["age-check"],
+                    "subjectRoles": [{
+                        "role": "person",
+                        "selectorProfiles": ["local-subject-adult-status-v1"]
+                    }],
+                    "concepts": [{
+                        "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                        "form": "boolean"
+                    }]
+                }
+            ]
+        });
+        private_file(
+            &root.join(".evidence/dev/bundle/evidence.yaml"),
+            serde_norway::to_string(&bundle)
+                .expect("bundle renders")
+                .as_bytes(),
+            0o400,
         );
 
         let evidence = temporary.path().join("evidence-stub");

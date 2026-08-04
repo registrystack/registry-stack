@@ -30,6 +30,7 @@ const SOURCES_DIRECTORY: &str = "sources";
 const SELECTORS_DIRECTORY: &str = "selectors";
 const DERIVATIONS_DIRECTORY: &str = "derivations";
 const SCHEMAS_DIRECTORY: &str = "schemas";
+const FIXTURES_DIRECTORY: &str = "fixtures";
 const SECRETS_DIRECTORY: &str = "secrets";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
@@ -85,6 +86,18 @@ pub(crate) struct CompiledProject {
     pub(crate) local_audience: String,
     pub(crate) requester_tag: String,
     pub(crate) caller_evidence_audience: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompiledProductionProject {
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) fixture_paths: Vec<String>,
+    pub(crate) bundle: Value,
+}
+
+enum CompileProfile {
+    Local(LocalServicePorts),
+    Production(Value),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,8 +163,8 @@ pub(crate) fn compile_local_project_with_ports(
 
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
-    let inputs = read_inputs(&project_root)?;
-    let plan = compile_plan(inputs, ports)?;
+    let inputs = read_inputs(&project_root, true)?;
+    let plan = compile_plan(inputs, CompileProfile::Local(ports))?;
     let compilation = write_plan(&project_root, staging_root, &plan, ports)?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
@@ -163,6 +176,39 @@ pub(crate) fn compile_local_project_with_ports(
     }
 
     Ok(compilation)
+}
+
+/// Compile one complete production bundle into an unpublished private staging
+/// directory. The caller owns temporary runtime validation and publication.
+pub(crate) fn compile_production_project(
+    project_root: &Path,
+    staging_root: &Path,
+    governed_bundle: Value,
+) -> Result<CompiledProductionProject> {
+    validate_plain_path_components(project_root, "production project")?;
+    let project_root = validate_project_root(project_root)?;
+    validate_private_empty_staging(staging_root)?;
+    let inputs = read_inputs(&project_root, false)?;
+    validate_production_inputs(&project_root, &inputs)?;
+    let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
+    reject_local_production_values(&plan.bundle)?;
+    validate_production_sources(&plan.bundle)?;
+    let bundle_path = write_bundle(&project_root, staging_root, &plan)?;
+    let fixture_paths = plan
+        .questions
+        .iter()
+        .map(|question| {
+            question
+                .fixture_artifact
+                .clone()
+                .expect("production questions were validated")
+        })
+        .collect();
+    Ok(CompiledProductionProject {
+        bundle_path,
+        fixture_paths,
+        bundle: plan.bundle,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +225,39 @@ struct Question {
     answers: Vec<QuestionAnswer>,
     derivation: String,
     disclosure: QuestionDisclosure,
+    #[serde(default)]
+    governance: Option<QuestionGovernance>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuestionGovernance {
+    requirement: String,
+    kind: RequirementKind,
+    reference_frameworks: Vec<String>,
+    evidence_type: String,
+    validity_seconds: u64,
+    observation_timezone: String,
+    fixtures: String,
+    disclosure_families: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RequirementKind {
+    Criterion,
+    InformationRequirement,
+    Constraint,
+}
+
+impl RequirementKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Criterion => "criterion",
+            Self::InformationRequirement => "information-requirement",
+            Self::Constraint => "constraint",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +303,8 @@ enum FactCombination {
 #[serde(deny_unknown_fields)]
 struct QuestionAnswer {
     concept: String,
+    #[serde(default)]
+    id: Option<String>,
     #[serde(rename = "type")]
     answer_type: AnswerType,
     #[serde(default)]
@@ -288,6 +369,7 @@ struct QuestionPlan {
     source_artifact_id: String,
     authored_source_artifacts: Option<Vec<String>>,
     derivation_artifact: String,
+    fixture_artifact: Option<String>,
     purpose: String,
     requirement_uri: String,
     concepts: Vec<ConceptPlan>,
@@ -354,6 +436,35 @@ fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
         .with_context(|| format!("resolving project root {}", project_root.display()))
 }
 
+fn validate_plain_path_components(path: &Path, description: &str) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let components = absolute.components().collect::<Vec<_>>();
+    let mut current = PathBuf::new();
+    for component in components {
+        match component {
+            Component::RootDir => current.push(Path::new("/")),
+            Component::Normal(value) => current.push(value),
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Prefix(_) => {
+                bail!("{description} must not contain path traversal")
+            }
+        }
+        let metadata =
+            fs::symlink_metadata(&current).with_context(|| format!("inspecting {description}"))?;
+        if metadata.file_type().is_symlink() {
+            bail!("{description} must not traverse symbolic links");
+        }
+        if !metadata.is_dir() {
+            bail!("{description} must be a plain directory");
+        }
+    }
+    Ok(())
+}
+
 fn validate_private_empty_staging(staging_root: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(staging_root)
         .with_context(|| format!("inspecting staging root {}", staging_root.display()))?;
@@ -387,7 +498,7 @@ fn validate_evidence_binary(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_inputs(project_root: &Path) -> Result<Inputs> {
+fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Inputs> {
     let openapi_text = read_regular_file(
         &project_root.join(OPENAPI_FILE),
         MAX_OPENAPI_BYTES,
@@ -433,15 +544,17 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         });
     }
 
-    let secrets = project_root.join(SECRETS_DIRECTORY);
-    let secrets_metadata = fs::symlink_metadata(&secrets)
-        .with_context(|| format!("inspecting local secret directory {}", secrets.display()))?;
-    if secrets_metadata.file_type().is_symlink()
-        || !secrets_metadata.is_dir()
-        || secrets_metadata.uid() != rustix::process::geteuid().as_raw()
-        || secrets_metadata.permissions().mode() & 0o7777 != 0o700
-    {
-        bail!("local secret directory must be a plain owner-only directory (mode 0700)");
+    if require_local_secrets {
+        let secrets = project_root.join(SECRETS_DIRECTORY);
+        let secrets_metadata = fs::symlink_metadata(&secrets)
+            .with_context(|| format!("inspecting local secret directory {}", secrets.display()))?;
+        if secrets_metadata.file_type().is_symlink()
+            || !secrets_metadata.is_dir()
+            || secrets_metadata.uid() != rustix::process::geteuid().as_raw()
+            || secrets_metadata.permissions().mode() & 0o7777 != 0o700
+        {
+            bail!("local secret directory must be a plain owner-only directory (mode 0700)");
+        }
     }
 
     Ok(Inputs {
@@ -451,6 +564,100 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         schemas,
         questions,
     })
+}
+
+fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
+    for authored in &inputs.questions {
+        let question = &authored.question;
+        let governance = question
+            .governance
+            .as_ref()
+            .ok_or_else(|| anyhow!("every production question requires governance"))?;
+        if question.answers.iter().any(|answer| answer.id.is_none()) {
+            bail!("every production answer requires one stable concept id");
+        }
+        for uri in std::iter::once(governance.requirement.as_str())
+            .chain(governance.reference_frameworks.iter().map(String::as_str))
+            .chain(std::iter::once(governance.evidence_type.as_str()))
+            .chain(governance.disclosure_families.iter().map(String::as_str))
+            .chain(
+                question
+                    .answers
+                    .iter()
+                    .filter_map(|answer| answer.id.as_deref()),
+            )
+        {
+            if uri.starts_with(LOCAL_URI_PREFIX) {
+                bail!("production governance must not use disposable local identifiers");
+            }
+        }
+        let fixture = project_relative_fixture(project_root, &governance.fixtures)?;
+        let _ = read_regular_file(&fixture, MAX_SOURCE_ARTIFACT_BYTES, "production fixture")?;
+    }
+    Ok(())
+}
+
+fn project_relative_fixture(project_root: &Path, value: &str) -> Result<PathBuf> {
+    let relative = Path::new(value);
+    let components = relative.components().collect::<Vec<_>>();
+    if components.len() != 2
+        || components.first() != Some(&Component::Normal(FIXTURES_DIRECTORY.as_ref()))
+        || !matches!(components.get(1), Some(Component::Normal(_)))
+        || relative
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("yaml")
+    {
+        bail!("governance fixtures must be project-relative fixtures/<name>.yaml files");
+    }
+    let directory = project_root.join(FIXTURES_DIRECTORY);
+    let metadata = fs::symlink_metadata(&directory)
+        .with_context(|| format!("inspecting fixture directory {}", directory.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("fixtures must be held in a plain directory");
+    }
+    Ok(project_root.join(relative))
+}
+
+fn reject_local_production_values(bundle: &Value) -> Result<()> {
+    match bundle {
+        Value::String(value) if value.starts_with(LOCAL_URI_PREFIX) => {
+            bail!("the production bundle contains a disposable local identifier")
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_local_production_values(value)?;
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                reject_local_production_values(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_production_sources(bundle: &Value) -> Result<()> {
+    let sources = bundle
+        .get("sources")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the production bundle has no sources object"))?;
+    for source in sources.values() {
+        let https = source
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("https://"));
+        let authenticated = source
+            .pointer("/authentication/kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind != "none" && kind != "review-required");
+        if !https || !authenticated {
+            bail!("every production source must use authenticated HTTPS");
+        }
+    }
+    Ok(())
 }
 
 fn read_named_objects(
@@ -893,7 +1100,7 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
     Ok(())
 }
 
-fn compile_plan(inputs: Inputs, ports: LocalServicePorts) -> Result<CompilePlan> {
+fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> {
     let has_inline_source = inputs
         .questions
         .iter()
@@ -932,7 +1139,10 @@ fn compile_plan(inputs: Inputs, ports: LocalServicePorts) -> Result<CompilePlan>
             authored,
         )?);
     }
-    let bundle = render_bundle(&questions, ports);
+    let bundle = match profile {
+        CompileProfile::Local(ports) => render_local_bundle(&questions, ports),
+        CompileProfile::Production(governance) => render_production_bundle(&questions, governance)?,
+    };
     Ok(CompilePlan { questions, bundle })
 }
 
@@ -995,18 +1205,27 @@ fn compile_question_plan(
         &operation,
         &question.source,
     )?;
-    let requirement_uri = local_uri(&format!("requirement:{}", question.id));
+    let requirement_uri = question
+        .governance
+        .as_ref()
+        .map(|governance| governance.requirement.clone())
+        .unwrap_or_else(|| local_uri(&format!("requirement:{}", question.id)));
     let concepts = question
         .answers
         .iter()
         .map(|answer| compile_concept(&question.id, answer, schemas))
         .collect::<Result<Vec<_>>>()?;
-    let requirement_kind =
-        if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
-            "criterion"
-        } else {
-            "information-requirement"
-        };
+    let requirement_kind = question
+        .governance
+        .as_ref()
+        .map(|governance| governance.kind.as_str())
+        .unwrap_or_else(|| {
+            if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
+                "criterion"
+            } else {
+                "information-requirement"
+            }
+        });
 
     let response_schema = compiled_facts.response_schema;
     let fact_schema = compiled_facts.fact_schema;
@@ -1067,6 +1286,10 @@ fn compile_question_plan(
         source_artifact_id: question.id.clone(),
         authored_source_artifacts: None,
         derivation_artifact: question.derivation.clone(),
+        fixture_artifact: question
+            .governance
+            .as_ref()
+            .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
         concepts,
@@ -1104,18 +1327,27 @@ fn compile_referenced_question(
         .clone();
     let subjects = compile_referenced_subjects(question, &source_value, selectors)?;
 
-    let requirement_uri = local_uri(&format!("requirement:{}", question.id));
+    let requirement_uri = question
+        .governance
+        .as_ref()
+        .map(|governance| governance.requirement.clone())
+        .unwrap_or_else(|| local_uri(&format!("requirement:{}", question.id)));
     let concepts = question
         .answers
         .iter()
         .map(|answer| compile_concept(&question.id, answer, schemas))
         .collect::<Result<Vec<_>>>()?;
-    let requirement_kind =
-        if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
-            "criterion"
-        } else {
-            "information-requirement"
-        };
+    let requirement_kind = question
+        .governance
+        .as_ref()
+        .map(|governance| governance.kind.as_str())
+        .unwrap_or_else(|| {
+            if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
+                "criterion"
+            } else {
+                "information-requirement"
+            }
+        });
     let (grant, requirement) = render_governance_parts(
         question,
         &subjects,
@@ -1133,6 +1365,10 @@ fn compile_referenced_question(
         source_artifact_id: source_id.to_owned(),
         authored_source_artifacts: Some(referenced_source_artifacts(&source_value)?),
         derivation_artifact: question.derivation.clone(),
+        fixture_artifact: question
+            .governance
+            .as_ref()
+            .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
         concepts,
@@ -1323,7 +1559,10 @@ fn compile_concept(
     answer: &QuestionAnswer,
     schemas: &BTreeMap<String, Value>,
 ) -> Result<ConceptPlan> {
-    let concept_uri = local_uri(&format!("concept:{question_id}:{}", answer.concept));
+    let concept_uri = answer
+        .id
+        .clone()
+        .unwrap_or_else(|| local_uri(&format!("concept:{question_id}:{}", answer.concept)));
     Ok(match answer.answer_type {
         AnswerType::Boolean => ConceptPlan {
             concept_alias: answer.concept.clone(),
@@ -1335,7 +1574,15 @@ fn compile_concept(
             sd_jwt_vc: None,
         },
         AnswerType::ControlledCategory => {
-            let scheme = local_uri(&format!("category-scheme:{question_id}:{}", answer.concept));
+            let scheme = answer.id.as_ref().map_or_else(
+                || local_uri(&format!("category-scheme:{question_id}:{}", answer.concept)),
+                // Version 1 requires a distinct category-scheme identifier,
+                // while the compact production question contract authors
+                // only the stable concept identifier. This deterministic
+                // suffix does not invent a requirement, framework, Evidence
+                // Type, concept, or disclosure-family URI.
+                |identifier| format!("{identifier}:categories"),
+            );
             let path = format!("codelists/{question_id}-{}.yaml", answer.concept);
             let maximum_bytes = answer
                 .values
@@ -2146,9 +2393,23 @@ fn render_governance_parts(
     source_id: &str,
     requirement: &BundleRequirement<'_>,
 ) -> (Value, Value) {
-    let framework_id = local_uri(&format!("framework:{}", question.id));
-    let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
-    let disclosure_family = local_uri(&format!("disclosure-family:{}", question.id));
+    let (reference_frameworks, evidence_type, observation_timezone, validity_seconds, families) =
+        match &question.governance {
+            Some(governance) => (
+                governance.reference_frameworks.clone(),
+                governance.evidence_type.clone(),
+                governance.observation_timezone.clone(),
+                governance.validity_seconds,
+                governance.disclosure_families.clone(),
+            ),
+            None => (
+                vec![local_uri(&format!("framework:{}", question.id))],
+                local_uri(&format!("evidence-type:{}", question.id)),
+                "UTC".to_owned(),
+                300,
+                vec![local_uri(&format!("disclosure-family:{}", question.id))],
+            ),
+        };
     let grant_subjects = subjects
         .iter()
         .map(|subject| {
@@ -2226,25 +2487,28 @@ fn render_governance_parts(
     if !selector_inputs.is_empty() {
         derivation.insert("selectorInputs".to_owned(), Value::Array(selector_inputs));
     }
-    let requirement_value = json!({
+    let mut requirement_value = json!({
             "id": requirement.requirement_uri,
             "kind": requirement.kind,
             "source": source_id,
             "purposes": [question.purpose],
             "subjectRoles": subject_roles,
-            "referenceFrameworks": [framework_id],
+            "referenceFrameworks": reference_frameworks,
             "evidenceType": evidence_type,
-            "observationTimezone": "UTC",
-            "validitySeconds": 300,
+            "observationTimezone": observation_timezone,
+            "validitySeconds": validity_seconds,
             "derivation": derivation,
             "concepts": concepts,
-            "disclosureGuard": {"families": [disclosure_family]},
+            "disclosureGuard": {"families": families},
             "existenceDisclosure": "collapse-unresolved",
     });
+    if let Some(governance) = &question.governance {
+        requirement_value["fixtures"] = Value::String(governance.fixtures.clone());
+    }
     (grant, requirement_value)
 }
 
-fn render_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value {
+fn render_local_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value {
     let mint_origin = ports.mint_origin();
     let selector_profiles = questions
         .iter()
@@ -2337,12 +2601,117 @@ fn render_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value 
     })
 }
 
+fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
+    let object = governance
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("production governance must be an object"))?;
+    object.insert(
+        "selectorProfiles".to_owned(),
+        Value::Object(Map::from_iter(
+            questions
+                .iter()
+                .flat_map(|question| &question.subjects)
+                .map(|subject| {
+                    (
+                        subject.selector_profile.clone(),
+                        subject.selector_profile_value.clone(),
+                    )
+                }),
+        )),
+    );
+    object.insert(
+        "sources".to_owned(),
+        Value::Object(Map::from_iter(questions.iter().map(|question| {
+            (question.source_id.clone(), question.source_value.clone())
+        }))),
+    );
+    object.insert(
+        "requirements".to_owned(),
+        Value::Array(
+            questions
+                .iter()
+                .map(|question| question.requirement.clone())
+                .collect(),
+        ),
+    );
+    Ok(governance)
+}
+
 fn write_plan(
     project_root: &Path,
     staging_root: &Path,
     plan: &CompilePlan,
     ports: LocalServicePorts,
 ) -> Result<CompiledProject> {
+    write_bundle(project_root, staging_root, plan)?;
+    create_private_directory(&staging_root.join("audit"))?;
+
+    let canonical_staging = fs::canonicalize(staging_root)
+        .with_context(|| format!("resolving staging root {}", staging_root.display()))?;
+    let secret_root = fs::canonicalize(project_root.join(SECRETS_DIRECTORY))
+        .context("resolving local secret directory")?;
+    let runtime = json!({
+        "version": 1,
+        "bundleDirectory": canonical_staging.join("bundle").to_string_lossy(),
+        "listener": {
+            "bindHost": "127.0.0.1",
+            "port": ports.evidence,
+            "tlsTermination": "operator-controlled-upstream",
+            "trustProxyIdentityHeaders": false,
+            "maximumRequestBytes": 65536,
+            "maximumConcurrentRequests": 64,
+            "requestTimeoutMilliseconds": 10000,
+            "shutdownGraceMilliseconds": 30000,
+        },
+        "secretProviders": {"file": {"root": secret_root.to_string_lossy()}},
+        "auditStorage": {
+            "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
+            "maximumFileBytes": 1073741824_u64,
+        },
+        "outboundTls": {"systemRoots": true, "trustProfiles": {}},
+    });
+    let runtime_path = staging_root.join("runtime.yaml");
+    write_private_file(&runtime_path, &yaml_bytes(&runtime)?)?;
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
+        .with_context(|| format!("sealing {}", runtime_path.display()))?;
+
+    let questions = plan
+        .questions
+        .iter()
+        .map(|question| CompiledQuestion {
+            question_alias: question.question_id.clone(),
+            requirement_uri: question.requirement_uri.clone(),
+            purpose: question.purpose.clone(),
+            subjects: question
+                .subjects
+                .iter()
+                .map(|subject| CompiledSubject {
+                    role: subject.role.clone(),
+                    selector_profile: subject.selector_profile.clone(),
+                    selector_field: subject.selector_field.clone(),
+                })
+                .collect(),
+            concepts: question
+                .concepts
+                .iter()
+                .map(|concept| CompiledConcept {
+                    concept_alias: concept.concept_alias.clone(),
+                    concept_uri: concept.concept_uri.clone(),
+                    concept_form: concept.concept_form,
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(CompiledProject {
+        runtime_path,
+        questions,
+        local_audience: LOCAL_AUDIENCE.to_owned(),
+        requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
+        caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
+    })
+}
+
+fn write_bundle(project_root: &Path, staging_root: &Path, plan: &CompilePlan) -> Result<PathBuf> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
     for directory in ["adapters", "derivations", "schemas"] {
@@ -2356,20 +2725,22 @@ fn write_plan(
     {
         create_private_directory(&bundle.join("codelists"))?;
     }
-    create_private_directory(&staging_root.join("audit"))?;
-
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
     let mut written_sources = BTreeSet::new();
-    let mut written_answer_schemas = BTreeSet::new();
+    let mut written_paths = BTreeSet::from(["evidence.yaml".to_owned()]);
     for question in &plan.questions {
         if written_sources.insert(question.source_artifact_id.clone()) {
             if let Some(artifacts) = &question.authored_source_artifacts {
                 for artifact in artifacts {
-                    let bytes = read_regular_file(
-                        &project_root.join(artifact),
+                    let bytes = read_project_artifact(
+                        project_root,
+                        artifact,
                         MAX_SOURCE_ARTIFACT_BYTES,
                         "referenced source artifact",
                     )?;
+                    if !written_paths.insert(artifact.clone()) {
+                        continue;
+                    }
                     write_private_file(&bundle.join(artifact), &bytes)?;
                 }
             } else {
@@ -2414,11 +2785,15 @@ fn write_plan(
             &bundle.join(&question.derivation_artifact),
             question.derivation_script.as_bytes(),
         )?;
+        written_paths.insert(question.derivation_artifact.clone());
         for (path, codelist) in question
             .concepts
             .iter()
             .filter_map(|concept| concept.codelist.as_ref())
         {
+            if !written_paths.insert(path.clone()) {
+                continue;
+            }
             write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
         }
         for (path, schema) in question
@@ -2426,77 +2801,113 @@ fn write_plan(
             .iter()
             .filter_map(|concept| concept.schema.as_ref())
         {
-            if written_answer_schemas.insert(path.clone()) && !bundle.join(path).exists() {
+            if written_paths.insert(path.clone()) {
                 write_private_file(&bundle.join(path), &yaml_bytes(schema)?)?;
             }
         }
+        if let Some(path) = &question.fixture_artifact {
+            if written_paths.insert(path.clone()) {
+                let bytes = read_project_artifact(
+                    project_root,
+                    path,
+                    MAX_SOURCE_ARTIFACT_BYTES,
+                    "production fixture",
+                )?;
+                ensure_generated_parent(&bundle, path)?;
+                write_private_file(&bundle.join(path), &bytes)?;
+            }
+        }
     }
-
-    let canonical_staging = fs::canonicalize(staging_root)
-        .with_context(|| format!("resolving staging root {}", staging_root.display()))?;
-    let secret_root = fs::canonicalize(project_root.join(SECRETS_DIRECTORY))
-        .context("resolving local secret directory")?;
-    let runtime = json!({
-        "version": 1,
-        "bundleDirectory": canonical_staging.join("bundle").to_string_lossy(),
-        "listener": {
-            "bindHost": "127.0.0.1",
-            "port": ports.evidence,
-            "tlsTermination": "operator-controlled-upstream",
-            "trustProxyIdentityHeaders": false,
-            "maximumRequestBytes": 65536,
-            "maximumConcurrentRequests": 64,
-            "requestTimeoutMilliseconds": 10000,
-            "shutdownGraceMilliseconds": 30000,
-        },
-        "secretProviders": {"file": {"root": secret_root.to_string_lossy()}},
-        "auditStorage": {
-            "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
-            "maximumFileBytes": 1073741824_u64,
-        },
-        "outboundTls": {"systemRoots": true, "trustProfiles": {}},
-    });
-    let runtime_path = staging_root.join("runtime.yaml");
-    write_private_file(&runtime_path, &yaml_bytes(&runtime)?)?;
-
+    for path in auxiliary_artifacts(&plan.bundle)? {
+        if written_paths.insert(path.clone()) {
+            let bytes = read_project_artifact(
+                project_root,
+                &path,
+                MAX_SOURCE_ARTIFACT_BYTES,
+                "referenced bundle artifact",
+            )?;
+            ensure_generated_parent(&bundle, &path)?;
+            write_private_file(&bundle.join(path), &bytes)?;
+        }
+    }
     set_bundle_modes(&bundle, 0o500, 0o400)?;
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
-        .with_context(|| format!("sealing {}", runtime_path.display()))?;
+    Ok(bundle)
+}
 
-    let questions = plan
-        .questions
-        .iter()
-        .map(|question| CompiledQuestion {
-            question_alias: question.question_id.clone(),
-            requirement_uri: question.requirement_uri.clone(),
-            purpose: question.purpose.clone(),
-            subjects: question
-                .subjects
-                .iter()
-                .map(|subject| CompiledSubject {
-                    role: subject.role.clone(),
-                    selector_profile: subject.selector_profile.clone(),
-                    selector_field: subject.selector_field.clone(),
-                })
-                .collect(),
-            concepts: question
-                .concepts
-                .iter()
-                .map(|concept| CompiledConcept {
-                    concept_alias: concept.concept_alias.clone(),
-                    concept_uri: concept.concept_uri.clone(),
-                    concept_form: concept.concept_form,
-                })
-                .collect(),
-        })
-        .collect();
-    Ok(CompiledProject {
-        runtime_path,
-        questions,
-        local_audience: LOCAL_AUDIENCE.to_owned(),
-        requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
-        caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
-    })
+fn read_project_artifact(
+    project_root: &Path,
+    relative: &str,
+    maximum_bytes: u64,
+    description: &str,
+) -> Result<Vec<u8>> {
+    let parent = project_root
+        .join(relative)
+        .parent()
+        .ok_or_else(|| anyhow!("{description} has no project directory"))?
+        .to_path_buf();
+    let metadata = fs::symlink_metadata(&parent)
+        .with_context(|| format!("inspecting {description} directory"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("{description} must be held in a plain project directory");
+    }
+    read_regular_file(&project_root.join(relative), maximum_bytes, description)
+}
+
+fn ensure_generated_parent(bundle: &Path, relative: &str) -> Result<()> {
+    let parent = bundle
+        .join(relative)
+        .parent()
+        .ok_or_else(|| anyhow!("generated artifact has no parent"))?
+        .to_path_buf();
+    if !parent.exists() {
+        fs::create_dir_all(&parent)
+            .with_context(|| format!("creating generated directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn auxiliary_artifacts(bundle: &Value) -> Result<Vec<String>> {
+    let mut paths = BTreeSet::new();
+    if let Some(profiles) = bundle.get("selectorProfiles").and_then(Value::as_object) {
+        for profile in profiles.values() {
+            if let Some(fields) = profile.get("fields").and_then(Value::as_object) {
+                for field in fields.values() {
+                    if let Some(path) = field.get("codelist").and_then(Value::as_str) {
+                        validate_auxiliary_artifact(path, "codelists", ".yaml")?;
+                        paths.insert(path.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(public_keys) = bundle
+        .pointer("/signing/retiredPublicJwkFiles")
+        .and_then(Value::as_array)
+    {
+        for value in public_keys {
+            let path = value
+                .as_str()
+                .ok_or_else(|| anyhow!("retired public key paths must be strings"))?;
+            validate_auxiliary_artifact(path, "public-keys", ".jwk.json")?;
+            paths.insert(path.to_owned());
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn validate_auxiliary_artifact(value: &str, directory: &str, suffix: &str) -> Result<()> {
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().next() != Some(Component::Normal(directory.as_ref()))
+        || path.components().count() != 2
+        || !value.ends_with(suffix)
+    {
+        bail!("referenced bundle artifacts must remain in their allowed project directory");
+    }
+    Ok(())
 }
 
 fn create_private_directory(path: &Path) -> Result<()> {
@@ -2601,7 +3012,10 @@ fn escape_pointer_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
+    use std::{
+        io::Write as _,
+        os::unix::fs::{symlink, OpenOptionsExt as _},
+    };
 
     const OPENAPI: &str = r#"openapi: 3.1.0
 info: {title: Tutorial registry, version: 1.0.0}
@@ -3164,6 +3578,364 @@ properties:
             bundle["requirements"][0]["concepts"][0]["form"],
             "controlled-category"
         );
+    }
+
+    #[test]
+    fn production_controlled_category_keeps_the_stable_concept_and_distinct_scheme_ids() {
+        let answer: QuestionAnswer = serde_norway::from_str(
+            r#"concept: age_bracket
+id: urn:authority:concept:age-bracket:v1
+type: controlled-category
+values: [under-18, adult]
+"#,
+        )
+        .expect("production answer parses");
+        let concept = compile_concept("age-bracket", &answer, &BTreeMap::new())
+            .expect("controlled category compiles");
+
+        assert_eq!(concept.concept_uri, "urn:authority:concept:age-bracket:v1");
+        assert_eq!(
+            concept.constraints["categoryScheme"],
+            "urn:authority:concept:age-bracket:v1:categories"
+        );
+        assert_ne!(
+            concept.constraints["categoryScheme"],
+            concept.concept_uri.as_str(),
+            "the runtime-required category scheme remains distinct from the governed concept"
+        );
+        let (_, codelist) = concept.codelist.expect("controlled category codelist");
+        assert_eq!(
+            codelist["id"],
+            "urn:authority:concept:age-bracket:v1:categories"
+        );
+    }
+
+    #[test]
+    fn production_compiler_handles_all_four_neutral_question_shapes_through_one_path() {
+        fn referenced(question: &str, source: &str) -> String {
+            let start = question.find("source:\n").expect("source section");
+            let end = start
+                + question[start..]
+                    .find("answers:\n")
+                    .expect("answers section");
+            format!(
+                "{}source:\n  ref: {source}\n{}",
+                &question[..start],
+                &question[end..]
+            )
+        }
+
+        fn governed(mut question: String, question_id: &str, answers: &[(&str, &str)]) -> String {
+            for (alias, identifier) in answers {
+                question = question.replace(
+                    &format!("  - concept: {alias}\n"),
+                    &format!("  - concept: {alias}\n    id: {identifier}\n"),
+                );
+            }
+            question.push_str(&format!(
+                r#"governance:
+  requirement: urn:authority:requirement:{question_id}:v1
+  kind: information-requirement
+  referenceFrameworks: [urn:authority:framework:neutral:v1]
+  evidenceType: urn:authority:evidence-type:{question_id}:v1
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/{question_id}.yaml
+  disclosureFamilies: [urn:authority:disclosure-family:{question_id}:v1]
+"#,
+            ));
+            question
+        }
+
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        for directory in ["sources", "selectors", "adapters", "schemas", "fixtures"] {
+            fs::create_dir(fixture.project.join(directory))
+                .expect("production authoring directory");
+        }
+        for (profile, field) in [
+            ("person-reference-v1", "person_id"),
+            ("child-reference-v1", "child_id"),
+            ("candidate-reference-v1", "candidate_id"),
+        ] {
+            fs::write(
+                fixture.project.join(format!("selectors/{profile}.yaml")),
+                format!(
+                    "maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
+                ),
+            )
+            .expect("selector profile");
+        }
+        fs::write(
+            fixture.project.join("sources/people.yaml"),
+            r#"transport: http-json
+baseUrl: https://records.example.test
+posture: field-projected
+authentication: {kind: static-bearer, tokenRef: 'secret:file/records-token'}
+request:
+  method: GET
+  pathTemplate: /people/{person_id}
+  pathBindings:
+    person_id: {role: person, profile: person-reference-v1, field: person_id}
+  fixedHeaders: [{name: Accept, value: application/json}]
+  selectorInputs:
+    - role: person
+      alternatives:
+        - {profile: person-reference-v1, fields: [person_id]}
+  prepareScript: adapters/source-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/source-parameters.schema.yaml
+  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+  projection: [/value]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/source-response.schema.yaml
+extractScript: adapters/source-extract.rhai
+factSchema: schemas/source-facts.schema.yaml
+"#,
+        )
+        .expect("people source");
+        fs::write(
+            fixture.project.join("sources/relationships.yaml"),
+            r#"transport: http-json
+baseUrl: https://relationships.example.test
+posture: field-projected
+authentication: {kind: static-bearer, tokenRef: 'secret:file/relationships-token'}
+request:
+  method: GET
+  pathTemplate: /children/{child_id}/candidates/{candidate_id}
+  pathBindings:
+    child_id: {role: child, profile: child-reference-v1, field: child_id}
+    candidate_id: {role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
+  fixedHeaders: [{name: Accept, value: application/json}]
+  selectorInputs:
+    - role: child
+      alternatives:
+        - {profile: child-reference-v1, fields: [child_id]}
+    - role: candidate-parent
+      alternatives:
+        - {profile: candidate-reference-v1, fields: [candidate_id]}
+  prepareScript: adapters/source-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/source-parameters.schema.yaml
+  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+  projection: [/value]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/source-response.schema.yaml
+extractScript: adapters/source-extract.rhai
+factSchema: schemas/source-facts.schema.yaml
+"#,
+        )
+        .expect("relationship source");
+        for (path, contents) in [
+            (
+                "adapters/source-prepare.rhai",
+                "fn prepare(selectors, parameters) { #{query: [], body: ()} }\n",
+            ),
+            (
+                "adapters/source-extract.rhai",
+                "fn extract(response, parameters) { #{outcome: \"match\", facts: response} }\n",
+            ),
+            (
+                "schemas/source-parameters.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+            (
+                "schemas/source-response.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+            (
+                "schemas/source-facts.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+        ] {
+            fs::write(fixture.project.join(path), contents).expect("source artifact");
+        }
+
+        let questions = [
+            (
+                governed(
+                    referenced(QUESTION, "people"),
+                    "adult-status",
+                    &[("is_adult", "urn:authority:concept:is-adult:v1")],
+                ),
+                ANSWER,
+            ),
+            (
+                governed(
+                    referenced(AGE_BRACKET_QUESTION, "people"),
+                    "age-bracket",
+                    &[("age_bracket", "urn:authority:concept:age-bracket:v1")],
+                ),
+                AGE_BRACKET_ANSWER,
+            ),
+            (
+                governed(
+                    referenced(IMMUNIZATION_QUESTION, "people"),
+                    "immunization-summary",
+                    &[
+                        (
+                            "schedule_complete",
+                            "urn:authority:concept:schedule-complete:v1",
+                        ),
+                        ("dose_count", "urn:authority:concept:dose-count:v1"),
+                    ],
+                ),
+                IMMUNIZATION_ANSWER,
+            ),
+            (
+                governed(
+                    referenced(RELATIONSHIP_QUESTION, "relationships"),
+                    "parent-relationship",
+                    &[(
+                        "relationship_confirmed",
+                        "urn:authority:concept:relationship-confirmed:v1",
+                    )],
+                ),
+                RELATIONSHIP_ANSWER,
+            ),
+        ];
+        for (question, derivation) in questions {
+            fixture.add_question(&question, derivation);
+            let parsed: Question = serde_norway::from_str(&question).expect("governed question");
+            fs::write(
+                fixture.project.join(format!("fixtures/{}.yaml", parsed.id)),
+                "version: 1\ncases: []\n",
+            )
+            .expect("governed fixture");
+        }
+
+        let target = json!({
+            "version": 1,
+            "assuranceProfile": "production",
+            "service": {"providerId": "urn:authority:provider", "trustDomain": "urn:authority:trust"},
+            "issuer": {"id": "urn:authority:issuer"},
+            "authentication": {},
+            "audit": {},
+            "subjectBinding": {},
+            "rateLimits": {},
+            "signing": {},
+            "authorityProfiles": {"authority": {"kind": "explicit-request"}},
+        });
+        let project = fs::canonicalize(&fixture.project).expect("canonical production project");
+        let compiled = compile_production_project(&project, &fixture.staging, target)
+            .expect("all neutral shapes compile through production");
+        let bundle = compiled.bundle;
+        let requirements = bundle["requirements"].as_array().expect("requirements");
+
+        assert_eq!(requirements.len(), 4);
+        assert_eq!(
+            requirements
+                .iter()
+                .map(|requirement| requirement["id"].as_str().expect("requirement id"))
+                .collect::<Vec<_>>(),
+            [
+                "urn:authority:requirement:adult-status:v1",
+                "urn:authority:requirement:age-bracket:v1",
+                "urn:authority:requirement:immunization-summary:v1",
+                "urn:authority:requirement:parent-relationship:v1",
+            ]
+        );
+        assert_eq!(requirements[0]["concepts"][0]["form"], "boolean");
+        assert_eq!(
+            requirements[1]["concepts"][0]["form"],
+            "controlled-category"
+        );
+        assert_eq!(requirements[2]["concepts"].as_array().unwrap().len(), 2);
+        assert_eq!(requirements[2]["concepts"][1]["form"], "bounded-integer");
+        assert_eq!(requirements[3]["subjectRoles"].as_array().unwrap().len(), 2);
+        assert_eq!(compiled.fixture_paths.len(), 4);
+        assert!(!serde_json::to_string(&bundle)
+            .expect("bundle JSON")
+            .contains(LOCAL_URI_PREFIX));
+    }
+
+    #[test]
+    fn local_compiler_uses_exact_optional_governance_but_keeps_local_assurance() {
+        let question = QUESTION.replace(
+            "  - concept: is_adult\n",
+            "  - concept: is_adult\n    id: urn:authority:concept:is-adult:v1\n",
+        ) + r#"governance:
+  requirement: urn:authority:requirement:adult-status:v1
+  kind: criterion
+  referenceFrameworks: [urn:authority:framework:adult-status:v1]
+  evidenceType: urn:authority:evidence-type:adult-status:v1
+  validitySeconds: 900
+  observationTimezone: Asia/Bangkok
+  fixtures: fixtures/adult-status.yaml
+  disclosureFamilies: [urn:authority:disclosure-family:adult-status:v1]
+"#;
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+        fs::create_dir(fixture.project.join("fixtures")).expect("fixtures");
+        fs::write(
+            fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .expect("fixture");
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("governed local compilation");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("local bundle"),
+        )
+        .expect("local bundle YAML");
+        let requirement = &bundle["requirements"][0];
+
+        assert_eq!(bundle["assuranceProfile"], "local");
+        assert_eq!(bundle["authentication"]["issuer"], "http://127.0.0.1:8081");
+        assert_eq!(
+            bundle["signing"]["activeKeyRef"],
+            "secret:file/signing-ed25519-private-jwk"
+        );
+        assert_eq!(
+            requirement["id"],
+            "urn:authority:requirement:adult-status:v1"
+        );
+        assert_eq!(requirement["validitySeconds"], 900);
+        assert_eq!(requirement["observationTimezone"], "Asia/Bangkok");
+        assert_eq!(
+            requirement["concepts"][0]["id"],
+            "urn:authority:concept:is-adult:v1"
+        );
+        assert!(fixture
+            .staging
+            .join("bundle/fixtures/adult-status.yaml")
+            .is_file());
+    }
+
+    #[test]
+    fn copied_project_artifacts_reject_symlinked_parent_directories() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let project = temporary.path().join("project");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&project).expect("project");
+        fs::create_dir(&outside).expect("outside");
+
+        for (directory, file) in [
+            ("adapters", "prepare.rhai"),
+            ("schemas", "facts.schema.yaml"),
+            ("codelists", "categories.yaml"),
+            ("public-keys", "retired.jwk.json"),
+        ] {
+            fs::write(outside.join(file), b"outside\n").expect("outside artifact");
+            symlink(&outside, project.join(directory)).expect("artifact directory symlink");
+            assert!(
+                read_project_artifact(
+                    &project,
+                    &format!("{directory}/{file}"),
+                    1024,
+                    "copied artifact",
+                )
+                .is_err(),
+                "{directory} symlink must not be followed"
+            );
+            fs::remove_file(project.join(directory)).expect("remove test symlink");
+            fs::remove_file(outside.join(file)).expect("remove outside artifact");
+        }
     }
 
     #[test]

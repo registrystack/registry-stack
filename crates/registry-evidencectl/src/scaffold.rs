@@ -75,6 +75,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         "schemas",
         "questions",
         "derivations",
+        "fixtures",
     ] {
         fs::create_dir(staged_root.join(directory))
             .with_context(|| format!("creating the empty {directory} directory"))?;
@@ -110,6 +111,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         "  derivations: {}",
         args.directory.join("derivations").display()
     );
+    println!("  fixtures: {}", args.directory.join("fixtures").display());
     if args.generate_keys {
         println!(
             "  keys: {} (owner-only, disposable, and unbound)",
@@ -120,7 +122,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
         args.directory.display()
     );
-    println!("No question, runtime, fixture, or deployment bundle was generated.");
+    println!("No question, fixture case, runtime, target, or deployment bundle was generated.");
     Ok(ExitCode::SUCCESS)
 }
 

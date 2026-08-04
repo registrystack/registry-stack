@@ -538,6 +538,7 @@ impl Fixture {
             &serde_json::to_vec(&state).unwrap(),
             0o600,
         );
+        write_sealed_bundle(&root, &state);
 
         let mint = temporary.path().join("mint-stub");
         executable(
@@ -620,6 +621,59 @@ fn private_directory(path: &Path) {
 fn private_file(path: &Path, contents: &[u8], mode: u32) {
     fs::write(path, contents).expect("private file");
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn write_sealed_bundle(root: &Path, state: &Value) {
+    let bundle_directory = root.join(".evidence/dev/bundle");
+    private_directory(&bundle_directory);
+    let questions = state["questions"].as_array().expect("state questions");
+    let mut selector_profiles = serde_json::Map::new();
+    let requirements = questions
+        .iter()
+        .map(|question| {
+            let roles = question["subjects"]
+                .as_array()
+                .expect("question subjects")
+                .iter()
+                .map(|subject| {
+                    let profile = subject["selectorProfile"]
+                        .as_str()
+                        .expect("selector profile");
+                    let field = subject["selectorField"].as_str().expect("selector field");
+                    selector_profiles.insert(
+                        profile.to_owned(),
+                        json!({"fields": {field: {"type": "string"}}}),
+                    );
+                    json!({"role": subject["role"], "selectorProfiles": [profile]})
+                })
+                .collect::<Vec<_>>();
+            let concepts = question["concepts"]
+                .as_array()
+                .expect("question concepts")
+                .iter()
+                .map(|concept| {
+                    json!({"id": concept["uri"], "form": concept["form"]})
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": question["requirementUri"],
+                "purposes": [question["purpose"].clone()],
+                "subjectRoles": roles,
+                "concepts": concepts,
+            })
+        })
+        .collect::<Vec<_>>();
+    let bundle = json!({
+        "selectorProfiles": selector_profiles,
+        "requirements": requirements,
+    });
+    private_file(
+        &bundle_directory.join("evidence.yaml"),
+        serde_norway::to_string(&bundle)
+            .expect("bundle renders")
+            .as_bytes(),
+        0o400,
+    );
 }
 
 fn executable(path: &Path, contents: &[u8]) {

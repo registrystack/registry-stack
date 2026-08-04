@@ -1,10 +1,10 @@
 //! Deployment-project mode walk.
 //!
-//! Evidence and Mint refuse, at startup, any deployment artifact whose
-//! permissions or ownership are wrong: a bundle they could write to, a secret
-//! readable past its owner, an audit chain another user could edit. Each
-//! refusal is correct and each names one artifact, so an operator who has just
-//! run `chmod -R` over a project discovers them one restart at a time.
+//! Evidence refuses, at startup, any deployment artifact whose permissions or
+//! ownership are wrong: a bundle it could write to, a secret readable past its
+//! owner, an audit chain another user could edit. Each refusal is correct and
+//! each names one artifact, so an operator who has just run `chmod -R` over a
+//! project discovers them one restart at a time.
 //!
 //! This walks the whole project and reports every artifact that would be
 //! refused, in one pass, without starting anything. It re-states the runtime's
@@ -16,8 +16,14 @@
 //! compared against the user running this check, which is not necessarily the
 //! user the service runs as. And a project on a read-only mount satisfies the
 //! immutability rule whatever its modes say, which this mirrors.
+//!
+//! An explicitly paired Mint configuration adds a separate, mechanical check
+//! of the access-token fields both products share. It does not discover Mint,
+//! validate either product, read a client registry or key, or make an
+//! authorization decision. The product `check` commands remain authoritative.
 
 use std::{
+    collections::BTreeSet,
     fs::{self, Metadata},
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
@@ -26,25 +32,27 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
 
 /// How a bundle names a secret the file provider resolves.
 const SECRET_REFERENCE_PREFIX: &str = "secret:file/";
 
-/// An optional paired Mint configuration inside a deployment project.
-const MINT_CONFIG_FILE: &str = "mint/mint.yaml";
+/// The JWT `typ` Registry Mint writes on access tokens.
+const MINT_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
-/// The example caller's own signing key, which `mint token --key` reads under
-/// the same owner-only rule as Mint's. Named rather than discovered: this is
-/// the filename `evidencectl keygen signing` writes.
-const CALLER_SIGNING_KEY: &str = "caller/signing-ed25519-private-jwk";
+/// Registry Mint's default public-key route when `signing.jwksPath` is omitted.
+const DEFAULT_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Deployment project directory containing runtime.yaml and bundle/.
     #[arg(long)]
     pub project: PathBuf,
+
+    /// Mechanically compare this Mint configuration with Evidence authentication.
+    #[arg(long, value_name = "PATH")]
+    pub mint_config: Option<PathBuf>,
 
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
@@ -98,7 +106,14 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     ];
     checks.extend(check_secrets(project, &runtime, &runtime_path, &bundle));
     checks.push(check_audit(project, &runtime, &runtime_path));
-    checks.extend(check_mint(project)?);
+    if let Some(mint_config_path) = args.mint_config.as_deref() {
+        checks.push(check_mint_compatibility(
+            project,
+            &bundle_config_path,
+            &bundle,
+            mint_config_path,
+        ));
+    }
 
     let passed = checks.iter().all(|check| check.passed);
     let inspected = checks.iter().map(|check| check.inspected).sum();
@@ -246,29 +261,233 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
     run.finish()
 }
 
-/// Mint's signing key and the example caller's, when the project carries a
-/// paired Mint configuration. Both are read under the same owner-only rule.
-fn check_mint(project: &Path) -> Result<Vec<Check>> {
-    let config_path = project.join(MINT_CONFIG_FILE);
-    if !config_path.is_file() {
-        return Ok(Vec::new());
-    }
-    let config = read_yaml(&config_path)?;
+/// The Evidence fields whose values must agree with a paired Mint deployment.
+///
+/// This deliberately projects only the protocol binding. The rest of the
+/// bundle is governed by `evidence check`, and accepting it here would turn
+/// adopter tooling into a second implementation of Evidence configuration.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceAuthenticationCompatibility {
+    issuer: String,
+    audiences: Vec<String>,
+    token_types: Vec<String>,
+    algorithms: Vec<String>,
+    jwks_uri: String,
+    principal_claim: String,
+    requester_tags_claim: String,
+    evidence_audience_claim: String,
+    grant_id_claim: String,
+    grant_authority_claim: String,
+    actor_claim: Option<String>,
+}
 
-    let mut run = CheckRun::new("mint keys", project);
-    if let Some(key) = config
-        .get("signing")
-        .and_then(|signing| signing.get("activeKeyFile"))
-        .and_then(YamlValue::as_str)
+/// The corresponding Mint projection. Mint's own `mint check` owns every
+/// other field, including key files, clients and client assertions.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MintCompatibilityDocument {
+    issuer: String,
+    signing: MintSigningCompatibility,
+    access_tokens: MintAccessTokenCompatibility,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MintSigningCompatibility {
+    algorithm: String,
+    #[serde(default = "default_mint_jwks_path")]
+    jwks_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MintAccessTokenCompatibility {
+    audiences: Vec<String>,
+    claims: MintClaimCompatibility,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MintClaimCompatibility {
+    #[serde(default = "default_principal_claim")]
+    principal: String,
+    requester_tags: String,
+    evidence_audience: String,
+    grant_id: String,
+    grant_authority: String,
+    actor: Option<String>,
+}
+
+fn default_mint_jwks_path() -> String {
+    DEFAULT_MINT_JWKS_PATH.to_owned()
+}
+
+fn default_principal_claim() -> String {
+    "sub".to_owned()
+}
+
+fn check_mint_compatibility(
+    project: &Path,
+    bundle_config_path: &Path,
+    bundle: &YamlValue,
+    mint_config_path: &Path,
+) -> Check {
+    let mut run = CheckRun::new("mint compatibility", project);
+    run.inspected += 1;
+    let evidence: Option<EvidenceAuthenticationCompatibility> = bundle
+        .get("authentication")
+        .cloned()
+        .and_then(|authentication| serde_norway::from_value(authentication).ok());
+    if evidence.is_none() {
+        run.refuse(
+            bundle_config_path,
+            "authentication paired-Mint compatibility fields are missing or invalid".to_owned(),
+        );
+    }
+    let mint = read_mint_compatibility(&mut run, mint_config_path);
+
+    let (Some(evidence), Some(mint)) = (evidence, mint) else {
+        return run.finish();
+    };
+
+    if evidence.issuer != mint.issuer {
+        run.refuse(
+            bundle_config_path,
+            "authentication.issuer does not match the paired Mint issuer".to_owned(),
+        );
+    }
+
+    // This is the route Mint publishes in its metadata. It is concatenation,
+    // not URL joining: path-bearing issuers are part of Mint's contract.
+    let mint_jwks_uri = format!(
+        "{}{}",
+        mint.issuer.trim_end_matches('/'),
+        mint.signing.jwks_path
+    );
+    if evidence.jwks_uri != mint_jwks_uri {
+        run.refuse(
+            bundle_config_path,
+            "authentication.jwksUri does not match the paired Mint JWKS endpoint".to_owned(),
+        );
+    }
+
+    if !same_string_set(&evidence.audiences, &mint.access_tokens.audiences) {
+        run.refuse(
+            bundle_config_path,
+            "authentication.audiences do not match the paired Mint access-token audiences"
+                .to_owned(),
+        );
+    }
+    if !evidence.algorithms.contains(&mint.signing.algorithm) {
+        run.refuse(
+            bundle_config_path,
+            "authentication.algorithms does not admit the paired Mint access-token signing algorithm"
+                .to_owned(),
+        );
+    }
+    if !evidence
+        .token_types
+        .iter()
+        .any(|token_type| token_type == MINT_ACCESS_TOKEN_TYPE)
     {
-        let key = resolve_against(&config_path, project, Path::new(key));
-        require_owner_only_file(&mut run, &key);
+        run.refuse(
+            bundle_config_path,
+            "authentication.tokenTypes does not admit Mint at+jwt access tokens".to_owned(),
+        );
     }
-    let caller_key = project.join(CALLER_SIGNING_KEY);
-    if caller_key.exists() {
-        require_owner_only_file(&mut run, &caller_key);
+
+    compare_claim_name(
+        &mut run,
+        bundle_config_path,
+        "principalClaim",
+        &evidence.principal_claim,
+        &mint.access_tokens.claims.principal,
+    );
+    compare_claim_name(
+        &mut run,
+        bundle_config_path,
+        "requesterTagsClaim",
+        &evidence.requester_tags_claim,
+        &mint.access_tokens.claims.requester_tags,
+    );
+    compare_claim_name(
+        &mut run,
+        bundle_config_path,
+        "evidenceAudienceClaim",
+        &evidence.evidence_audience_claim,
+        &mint.access_tokens.claims.evidence_audience,
+    );
+    compare_claim_name(
+        &mut run,
+        bundle_config_path,
+        "grantIdClaim",
+        &evidence.grant_id_claim,
+        &mint.access_tokens.claims.grant_id,
+    );
+    compare_claim_name(
+        &mut run,
+        bundle_config_path,
+        "grantAuthorityClaim",
+        &evidence.grant_authority_claim,
+        &mint.access_tokens.claims.grant_authority,
+    );
+    if evidence.actor_claim != mint.access_tokens.claims.actor {
+        run.refuse(
+            bundle_config_path,
+            "authentication.actorClaim does not match accessTokens.claims.actor".to_owned(),
+        );
     }
-    Ok(vec![run.finish()])
+
+    run.finish()
+}
+
+fn read_mint_compatibility(
+    run: &mut CheckRun<'_>,
+    mint_config_path: &Path,
+) -> Option<MintCompatibilityDocument> {
+    run.inspected += 1;
+    let bytes = match fs::read(mint_config_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            run.refuse(
+                mint_config_path,
+                "paired Mint configuration cannot be read".to_owned(),
+            );
+            return None;
+        }
+    };
+    match serde_norway::from_slice(&bytes) {
+        Ok(document) => Some(document),
+        Err(_) => {
+            run.refuse(
+                mint_config_path,
+                "paired Mint compatibility fields are missing or invalid".to_owned(),
+            );
+            None
+        }
+    }
+}
+
+fn same_string_set(left: &[String], right: &[String]) -> bool {
+    left.iter().collect::<BTreeSet<_>>() == right.iter().collect::<BTreeSet<_>>()
+}
+
+fn compare_claim_name(
+    run: &mut CheckRun<'_>,
+    bundle_config_path: &Path,
+    evidence_field: &str,
+    evidence_claim: &str,
+    mint_claim: &str,
+) {
+    if evidence_claim != mint_claim {
+        run.refuse(
+            bundle_config_path,
+            format!(
+                "authentication.{evidence_field} does not match its paired Mint access-token claim name"
+            ),
+        );
+    }
 }
 
 /// One check under construction: the artifacts it looked at, and the reasons it
@@ -379,25 +598,6 @@ fn refuse_unless_immutable(
             format!("has mode {mode:04o}; the runtime requires no write bits (chmod a-w)"),
         );
     }
-}
-
-/// A regular file no one but its owner can reach: what Mint requires of a
-/// private key file.
-fn require_owner_only_file(run: &mut CheckRun, path: &Path) {
-    let Some(metadata) = run.stat(path) else {
-        return;
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        run.refuse(
-            path,
-            "is not a regular file reached without traversing a symbolic link".to_owned(),
-        );
-        return;
-    }
-    if metadata.permissions().mode() & 0o077 != 0 {
-        run.refuse(path, group_or_other(&metadata, 0o600));
-    }
-    require_sole_owner(run, path, &metadata);
 }
 
 /// Owned by this user and reachable under one name only. A second hard link is

@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 
 mod audit_view;
 mod authoring;
+mod build;
 mod dev;
 mod doctor;
 mod fixtures;
@@ -39,6 +40,8 @@ enum Command {
     Jwks(jwks::JwksArgs),
     /// Start an editable Evidence authoring project from OpenAPI.
     New(scaffold::NewArgs),
+    /// Compile an editable project into a reviewed production candidate.
+    Build(build::BuildArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]
     Fixtures(fixtures::FixturesCommand),
@@ -67,6 +70,7 @@ fn main() -> ExitCode {
         Command::Keygen(command) => keygen::run(command),
         Command::Jwks(args) => jwks::run(args),
         Command::New(args) => scaffold::run(args),
+        Command::Build(args) => build::run(args),
         Command::Fixtures(command) => fixtures::run(command),
         Command::Source(command) => suggest::run(command),
         Command::Doctor(args) => doctor::run(args),

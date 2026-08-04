@@ -2,7 +2,7 @@
 
 //! `evidencectl doctor` over a real deployment project.
 //!
-//! Every assertion here is about a mode or an owner the Evidence or Mint
+//! Every filesystem assertion here is about a mode or an owner the Evidence
 //! runtime refuses at startup. The filesystem is intentionally assembled as a
 //! doctor fixture because `evidencectl new` no longer invents a runnable
 //! deployment. No `evidence` binary is involved anywhere in this file:
@@ -17,9 +17,22 @@ use std::{
 };
 
 const SIGNING_KID: &str = "doctor-signing-key-1";
-const MINT_KID: &str = "doctor-mint-key-1";
-const CALLER_KID: &str = "doctor-client-key-1";
 const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
+
+const MATCHING_MINT_CONFIG: &str = r#"version: 1
+issuer: https://identity.invalid
+signing:
+  algorithm: EdDSA
+  jwksPath: /.well-known/jwks.json
+accessTokens:
+  audiences: [evidence-scaffold]
+  claims:
+    principal: sub
+    requesterTags: evidence_tags
+    evidenceAudience: evidence_audience
+    grantId: evidence_grant_id
+    grantAuthority: evidence_authority
+"#;
 
 #[test]
 fn doctor_passes_a_frozen_project_and_leaves_the_public_key_beside_it_alone() {
@@ -67,7 +80,7 @@ fn doctor_names_every_artifact_whose_mode_the_runtime_refuses() {
     provision_bearer_token(&project);
     freeze(&project);
 
-    // One artifact per rule the runtimes enforce, each widened past it. A
+    // One artifact per rule the runtime enforces, each widened past it. A
     // `chmod -R` an operator runs over a project produces exactly this state.
     let refused = [
         "runtime.yaml",
@@ -75,8 +88,6 @@ fn doctor_names_every_artifact_whose_mode_the_runtime_refuses() {
         "secrets",
         "secrets/audit-hmac-key",
         "audit/evidence.jsonl",
-        "mint/secrets/signing-ed25519-private-jwk",
-        "caller/signing-ed25519-private-jwk",
     ];
     fs::write(project.join("audit/evidence.jsonl"), "").expect("stage an audit chain");
     for path in refused {
@@ -159,12 +170,574 @@ fn doctor_json_puts_one_document_on_stdout_and_the_report_on_stderr() {
     );
 }
 
+#[test]
+fn doctor_checks_only_an_explicit_external_mint_config() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let external_mint = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    write_mint(&external_mint, MATCHING_MINT_CONFIG);
+
+    // A nested document must not be discovered. The explicit path is the only
+    // act that pairs Evidence with Mint.
+    write_mint(
+        &project.join("mint/mint.yaml"),
+        &MATCHING_MINT_CONFIG.replace("https://identity.invalid", "https://nested.invalid"),
+    );
+
+    freeze(&project);
+    let unpaired = doctor(&project, &[]);
+    let paired = doctor(
+        &project,
+        &[
+            "--mint-config",
+            external_mint.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+
+    assert!(
+        unpaired.status.success(),
+        "doctor discovered an unrequested Mint config:\n{}{}",
+        stdout_of(&unpaired),
+        stderr_of(&unpaired)
+    );
+    assert!(
+        !stdout_of(&unpaired).contains("mint compatibility"),
+        "unpaired doctor reported a Mint check: {}",
+        stdout_of(&unpaired)
+    );
+    assert!(
+        paired.status.success(),
+        "doctor rejected matching external Mint config:\n{}{}",
+        stdout_of(&paired),
+        stderr_of(&paired)
+    );
+    assert!(
+        stdout_of(&paired).contains("PASS: mint compatibility"),
+        "paired doctor omitted its compatibility result: {}",
+        stdout_of(&paired)
+    );
+}
+
+#[test]
+fn doctor_rejects_an_issuer_mismatch_without_printing_its_value() {
+    const SENTINEL: &str = "https://credential-token-selector-source.invalid";
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    write_mint(
+        &mint_config,
+        &MATCHING_MINT_CONFIG.replace("https://identity.invalid", SENTINEL),
+    );
+
+    freeze(&project);
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+
+    let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+    assert!(
+        !output.status.success(),
+        "doctor accepted an issuer mismatch: {diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("authentication.issuer"),
+        "issuer mismatch did not identify its field: {diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains(SENTINEL),
+        "issuer mismatch disclosed the configured value: {diagnostics}"
+    );
+}
+
+#[test]
+fn doctor_reports_every_mint_field_mismatch_without_printing_values() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+
+    let cases = [
+        (
+            "jwksPath: /.well-known/jwks.json",
+            "jwksPath: /credential-token-selector-source-jwks",
+            "authentication.jwksUri",
+            "/credential-token-selector-source-jwks",
+        ),
+        (
+            "audiences: [evidence-scaffold]",
+            "audiences: [credential-token-selector-source-audience]",
+            "authentication.audiences",
+            "credential-token-selector-source-audience",
+        ),
+        (
+            "algorithm: EdDSA",
+            "algorithm: RS256",
+            "authentication.algorithms",
+            "RS256",
+        ),
+        (
+            "principal: sub",
+            "principal: credential_token_selector_source_principal",
+            "authentication.principalClaim",
+            "credential_token_selector_source_principal",
+        ),
+        (
+            "requesterTags: evidence_tags",
+            "requesterTags: credential_token_selector_source_tags",
+            "authentication.requesterTagsClaim",
+            "credential_token_selector_source_tags",
+        ),
+        (
+            "evidenceAudience: evidence_audience",
+            "evidenceAudience: credential_token_selector_source_audience_claim",
+            "authentication.evidenceAudienceClaim",
+            "credential_token_selector_source_audience_claim",
+        ),
+        (
+            "grantId: evidence_grant_id",
+            "grantId: credential_token_selector_source_grant_id",
+            "authentication.grantIdClaim",
+            "credential_token_selector_source_grant_id",
+        ),
+        (
+            "grantAuthority: evidence_authority",
+            "grantAuthority: credential_token_selector_source_authority",
+            "authentication.grantAuthorityClaim",
+            "credential_token_selector_source_authority",
+        ),
+    ];
+
+    for (original, replacement, field, sentinel) in cases {
+        let mismatched = replace_once(MATCHING_MINT_CONFIG, original, replacement);
+        write_mint(&mint_config, &mismatched);
+
+        freeze(&project);
+        let output = doctor(
+            &project,
+            &[
+                "--mint-config",
+                mint_config.to_str().expect("Mint config path"),
+            ],
+        );
+        unfreeze(&project);
+
+        let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+        assert!(
+            !output.status.success(),
+            "doctor accepted mismatch in {field}: {diagnostics}"
+        );
+        assert!(
+            diagnostics.contains(field),
+            "mismatch did not identify {field}: {diagnostics}"
+        );
+        assert!(
+            !diagnostics.contains(sentinel),
+            "mismatch in {field} disclosed its configured value: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn doctor_requires_evidence_to_admit_the_mint_access_token_type() {
+    const SENTINEL: &str = "credential-token-selector-source-type";
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    rewrite_bundle(
+        &project,
+        "tokenTypes: [at+jwt]",
+        &format!("tokenTypes: [{SENTINEL}]"),
+    );
+    write_mint(&mint_config, MATCHING_MINT_CONFIG);
+
+    freeze(&project);
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+
+    let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+    assert!(!output.status.success(), "doctor accepted {diagnostics}");
+    assert!(
+        diagnostics.contains("authentication.tokenTypes"),
+        "token-type mismatch did not identify its field: {diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains(SENTINEL),
+        "token-type mismatch disclosed its configured value: {diagnostics}"
+    );
+}
+
+#[test]
+fn doctor_checks_every_actor_claim_presence_combination() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    let cases = [
+        (None, None, true),
+        (Some("shared_actor"), Some("shared_actor"), true),
+        (Some("evidence_actor"), None, false),
+        (None, Some("mint_actor"), false),
+        (Some("evidence_actor"), Some("mint_actor"), false),
+    ];
+
+    for (index, (evidence_actor, mint_actor, expected_pass)) in cases.into_iter().enumerate() {
+        let project = workspace.path().join(format!("project-{index}"));
+        provision(&project);
+        provision_bearer_token(&project);
+        if let Some(actor) = evidence_actor {
+            add_evidence_actor(&project, actor);
+        }
+        let mut mint = MATCHING_MINT_CONFIG.to_owned();
+        if let Some(actor) = mint_actor {
+            mint.push_str(&format!("    actor: {actor}\n"));
+        }
+        write_mint(&mint_config, &mint);
+
+        freeze(&project);
+        let output = doctor(
+            &project,
+            &[
+                "--mint-config",
+                mint_config.to_str().expect("Mint config path"),
+            ],
+        );
+        unfreeze(&project);
+
+        let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+        assert_eq!(
+            output.status.success(),
+            expected_pass,
+            "unexpected actor compatibility result: {diagnostics}"
+        );
+        if !expected_pass {
+            assert!(
+                diagnostics.contains("authentication.actorClaim"),
+                "actor mismatch did not identify its field: {diagnostics}"
+            );
+            for value in [evidence_actor, mint_actor].into_iter().flatten() {
+                assert!(
+                    !diagnostics.contains(value),
+                    "actor mismatch disclosed its configured value: {diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn doctor_accepts_set_order_supersets_custom_jwks_and_matching_actor() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+
+    rewrite_bundle(
+        &project,
+        "issuer: https://identity.invalid",
+        "issuer: https://identity.invalid/",
+    );
+    rewrite_bundle(
+        &project,
+        "audiences: [evidence-scaffold]",
+        "audiences: [secondary-audience, evidence-scaffold]",
+    );
+    rewrite_bundle(
+        &project,
+        "tokenTypes: [at+jwt]",
+        "tokenTypes: [application/at+jwt, at+jwt]",
+    );
+    rewrite_bundle(
+        &project,
+        "algorithms: [EdDSA]",
+        "algorithms: [RS256, EdDSA]",
+    );
+    rewrite_bundle(
+        &project,
+        "jwksUri: https://identity.invalid/.well-known/jwks.json",
+        "jwksUri: https://identity.invalid/custom/jwks.json",
+    );
+    add_evidence_actor(&project, "shared_actor");
+
+    let mut mint = MATCHING_MINT_CONFIG
+        .replace(
+            "issuer: https://identity.invalid",
+            "issuer: https://identity.invalid/",
+        )
+        .replace(
+            "jwksPath: /.well-known/jwks.json",
+            "jwksPath: /custom/jwks.json",
+        )
+        .replace(
+            "audiences: [evidence-scaffold]",
+            "audiences: [evidence-scaffold, secondary-audience]",
+        );
+    mint.push_str("    actor: shared_actor\n");
+    write_mint(&mint_config, &mint);
+
+    freeze(&project);
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+
+    assert!(
+        output.status.success(),
+        "doctor rejected mechanically compatible sets and supersets:\n{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn doctor_applies_mint_protocol_defaults() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    let mint = MATCHING_MINT_CONFIG
+        .replace("  jwksPath: /.well-known/jwks.json\n", "")
+        .replace("    principal: sub\n", "");
+    write_mint(&mint_config, &mint);
+
+    freeze(&project);
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+
+    assert!(
+        output.status.success(),
+        "doctor did not apply Mint's JWKS and principal defaults:\n{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn doctor_json_aggregates_mismatches_and_redacts_every_value() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+
+    let sentinels = [
+        "credential-token-selector-source-audience",
+        "RS256",
+        "credential_token_selector_source_principal",
+    ];
+    let mint = MATCHING_MINT_CONFIG
+        .replace(
+            "audiences: [evidence-scaffold]",
+            &format!("audiences: [{}]", sentinels[0]),
+        )
+        .replace("algorithm: EdDSA", &format!("algorithm: {}", sentinels[1]))
+        .replace("principal: sub", &format!("principal: {}", sentinels[2]));
+    write_mint(&mint_config, &mint);
+
+    freeze(&project);
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+            "--json",
+        ],
+    );
+    unfreeze(&project);
+
+    assert!(!output.status.success(), "doctor accepted three mismatches");
+    let stdout = stdout_of(&output);
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).expect("doctor JSON");
+    let check = report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .find(|check| check["name"] == "mint compatibility")
+        .expect("Mint compatibility check");
+    assert_eq!(
+        check["findings"].as_array().expect("findings").len(),
+        3,
+        "doctor must report every mechanical mismatch in one run: {stdout}"
+    );
+
+    let diagnostics = format!("{stdout}{}", stderr_of(&output));
+    for field in [
+        "authentication.audiences",
+        "authentication.algorithms",
+        "authentication.principalClaim",
+    ] {
+        assert!(
+            diagnostics.contains(field),
+            "aggregate diagnostics omitted {field}: {diagnostics}"
+        );
+    }
+    for sentinel in sentinels {
+        assert!(
+            !diagnostics.contains(sentinel),
+            "JSON or human diagnostics disclosed {sentinel}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn doctor_redacts_invalid_paired_documents() {
+    const SENTINEL: &str = "credential-token-selector-source-invalid-document";
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_config = workspace.path().join("mint/mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    write_mint(&mint_config, &format!("issuer: {SENTINEL}\nsigning: [\n"));
+
+    freeze(&project);
+    let invalid_mint = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+    let mint_diagnostics = format!("{}{}", stdout_of(&invalid_mint), stderr_of(&invalid_mint));
+    assert!(!invalid_mint.status.success());
+    assert!(
+        mint_diagnostics.contains("paired Mint compatibility fields are missing or invalid"),
+        "invalid Mint document lacked a stable diagnostic: {mint_diagnostics}"
+    );
+    assert!(
+        !mint_diagnostics.contains(SENTINEL),
+        "Mint decoder error disclosed an authored value: {mint_diagnostics}"
+    );
+
+    write_mint(&mint_config, MATCHING_MINT_CONFIG);
+    rewrite_bundle(
+        &project,
+        "issuer: https://identity.invalid",
+        &format!("issuer: [{SENTINEL}]"),
+    );
+    freeze(&project);
+    let invalid_evidence = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    unfreeze(&project);
+    let evidence_diagnostics = format!(
+        "{}{}",
+        stdout_of(&invalid_evidence),
+        stderr_of(&invalid_evidence)
+    );
+    assert!(!invalid_evidence.status.success());
+    assert!(
+        evidence_diagnostics
+            .contains("authentication paired-Mint compatibility fields are missing or invalid"),
+        "invalid Evidence binding lacked a stable diagnostic: {evidence_diagnostics}"
+    );
+    assert!(
+        !evidence_diagnostics.contains(SENTINEL),
+        "Evidence decoder error disclosed an authored value: {evidence_diagnostics}"
+    );
+}
+
+#[test]
+fn doctor_pairing_is_read_only_and_does_not_inspect_mint_authority_material() {
+    const SENTINEL: &str = "credential-token-selector-source-authority-material";
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    let mint_root = workspace.path().join("mint");
+    let mint_config = mint_root.join("mint.yaml");
+    provision(&project);
+    provision_bearer_token(&project);
+    let mut mint = MATCHING_MINT_CONFIG.replace(
+        "  jwksPath: /.well-known/jwks.json",
+        &format!("  activeKeyFile: secrets/{SENTINEL}\n  jwksPath: /.well-known/jwks.json"),
+    );
+    mint.push_str("clients:\n  directory: clients\n");
+    write_mint(&mint_config, &mint);
+    fs::create_dir_all(mint_root.join("secrets")).expect("Mint secrets");
+    fs::create_dir_all(mint_root.join("clients")).expect("Mint clients");
+    fs::write(mint_root.join("secrets").join(SENTINEL), SENTINEL).expect("private key sentinel");
+    fs::write(mint_root.join("clients/client.yaml"), SENTINEL).expect("client sentinel");
+
+    freeze(&project);
+    let before = tree_snapshot(workspace.path());
+    let output = doctor(
+        &project,
+        &[
+            "--mint-config",
+            mint_config.to_str().expect("Mint config path"),
+        ],
+    );
+    let after = tree_snapshot(workspace.path());
+    unfreeze(&project);
+
+    assert!(
+        output.status.success(),
+        "doctor inspected unrelated Mint authority material:\n{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+    assert!(
+        before == after,
+        "doctor changed a deployment artifact; snapshot contents are withheld"
+    );
+    let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+    assert!(
+        !diagnostics.contains(SENTINEL),
+        "doctor disclosed Mint authority material: {diagnostics}"
+    );
+}
+
+#[test]
+fn doctor_help_exposes_the_explicit_mint_config_option() {
+    let output = evidencectl(&["doctor", "--help"]);
+    assert!(output.status.success(), "doctor --help failed");
+    assert!(
+        stdout_of(&output).contains("--mint-config <PATH>"),
+        "doctor help omitted --mint-config: {}",
+        stdout_of(&output)
+    );
+}
+
 /// Assemble the smallest filesystem fixture that names every kind of artifact
 /// doctor checks, then generate the private material through the public CLI.
 fn provision(project: &Path) {
     fs::create_dir_all(project.join("bundle")).expect("bundle directory");
     fs::create_dir_all(project.join("audit")).expect("audit directory");
-    fs::create_dir_all(project.join("mint")).expect("mint directory");
     fs::write(
         project.join("runtime.yaml"),
         "bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\nauditStorage:\n  path: audit/evidence.jsonl\n",
@@ -172,14 +745,25 @@ fn provision(project: &Path) {
     .expect("runtime fixture");
     fs::write(
         project.join("bundle/evidence.yaml"),
-        "signing: secret:file/signing-ed25519-private-jwk\naudit: secret:file/audit-hmac-key\nsubjectBinding: secret:file/subject-binding-hmac-key\nsourceToken: secret:file/source-bearer-token\n",
+        r#"authentication:
+  kind: oidc-access-token
+  issuer: https://identity.invalid
+  audiences: [evidence-scaffold]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://identity.invalid/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+signing: secret:file/signing-ed25519-private-jwk
+audit: secret:file/audit-hmac-key
+subjectBinding: secret:file/subject-binding-hmac-key
+sourceToken: secret:file/source-bearer-token
+"#,
     )
     .expect("bundle fixture");
-    fs::write(
-        project.join("mint/mint.yaml"),
-        "signing:\n  activeKeyFile: secrets/signing-ed25519-private-jwk\n",
-    )
-    .expect("Mint fixture");
 
     let secrets = project.join("secrets");
     run_ok(&[
@@ -194,26 +778,64 @@ fn provision(project: &Path) {
         let out = secrets.join(name);
         run_ok(&["keygen", "secret", "--out", out.to_str().expect("secret")]);
     }
+}
 
-    run_ok(&[
-        "keygen",
-        "signing",
-        "--out-dir",
-        project
-            .join("mint/secrets")
-            .to_str()
-            .expect("mint secret root"),
-        "--kid",
-        MINT_KID,
-    ]);
-    run_ok(&[
-        "keygen",
-        "signing",
-        "--out-dir",
-        project.join("caller").to_str().expect("caller secret root"),
-        "--kid",
-        CALLER_KID,
-    ]);
+fn write_mint(path: &Path, document: &str) {
+    fs::create_dir_all(path.parent().expect("Mint parent")).expect("Mint directory");
+    fs::write(path, document).expect("Mint configuration");
+}
+
+fn rewrite_bundle(project: &Path, original: &str, replacement: &str) {
+    let path = project.join("bundle/evidence.yaml");
+    let document = fs::read_to_string(&path).expect("Evidence configuration");
+    fs::write(&path, replace_once(&document, original, replacement))
+        .expect("rewrite Evidence configuration");
+}
+
+fn add_evidence_actor(project: &Path, actor: &str) {
+    rewrite_bundle(
+        project,
+        "  grantAuthorityClaim: evidence_authority",
+        &format!("  grantAuthorityClaim: evidence_authority\n  actorClaim: {actor}"),
+    );
+}
+
+fn replace_once(document: &str, original: &str, replacement: &str) -> String {
+    assert_eq!(
+        document.matches(original).count(),
+        1,
+        "fixture must contain exactly one {original:?}"
+    );
+    document.replacen(original, replacement, 1)
+}
+
+fn tree_snapshot(root: &Path) -> Vec<(String, u32, Vec<u8>)> {
+    let mut snapshot = Vec::new();
+    collect_tree_snapshot(root, root, &mut snapshot);
+    snapshot
+}
+
+fn collect_tree_snapshot(root: &Path, path: &Path, snapshot: &mut Vec<(String, u32, Vec<u8>)>) {
+    let metadata = fs::symlink_metadata(path).expect("snapshot metadata");
+    let relative = path
+        .strip_prefix(root)
+        .expect("snapshot root")
+        .display()
+        .to_string();
+    let mode = metadata.permissions().mode() & 0o7777;
+    if metadata.is_dir() {
+        snapshot.push((relative, mode, Vec::new()));
+        let mut entries: Vec<_> = fs::read_dir(path)
+            .expect("snapshot directory")
+            .map(|entry| entry.expect("snapshot entry").path())
+            .collect();
+        entries.sort();
+        for entry in entries {
+            collect_tree_snapshot(root, &entry, snapshot);
+        }
+    } else {
+        snapshot.push((relative, mode, fs::read(path).expect("snapshot file")));
+    }
 }
 
 /// The one secret the scaffolded source needs and `provision` leaves out, so a

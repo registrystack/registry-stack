@@ -44,7 +44,6 @@ const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
-const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const MINT_KEY_ID: &str = "local-mint-signing-key-1";
 const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
 const PRIVATE_DIR_MODE: u32 = 0o700;
@@ -399,7 +398,8 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             .map(|question| question.alias.as_str())
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            == state.questions.len();
+            == state.questions.len()
+        && questions_match_sealed_bundle(&state.questions, dev_root).unwrap_or(false);
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
         || !origins_are_closed
@@ -415,13 +415,9 @@ fn valid_question_state(question: &QuestionState) -> bool {
     let identifiers_are_closed = [question.alias.as_str(), question.purpose.as_str()]
         .into_iter()
         .all(valid_local_identifier);
-    let requirement_uri = format!("{LOCAL_URI_PREFIX}requirement:{}", question.alias);
     let concepts_are_closed = !question.concepts.is_empty()
         && question.concepts.len() <= 16
-        && question
-            .concepts
-            .iter()
-            .all(|concept| valid_concept_state(&question.alias, concept))
+        && question.concepts.iter().all(valid_concept_state)
         && question
             .concepts
             .iter()
@@ -452,22 +448,99 @@ fn valid_question_state(question: &QuestionState) -> bool {
             .len()
             == question.subjects.len();
     identifiers_are_closed
-        && question.requirement_uri == requirement_uri
+        && valid_uri(&question.requirement_uri)
         && subjects_are_closed
         && concepts_are_closed
 }
 
-fn valid_concept_state(question_alias: &str, concept: &ConceptState) -> bool {
+fn valid_concept_state(concept: &ConceptState) -> bool {
     valid_local_identifier(&concept.alias)
-        && concept.uri
-            == format!(
-                "{LOCAL_URI_PREFIX}concept:{question_alias}:{}",
-                concept.alias
-            )
+        && valid_uri(&concept.uri)
         && matches!(
             concept.form.as_str(),
             "boolean" | "controlled-category" | "bounded-integer" | "reviewed-structured-value"
         )
+}
+
+fn valid_uri(value: &str) -> bool {
+    value.len() <= 512 && url::Url::parse(value).is_ok()
+}
+
+fn questions_match_sealed_bundle(questions: &[QuestionState], dev_root: &Path) -> Result<bool> {
+    let path = dev_root.join("bundle/evidence.yaml");
+    require_owned_regular_file(&path, 0o400)?;
+    let bytes = fs::read(&path).context("failed to read the sealed local bundle")?;
+    if bytes.len() > 1024 * 1024 {
+        return Ok(false);
+    }
+    let bundle: Value =
+        serde_norway::from_slice(&bytes).context("the sealed local bundle is invalid")?;
+    let requirements = bundle
+        .get("requirements")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("the sealed local bundle has no requirements"))?;
+    if requirements.len() != questions.len() {
+        return Ok(false);
+    }
+    let selector_profiles = bundle
+        .get("selectorProfiles")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the sealed local bundle has no selector profiles"))?;
+    for question in questions {
+        let Some(requirement) = requirements.iter().find(|requirement| {
+            requirement.get("id").and_then(Value::as_str) == Some(question.requirement_uri.as_str())
+        }) else {
+            return Ok(false);
+        };
+        if !requirement
+            .get("purposes")
+            .and_then(Value::as_array)
+            .is_some_and(|purposes| *purposes == [Value::String(question.purpose.clone())])
+        {
+            return Ok(false);
+        }
+        let concepts = requirement
+            .get("concepts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("a sealed local requirement has no concepts"))?;
+        if concepts.len() != question.concepts.len()
+            || question.concepts.iter().any(|concept| {
+                !concepts.iter().any(|configured| {
+                    configured.get("id").and_then(Value::as_str) == Some(concept.uri.as_str())
+                        && configured.get("form").and_then(Value::as_str)
+                            == Some(concept.form.as_str())
+                })
+            })
+        {
+            return Ok(false);
+        }
+        let roles = requirement
+            .get("subjectRoles")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("a sealed local requirement has no subject roles"))?;
+        if roles.len() != question.subjects.len()
+            || question.subjects.iter().any(|subject| {
+                !roles.iter().any(|role| {
+                    role.get("role").and_then(Value::as_str) == Some(subject.role.as_str())
+                        && role
+                            .get("selectorProfiles")
+                            .and_then(Value::as_array)
+                            .is_some_and(|profiles| {
+                                profiles.iter().any(|profile| {
+                                    profile.as_str() == Some(subject.selector_profile.as_str())
+                                })
+                            })
+                }) || !selector_profiles
+                    .get(&subject.selector_profile)
+                    .and_then(|profile| profile.get("fields"))
+                    .and_then(Value::as_object)
+                    .is_some_and(|fields| fields.contains_key(&subject.selector_field))
+            })
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn validate_closed_caller(caller: &CallerState, dev_root: &Path, token_url: &str) -> Result<()> {
@@ -1609,6 +1682,32 @@ mod tests {
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).expect("socket mode");
 
         let compiled = compiled(&runtime);
+        let bundle = dev.join("bundle");
+        create_private_directory(&bundle).expect("bundle");
+        fs::write(
+            bundle.join("evidence.yaml"),
+            br#"selectorProfiles:
+  local-subject-adult-status-v1:
+    fields:
+      person_id: {type: string}
+requirements:
+  - id: urn:registrystack:evidence:local:requirement:adult-status
+    purposes: [age-check]
+    subjectRoles:
+      - role: person
+        selectorProfiles: [local-subject-adult-status-v1]
+    concepts:
+      - id: urn:registrystack:evidence:local:concept:adult-status:is_adult
+        form: boolean
+"#,
+        )
+        .expect("bundle config");
+        fs::set_permissions(
+            bundle.join("evidence.yaml"),
+            fs::Permissions::from_mode(0o400),
+        )
+        .expect("seal bundle config");
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
         let mut state = DevState {
             schema: STATE_SCHEMA.to_owned(),
             status: DevStatus::Ready,
