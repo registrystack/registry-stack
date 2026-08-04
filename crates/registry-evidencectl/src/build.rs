@@ -4,12 +4,18 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     os::unix::fs::{
         DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
     },
     path::{Component, Path, PathBuf},
-    process::{Command, ExitCode},
+    process::{Command, ExitCode, ExitStatus, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -21,6 +27,7 @@ use serde_json::{json, Map, Value};
 use crate::{authoring, fixtures, keygen};
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
+const MAX_EVIDENCE_STDOUT_BYTES: u64 = 1024 * 1024;
 const SECRET_PREFIX: &str = "secret:file/";
 const VALIDATION_CA: &[u8] = br#"-----BEGIN CERTIFICATE-----
 MIIDMzCCAhugAwIBAgIULquGuNJ2HotUWgpEcRBAdsEtTkUwDQYJKoZIhvcNAQEL
@@ -84,10 +91,10 @@ impl TargetGovernance {
         if self.assurance_profile != "production" {
             bail!("evidencectl build requires assuranceProfile: production");
         }
-        if !self
+        if self
             .authority_profiles
             .as_object()
-            .is_some_and(|profiles| !profiles.is_empty())
+            .is_none_or(Map::is_empty)
         {
             bail!("production governance requires at least one authority profile");
         }
@@ -114,8 +121,23 @@ impl TargetGovernance {
 }
 
 pub fn run(args: BuildArgs) -> Result<ExitCode> {
+    let interruption = BuildInterruption::install()?;
+    run_inner(args, &interruption)
+}
+
+fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCode> {
+    interruption.check()?;
     reject_existing_output(&args.output)?;
+    let project = plain_directory(&args.project, "production project")?;
     let output_parent = plain_parent(&args.output)?;
+    let candidate = output_parent.join(
+        args.output
+            .file_name()
+            .ok_or_else(|| anyhow!("candidate output must name one new directory"))?,
+    );
+    if candidate.starts_with(&project) {
+        bail!("candidate output must remain outside the editable project");
+    }
     let target = plain_directory(&args.target, "production target")?;
     let governance_bytes = read_plain_file(
         &target.join("governance.yaml"),
@@ -132,6 +154,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
     let governed_bundle = governance.into_bundle()?;
     let evidence_bin = fixtures::resolve_evidence_binary(None)?;
 
+    interruption.check()?;
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-build-")
         .tempdir_in(&output_parent)
@@ -139,20 +162,25 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
         .context("setting private production candidate staging permissions")?;
     let result = prepare_candidate(
-        &args.project,
+        &project,
         staging.path(),
         &target_runtime,
         governed_bundle,
         &evidence_bin,
         &output_parent,
+        interruption,
     );
     let (revision, secret_references) = match result {
         Ok(result) => result,
         Err(error) => {
-            let _ = make_tree_removable(staging.path());
+            close_candidate_staging(staging)?;
             return Err(error);
         }
     };
+    if let Err(error) = interruption.check() {
+        close_candidate_staging(staging)?;
+        return Err(error);
+    }
     publish(staging, &args.output)?;
 
     println!("Bundle revision: {revision}");
@@ -167,6 +195,41 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+struct BuildInterruption {
+    requested: Arc<AtomicBool>,
+    registrations: Vec<signal_hook::SigId>,
+}
+
+impl BuildInterruption {
+    fn install() -> Result<Self> {
+        let mut guard = Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            registrations: Vec::new(),
+        };
+        for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+            let registration = signal_hook::flag::register(signal, Arc::clone(&guard.requested))
+                .context("installing the production-build signal handler")?;
+            guard.registrations.push(registration);
+        }
+        Ok(guard)
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.requested.load(Ordering::Relaxed) {
+            bail!("production build interrupted");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for BuildInterruption {
+    fn drop(&mut self) {
+        for registration in self.registrations.drain(..) {
+            signal_hook::low_level::unregister(registration);
+        }
+    }
+}
+
 fn prepare_candidate(
     project: &Path,
     staging_root: &Path,
@@ -174,8 +237,10 @@ fn prepare_candidate(
     governed_bundle: Value,
     evidence_bin: &Path,
     temporary_parent: &Path,
+    interruption: &BuildInterruption,
 ) -> Result<(String, Vec<String>)> {
     let compiled = authoring::compile_production_project(project, staging_root, governed_bundle)?;
+    interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(target_runtime, "production runtime")?;
     let runtime_path = staging_root.join("runtime.yaml");
@@ -190,16 +255,26 @@ fn prepare_candidate(
         .context("creating private production validation state")?;
     fs::set_permissions(validation.path(), fs::Permissions::from_mode(0o700))
         .context("setting private production validation permissions")?;
-    let validation_runtime = prepare_validation_runtime(
-        validation.path(),
-        &compiled.bundle_path,
-        &compiled.bundle,
-        &secret_references,
-    )?;
-    let revision = run_check(evidence_bin, &validation_runtime)?;
-    for fixture in &compiled.fixture_paths {
-        run_fixture(evidence_bin, &validation_runtime, fixture)?;
-    }
+    let validation_result = (|| -> Result<String> {
+        let validation_runtime = prepare_validation_runtime(
+            validation.path(),
+            &compiled.bundle_path,
+            &compiled.bundle,
+            &secret_references,
+        )?;
+        interruption.check()?;
+        let revision = run_check(evidence_bin, &validation_runtime, interruption)?;
+        for fixture in &compiled.fixture_paths {
+            interruption.check()?;
+            run_fixture(evidence_bin, &validation_runtime, fixture, interruption)?;
+        }
+        interruption.check()?;
+        Ok(revision)
+    })();
+    validation
+        .close()
+        .context("removing private production validation staging")?;
+    let revision = validation_result?;
     Ok((revision, secret_references))
 }
 
@@ -289,34 +364,110 @@ fn tls_trust_profiles(config: &Value) -> Result<Vec<String>> {
     Ok(profiles.into_iter().collect())
 }
 
-fn run_check(evidence_bin: &Path, runtime: &Path) -> Result<String> {
-    let output = Command::new(evidence_bin)
+fn run_check(
+    evidence_bin: &Path,
+    runtime: &Path,
+    interruption: &BuildInterruption,
+) -> Result<String> {
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("--runtime")
         .arg(runtime)
         .arg("check")
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .context("running the Evidence production check")?;
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let output = run_evidence(command, interruption, true)?;
     if !output.status.success() {
         return runtime_failure("Evidence rejected the generated production bundle");
     }
     parse_bundle_revision(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn run_fixture(evidence_bin: &Path, runtime: &Path, fixture: &str) -> Result<()> {
-    let output = Command::new(evidence_bin)
+fn run_fixture(
+    evidence_bin: &Path,
+    runtime: &Path,
+    fixture: &str,
+    interruption: &BuildInterruption,
+) -> Result<()> {
+    let mut command = Command::new(evidence_bin);
+    command
         .arg("--runtime")
         .arg(runtime)
         .arg("evaluate")
         .arg("--fixture")
         .arg(fixture)
-        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .output()
-        .context("running one Evidence production fixture")?;
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    let output = run_evidence(command, interruption, false)?;
     if output.status.success() {
         return Ok(());
     }
     runtime_failure("Evidence rejected a production fixture")
+}
+
+struct EvidenceOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+}
+
+fn run_evidence(
+    mut command: Command,
+    interruption: &BuildInterruption,
+    capture_stdout: bool,
+) -> Result<EvidenceOutput> {
+    interruption.check()?;
+    let mut stdout = capture_stdout
+        .then(tempfile::tempfile)
+        .transpose()
+        .context("creating private Evidence output capture")?;
+    command.stdin(Stdio::null()).stderr(Stdio::null());
+    if let Some(file) = &stdout {
+        command.stdout(Stdio::from(file.try_clone()?));
+    } else {
+        command.stdout(Stdio::null());
+    }
+    let mut child = command
+        .spawn()
+        .context("starting the Evidence production validation")?;
+    let status = loop {
+        if interruption.check().is_err() {
+            terminate_validation_child(&mut child);
+            return Err(anyhow!("production build interrupted"));
+        }
+        if stdout.as_ref().is_some_and(|file| {
+            file.metadata()
+                .is_ok_and(|metadata| metadata.len() > MAX_EVIDENCE_STDOUT_BYTES)
+        }) {
+            terminate_validation_child(&mut child);
+            bail!("Evidence production validation output exceeded its byte limit");
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                terminate_validation_child(&mut child);
+                return Err(error).context("waiting for Evidence production validation");
+            }
+        }
+    };
+    interruption.check()?;
+
+    let mut captured = Vec::new();
+    if let Some(file) = stdout.as_mut() {
+        file.rewind()?;
+        file.take(MAX_EVIDENCE_STDOUT_BYTES + 1)
+            .read_to_end(&mut captured)?;
+        if captured.len() as u64 > MAX_EVIDENCE_STDOUT_BYTES {
+            bail!("Evidence production validation output exceeded its byte limit");
+        }
+    }
+    Ok(EvidenceOutput {
+        status,
+        stdout: captured,
+    })
+}
+
+fn terminate_validation_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn runtime_failure<T>(message: &str) -> Result<T> {
@@ -555,6 +706,13 @@ fn make_tree_removable(root: &Path) -> Result<()> {
     }
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
     Ok(())
+}
+
+fn close_candidate_staging(staging: tempfile::TempDir) -> Result<()> {
+    make_tree_removable(staging.path())?;
+    staging
+        .close()
+        .context("removing private production candidate staging")
 }
 
 fn publish(staging: tempfile::TempDir, output: &Path) -> Result<()> {

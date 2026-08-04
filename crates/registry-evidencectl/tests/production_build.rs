@@ -11,7 +11,9 @@ use std::{
     fs,
     os::unix::fs::{symlink, PermissionsExt as _},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -31,6 +33,21 @@ fn build_is_create_only_and_never_changes_an_existing_output() {
         fs::read_to_string(fixture.output.join("owned.txt")).unwrap(),
         "preserve me\n"
     );
+    assert!(fixture.invocations().is_empty());
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn build_rejects_output_inside_the_editable_project_without_modifying_it() {
+    let fixture = Fixture::new();
+    let candidate = fixture.project.join("candidate");
+    let before = snapshot(&fixture.project);
+
+    let output = fixture.build_with(&fixture.project, &fixture.target, &candidate);
+
+    assert_failed(&output, "project-contained output must be refused");
+    assert!(!candidate.exists());
+    assert_eq!(snapshot(&fixture.project), before);
     assert!(fixture.invocations().is_empty());
     fixture.assert_no_staging_residue();
 }
@@ -297,6 +314,70 @@ fn identical_inputs_produce_identical_bundle_bytes_revision_and_stable_report_sh
     assert_eq!(reported_revision(&first), reported_revision(&second));
 }
 
+#[test]
+fn termination_cancels_evidence_and_removes_only_current_build_staging() {
+    for signal in [rustix::process::Signal::INT, rustix::process::Signal::TERM] {
+        let fixture = Fixture::new();
+        let ready = fixture.root.join("blocked-evidence-ready");
+        let unrelated = fixture.root.join(".evidencectl-build-unrelated");
+        fs::create_dir(&unrelated).expect("unrelated staging");
+        fs::write(unrelated.join("owned.txt"), "preserve me\n").expect("unrelated sentinel");
+
+        let mut child = fixture
+            .command(&fixture.project, &fixture.target, &fixture.output)
+            .env("FAKE_EVIDENCE_BLOCK", "1")
+            .env("FAKE_EVIDENCE_BLOCK_READY", &ready)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("blocking evidencectl build starts");
+
+        let ready_deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            assert!(
+                child.try_wait().expect("poll blocking build").is_none(),
+                "build exited before the fake Evidence process blocked"
+            );
+            assert!(
+                Instant::now() < ready_deadline,
+                "fake Evidence did not reach its blocking point"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let pid = rustix::process::Pid::from_raw(
+            i32::try_from(child.id()).expect("evidencectl PID fits i32"),
+        )
+        .expect("evidencectl PID is positive");
+        rustix::process::kill_process(pid, signal).expect("send signal to evidencectl build");
+
+        let exit_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if child.try_wait().expect("poll interrupted build").is_some() {
+                break;
+            }
+            if Instant::now() >= exit_deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("interrupted evidencectl build did not exit");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let output = child.wait_with_output().expect("collect interrupted build");
+
+        assert_failed(&output, "signal-interrupted build");
+        assert_value_free(&output);
+        assert!(!fixture.output.exists());
+        assert_eq!(
+            fs::read_to_string(unrelated.join("owned.txt")).unwrap(),
+            "preserve me\n",
+            "build cleaned unrelated staging"
+        );
+        fs::remove_dir_all(&unrelated).expect("remove test-owned unrelated staging");
+        fixture.assert_no_staging_residue();
+    }
+}
+
 struct Fixture {
     _temporary: tempfile::TempDir,
     root: PathBuf,
@@ -497,15 +578,27 @@ impl Fixture {
     }
 
     fn assert_no_staging_residue(&self) {
-        let names = fs::read_dir(&self.root)
-            .expect("test root")
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        fn collect(path: &Path, names: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(path).expect("staging scan directory") {
+                let entry = entry.expect("staging scan entry");
+                let entry_path = entry.path();
+                let metadata = fs::symlink_metadata(&entry_path).expect("staging scan metadata");
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(".evidencectl-build-")
+                    || name.starts_with(".evidencectl-build-validation-")
+                {
+                    names.push(entry_path.clone());
+                }
+                if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                    collect(&entry_path, names);
+                }
+            }
+        }
+        let mut names = Vec::new();
+        collect(&self.root, &mut names);
         assert!(
-            names.iter().all(|name| {
-                !name.starts_with(".evidencectl-build-")
-                    && !name.starts_with(".evidencectl-build-validation-")
-            }),
+            names.is_empty(),
             "private staging residue remained: {names:?}"
         );
     }
@@ -730,6 +823,11 @@ for arg in "$@"; do
   printf '%s\n' "$arg" >> "$FAKE_EVIDENCE_LOG"
 done
 printf '%s\n' '===' >> "$FAKE_EVIDENCE_LOG"
+
+if [ "${FAKE_EVIDENCE_BLOCK:-}" = '1' ]; then
+  printf '%s\n' ready > "$FAKE_EVIDENCE_BLOCK_READY"
+  exec sleep 300
+fi
 
 fixture=''
 previous=''

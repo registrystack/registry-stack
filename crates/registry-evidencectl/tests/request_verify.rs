@@ -651,9 +651,7 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                 .as_array()
                 .expect("question concepts")
                 .iter()
-                .map(|concept| {
-                    json!({"id": concept["uri"], "form": concept["form"]})
-                })
+                .map(|concept| json!({"id": concept["uri"], "form": concept["form"]}))
                 .collect::<Vec<_>>();
             json!({
                 "id": question["requirementUri"],

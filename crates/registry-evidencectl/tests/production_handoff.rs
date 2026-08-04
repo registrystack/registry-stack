@@ -31,6 +31,13 @@ const EVIDENCE_TYPE: &str = "urn:example:evidence-types:adult-status:v1";
 const CONCEPT: &str = "urn:example:concepts:is-adult";
 const PURPOSE: &str = "fixture-eligibility";
 const SELECTOR_CANARY: &str = "synthetic-person-001";
+const AGE_REQUIREMENT: &str = "urn:example:requirements:age-bracket:v1";
+const AGE_CONCEPT: &str = "urn:example:concepts:age-bracket";
+const IMMUNIZATION_REQUIREMENT: &str = "urn:example:requirements:immunization-summary:v1";
+const SCHEDULE_CONCEPT: &str = "urn:example:concepts:schedule-complete";
+const DOSE_COUNT_CONCEPT: &str = "urn:example:concepts:dose-count";
+const RELATIONSHIP_REQUIREMENT: &str = "urn:example:requirements:parent-relationship:v1";
+const RELATIONSHIP_CONCEPT: &str = "urn:example:concepts:relationship-confirmed";
 
 #[test]
 #[ignore = "exact gate: starts real binaries plus local HTTPS issuer and source"]
@@ -299,6 +306,251 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
     );
 }
 
+#[test]
+#[ignore = "exact gate: runs the real production builder across all four authoring shapes"]
+fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fixture.stage_four_shape_project();
+    fixture.stage_target();
+    fixture.authorize_four_shapes();
+
+    let output = fixture.build(evidence);
+    let revision = bundle_revision(&output);
+    fixture.provision_target_secrets();
+    let (checked_revision, _) = check_revisions(
+        evidence,
+        &fixture.candidate.join("runtime.yaml"),
+        "published four-shape production check",
+    );
+    assert_eq!(checked_revision, revision);
+
+    let bundle: Value = serde_norway::from_slice(
+        &fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("four-shape bundle"),
+    )
+    .expect("four-shape bundle parses");
+    assert_eq!(bundle["assuranceProfile"], "production");
+    let requirements = bundle["requirements"]
+        .as_array()
+        .expect("compiled requirements");
+    assert_eq!(requirements.len(), 4);
+    let requirements = requirements
+        .iter()
+        .map(|requirement| {
+            (
+                requirement["id"]
+                    .as_str()
+                    .expect("stable requirement identifier"),
+                requirement,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assert_requirement_forms(&requirements, REQUIREMENT, &["boolean"], 1);
+    assert_requirement_forms(&requirements, AGE_REQUIREMENT, &["controlled-category"], 1);
+    assert_requirement_forms(
+        &requirements,
+        IMMUNIZATION_REQUIREMENT,
+        &["boolean", "bounded-integer"],
+        1,
+    );
+    assert_requirement_forms(&requirements, RELATIONSHIP_REQUIREMENT, &["boolean"], 2);
+    for fixture_path in [
+        "adult-status.yaml",
+        "age-bracket.yaml",
+        "immunization-summary.yaml",
+        "parent-relationship.yaml",
+    ] {
+        assert!(
+            fixture
+                .candidate
+                .join("bundle/fixtures")
+                .join(fixture_path)
+                .is_file(),
+            "the production candidate must capture fixture {fixture_path}"
+        );
+    }
+    let age_codelist = requirements[AGE_REQUIREMENT]["concepts"][0]["constraints"]["codelist"]
+        .as_str()
+        .expect("compiled controlled-category codelist path");
+    assert!(
+        fixture
+            .candidate
+            .join("bundle")
+            .join(age_codelist)
+            .is_file(),
+        "the governed controlled-category codelist must be captured"
+    );
+}
+
+#[test]
+#[ignore = "exact gate: starts and stops real local Evidence and Mint before production build"]
+fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    let mint = mint_binary();
+    let retained_openapi = fixture.root.join("lifecycle.openapi.yaml");
+    fs::write(
+        &retained_openapi,
+        "openapi: 3.1.0\ninfo: {title: Lifecycle source, version: 1.0.0}\npaths: {}\n",
+    )
+    .expect("lifecycle OpenAPI");
+
+    assert_success(
+        evidencectl()
+            .arg("new")
+            .arg(&fixture.project)
+            .arg("--openapi")
+            .arg(&retained_openapi)
+            .args(["--profile", "local", "--generate-keys"])
+            .output()
+            .expect("public new starts"),
+        "public new",
+    );
+    assert!(!fixture.project.join(".evidence").exists());
+    fixture.stage_local_project_without_governance();
+    assert_success(
+        evidencectl()
+            .args(["keygen", "token", "--out"])
+            .arg(fixture.project.join("secrets/source-token"))
+            .output()
+            .expect("local source token keygen starts"),
+        "local source token keygen",
+    );
+
+    let started = assert_success(
+        evidencectl()
+            .args(["dev", "--detach", "--project"])
+            .arg(&fixture.project)
+            .arg("--evidence-bin")
+            .arg(evidence)
+            .arg("--mint-bin")
+            .arg(mint)
+            .args(["--evidence-port", &fixture.evidence_port.to_string()])
+            .args(["--mint-port", &fixture.mint_port.to_string()])
+            .args(["--ready-timeout-seconds", "20"])
+            .output()
+            .expect("public dev starts"),
+        "public dev with omitted governance",
+    );
+    let mut stop_guard = DevStopGuard::new(&fixture.project);
+    let started_stdout = String::from_utf8(started.stdout).expect("dev stdout");
+    assert!(started_stdout.contains(&format!(
+        "Evidence ready at http://127.0.0.1:{}",
+        fixture.evidence_port
+    )));
+    assert!(started_stdout.contains(&format!(
+        "Mint ready at http://127.0.0.1:{}",
+        fixture.mint_port
+    )));
+    let dev_root = fixture.project.join(".evidence/dev");
+    let local_bundle = fs::read(dev_root.join("bundle/evidence.yaml")).expect("local dev bundle");
+    assert!(
+        local_bundle
+            .windows(b"urn:registrystack:evidence:local:".len())
+            .any(|part| part == b"urn:registrystack:evidence:local:"),
+        "the governance-free dev generation must use disposable local identifiers"
+    );
+    assert_success(
+        evidencectl()
+            .args(["dev", "stop", "--project"])
+            .arg(&fixture.project)
+            .output()
+            .expect("public dev stop starts"),
+        "public dev stop",
+    );
+    stop_guard.disarm();
+    assert!(dev_root.join("state.json").is_file());
+    let stopped_dev = snapshot_files(&dev_root);
+
+    fixture.stage_authoring_project();
+    fixture.stage_target();
+    let governed_question = fs::read_to_string(fixture.project.join("questions/adult-status.yaml"))
+        .expect("governed question");
+    assert!(governed_question.contains(&format!("  requirement: {REQUIREMENT}")));
+    assert!(governed_question.contains(&format!("    id: {CONCEPT}")));
+    assert!(fixture.project.join("fixtures/adult-status.yaml").is_file());
+
+    let local_source_token =
+        fs::read(fixture.project.join("secrets/source-token")).expect("local source token");
+    let build = fixture.build(evidence);
+    bundle_revision(&build);
+    assert_eq!(
+        snapshot_files(&dev_root),
+        stopped_dev,
+        "production build must neither consume nor mutate stopped local state"
+    );
+    let candidate = snapshot_files(&fixture.candidate);
+    for (path, bytes) in &candidate {
+        assert!(
+            !path.to_string_lossy().contains(".evidence"),
+            "production candidate captured local state at {}",
+            path.display()
+        );
+        assert!(
+            !bytes
+                .windows(b"urn:registrystack:evidence:local:".len())
+                .any(|part| part == b"urn:registrystack:evidence:local:"),
+            "production candidate retained a disposable local identifier in {}",
+            path.display()
+        );
+        assert!(
+            !bytes
+                .windows(local_source_token.len())
+                .any(|part| part == local_source_token),
+            "production candidate copied local secret material into {}",
+            path.display()
+        );
+    }
+    let production_bundle =
+        fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("production bundle");
+    assert!(
+        production_bundle
+            .windows(REQUIREMENT.len())
+            .any(|part| part == REQUIREMENT.as_bytes()),
+        "production candidate must use the newly added stable governance"
+    );
+
+    assert_success(
+        evidencectl()
+            .args(["dev", "clean", "--project"])
+            .arg(&fixture.project)
+            .output()
+            .expect("public dev clean starts"),
+        "public dev clean",
+    );
+}
+
+struct DevStopGuard {
+    project: PathBuf,
+    active: bool,
+}
+
+impl DevStopGuard {
+    fn new(project: &Path) -> Self {
+        Self {
+            project: project.to_owned(),
+            active: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for DevStopGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = evidencectl()
+                .args(["dev", "stop", "--project"])
+                .arg(&self.project)
+                .output();
+        }
+    }
+}
+
 struct MintDeployment {
     config: PathBuf,
     caller_private: PathBuf,
@@ -547,6 +799,477 @@ privacy_expectation:
         .expect("fixture");
     }
 
+    fn stage_local_project_without_governance(&self) {
+        self.stage_authoring_project();
+        let question_path = self.project.join("questions/adult-status.yaml");
+        let question = fs::read_to_string(&question_path).expect("governed adult question");
+        let governance = question
+            .find("governance:\n")
+            .expect("adult question governance block");
+        let question = question[..governance].replace(&format!("    id: {CONCEPT}\n"), "");
+        fs::write(&question_path, question).expect("governance-free local question");
+        fs::remove_file(self.project.join("fixtures/adult-status.yaml"))
+            .expect("withhold production fixture during local dev");
+        assert!(
+            !fs::read_to_string(question_path)
+                .expect("local question")
+                .contains("governance:"),
+            "local dev must begin before stable governance exists"
+        );
+    }
+
+    fn stage_four_shape_project(&self) {
+        for (profile, field) in [
+            ("child-reference-v1", "child_id"),
+            ("candidate-reference-v1", "candidate_id"),
+        ] {
+            fs::write(
+                self.project.join(format!("selectors/{profile}.yaml")),
+                format!(
+                    "maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
+                ),
+            )
+            .expect("role-bound selector");
+        }
+
+        let source_origin = format!("https://127.0.0.1:{}", self.https_port);
+        fs::write(
+            self.project.join("sources/immunizations.yaml"),
+            format!(
+                r#"transport: http-json
+baseUrl: {source_origin}
+posture: field-projected
+authentication: {{kind: static-bearer, tokenRef: 'secret:file/source-token'}}
+request:
+  method: POST
+  path: /v1/immunizations
+  fixedHeaders: [{{name: Accept, value: application/json}}]
+  selectorInputs:
+    - role: subject
+      alternatives:
+        - {{profile: person-reference-v1, fields: [person_id]}}
+  prepareScript: adapters/immunizations-prepare.rhai
+  adapterParameters: {{requestedFields: [dose_count], resultLimit: 2}}
+  adapterParametersSchema: schemas/immunizations-parameters.schema.yaml
+  preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
+  projection: [/total, /dose_count]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/immunizations-response.schema.yaml
+extractScript: adapters/immunizations-extract.rhai
+factSchema: schemas/immunizations-facts.schema.yaml
+"#
+            ),
+        )
+        .expect("immunization source");
+        fs::write(
+            self.project.join("sources/relationships.yaml"),
+            format!(
+                r#"transport: http-json
+baseUrl: {source_origin}
+posture: field-projected
+authentication: {{kind: static-bearer, tokenRef: 'secret:file/source-token'}}
+request:
+  method: POST
+  path: /v1/relationships
+  fixedHeaders: [{{name: Accept, value: application/json}}]
+  selectorInputs:
+    - role: child
+      alternatives:
+        - {{profile: child-reference-v1, fields: [child_id]}}
+    - role: candidate-parent
+      alternatives:
+        - {{profile: candidate-reference-v1, fields: [candidate_id]}}
+  prepareScript: adapters/relationships-prepare.rhai
+  adapterParameters: {{requestedFields: [relationship_confirmed], resultLimit: 2}}
+  adapterParametersSchema: schemas/relationships-parameters.schema.yaml
+  preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
+  projection: [/total, /relationship_confirmed]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/relationships-response.schema.yaml
+extractScript: adapters/relationships-extract.rhai
+factSchema: schemas/relationships-facts.schema.yaml
+"#
+            ),
+        )
+        .expect("relationship source");
+
+        for (path, contents) in [
+            (
+                "adapters/immunizations-prepare.rhai",
+                r#"fn prepare(selectors, parameters) {
+    #{
+        query: [],
+        body: #{
+            lookup: #{person_id: selectors["subject"]["values"]["person_id"]},
+            fields: parameters["requestedFields"],
+            limit: parameters["resultLimit"]
+        }
+    }
+}
+"#,
+            ),
+            (
+                "adapters/immunizations-extract.rhai",
+                r#"fn extract(source_response, parameters) {
+    let total = source_response["total"];
+    if total == 0 { return #{outcome: "no_match"}; }
+    if total > 1 { return #{outcome: "ambiguous"}; }
+    let value = get_path(source_response, "/dose_count");
+    if is_missing(value) { return #{outcome: "match", facts: #{}}; }
+    #{outcome: "match", facts: #{dose_count: value}}
+}
+"#,
+            ),
+            (
+                "adapters/relationships-prepare.rhai",
+                r#"fn prepare(selectors, parameters) {
+    #{
+        query: [],
+        body: #{
+            lookup: #{
+                child_id: selectors["child"]["values"]["child_id"],
+                candidate_id: selectors["candidate-parent"]["values"]["candidate_id"]
+            },
+            fields: parameters["requestedFields"],
+            limit: parameters["resultLimit"]
+        }
+    }
+}
+"#,
+            ),
+            (
+                "adapters/relationships-extract.rhai",
+                r#"fn extract(source_response, parameters) {
+    let total = source_response["total"];
+    if total == 0 { return #{outcome: "no_match"}; }
+    if total > 1 { return #{outcome: "ambiguous"}; }
+    let value = get_path(source_response, "/relationship_confirmed");
+    if is_missing(value) { return #{outcome: "match", facts: #{}}; }
+    #{outcome: "match", facts: #{relationship_confirmed: value}}
+}
+"#,
+            ),
+            (
+                "schemas/immunizations-parameters.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [dose_count]}\n  resultLimit: {const: 2}\n",
+            ),
+            (
+                "schemas/immunizations-response.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  dose_count: {type: integer, minimum: 0, maximum: 20}\n",
+            ),
+            (
+                "schemas/immunizations-facts.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [dose_count]\nproperties:\n  dose_count: {type: integer, minimum: 0, maximum: 20}\n",
+            ),
+            (
+                "schemas/relationships-parameters.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [relationship_confirmed]}\n  resultLimit: {const: 2}\n",
+            ),
+            (
+                "schemas/relationships-response.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  relationship_confirmed: {type: boolean}\n",
+            ),
+            (
+                "schemas/relationships-facts.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: [relationship_confirmed]\nproperties:\n  relationship_confirmed: {type: boolean}\n",
+            ),
+        ] {
+            fs::write(self.project.join(path), contents).expect("four-shape source artifact");
+        }
+
+        self.stage_four_shape_questions();
+        self.stage_four_shape_fixtures();
+    }
+
+    fn stage_four_shape_questions(&self) {
+        for (path, contents) in [
+            (
+                "questions/age-bracket.yaml",
+                format!(
+                    r#"id: age-bracket
+question: Which governed age bracket contains this person?
+purpose: service-path-selection
+subject:
+  role: subject
+  selector: person_id
+  profile: person-reference-v1
+source:
+  ref: people
+answers:
+  - concept: age_bracket
+    id: {AGE_CONCEPT}
+    type: controlled-category
+    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
+derivation: derivations/age-bracket.rhai
+disclosure:
+  allow: [age_bracket]
+governance:
+  requirement: {AGE_REQUIREMENT}
+  kind: information-requirement
+  referenceFrameworks: [urn:example:frameworks:age-bracket:v1]
+  evidenceType: urn:example:evidence-types:age-bracket:v1
+  validitySeconds: 86400
+  observationTimezone: Asia/Bangkok
+  fixtures: fixtures/age-bracket.yaml
+  disclosureFamilies: [urn:example:disclosure-families:age-bracket]
+"#
+                ),
+            ),
+            (
+                "questions/immunization-summary.yaml",
+                format!(
+                    r#"id: immunization-summary
+question: Is the schedule complete, and how many doses are recorded?
+purpose: care-coordination
+subject:
+  role: subject
+  selector: person_id
+  profile: person-reference-v1
+source:
+  ref: immunizations
+answers:
+  - concept: schedule_complete
+    id: {SCHEDULE_CONCEPT}
+    type: boolean
+  - concept: dose_count
+    id: {DOSE_COUNT_CONCEPT}
+    type: bounded-integer
+    minimum: 0
+    maximum: 20
+derivation: derivations/immunization-summary.rhai
+disclosure:
+  allow: [schedule_complete, dose_count]
+governance:
+  requirement: {IMMUNIZATION_REQUIREMENT}
+  kind: information-requirement
+  referenceFrameworks: [urn:example:frameworks:immunization-summary:v1]
+  evidenceType: urn:example:evidence-types:immunization-summary:v1
+  validitySeconds: 86400
+  observationTimezone: Asia/Bangkok
+  fixtures: fixtures/immunization-summary.yaml
+  disclosureFamilies: [urn:example:disclosure-families:immunization-summary]
+"#
+                ),
+            ),
+            (
+                "questions/parent-relationship.yaml",
+                format!(
+                    r#"id: parent-relationship
+question: Is the candidate registered as a parent of the child?
+purpose: relationship-check
+subjects:
+  - role: child
+    selector: child_id
+    profile: child-reference-v1
+  - role: candidate-parent
+    selector: candidate_id
+    profile: candidate-reference-v1
+source:
+  ref: relationships
+answers:
+  - concept: relationship_confirmed
+    id: {RELATIONSHIP_CONCEPT}
+    type: boolean
+derivation: derivations/parent-relationship.rhai
+disclosure:
+  allow: [relationship_confirmed]
+governance:
+  requirement: {RELATIONSHIP_REQUIREMENT}
+  kind: criterion
+  referenceFrameworks: [urn:example:frameworks:parent-relationship:v1]
+  evidenceType: urn:example:evidence-types:parent-relationship:v1
+  validitySeconds: 86400
+  observationTimezone: Asia/Bangkok
+  fixtures: fixtures/parent-relationship.yaml
+  disclosureFamilies: [urn:example:disclosure-families:parent-relationship]
+"#
+                ),
+            ),
+        ] {
+            fs::write(self.project.join(path), contents).expect("four-shape question");
+        }
+        for (path, contents) in [
+            (
+                "derivations/age-bracket.rhai",
+                r#"fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
+        #{age_bracket: "under-18"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
+        #{age_bracket: "18-to-24"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
+        #{age_bracket: "25-to-64"}
+    } else {
+        #{age_bracket: "65-or-older"}
+    }
+}
+"#,
+            ),
+            (
+                "derivations/immunization-summary.rhai",
+                r#"fn answer(facts, selectors, context) {
+    let dose_count = required(facts.dose_count, "dose_count_missing");
+    #{schedule_complete: dose_count >= 3, dose_count: dose_count}
+}
+"#,
+            ),
+            (
+                "derivations/parent-relationship.rhai",
+                r#"fn answer(facts, selectors, context) {
+    #{relationship_confirmed: required(facts.relationship_confirmed, "relationship_missing")}
+}
+"#,
+            ),
+        ] {
+            fs::write(self.project.join(path), contents).expect("four-shape derivation");
+        }
+    }
+
+    fn stage_four_shape_fixtures(&self) {
+        fs::write(
+            self.project.join("fixtures/age-bracket.yaml"),
+            format!(
+                r#"fixture: registry.evidence.acceptance.production-age-bracket/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  legal_local_date: '2026-08-02'
+  selector: {{person_id: {SELECTOR_CANARY}}}
+  selectors:
+    subject: {{profile: person-reference-v1, values: {{person_id: {SELECTOR_CANARY}}}}}
+  expectedRequestParts:
+    query: []
+    body: {{lookup: {{person_id: {SELECTOR_CANARY}}}, fields: [date_of_birth], limit: 2}}
+  expectedTransport:
+    path: /v1/facts
+    fixedHeaders: [{{name: Accept, value: application/json}}]
+cases:
+  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: 25-to-64, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - {{id: negative-under-18-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: under-18, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - {{id: boundary-on-18, source: {{total: 1, date_of_birth: '2008-08-02'}}, expected_value: 18-to-24, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {AGE_CONCEPT}, value: true}}], expected: output-gate-rejection}}
+  - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
+privacy_expectation:
+  evidence_contains: [{AGE_CONCEPT}]
+  evidence_excludes: [date_of_birth, person_id]
+  diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
+"#
+            ),
+        )
+        .expect("age-bracket fixture");
+
+        fs::write(
+            self.project.join("fixtures/immunization-summary.yaml"),
+            format!(
+                r#"fixture: registry.evidence.acceptance.production-immunization-summary/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  selector: {{person_id: {SELECTOR_CANARY}}}
+  selectors:
+    subject: {{profile: person-reference-v1, values: {{person_id: {SELECTOR_CANARY}}}}}
+  expectedRequestParts:
+    query: []
+    body: {{lookup: {{person_id: {SELECTOR_CANARY}}}, fields: [dose_count], limit: 2}}
+  expectedTransport:
+    path: /v1/immunizations
+    fixedHeaders: [{{name: Accept, value: application/json}}]
+cases:
+  - id: positive
+    source: {{total: 1, dose_count: 4}}
+    expected_values: {{schedule-complete: true, dose-count: 4}}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-false-is-success
+    source: {{total: 1, dose_count: 2}}
+    expected_values: {{schedule-complete: false, dose-count: 2}}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-maximum
+    source: {{total: 1, dose_count: 20}}
+    expected_values: {{schedule-complete: true, dose-count: 20}}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - id: negative-wrong-derived-type
+    injected_derivation:
+      - {{concept_id: {SCHEDULE_CONCEPT}, value: true}}
+      - {{concept_id: {DOSE_COUNT_CONCEPT}, value: '4'}}
+    expected: output-gate-rejection
+  - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
+privacy_expectation:
+  evidence_contains: [{SCHEDULE_CONCEPT}, {DOSE_COUNT_CONCEPT}]
+  evidence_excludes: [dose_count, person_id]
+  diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
+"#
+            ),
+        )
+        .expect("immunization fixture");
+
+        fs::write(
+            self.project.join("fixtures/parent-relationship.yaml"),
+            format!(
+                r#"fixture: registry.evidence.acceptance.production-parent-relationship/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  selectors:
+    child: {{profile: child-reference-v1, values: {{child_id: synthetic-child-001}}}}
+    candidate-parent: {{profile: candidate-reference-v1, values: {{candidate_id: synthetic-parent-001}}}}
+  expectedRequestParts:
+    query: []
+    body:
+      lookup: {{child_id: synthetic-child-001, candidate_id: synthetic-parent-001}}
+      fields: [relationship_confirmed]
+      limit: 2
+  expectedTransport:
+    path: /v1/relationships
+    fixedHeaders: [{{name: Accept, value: application/json}}]
+cases:
+  - {{id: positive, source: {{total: 1, relationship_confirmed: true}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - {{id: negative-false-is-success, source: {{total: 1, relationship_confirmed: false}}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - id: boundary-role-order
+    source: {{total: 1, relationship_confirmed: true}}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+    expected_subject_roles: [child, candidate-parent]
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {RELATIONSHIP_CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
+  - {{id: anti-reconstruction, companion_bundle: relationship-graph, expected: bundle-rejection}}
+privacy_expectation:
+  evidence_contains: [child, candidate-parent, {RELATIONSHIP_CONCEPT}]
+  evidence_excludes: [child_id, candidate_id, relationship_confirmed]
+  diagnostics_exclude: [synthetic-child-001, synthetic-parent-001, fixture-source-canary]
+"#
+            ),
+        )
+        .expect("parent relationship fixture");
+    }
+
     fn stage_https_identity(&self) {
         let tls = self.ca.parent().expect("TLS directory");
         fs::create_dir(tls).expect("TLS directory");
@@ -685,6 +1408,32 @@ authorityProfiles:
             ),
         )
         .expect("runtime");
+    }
+
+    fn authorize_four_shapes(&self) {
+        let path = self.target.join("governance.yaml");
+        let mut governance = fs::read_to_string(&path).expect("production governance");
+        governance.push_str(&format!(
+            r#"      - requirement: {AGE_REQUIREMENT}
+        purpose: service-path-selection
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects: [{{role: subject, selectorProfile: person-reference-v1, valueOrigin: request}}]
+      - requirement: {IMMUNIZATION_REQUIREMENT}
+        purpose: care-coordination
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects: [{{role: subject, selectorProfile: person-reference-v1, valueOrigin: request}}]
+      - requirement: {RELATIONSHIP_REQUIREMENT}
+        purpose: relationship-check
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {{role: child, selectorProfile: child-reference-v1, valueOrigin: request}}
+          - {{role: candidate-parent, selectorProfile: candidate-reference-v1, valueOrigin: request}}
+"#
+        ));
+        fs::write(path, governance).expect("four-shape production governance");
     }
 
     fn build(&self, evidence: &Path) -> Output {
@@ -1020,6 +1769,31 @@ fn bundle_revision(output: &Output) -> String {
         })
         .expect("build reports one bundle revision")
         .to_owned()
+}
+
+fn assert_requirement_forms(
+    requirements: &BTreeMap<&str, &Value>,
+    requirement_id: &str,
+    expected_forms: &[&str],
+    expected_subject_roles: usize,
+) {
+    let requirement = requirements
+        .get(requirement_id)
+        .unwrap_or_else(|| panic!("missing compiled requirement {requirement_id}"));
+    let forms = requirement["concepts"]
+        .as_array()
+        .expect("compiled concepts")
+        .iter()
+        .map(|concept| concept["form"].as_str().expect("compiled concept form"))
+        .collect::<Vec<_>>();
+    assert_eq!(forms, expected_forms);
+    assert_eq!(
+        requirement["subjectRoles"]
+            .as_array()
+            .expect("compiled subject roles")
+            .len(),
+        expected_subject_roles
+    );
 }
 
 fn check_revisions(evidence: &Path, runtime: &Path, label: &str) -> (String, String) {

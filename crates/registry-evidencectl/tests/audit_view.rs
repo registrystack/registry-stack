@@ -170,10 +170,8 @@ fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
 
     let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
-    let mut bundle: Value = serde_norway::from_slice(
-        &fs::read(&bundle_path).expect("bundle"),
-    )
-    .expect("bundle YAML");
+    let mut bundle: Value =
+        serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
     bundle["requirements"][1]["concepts"] = json!([
         {
             "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
