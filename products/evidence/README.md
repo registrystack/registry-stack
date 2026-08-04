@@ -139,9 +139,9 @@ referenced. The operator independently provisions the signing, audit,
 subject-binding, and source secrets, then runs one grouped handoff:
 
 ```sh
-evidencectl doctor --project <candidate>
-evidencectl fixtures run --project <candidate>
-evidence --runtime <candidate>/runtime.yaml serve
+evidencectl doctor --project '<candidate>'
+evidencectl fixtures run --project '<candidate>'
+evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
 An existing OIDC issuer and Registry Mint are equal issuer choices from

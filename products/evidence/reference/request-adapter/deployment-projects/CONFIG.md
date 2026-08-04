@@ -649,9 +649,9 @@ to the service identity, and run the grouped handoff once whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --project <candidate>
-evidencectl fixtures run --project <candidate>
-evidence --runtime <candidate>/runtime.yaml serve
+evidencectl doctor --project '<candidate>'
+evidencectl fixtures run --project '<candidate>'
+evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
 Then route only after `/ready`, retain one authorized synthetic-subject

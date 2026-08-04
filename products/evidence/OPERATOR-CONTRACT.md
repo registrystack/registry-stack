@@ -115,9 +115,9 @@ Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --project <candidate>
-evidencectl fixtures run --project <candidate>
-evidence --runtime <candidate>/runtime.yaml serve
+evidencectl doctor --project '<candidate>'
+evidencectl fixtures run --project '<candidate>'
+evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
 `doctor` is advisory for local artifact posture; the real runtime remains the
