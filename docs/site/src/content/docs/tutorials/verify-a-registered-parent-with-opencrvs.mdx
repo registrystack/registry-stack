@@ -377,7 +377,7 @@ fn extract(source_response, parameters) {
         throw("source_protocol_error");
     }
 
-    let parent_ids = #{};
+    let parents = [];
     let mother_field = parameters["motherNationalIdField"];
     if declaration.contains(mother_field) {
         let verification = parameters["motherVerificationField"];
@@ -385,7 +385,10 @@ fn extract(source_response, parameters) {
            declaration[verification] != parameters["authenticatedValue"] {
             throw("source_protocol_error");
         }
-        parent_ids["mother_national_id"] = declaration[mother_field];
+        parents.push(#{
+            role: "mother",
+            national_id: declaration[mother_field]
+        });
     }
 
     let father_field = parameters["fatherNationalIdField"];
@@ -396,14 +399,13 @@ fn extract(source_response, parameters) {
             throw("source_protocol_error");
         }
         let father_id = declaration[father_field];
-        if parent_ids.contains("mother_national_id") &&
-           parent_ids["mother_national_id"] == father_id {
+        if parents.len == 1 && parents[0]["national_id"] == father_id {
             throw("source_protocol_error");
         }
-        parent_ids["father_national_id"] = father_id;
+        parents.push(#{role: "father", national_id: father_id});
     }
 
-    if parent_ids.len == 0 || parent_ids.len > 2 {
+    if parents.len == 0 || parents.len > 2 {
         throw("source_protocol_error");
     }
 
@@ -411,7 +413,7 @@ fn extract(source_response, parameters) {
         outcome: "match",
         facts: #{
             child_national_id: declaration[child_field],
-            registered_parent_national_ids: parent_ids
+            registered_parents: parents
         }
     }
 }
@@ -427,25 +429,29 @@ Replace `schemas/opencrvs-birth-parents-facts.schema.yaml` with:
 ```yaml
 type: object
 additionalProperties: false
-required: [child_national_id, registered_parent_national_ids]
+required: [child_national_id, registered_parents]
 properties:
   child_national_id:
     type: string
     minLength: 1
     maxLength: 128
-  registered_parent_national_ids:
-    type: object
-    additionalProperties: false
-    minProperties: 1
-    properties:
-      mother_national_id:
-        type: string
-        minLength: 1
-        maxLength: 128
-      father_national_id:
-        type: string
-        minLength: 1
-        maxLength: 128
+  registered_parents:
+    type: array
+    minItems: 1
+    maxItems: 2
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required: [role, national_id]
+      properties:
+        role:
+          type: string
+          enum: [mother, father]
+        national_id:
+          type: string
+          minLength: 1
+          maxLength: 128
 ```
 
 These facts are the complete input to both questions. Names, dates, addresses, and other birth
@@ -492,12 +498,12 @@ fn answer(facts, selectors, context) {
     }
 
     let candidate = selectors["candidate-parent"]["values"]["national_id"];
-    let parents = facts.registered_parent_national_ids;
-    let confirmed =
-        (parents.contains("mother_national_id") &&
-         parents["mother_national_id"] == candidate) ||
-        (parents.contains("father_national_id") &&
-         parents["father_national_id"] == candidate);
+    let confirmed = false;
+    for parent in facts.registered_parents {
+        if parent["national_id"] == candidate {
+            confirmed = true;
+        }
+    }
     #{relationship_confirmed: confirmed}
 }
 ```
@@ -514,21 +520,30 @@ Create `schemas/registered-parent-national-ids.schema.yaml`:
 $id: urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1
 type: object
 additionalProperties: false
-minProperties: 1
+required: [parents]
 properties:
-  mother_national_id:
-    type: string
-    minLength: 1
-    maxLength: 128
-  father_national_id:
-    type: string
-    minLength: 1
-    maxLength: 128
+  parents:
+    type: array
+    minItems: 1
+    maxItems: 2
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required: [role, national_id]
+      properties:
+        role:
+          type: string
+          enum: [mother, father]
+        national_id:
+          type: string
+          minLength: 1
+          maxLength: 128
 ```
 
-This closed schema preserves each parent's role and rejects extra fields. Either identifier may
-be absent from a registration, but Evidence will not issue the assertion unless the source
-establishes at least one authenticated parent identifier.
+This closed schema preserves each parent's role and rejects extra fields. The bounded array holds
+one or two role-labeled identifiers. The extraction script refuses to produce facts unless the
+source establishes at least one authenticated parent identifier.
 
 Create `questions/registered-parent-identifiers.yaml`:
 
@@ -570,7 +585,7 @@ fn answer(facts, selectors, context) {
         registered_parent_national_ids: #{
             form: "reviewed-structured-value",
             schema: "urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1",
-            fields: facts.registered_parent_national_ids
+            fields: #{parents: facts.registered_parents}
         }
     }
 }
@@ -726,15 +741,20 @@ details as unavailable. Its supported value therefore contains the mother field 
     "form": "reviewed-structured-value",
     "schema": "urn:registrystack:evidence:local:schema:registered-parent-national-ids:v1",
     "fields": {
-      "mother_national_id": "<mother-national-id>"
+      "parents": [
+        {
+          "role": "mother",
+          "national_id": "<mother-national-id>"
+        }
+      ]
     }
   }
 }
 ```
 
-For a synthetic registration with two authenticated parent identifiers, `fields` contains both
-`mother_national_id` and `father_national_id`. You can create such a registration in the demo and
-prepare the same question with that child's national ID.
+For a synthetic registration with two authenticated parent identifiers, `parents` contains a
+second item with role `father`. You can create such a registration in the demo and prepare the
+same question with that child's national ID.
 
 This assertion intentionally discloses identifiers. Store and transmit the verified result as
 sensitive civil-registration data. Callers that need only a relationship decision must use the
