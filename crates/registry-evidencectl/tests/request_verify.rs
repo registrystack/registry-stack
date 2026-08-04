@@ -785,6 +785,7 @@ impl Fixture {
         }]);
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        write_sealed_bundle(&self.root, &state);
     }
 
     fn verify(&self, output: &str) -> Output {
@@ -821,7 +822,9 @@ fn private_file(path: &Path, contents: &[u8], mode: u32) {
 
 fn write_sealed_bundle(root: &Path, state: &Value) {
     let bundle_directory = root.join(".evidence/dev/bundle");
-    private_directory(&bundle_directory);
+    if !bundle_directory.exists() {
+        private_directory(&bundle_directory);
+    }
     let questions = state["questions"].as_array().expect("state questions");
     let mut selector_profiles = serde_json::Map::new();
     let requirements = questions
@@ -857,12 +860,82 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
             })
         })
         .collect::<Vec<_>>();
+    let grant_for = |question: &Value| {
+        let subjects = question["subjects"]
+            .as_array()
+            .expect("question subjects")
+            .iter()
+            .map(|subject| {
+                json!({
+                    "role": subject["role"],
+                    "selectorProfile": subject["selectorProfile"],
+                    "valueOrigin": "request",
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "requirement": question["requirementUri"],
+            "purpose": question["purpose"],
+            "audienceFrom": "authenticated-requester",
+            "responseFormats": ["signed-jws"],
+            "subjects": subjects,
+        })
+    };
+    let access_policies = state["accessPolicies"]
+        .as_array()
+        .expect("state access policies");
+    let authority_profiles = if access_policies.is_empty() {
+        serde_json::Map::from_iter([(
+            "local-caller".to_owned(),
+            json!({
+                "kind": "explicit-request",
+                "requesterTags": ["local-caller"],
+                "grants": questions.iter().map(grant_for).collect::<Vec<_>>(),
+            }),
+        )])
+    } else {
+        access_policies
+            .iter()
+            .map(|policy| {
+                let requester_tag = policy["requesterTag"]
+                    .as_str()
+                    .expect("policy requester tag");
+                let grants = policy["questions"]
+                    .as_array()
+                    .expect("policy questions")
+                    .iter()
+                    .map(|alias| {
+                        let alias = alias.as_str().expect("question alias");
+                        let question = questions
+                            .iter()
+                            .find(|question| question["alias"] == alias)
+                            .expect("policy question exists");
+                        grant_for(question)
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    requester_tag.to_owned(),
+                    json!({
+                        "kind": "explicit-request",
+                        "requesterTags": [requester_tag],
+                        "grants": grants,
+                    }),
+                )
+            })
+            .collect()
+    };
     let bundle = json!({
         "selectorProfiles": selector_profiles,
+        "authorityProfiles": authority_profiles,
         "requirements": requirements,
     });
+    let bundle_path = bundle_directory.join("evidence.yaml");
+    if bundle_path.exists() {
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+            .expect("unseal bundle fixture");
+    }
     private_file(
-        &bundle_directory.join("evidence.yaml"),
+        &bundle_path,
         serde_norway::to_string(&bundle)
             .expect("bundle renders")
             .as_bytes(),

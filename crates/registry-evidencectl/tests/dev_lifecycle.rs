@@ -279,6 +279,8 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
         &add_local_client(&fixture.root, "client-a", "age-checks"),
         "add client A",
     );
+    let client_a_key = fixture.root.join(".evidence/clients/client-a/private.jwk");
+    assert_mode(&client_a_key, 0o600);
 
     let pid_directory = fixture.root.join("service-pids");
     fs::create_dir(&pid_directory).expect("PID directory");
@@ -310,24 +312,26 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     assert!(process_is_alive(evidence_pid));
     assert!(process_is_alive(mint_pid));
 
-    let prepared = evidencectl()
-        .args([
-            "request",
-            "prepare",
-            "adult-status",
-            "--purpose",
-            "age-check",
-            "--subject",
-            "person_id=person-123",
-            "--client",
-            "client-b",
-            "--name",
-            "client-b-live",
-            "--project",
-        ])
-        .arg(&fixture.root)
-        .output()
-        .expect("prepare as client B");
+    let prepared = retry_until_success("newly added client B token request", || {
+        evidencectl()
+            .args([
+                "request",
+                "prepare",
+                "adult-status",
+                "--purpose",
+                "age-check",
+                "--subject",
+                "person_id=person-123",
+                "--client",
+                "client-b",
+                "--name",
+                "client-b-live",
+                "--project",
+            ])
+            .arg(&fixture.root)
+            .output()
+            .expect("prepare as client B")
+    });
     assert_success(&prepared, "newly added client B token request");
 
     let revoked = evidencectl()
@@ -342,6 +346,11 @@ fn explicit_access_clients_reload_mint_without_restarting_services() {
     assert_eq!(read_pid(&pid_directory.join("mint.pid")), mint_pid);
     assert!(process_is_alive(evidence_pid));
     assert!(process_is_alive(mint_pid));
+    assert!(client_a_key.is_file(), "revocation retains client A's key");
+
+    let direct_refusal =
+        retry_until_mint_refuses(|| direct_mint_token(&mint, mint_port, "client-a", &client_a_key));
+    assert!(direct_refusal.stdout.is_empty());
 
     let refused = evidencectl()
         .args([
@@ -770,6 +779,61 @@ fn add_local_client(project: &Path, client: &str, policy: &str) -> Output {
         .arg(project)
         .output()
         .expect("add local client")
+}
+
+fn direct_mint_token(mint: &Path, port: u16, client: &str, key: &Path) -> Output {
+    let token_url = format!("http://127.0.0.1:{port}/token");
+    Command::new(mint)
+        .arg("token")
+        .arg("--url")
+        .arg(&token_url)
+        .arg("--audience")
+        .arg(&token_url)
+        .arg("--client-id")
+        .arg(client)
+        .arg("--key")
+        .arg(key)
+        .output()
+        .expect("invoke Mint token client")
+}
+
+fn retry_until_success(label: &str, mut operation: impl FnMut() -> Output) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = operation();
+        if output.status.success() {
+            return output;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{label} did not succeed after Mint reload\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn retry_until_mint_refuses(mut operation: impl FnMut() -> Output) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = operation();
+        let refused = !output.status.success()
+            && output.stdout.is_empty()
+            && String::from_utf8_lossy(&output.stderr).contains("invalid_client");
+        if refused {
+            return output;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "Mint did not refuse revoked client A after reload\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn read_pid(path: &Path) -> u32 {

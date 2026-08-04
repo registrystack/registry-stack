@@ -128,6 +128,19 @@ fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
     .expect("state writes");
     fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
 
+    let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
+    let mut bundle: Value =
+        serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
+    bundle["requirements"][1]["concepts"][0]["form"] = json!("reviewed-structured-value");
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+        .expect("unseal bundle for fixture update");
+    fs::write(
+        &bundle_path,
+        serde_norway::to_string(&bundle).expect("bundle renders"),
+    )
+    .expect("bundle writes");
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400)).expect("bundle mode");
+
     let mut view = successful_view();
     view["events"][0]["responseProtection"] = json!("sd-jwt-vc");
     view["events"][1]["responseProtection"] = json!("sd-jwt-vc");
@@ -410,6 +423,36 @@ impl Fixture {
                 },
                 "local-subject-adult-status-v1": {
                     "fields": {"person_id": {"type": "string"}}
+                }
+            },
+            "authorityProfiles": {
+                "local-caller": {
+                    "kind": "explicit-request",
+                    "requesterTags": ["local-caller"],
+                    "grants": [
+                        {
+                            "requirement": "urn:registrystack:evidence:local:requirement:age-bracket",
+                            "purpose": "service-path-selection",
+                            "audienceFrom": "authenticated-requester",
+                            "responseFormats": ["signed-jws"],
+                            "subjects": [{
+                                "role": "person",
+                                "selectorProfile": "local-subject-age-bracket-v1",
+                                "valueOrigin": "request"
+                            }]
+                        },
+                        {
+                            "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+                            "purpose": "age-check",
+                            "audienceFrom": "authenticated-requester",
+                            "responseFormats": ["signed-jws"],
+                            "subjects": [{
+                                "role": "person",
+                                "selectorProfile": "local-subject-adult-status-v1",
+                                "valueOrigin": "request"
+                            }]
+                        }
+                    ]
                 }
             },
             "requirements": [

@@ -572,7 +572,11 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             derivation,
         });
     }
-    let access_policies = read_access_policies(project_root, &question_ids)?;
+    let access_policies = if require_local_secrets {
+        read_access_policies(project_root, &question_ids)?
+    } else {
+        Vec::new()
+    };
 
     if require_local_secrets {
         let secrets = project_root.join(SECRETS_DIRECTORY);
@@ -3805,7 +3809,7 @@ values: [under-18, adult]
     }
 
     #[test]
-    fn production_compiler_handles_all_four_neutral_question_shapes_through_one_path() {
+    fn production_compiler_ignores_local_access_and_handles_all_neutral_question_shapes() {
         fn referenced(question: &str, source: &str) -> String {
             let start = question.find("source:\n").expect("source section");
             let end = start
@@ -4002,6 +4006,12 @@ factSchema: schemas/source-facts.schema.yaml
             )
             .expect("governed fixture");
         }
+
+        symlink(
+            fixture.project.join("questions"),
+            fixture.project.join(ACCESS_DIRECTORY),
+        )
+        .expect("malformed local access link");
 
         let target = json!({
             "version": 1,

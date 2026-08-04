@@ -499,8 +499,7 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             .map(|question| question.alias.as_str())
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            == state.questions.len()
-        && questions_match_sealed_bundle(&state.questions, dev_root).unwrap_or(false);
+            == state.questions.len();
     let question_aliases = state
         .questions
         .iter()
@@ -521,7 +520,9 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             .map(|policy| policy.requester_tag.as_str())
             .collect::<BTreeSet<_>>()
             .len()
-            == state.access_policies.len();
+            == state.access_policies.len()
+        && state_matches_sealed_bundle(&state.questions, &state.access_policies, dev_root)
+            .unwrap_or(false);
     let caller_is_closed = match state.status {
         DevStatus::Starting | DevStatus::Ready => {
             state.access_policies.is_empty() == state.caller.is_some()
@@ -616,7 +617,11 @@ fn valid_uri(value: &str) -> bool {
     value.len() <= 512 && url::Url::parse(value).is_ok()
 }
 
-fn questions_match_sealed_bundle(questions: &[QuestionState], dev_root: &Path) -> Result<bool> {
+fn state_matches_sealed_bundle(
+    questions: &[QuestionState],
+    access_policies: &[AccessPolicyState],
+    dev_root: &Path,
+) -> Result<bool> {
     let path = dev_root.join("bundle/evidence.yaml");
     require_owned_regular_file(&path, 0o400)?;
     let bytes = fs::read(&path).context("failed to read the sealed local bundle")?;
@@ -690,7 +695,91 @@ fn questions_match_sealed_bundle(questions: &[QuestionState], dev_root: &Path) -
             return Ok(false);
         }
     }
+    let authority_profiles = bundle
+        .get("authorityProfiles")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the sealed local bundle has no authority profiles"))?;
+    if access_policies.is_empty() {
+        let Some(profile) = authority_profiles.get(LOCAL_REQUESTER_TAG) else {
+            return Ok(false);
+        };
+        return Ok(authority_profiles.len() == 1
+            && authority_profile_matches(
+                profile,
+                LOCAL_REQUESTER_TAG,
+                &questions.iter().collect::<Vec<_>>(),
+            ));
+    }
+    if authority_profiles.len() != access_policies.len() {
+        return Ok(false);
+    }
+    for policy in access_policies {
+        let Some(profile) = authority_profiles.get(&policy.requester_tag) else {
+            return Ok(false);
+        };
+        let governed_questions = policy
+            .questions
+            .iter()
+            .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
+            .collect::<Vec<_>>();
+        if governed_questions.len() != policy.questions.len()
+            || !authority_profile_matches(profile, &policy.requester_tag, &governed_questions)
+        {
+            return Ok(false);
+        }
+    }
     Ok(true)
+}
+
+fn authority_profile_matches(
+    profile: &Value,
+    requester_tag: &str,
+    questions: &[&QuestionState],
+) -> bool {
+    if profile.get("kind").and_then(Value::as_str) != Some("explicit-request")
+        || profile
+            .get("requesterTags")
+            .and_then(Value::as_array)
+            .is_none_or(|tags| tags.as_slice() != [Value::String(requester_tag.to_owned())])
+    {
+        return false;
+    }
+    profile
+        .get("grants")
+        .and_then(Value::as_array)
+        .is_some_and(|grants| {
+            grants.len() == questions.len()
+                && grants
+                    .iter()
+                    .zip(questions)
+                    .all(|(grant, question)| grant_matches_question(grant, question))
+        })
+}
+
+fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
+    if grant.get("requirement").and_then(Value::as_str) != Some(question.requirement_uri.as_str())
+        || grant.get("purpose").and_then(Value::as_str) != Some(question.purpose.as_str())
+        || grant.get("audienceFrom").and_then(Value::as_str) != Some("authenticated-requester")
+    {
+        return false;
+    }
+    grant
+        .get("subjects")
+        .and_then(Value::as_array)
+        .is_some_and(|subjects| {
+            subjects.len() == question.subjects.len()
+                && subjects
+                    .iter()
+                    .zip(&question.subjects)
+                    .all(|(configured, expected)| {
+                        configured.get("role").and_then(Value::as_str)
+                            == Some(expected.role.as_str())
+                            && configured.get("selectorProfile").and_then(Value::as_str)
+                                == Some(expected.selector_profile.as_str())
+                            && configured.get("valueOrigin").and_then(Value::as_str)
+                                == Some("request")
+                    })
+        })
 }
 
 fn validate_closed_caller(caller: &CallerState, dev_root: &Path, token_url: &str) -> Result<()> {
@@ -1911,12 +2000,26 @@ mod tests {
         let compiled = compiled(&runtime);
         let bundle = dev.join("bundle");
         create_private_directory(&bundle).expect("bundle");
+        let bundle_path = bundle.join("evidence.yaml");
         fs::write(
-            bundle.join("evidence.yaml"),
+            &bundle_path,
             br#"selectorProfiles:
   local-subject-adult-status-v1:
     fields:
       person_id: {type: string}
+authorityProfiles:
+  local-caller:
+    kind: explicit-request
+    requesterTags: [local-caller]
+    grants:
+      - requirement: urn:registrystack:evidence:local:requirement:adult-status
+        purpose: age-check
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: person
+            selectorProfile: local-subject-adult-status-v1
+            valueOrigin: request
 requirements:
   - id: urn:registrystack:evidence:local:requirement:adult-status
     purposes: [age-check]
@@ -1929,11 +2032,8 @@ requirements:
 "#,
         )
         .expect("bundle config");
-        fs::set_permissions(
-            bundle.join("evidence.yaml"),
-            fs::Permissions::from_mode(0o400),
-        )
-        .expect("seal bundle config");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+            .expect("seal bundle config");
         fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
         let mut state = DevState {
             schema: STATE_SCHEMA.to_owned(),
@@ -1985,6 +2085,36 @@ requirements:
         let policy_questions = vec!["adult-status".to_owned()];
         let policy_tag =
             access_policy_requester_tag("age-checks", &policy_questions).expect("policy tag");
+        let mut explicit_bundle: Value =
+            serde_norway::from_slice(&fs::read(&bundle_path).expect("read implicit bundle"))
+                .expect("parse implicit bundle");
+        explicit_bundle["authorityProfiles"] = Value::Object(serde_json::Map::from_iter([(
+            policy_tag.clone(),
+            json!({
+                "kind": "explicit-request",
+                "requesterTags": [policy_tag],
+                "grants": [{
+                    "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+                    "purpose": "age-check",
+                    "audienceFrom": "authenticated-requester",
+                    "responseFormats": ["signed-jws"],
+                    "subjects": [{
+                        "role": "person",
+                        "selectorProfile": "local-subject-adult-status-v1",
+                        "valueOrigin": "request",
+                    }],
+                }],
+            }),
+        )]));
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+            .expect("unseal bundle config for test update");
+        fs::write(
+            &bundle_path,
+            serde_norway::to_string(&explicit_bundle).expect("explicit bundle YAML"),
+        )
+        .expect("write explicit bundle");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+            .expect("reseal bundle config");
         state.caller = None;
         state.access_policies = vec![AccessPolicyState {
             id: "age-checks".to_owned(),
@@ -1999,6 +2129,15 @@ requirements:
             .expect("optional ready handoff")
             .is_some());
         let valid_explicit = state.clone();
+        state.access_policies[0].id = "other-age-checks".to_owned();
+        state.access_policies[0].requester_tag = access_policy_requester_tag(
+            &state.access_policies[0].id,
+            &state.access_policies[0].questions,
+        )
+        .expect("internally valid but unsealed policy tag");
+        replace_state(&dev.join("state.json"), &state).expect("unsealed policy state");
+        assert!(load_ready_state(&project).is_err());
+        state = valid_explicit.clone();
         state.access_policies[0].requester_tag = "policy-v1-tampered".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered policy state");
         assert!(load_ready_state(&project).is_err());
@@ -2057,11 +2196,17 @@ requirements:
             .arg("30")
             .spawn()
             .expect("evidence child");
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while !mint_ready.is_file() && Instant::now() < deadline {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !mint_ready.is_file() {
+            if let Some(status) = mint.try_wait().expect("mint child status") {
+                panic!("mint child exited before installing its HUP handler: {status}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "mint child did not install its HUP handler within 10 seconds"
+            );
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(mint_ready.is_file(), "mint child installed its HUP handler");
 
         let client_socket = socket.clone();
         let client = thread::spawn(move || {
