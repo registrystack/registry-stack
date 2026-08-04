@@ -1509,3 +1509,34 @@ owed and is recorded here in full.
   Evidence: `just openapi-contract` against the pull request's base now exits 0
   with 0 errors and the 2 intended warnings, `cargo fmt --check` is clean, and
   `cargo test --locked -p registry-manifest-core` passes 98 tests.
+
+- 2026-08-04: The stable-surface check's last red line was one retired
+  diagnostic code, `fixture_execution registryctl_relay_offline_harness
+  authorization.denied`. The harness is not gone: thirteen other live codes sit
+  under the same family and product. The code reached the catalog only through
+  `GeneratorRecipeId::AuthorizationBeforeSource`, whose emitter depended on
+  `registry_notary_server::standalone::OfflineAuthentication` and went with the
+  product. So the exemption is recorded per code, not per product: a new
+  `RETIRED_DIAGNOSTIC_CODES` map in
+  `release/scripts/check-stable-surface-compatibility.py`, keyed by the exact
+  `(family, product, code)` and carrying the reason in the file a reader of the
+  check will actually open.
+  Three alternatives were rejected on evidence. Adding the product to
+  `HISTORICAL_DIAGNOSTIC_PRODUCTS` would blind the check to those thirteen live
+  codes permanently. Skipping entries by `lifecycle: unreleased` would disable
+  the removal check outright, not loosen it: all seventy-four entries across the
+  three catalogs are `unreleased` (authoring 17, fixture 15, operator 42).
+  Restoring the emitter would reverse the retirement this plan exists to do.
+  The generated JSON catalogs were not touched; `validate_entries` in
+  `diagnostic_reference.rs` holds them to the Rust side.
+  Security review note, release provenance. Threat: a broad exemption quietly
+  stops the check from noticing that a maintained product dropped a code its
+  released catalog promised. Enforcement point: the membership test in
+  `compare_diagnostic_contracts` is on the full three-part key, so it cannot
+  match a code the map does not name. Negative test:
+  `test_a_retired_code_is_skipped_and_its_siblings_stay_protected` removes both
+  the retired code and a sibling under the same family and product, and asserts
+  the sibling alone is reported. A second test holds that every record states
+  why the code went away.
+  Evidence: `python3 release/scripts/check-stable-surface-compatibility.py`
+  exits 0, and `test_check_stable_surface_compatibility.py` passes 14 tests.

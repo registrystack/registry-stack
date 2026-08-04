@@ -285,6 +285,36 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
         }
         self.assertEqual([], self.module.compare_diagnostic_contracts(base, {}))
 
+    def test_a_retired_code_is_skipped_and_its_siblings_stay_protected(self) -> None:
+        retired = ("fixture_execution", "registryctl_relay_offline_harness",
+                   "authorization.denied")
+        sibling = ("fixture_execution", "registryctl_relay_offline_harness",
+                   "authorization.allowed")
+        contract = self.module.DiagnosticContract(
+            "registryctl",
+            "The offline harness refused the request.",
+            "the harness must refuse an unauthorized request",
+            "/reference/diagnostics/fixture/#registryctl--authorization.denied",
+        )
+        base = {retired: contract, sibling: contract}
+
+        errors = self.module.compare_diagnostic_contracts(base, {})
+
+        self.assertEqual(
+            [f"diagnostic code removed: {' '.join(sibling)}"],
+            errors,
+            "only the recorded code is exempt; every other code under the same "
+            "family and product is still guarded",
+        )
+
+    def test_every_retirement_record_states_why_the_code_went_away(self) -> None:
+        for key, reason in self.module.RETIRED_DIAGNOSTIC_CODES.items():
+            with self.subTest(code=key):
+                self.assertEqual(3, len(key), "a record names family, product and code")
+                self.assertTrue(
+                    reason.strip(), f"{' '.join(key)} was retired without a reason"
+                )
+
     def test_diagnostic_catalog_rejects_shape_duplicates_reordering_and_lifecycle_drift(
         self,
     ) -> None:

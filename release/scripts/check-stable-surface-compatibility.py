@@ -24,6 +24,22 @@ MAINTAINED_RELEASE_PRODUCTS = frozenset({"registry-relay"})
 HISTORICAL_RELEASE_PRODUCTS = frozenset({"registry-notary"})
 KNOWN_RELEASE_PRODUCTS = MAINTAINED_RELEASE_PRODUCTS | HISTORICAL_RELEASE_PRODUCTS
 HISTORICAL_DIAGNOSTIC_PRODUCTS = frozenset({"registry_notary"})
+# Codes a released catalog carried and a maintained product no longer emits.
+# Keyed by the exact (family, product, code) so the exemption reaches one code
+# and never the product's other codes, which stay guarded. A retirement is a
+# published-surface decision, so each one states why here rather than in a
+# commit message a reader of this file will not see.
+RETIRED_DIAGNOSTIC_CODES: dict[tuple[str, str, str], str] = {
+    (
+        "fixture_execution",
+        "registryctl_relay_offline_harness",
+        "authorization.denied",
+    ): (
+        "The offline fixture harness reached this code only through Notary's "
+        "standalone authentication, which was removed with the product. The "
+        "harness itself is maintained and its other codes still stand."
+    ),
+}
 DIAGNOSTIC_CATALOGS = {
     "authoring": (
         Path("docs/site/public/generated/diagnostics/authoring.v1.json"),
@@ -226,7 +242,7 @@ def compare_diagnostic_contracts(
     errors: list[str] = []
     for key, old in sorted(base.items()):
         family, product, code = key
-        if product in HISTORICAL_DIAGNOSTIC_PRODUCTS:
+        if product in HISTORICAL_DIAGNOSTIC_PRODUCTS or key in RETIRED_DIAGNOSTIC_CODES:
             continue
         new = current.get(key)
         label = f"{family} {product} {code}"
