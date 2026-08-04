@@ -103,7 +103,7 @@ load_spec() {
 		)
 		SPEC_LITERALS=(
 			"type: controlled-category"
-			"values: [under-18, 18-to-24, 25-or-older]"
+			"values: [under-18, 18-to-24, 25-to-64, 65-or-older]"
 			"evidencectl request prepare age-bracket"
 			"--config .evidence/requests/age-bracket/authorization.curl"
 			"evidencectl verify age-bracket.jws.json"
@@ -156,7 +156,7 @@ load_spec() {
 		SPEC_OUTPUTS=(
 			"authentic: yes"
 			"currently-valid: yes"
-			'"value": "25-or-older"'
+			'"value": "25-to-64"'
 		)
 		;;
 	*)

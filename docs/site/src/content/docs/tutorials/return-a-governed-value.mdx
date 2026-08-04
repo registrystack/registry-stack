@@ -15,15 +15,18 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Evolve the first Evidence project from a boolean question to a governed value. The same date of
-birth will now produce one reviewed age bracket, without disclosing the date or exact age.
+Complete [Issue your first Evidence assertion](../first-evidence-assertion/) before starting this
+tutorial. You will add a governed age-bracket question to that project while keeping its adult
+status question. The same date of birth can then answer either question without disclosing the
+date or exact age.
 
 <QuickstartMeta
   outcome="A verified assertion containing one controlled age-bracket value."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The adult-status project and registry.py from the first Evidence tutorial',
+    'The completed first Evidence assertion tutorial',
+    'Its adult-status project and registry.py',
     'Python 3',
     'A shell with curl',
   ]}
@@ -35,11 +38,12 @@ Adult status answers a yes-or-no criterion. A service that selects different pat
 young adults, and older adults needs more information, but still does not need a date of birth or
 exact age.
 
-This tutorial permits three answers:
+This tutorial permits four answers:
 
 - `under-18`
 - `18-to-24`
-- `25-or-older`
+- `25-to-64`
+- `65-or-older`
 
 The provider reviews this closed list. The caller cannot request a narrower bracket or an exact
 age.
@@ -54,7 +58,7 @@ python3 registry.py
 ```
 
 Leave the registry running. The source still returns the synthetic person's identifier, name, and
-date of birth. Only the Evidence question will change.
+date of birth. Evidence will use it to answer both questions.
 
 ## Add the age-bracket question
 
@@ -62,17 +66,15 @@ In another terminal, enter the existing project:
 
 ```sh
 cd adult-status
-mv questions/adult-status.yaml questions/age-bracket.yaml
-mv derivations/adult-status.rhai derivations/age-bracket.rhai
 ```
 
 ### `questions/age-bracket.yaml`
 
-Replace the first question definition with the age-bracket question:
+Create a second question definition alongside `questions/adult-status.yaml`:
 
 ```yaml
 id: age-bracket
-question: Which reviewed age bracket contains the person?
+question: Which age bracket does this person belong to?
 purpose: service-path-selection
 subject:
   role: person
@@ -83,19 +85,19 @@ source:
 answer:
   concept: age_bracket
   type: controlled-category
-  values: [under-18, 18-to-24, 25-or-older]
+  values: [under-18, 18-to-24, 25-to-64, 65-or-older]
   derivation: derivations/age-bracket.rhai
 disclosure:
   allow: [age_bracket]
 ```
 
-The new question uses the same OpenAPI operation, projected fact, and subject mapping. `values`
-defines the complete category list. The local compiler turns that list into the codelist enforced
-by the Evidence runtime.
+The new question uses the same OpenAPI operation, projected fact, and subject mapping as adult
+status. `values` defines the complete category list. The local compiler turns that list into the
+codelist enforced by the Evidence runtime.
 
 ### `derivations/age-bracket.rhai`
 
-Create the category derivation:
+Create this new derivation alongside `derivations/adult-status.rhai`:
 
 ```rhai
 fn answer(facts, selectors, context) {
@@ -104,8 +106,10 @@ fn answer(facts, selectors, context) {
         "under-18"
     } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
         "18-to-24"
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
+        "25-to-64"
     } else {
-        "25-or-older"
+        "65-or-older"
     }
 }
 ```
@@ -126,9 +130,9 @@ Evidence ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-The command replaces only the completed stopped development session from the first tutorial. The
-authored project remains in place. Authentication, source bounds, signing, verification, and audit
-remain active for the new generation.
+The command compiles both files in `questions/` into the same local Evidence service. The adult
+status question remains available. Authentication, source bounds, signing, verification, and audit
+apply to both questions.
 
 ## Request and verify the bracket
 
@@ -177,11 +181,11 @@ The relevant supported value has this shape:
 ```json
 {
   "providesValueFor": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-  "value": "25-or-older"
+  "value": "25-to-64"
 }
 ```
 
-The source value `2000-01-01` is currently in the `25-or-older` category. The verified assertion
+The source value `2000-01-01` is currently in the `25-to-64` category. The verified assertion
 does not include the date of birth, exact age, name, or `person_id`.
 
 Minimum disclosure is relative to the authorized purpose. A boolean was enough for the first
