@@ -16,6 +16,20 @@ const defaultSiteRoot = resolve(import.meta.dirname, '..');
 // Written as code, the word is an identifier and not a product on offer.
 const codeSpan = /`[^`]*`/gu;
 
+// Evidence's approved Version 1 contracts are frozen. They record what was
+// approved on the day it was approved, so a docs pass cannot edit one; that
+// needs a recorded re-approval. The mirrored page names the file it was
+// generated from in `editUrl`.
+const frozenEvidenceContracts = [
+  'products/evidence/CONCEPT.md',
+  'products/evidence/IMPLEMENTATION.md',
+  'products/evidence/SOURCE-TESTING.md',
+  'products/evidence/OPERATOR-CONTRACT.md',
+  'products/evidence/reference/request-adapter/ADAPTER-API.md',
+  'products/evidence/reference/request-adapter/deployment-projects/CONFIG.md',
+  'products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md',
+];
+
 // A specification's version table is that document's own history, held to the
 // same rule as the changelog and the decision records. `blocks()` gives each
 // table row separately, so this matches a row and never the prose around it.
@@ -38,7 +52,38 @@ function frontmatter(source, path) {
   return {
     status: match[1].match(/^status:[ \t]*(\S.*)$/mu)?.[1]?.trim(),
     draft: /^draft:[ \t]*true[ \t]*$/mu.test(match[1]),
+    editUrl: match[1].match(/^editUrl:[ \t]*(\S.*)$/mu)?.[1]?.trim(),
   };
+}
+
+function isFrozenEvidenceContract(editUrl) {
+  return Boolean(editUrl) && frozenEvidenceContracts.some((path) => editUrl.endsWith(`/${path}`));
+}
+
+// A fenced block is code for the reason an inline span is: the reader meets an
+// identifier, not a product on offer. Mermaid is the exception, because a
+// diagram's participant and message labels are prose the reader reads as
+// prose. Dropped lines are blanked rather than removed so line numbers survive.
+function withoutCodeFences(source) {
+  let marker = null;
+  let keep = false;
+  return source
+    .split('\n')
+    .map((line) => {
+      const fence = line.match(/^\s*(`{3,}|~{3,})\s*(\S*)/u);
+      if (marker === null) {
+        if (!fence) return line;
+        marker = fence[1].slice(0, 3);
+        keep = fence[2].toLowerCase() === 'mermaid';
+        return '';
+      }
+      if (fence && fence[1].startsWith(marker) && !fence[2]) {
+        marker = null;
+        return '';
+      }
+      return keep ? line : '';
+    })
+    .join('\n');
 }
 
 // `status: draft` marks a page as under review; it does not hide it, so a
@@ -96,18 +141,19 @@ export async function findNotaryMentions(siteRoot = defaultSiteRoot) {
     if (
       !isProductSurface(metadata.status) ||
       metadata.draft ||
-      siteRelative.startsWith('src/content/docs/products/') ||
-      isHistoryPage(siteRelative)
+      isHistoryPage(siteRelative) ||
+      isFrozenEvidenceContract(metadata.editUrl)
     ) {
       continue;
     }
-    for (const block of blocks(source)) {
+    const prose = withoutCodeFences(source);
+    for (const block of blocks(prose)) {
       if (!/notary/iu.test(block.text)) continue;
       if (versionHistoryRow.test(block.text.trim())) continue;
       if (!/notary/iu.test(block.text.replace(codeSpan, ''))) continue;
       findings.push({
         path: siteRelative,
-        line: lineNumber(source, block.start),
+        line: lineNumber(prose, block.start),
         excerpt: block.text.trim().split('\n')[0].slice(0, 90),
       });
     }

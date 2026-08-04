@@ -130,7 +130,7 @@ test('accepts a specification version-history row', async () => {
   });
 });
 
-test('skips the marked past, unpublished pages, and synced product docsets', async () => {
+test('skips the marked past and unpublished pages', async () => {
   await withSite(async (root) => {
     const claim = 'Registry Notary issues credentials through OID4VCI.';
     await writePage(root, 'unpublished.mdx', 'status: current\ndraft: true', claim);
@@ -138,9 +138,92 @@ test('skips the marked past, unpublished pages, and synced product docsets', asy
     await writePage(root, 'superseded.mdx', 'status: deprecated', claim);
     await writePage(root, 'changelog.mdx', 'status: current', claim);
     await writePage(root, 'decisions/rename-2026-05-23.mdx', 'status: current', claim);
-    await writePage(root, 'products/registry-notary/migration.mdx', 'status: current', claim);
 
     assert.deepEqual(await findNotaryMentions(root), []);
+  });
+});
+
+// The mirrored crate docs are published at /products/<repo>/<page>/ and are as
+// current as any authored page. An adopter reading the Relay runbook is on the
+// product surface, so the source under `crates/` is held to the same rule.
+test('holds a page mirrored from a crate doc to the same rule', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'products/registry-relay/ops.mdx',
+      'status: current',
+      'Use Registry Notary for credential issuance and signing-key operations.',
+    );
+
+    assert.deepEqual(
+      (await findNotaryMentions(root)).map(({ path }) => path),
+      ['src/content/docs/products/registry-relay/ops.mdx'],
+    );
+  });
+});
+
+// Editing a frozen contract needs a recorded re-approval, not a docs pass, so
+// the checker cannot ask for one.
+test('skips a page mirrored from a frozen Evidence Version 1 contract', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'products/registry-evidence/concept.mdx',
+      [
+        'status: draft',
+        'editUrl: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/CONCEPT.md',
+      ].join('\n'),
+      'Evidence is not a rewrite or reduced configuration of Registry Notary.',
+    );
+
+    assert.deepEqual(await findNotaryMentions(root), []);
+  });
+});
+
+// A request example has to show the wire, and the wire still spells the
+// identifier. The rule is the same one code spans get.
+test('accepts a shipped identifier inside a fenced code block', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'products/registry-relay/api.mdx',
+      'status: current',
+      [
+        'Execute only after the calling workload has pinned that contract:',
+        '',
+        '```http',
+        'POST /v1/consultations/person-status/execute',
+        'Registry-Notary-Evaluation-Id: 01JYZZZZZZZZZZZZZZZZZZZZZZ',
+        '```',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(await findNotaryMentions(root), []);
+    await assert.doesNotReject(checkNotarySurface(root));
+  });
+});
+
+// A diagram is not code: its participant and message labels are the page's
+// prose, and a reader meets the product name there exactly as in a sentence.
+test('rejects a mermaid diagram that names the product', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'products/registry-relay/client-integration.mdx',
+      'status: current',
+      [
+        '```mermaid',
+        'sequenceDiagram',
+        '  participant Notary as Registry Notary',
+        '  Client->>Notary: Submit claim or evidence',
+        '```',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(
+      (await findNotaryMentions(root)).map(({ line, excerpt }) => [line, excerpt]),
+      [[6, 'sequenceDiagram']],
+    );
   });
 });
 

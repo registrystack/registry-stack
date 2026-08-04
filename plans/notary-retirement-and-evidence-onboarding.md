@@ -264,7 +264,7 @@ channel; it does not get a parallel one.
       `cargo deny check`, both Evidence scripts, release unit tests plus
       manifest validation and the source-model check, docs `npm test` and
       `npm run check`.
-- [ ] G2. Every removed docs URL redirects; no product-surface page
+- [x] G2. Every removed docs URL redirects; no product-surface page
       describes Notary as current.
 - [ ] G3. All tutorials pass their CI gates.
 - [ ] G4. Frozen Evidence V1 contracts are byte-identical to the state at
@@ -1102,3 +1102,44 @@ is parallel; B has no upstream dependencies and is the standing priority
   current) and G5 (review notes for every security-sensitive change). G3
   (tutorial CI gates) is likewise still open. G4 stays reserved for Jeremi and
   F3 stays blocked on a published release cut.
+- 2026-08-04: G2 done, in two halves.
+  Redirects: the plan's starting revision published 260 routes (195 pages, 65
+  redirect stubs); HEAD publishes 333 (176 pages, 157 stubs). Every one of the
+  260 base routes still resolves, 52 of them now as redirects, and no redirect
+  points at a missing target. `check-built-links.mjs` already validates
+  redirect targets because Astro's stub carries an `<a href>`, so this half
+  needed no code, only the proof.
+  Surface: `check-notary-surface.mjs` skipped everything under
+  `src/content/docs/products/`, which is where the crate docs are mirrored, so
+  the gate had never read the pages an adopter reaches from the Relay and
+  Manifest product menus. Removing the skip surfaced 55 blocks across 13
+  mirrored pages. All 13 source files were rewritten around Relay, Evidence,
+  and Mint: 10 under `crates/registry-relay/docs/`, plus
+  `products/manifest/docs/reference.md`, `products/evidence/README.md`, and
+  `products/evidence/PERFORMANCE.md`. Two shipped Relay wire identifiers were
+  left exactly as they are, per E3: the `Registry-Notary-Evaluation-Id` header
+  and the `notary_evaluation_id` envelope field. The manifest reference lost
+  its `federation` row outright, because `FederationManifest` no longer exists
+  in `registry-manifest-core`.
+  The checker gained two exemptions, each with a test. A non-mermaid fenced
+  block is code for the same reason an inline span is, so an `http` example
+  may spell a shipped header; a mermaid fence stays subject to the rule,
+  because a diagram's participant labels are prose. And a page whose `editUrl`
+  names a frozen Evidence Version 1 contract is skipped.
+  Open for Jeremi, and the reason for that second exemption:
+  `products/evidence/CONCEPT.md` is a frozen V1 contract that still positions
+  Evidence against Notary ("not a rewrite, replacement mode, or reduced
+  configuration of Registry Notary", "follows the useful part of the current
+  Notary consultation profile") and links to `products/notary/docs/` at
+  v0.16.3, a path this repo no longer has. Correcting it needs the G4
+  re-approval reserved for Jeremi. `IMPLEMENTATION.md` is exempt on the same
+  grounds. `products/evidence/AGENTS.md` also names Notary, but it is agent
+  guidance rather than product surface and is not published, so it is out of
+  G2's scope either way.
+  Gates, exit status 0 each, captured by redirect and not through a pipe:
+  `node --test scripts/check-notary-surface.test.mjs` (12/12, up from 8),
+  `npm run generate`, `node scripts/check-notary-surface.mjs`, `npm test`
+  (300/300), `npm run check` (check-llms 166 passed, SEO over 333 files,
+  31735 built internal links), `products/evidence/scripts/check-contracts.sh`
+  and `check-source-neutrality.sh`. No Rust source changed, only Markdown
+  under `crates/`.
