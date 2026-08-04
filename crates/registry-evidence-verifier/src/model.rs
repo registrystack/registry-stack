@@ -362,8 +362,11 @@ mod tests {
             payload: "protected-payload-canary".to_owned(),
             signature: "protected-signature-canary".to_owned(),
         };
+        // The envelope's other fields are enum discriminants and a nested
+        // `Evidence` that redacts itself, so only a canary here makes the
+        // envelope's own redaction load-bearing.
         let unsigned_envelope = UnsignedEvidenceEnvelope {
-            schema: crate::EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1.to_owned(),
+            schema: "protected-envelope-schema-canary".to_owned(),
             envelope_type: UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
             integrity_protection: UnsignedIntegrityProtection::None,
             warning: UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
