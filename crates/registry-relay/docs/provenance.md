@@ -1,6 +1,6 @@
 # Relay credential issuance migration
 
-Registry Relay no longer issues response credentials, hosts DID documents, publishes credential schemas or JSON-LD contexts, or manages issuer signing keys. Registry Notary is the sole credential issuance and verification surface.
+Registry Relay no longer issues response credentials, hosts DID documents, publishes credential schemas or JSON-LD contexts, or manages issuer signing keys. Registry Evidence is where a caller gets a signed, minimum-disclosure answer it can verify later.
 
 Remove these legacy Relay settings before upgrading:
 

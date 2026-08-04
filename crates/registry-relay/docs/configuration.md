@@ -812,9 +812,9 @@ at most two closed objects. Each object releases only `type`, `name`, and an
 optional nullable `identifier`; the reviewed Rhai adapter constructs those
 fields rather than returning the source parent record.
 
-Notary must pin the same recursive output contract. Changing a field,
-requirement, type, item limit, or byte limit changes the contract hash and
-requires a coordinated Relay and Notary generation.
+The calling workload must pin the same recursive output contract. Changing a
+field, requirement, type, item limit, or byte limit changes the contract hash
+and requires a coordinated regeneration on both sides.
 
 Each private destination binding defaults to
 `dns_family: dual_stack_strict`: Relay requires definitive A and AAAA lookup

@@ -13,7 +13,7 @@ is disabled for demos or controlled tooling.
 sequenceDiagram
   participant Client as Application client
   participant Relay as Registry Relay
-  participant Notary as Registry Notary
+  participant Evidence as Registry Evidence
 
   Client->>Relay: Authenticated discovery (OpenAPI, metadata, schemas)
   Relay-->>Client: Scoped views (ETag, 304 if unchanged)
@@ -23,16 +23,16 @@ sequenceDiagram
     Client->>Relay: Retry idempotent GET with jittered backoff
   end
   Relay-->>Client: Entity records (opaque next_cursor)
-  opt claim or evidence verification needed
+  opt a signed assertion is needed
     Client->>Relay: Discover evidence offering
-    Relay-->>Client: access.kind registry-notary endpoint
-    Client->>Notary: Follow Registry Notary client docs
+    Relay-->>Client: access.kind registry-evidence endpoint
+    Client->>Evidence: Request the assertion from that endpoint
   end
 ```
 
 *The typical client lifecycle: authenticated discovery, scoped reads with
-conservative retries, and handoff to Registry Notary for verification or
-credential issuance. Each step is detailed in the sections that follow.*
+conservative retries, and handoff to Registry Evidence when the caller needs a
+signed answer. Each step is detailed in the sections that follow.*
 
 ## Connect to an existing deployment
 
@@ -75,7 +75,8 @@ Before a client is allowed to consume Relay data, confirm:
 - The client handles RFC 9457 Problem Details instead of parsing text messages.
 - The client treats cursors and `ETags` as opaque values.
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
-  row bodies, credential bodies from Notary workflows, and Problem Details `detail`.
+  row bodies, assertions received from an Evidence deployment, and Problem
+  Details `detail`.
 
 ## OpenFn workflows
 
@@ -89,8 +90,8 @@ evidence offering discovery:
 ```
 
 Use the adaptor when the workflow is authorized to read Relay data directly.
-Use Registry Notary when the workflow needs a governed trust decision or a
-certified value claim. The [OpenFn Relay guide](openfn-relay-adaptor-guide.md)
+Call Registry Evidence instead when the workflow needs a signed answer it can
+verify later. The [OpenFn Relay guide](openfn-relay-adaptor-guide.md)
 shows the lab-backed workflow shape and guardrails.
 
 ## Authentication
@@ -250,11 +251,11 @@ Use conservative retries:
 Relay is read-only for registry data, but retries still create extra audit
 events and may repeat costly source reads.
 
-## Registry Notary handoff
+## Registry Evidence handoff
 
-Relay publishes evidence offering metadata for discovery and delegates all claim
-and evidence verification to Registry Notary. Notary also owns credential
-issuance. The only evidence offering routes
+Relay publishes evidence offering metadata for discovery. It makes no assertion
+about a subject and signs nothing; a client that needs one asks the Evidence
+deployment the offering advertises. The only evidence offering routes
 in Relay are:
 
 ```http
@@ -271,12 +272,12 @@ issue verification receipts, or disclose row data. There is no
 sequenceDiagram
   participant Client as Service client
   participant Relay as Registry Relay
-  participant Notary as Registry Notary
+  participant Evidence as Registry Evidence
 
   Client->>Relay: GET /metadata/evidence-offerings
-  Relay-->>Client: Offering metadata with access.kind registry-notary
-  Client->>Notary: Submit claim or evidence to the advertised endpoint
-  Notary-->>Client: Verification result or credential
+  Relay-->>Client: Offering metadata with access.kind registry-evidence
+  Client->>Evidence: Request an assertion from the advertised endpoint
+  Evidence-->>Client: Signed minimum-disclosure assertion
 ```
 
 *The discovery and assertion boundary. Relay publishes evidence offering

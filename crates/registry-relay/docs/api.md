@@ -127,16 +127,16 @@ Fetch the protected contract metadata before execution:
 
 ```http
 GET /v1/consultations/person-status
-Authorization: Bearer <notary-jwt>
+Authorization: Bearer <workload-jwt>
 ```
 
 The metadata response contains exactly the active `contract_hash` and its complete public
-`contract`. There is no profile-listing route or route version. Execute only after Registry Notary
-has validated and pinned that contract:
+`contract`. There is no profile-listing route or route version. Execute only after the calling
+workload has validated and pinned that contract:
 
 ```http
 POST /v1/consultations/person-status/execute
-Authorization: Bearer <notary-jwt>
+Authorization: Bearer <workload-jwt>
 Content-Type: application/json
 Data-Purpose: program-enrollment-verification
 Registry-Notary-Evaluation-Id: 01JYZZZZZZZZZZZZZZZZZZZZZZ
@@ -162,7 +162,7 @@ returns `409 consultation.contract_mismatch` before source access.
 A successful response has the closed `registry.relay.consultation-result.v1` envelope. It returns
 only `match`, `no_match`, or `ambiguous`. A `match` includes every declared typed output.
 `no_match` and `ambiguous` omit `outputs`. Every outcome includes the generated consultation id,
-required Notary evaluation id, exact profile id and `contract_hash`, acquisition time and class,
+the required `notary_evaluation_id`, exact profile id and `contract_hash`, acquisition time and class,
 integration id and revision, and snapshot evidence when applicable.
 Raw inputs, source credentials, source URLs, static policy digests, and source diagnostics are never
 returned.
@@ -238,7 +238,7 @@ These frozen semantics apply to ordinary entity and OGC feature routes:
 - When the header is present, the value is **always recorded verbatim** in the audit trail.
 - Without an entity `governed_policy`, purpose **values are not enforced** on those ordinary reads. Relay records the value but does not validate, compare, or allowlist it.
 - With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return a stable `pdp.*` denial when the purpose is not permitted.
-- **Registry Notary** remains the caller-side purpose and claim-evaluation layer.
+- Purpose declaration and claim evaluation remain **caller-side**; Relay records the purpose and serves the pinned plan, and never decides a claim.
 - Value-level allowlists remain additive opt-in configuration and do not change the default `require_purpose_header` behavior.
 
 The native `/v1/consultations/.../execute` surface is stricter. It validates `Data-Purpose` against the selected hash-pinned public contract before source dispatch and returns `403 consultation.denied` when the purpose is not allowed.
@@ -543,4 +543,4 @@ Startup-only split metadata failures use stable `metadata.manifest.*` and `runti
 
 ## Credential issuance
 
-Relay does not issue response credentials, host DID documents, or publish credential-support schemas and contexts. Use Registry Notary for credential issuance and verification workflows. See [provenance.md](provenance.md) for migration notes.
+Relay does not issue response credentials, host DID documents, or publish credential-support schemas and contexts. Use Registry Evidence when a caller needs a signed, minimum-disclosure answer it can verify later. See [provenance.md](provenance.md) for migration notes.
