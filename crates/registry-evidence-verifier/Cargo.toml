@@ -14,9 +14,7 @@ workspace = true
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-# The default features of this dependency pull an HTTP client and a command
-# line parser, neither of which a portable verifier may carry.
-jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
+jsonschema.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-sdjwt.workspace = true
 schemars.workspace = true
