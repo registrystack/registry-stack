@@ -32,6 +32,7 @@ const SIGNING_KEY_ID: &str = "local-signing-key-1";
 const SOURCE_ID: &str = "local-source";
 const SELECTOR_PROFILE_ID: &str = "local-subject-v1";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
+const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_QUESTION_BYTES: u64 = 64 * 1024;
 const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
@@ -56,6 +57,8 @@ pub(crate) struct CompiledQuestion {
     pub(crate) concept_uri: String,
     pub(crate) concept_form: CompiledConceptForm,
     pub(crate) local_audience: String,
+    pub(crate) requester_tag: String,
+    pub(crate) caller_evidence_audience: String,
 }
 
 /// Compile one retained OpenAPI operation and one authored question into an
@@ -1116,6 +1119,8 @@ fn write_plan(
         concept_uri: plan.concept_uri.clone(),
         concept_form: CompiledConceptForm::Boolean,
         local_audience: LOCAL_AUDIENCE.to_owned(),
+        requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
+        caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
     })
 }
 
@@ -1276,6 +1281,11 @@ disclosure:
         assert_eq!(compiled.concept_alias, "is_adult");
         assert_eq!(compiled.concept_form, CompiledConceptForm::Boolean);
         assert_eq!(compiled.local_audience, LOCAL_AUDIENCE);
+        assert_eq!(compiled.requester_tag, AUTHORITY_PROFILE_ID);
+        assert_eq!(
+            compiled.caller_evidence_audience,
+            LOCAL_CALLER_EVIDENCE_AUDIENCE
+        );
         assert_eq!(
             tree(&fixture.staging),
             vec![

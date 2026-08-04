@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod authoring;
+mod dev;
 mod doctor;
 mod fixtures;
 mod jwks;
@@ -43,6 +44,10 @@ enum Command {
     Source(suggest::SourceCommand),
     /// Report every project artifact whose mode or owner the runtime refuses.
     Doctor(doctor::DoctorArgs),
+    /// Run the private local Mint and Evidence pair for the first tutorial.
+    Dev(dev::DevArgs),
+    #[command(name = "__dev-supervisor", hide = true)]
+    DevSupervisor(dev::SupervisorArgs),
 }
 
 fn main() -> ExitCode {
@@ -54,6 +59,8 @@ fn main() -> ExitCode {
         Command::Fixtures(command) => fixtures::run(command),
         Command::Source(command) => suggest::run(command),
         Command::Doctor(args) => doctor::run(args),
+        Command::Dev(args) => dev::run(args),
+        Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {
         Ok(code) => code,

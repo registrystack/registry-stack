@@ -10,7 +10,7 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 5] = ["keygen", "jwks", "new", "fixtures", "source"];
+const TOP_LEVEL_COMMANDS: [&str; 6] = ["keygen", "jwks", "new", "fixtures", "source", "dev"];
 
 #[test]
 fn every_top_level_command_is_listed_and_dispatchable() {

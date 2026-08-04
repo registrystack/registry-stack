@@ -150,6 +150,7 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path, kid: &str) -> Resul
         SIGNING_PRIVATE_FILENAME,
         SIGNING_PUBLIC_FILENAME,
         false,
+        PUBLIC_FILE_MODE,
     )?;
     for filename in [AUDIT_HMAC_FILENAME, SUBJECT_BINDING_HMAC_FILENAME] {
         run_secret_impl(
@@ -161,6 +162,32 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path, kid: &str) -> Resul
         )?;
     }
     Ok(())
+}
+
+/// Generate one private development keypair without reporting key material or
+/// paths. Both halves remain owner-only because the pair lives in ephemeral
+/// private supervisor state rather than in a public JWKS artifact.
+pub(crate) fn generate_dev_keypair(
+    out_dir: &Path,
+    kid: &str,
+    private_filename: &str,
+    public_filename: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    ensure_private_dir(out_dir)?;
+    run_keypair_impl(
+        out_dir,
+        Some(kid),
+        None,
+        false,
+        private_filename,
+        public_filename,
+        false,
+        PRIVATE_FILE_MODE,
+    )?;
+    Ok((
+        out_dir.join(private_filename),
+        out_dir.join(public_filename),
+    ))
 }
 
 fn run_keypair(
@@ -179,6 +206,7 @@ fn run_keypair(
         private_filename,
         public_filename,
         true,
+        PUBLIC_FILE_MODE,
     )
 }
 
@@ -191,6 +219,7 @@ fn run_keypair_impl(
     private_filename: &str,
     public_filename: &str,
     report: bool,
+    public_file_mode: u32,
 ) -> Result<ExitCode> {
     if let Some(kid) = kid {
         if kid.trim().is_empty() {
@@ -258,7 +287,7 @@ fn run_keypair_impl(
     write_owner_file(
         &public_path,
         public_json.as_bytes(),
-        PUBLIC_FILE_MODE,
+        public_file_mode,
         force,
     )?;
 

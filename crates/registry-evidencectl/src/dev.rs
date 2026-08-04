@@ -1,0 +1,1290 @@
+//! Minimal private lifecycle for the first local Evidence tutorial.
+//!
+//! The final `.evidence/dev` directory is compiled in place because the
+//! runtime contains absolute paths. A resident supervisor owns both service
+//! children and is the only process allowed to stop them.
+
+use std::{
+    fs::{self, File, Metadata, OpenOptions},
+    io::{Read as _, Write as _},
+    os::unix::{
+        fs::{
+            DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
+            PermissionsExt as _,
+        },
+        net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
+    process::{Child, Command, ExitCode, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use anyhow::{anyhow, bail, Context as _, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use clap::{Args, Subcommand};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::{
+    authoring::{compile_local_project, CompiledConceptForm, CompiledQuestion},
+    keygen,
+};
+
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v1";
+const EVIDENCE_ORIGIN: &str = "http://127.0.0.1:8080";
+const MINT_ORIGIN: &str = "http://127.0.0.1:8081";
+const TOKEN_URL: &str = "http://127.0.0.1:8081/token";
+const MINT_JWKS_URL: &str = "http://127.0.0.1:8081/.well-known/jwks.json";
+const CALLER_ID: &str = "local-tutorial-caller";
+const MINT_KEY_ID: &str = "local-mint-signing-key-1";
+const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
+const PRIVATE_DIR_MODE: u32 = 0o700;
+const PRIVATE_FILE_MODE: u32 = 0o600;
+const MAX_STATE_BYTES: u64 = 64 * 1024;
+const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
+const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
+const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
+
+#[derive(Debug, Args)]
+pub struct DevArgs {
+    #[command(subcommand)]
+    action: Option<DevAction>,
+
+    /// Return after Mint and Evidence are ready on loopback.
+    #[arg(long)]
+    detach: bool,
+
+    /// Project root. Defaults to the current directory.
+    #[arg(long, default_value = ".", hide = true)]
+    project: PathBuf,
+
+    #[arg(long, hide = true)]
+    evidence_bin: Option<PathBuf>,
+
+    #[arg(long, hide = true)]
+    mint_bin: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = DEFAULT_READY_TIMEOUT_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..=120),
+        hide = true
+    )]
+    ready_timeout_seconds: u64,
+}
+
+#[derive(Debug, Subcommand)]
+enum DevAction {
+    /// Stop the active local Mint and Evidence pair.
+    Stop(StopArgs),
+}
+
+#[derive(Debug, Args)]
+struct StopArgs {
+    #[arg(long, default_value = ".", hide = true)]
+    project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct SupervisorArgs {
+    #[arg(long)]
+    dev_root: PathBuf,
+    #[arg(long)]
+    evidence_bin: PathBuf,
+    #[arg(long)]
+    mint_bin: PathBuf,
+    #[arg(long)]
+    ready_timeout_seconds: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum DevStatus {
+    Starting,
+    Ready,
+    Stopping,
+    Stopped,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FailureKind {
+    MintStart,
+    MintReadiness,
+    EvidenceStart,
+    EvidenceReadiness,
+    ChildExited,
+    Supervisor,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DevState {
+    schema: String,
+    status: DevStatus,
+    project: PathBuf,
+    runtime_path: PathBuf,
+    evidence_origin: String,
+    mint_origin: String,
+    token_url: String,
+    access_token_audience: String,
+    caller: Option<CallerState>,
+    question: QuestionState,
+    failure: Option<FailureKind>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CallerState {
+    client_id: String,
+    private_key_path: PathBuf,
+    assertion_audience: String,
+    evidence_audience: String,
+    requester_tag: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuestionState {
+    alias: String,
+    requirement_uri: String,
+    purpose: String,
+    subject_role: String,
+    selector_profile: String,
+    selector_field: String,
+    concept_alias: String,
+    concept_uri: String,
+    concept_form: String,
+}
+
+/// Validated active-session inputs for native request preparation.
+///
+/// Consumers use this seam instead of parsing private state themselves. Every
+/// path is absolute and revalidated against the one ready `.evidence/dev`
+/// session before it is returned.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Consumed by the immediately following request slice.
+pub(crate) struct ReadyDevState {
+    pub(crate) project: PathBuf,
+    pub(crate) runtime_path: PathBuf,
+    pub(crate) evidence_origin: String,
+    pub(crate) mint_origin: String,
+    pub(crate) token_url: String,
+    pub(crate) access_token_audience: String,
+    pub(crate) caller_id: String,
+    pub(crate) caller_private_key_path: PathBuf,
+    pub(crate) caller_assertion_audience: String,
+    pub(crate) caller_evidence_audience: String,
+    pub(crate) requester_tag: String,
+    pub(crate) question: ReadyQuestionState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Consumed by the immediately following request slice.
+pub(crate) struct ReadyQuestionState {
+    pub(crate) alias: String,
+    pub(crate) requirement_uri: String,
+    pub(crate) purpose: String,
+    pub(crate) subject_role: String,
+    pub(crate) selector_profile: String,
+    pub(crate) selector_field: String,
+    pub(crate) concept_alias: String,
+    pub(crate) concept_uri: String,
+    pub(crate) concept_form: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Consumed by the immediately following audit slice.
+pub(crate) struct StoppedDevState {
+    pub(crate) runtime_path: PathBuf,
+    pub(crate) question: ReadyQuestionState,
+}
+
+struct LifecycleLock {
+    _file: File,
+}
+
+pub fn run(args: DevArgs) -> Result<ExitCode> {
+    match args.action {
+        Some(DevAction::Stop(stop)) => {
+            if args.detach {
+                bail!("`dev stop` does not accept `--detach`");
+            }
+            stop_dev(&stop.project)
+        }
+        None => {
+            if !args.detach {
+                bail!("the first tutorial lifecycle requires `evidencectl dev --detach`");
+            }
+            start_detached(
+                &args.project,
+                args.evidence_bin.as_deref(),
+                args.mint_bin.as_deref(),
+                args.ready_timeout_seconds,
+            )
+        }
+    }
+}
+
+pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
+    rustix::process::setsid().context("failed to detach the local supervisor session")?;
+    supervise(args)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+#[allow(dead_code)] // Crate-private handoff for the immediately following request slice.
+pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
+    let project = canonical_project(project)?;
+    let generated_root = existing_private_generated_root(&project)?;
+    let dev_root = generated_root.join("dev");
+    validate_private_directory(&dev_root)?;
+    let state = read_state(&dev_root.join("state.json"))?;
+    let caller = state
+        .caller
+        .ok_or_else(|| anyhow!("the local development session has no active caller"))?;
+    if state.status != DevStatus::Ready
+        || state.project != project
+        || state.runtime_path != dev_root.join("runtime.yaml")
+        || state.evidence_origin != EVIDENCE_ORIGIN
+        || state.mint_origin != MINT_ORIGIN
+        || state.token_url != TOKEN_URL
+        || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
+        || caller.assertion_audience != TOKEN_URL
+    {
+        bail!("the local development state is not the closed ready session");
+    }
+    require_owned_regular_file(&state.runtime_path, 0o400)?;
+    require_owned_regular_file(&caller.private_key_path, PRIVATE_FILE_MODE)?;
+    validate_control_socket(&dev_root.join("control.sock"))?;
+    Ok(ReadyDevState {
+        project,
+        runtime_path: state.runtime_path,
+        evidence_origin: state.evidence_origin,
+        mint_origin: state.mint_origin,
+        token_url: state.token_url,
+        access_token_audience: state.access_token_audience,
+        caller_id: caller.client_id,
+        caller_private_key_path: caller.private_key_path,
+        caller_assertion_audience: caller.assertion_audience,
+        caller_evidence_audience: caller.evidence_audience,
+        requester_tag: caller.requester_tag,
+        question: ReadyQuestionState {
+            alias: state.question.alias,
+            requirement_uri: state.question.requirement_uri,
+            purpose: state.question.purpose,
+            subject_role: state.question.subject_role,
+            selector_profile: state.question.selector_profile,
+            selector_field: state.question.selector_field,
+            concept_alias: state.question.concept_alias,
+            concept_uri: state.question.concept_uri,
+            concept_form: state.question.concept_form,
+        },
+    })
+}
+
+#[allow(dead_code)] // Crate-private handoff for the immediately following audit slice.
+pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
+    let project = canonical_project(project)?;
+    let generated_root = existing_private_generated_root(&project)?;
+    let dev_root = generated_root.join("dev");
+    validate_private_directory(&dev_root)?;
+    let state = read_state(&dev_root.join("state.json"))?;
+    if state.status != DevStatus::Stopped
+        || state.project != project
+        || state.caller.is_some()
+        || state.runtime_path != dev_root.join("runtime.yaml")
+    {
+        bail!("the local development state is not the closed stopped session");
+    }
+    require_owned_regular_file(&state.runtime_path, 0o400)?;
+    match fs::symlink_metadata(dev_root.join("control.sock")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("stopped local state still has a control path"),
+        Err(error) => return Err(error.into()),
+    }
+    Ok(StoppedDevState {
+        runtime_path: state.runtime_path,
+        question: ready_question(state.question),
+    })
+}
+
+fn start_detached(
+    project: &Path,
+    evidence_override: Option<&Path>,
+    mint_override: Option<&Path>,
+    ready_timeout_seconds: u64,
+) -> Result<ExitCode> {
+    let project = canonical_project(project)?;
+    let generated_root = ensure_private_generated_root(&project)?;
+    let _lifecycle = lock_lifecycle(&generated_root)?;
+    let dev_root = generated_root.join("dev");
+
+    match fs::symlink_metadata(&dev_root) {
+        Ok(metadata) => {
+            validate_private_directory_metadata(&dev_root, &metadata)?;
+            bail!(
+                "local development state already exists; refuse to replace an active, stopped, or stale session"
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("failed to inspect local development state"),
+    }
+
+    create_private_directory(&dev_root)?;
+    let result = prepare_and_start(
+        &project,
+        &dev_root,
+        evidence_override,
+        mint_override,
+        ready_timeout_seconds,
+    );
+    if result.is_err() {
+        let state = read_state(&dev_root.join("state.json")).ok();
+        if state
+            .as_ref()
+            .is_none_or(|state| matches!(state.status, DevStatus::Failed | DevStatus::Stopped))
+        {
+            let _ = cleanup_new_dev_root(&dev_root);
+        }
+    }
+    result
+}
+
+fn prepare_and_start(
+    project: &Path,
+    dev_root: &Path,
+    evidence_override: Option<&Path>,
+    mint_override: Option<&Path>,
+    ready_timeout_seconds: u64,
+) -> Result<ExitCode> {
+    let evidence_bin = resolve_tool_binary(
+        "evidence",
+        evidence_override,
+        "EVIDENCECTL_TEST_EVIDENCE_BIN",
+    )?;
+    let mint_bin = resolve_tool_binary("mint", mint_override, "EVIDENCECTL_TEST_MINT_BIN")?;
+    let compiled = compile_local_project(project, dev_root, &evidence_bin)?;
+
+    let generated = dev_root.join("generated");
+    let keys = generated.join("keys");
+    let clients = generated.join("clients");
+    let logs = dev_root.join("logs");
+    for directory in [&generated, &keys, &clients, &logs] {
+        create_private_directory(directory)?;
+    }
+
+    let (mint_private, _) = keygen::generate_dev_keypair(
+        &keys,
+        MINT_KEY_ID,
+        "mint-private.jwk",
+        "mint-public.jwk.json",
+    )?;
+    let (caller_private, caller_public) = keygen::generate_dev_keypair(
+        &keys,
+        CALLER_KEY_ID,
+        "caller-private.jwk",
+        "caller-public.jwk.json",
+    )?;
+    let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
+    let (mint_config, caller_registration) =
+        mint_documents(&compiled, &mint_private, caller_public);
+    let mint_config_path = generated.join("mint.yaml");
+    write_private_yaml(&mint_config_path, &mint_config)?;
+    write_private_yaml(&clients.join("caller.yaml"), &caller_registration)?;
+    run_check(&mint_bin, &["check", "--config"], &mint_config_path, "Mint")?;
+
+    let state = DevState {
+        schema: STATE_SCHEMA.to_owned(),
+        status: DevStatus::Starting,
+        project: project.to_path_buf(),
+        runtime_path: compiled.runtime_path.clone(),
+        evidence_origin: EVIDENCE_ORIGIN.to_owned(),
+        mint_origin: MINT_ORIGIN.to_owned(),
+        token_url: TOKEN_URL.to_owned(),
+        access_token_audience: compiled.local_audience.clone(),
+        caller: Some(CallerState {
+            client_id: CALLER_ID.to_owned(),
+            private_key_path: caller_private,
+            assertion_audience: TOKEN_URL.to_owned(),
+            evidence_audience: compiled.caller_evidence_audience.clone(),
+            requester_tag: compiled.requester_tag.clone(),
+        }),
+        question: QuestionState::from(&compiled),
+        failure: None,
+    };
+    write_new_state(&dev_root.join("state.json"), &state)?;
+
+    let supervisor_log = create_private_file(&logs.join("supervisor.log"))?;
+    let supervisor_error = supervisor_log.try_clone()?;
+    let executable = std::env::current_exe().context("failed to resolve evidencectl")?;
+    let mut supervisor = Command::new(executable)
+        .arg("__dev-supervisor")
+        .arg("--dev-root")
+        .arg(dev_root)
+        .arg("--evidence-bin")
+        .arg(&evidence_bin)
+        .arg("--mint-bin")
+        .arg(&mint_bin)
+        .arg("--ready-timeout-seconds")
+        .arg(ready_timeout_seconds.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(supervisor_log))
+        .stderr(Stdio::from(supervisor_error))
+        .spawn()
+        .context("failed to start the local supervisor")?;
+
+    if let Err(error) = wait_for_supervisor_ready(dev_root, &mut supervisor, ready_timeout_seconds)
+    {
+        abort_start(dev_root, &mut supervisor);
+        return Err(error);
+    }
+    println!("Evidence ready at {EVIDENCE_ORIGIN}");
+    println!("Mint ready at {MINT_ORIGIN}");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn stop_dev(project: &Path) -> Result<ExitCode> {
+    let project = canonical_project(project)?;
+    let generated_root = existing_private_generated_root(&project)?;
+    let _lifecycle = lock_lifecycle(&generated_root)?;
+    let dev_root = generated_root.join("dev");
+    validate_private_directory(&dev_root)?;
+    let state = read_state(&dev_root.join("state.json"))?;
+    if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
+        bail!("local development state is not an active session");
+    }
+    let socket = dev_root.join("control.sock");
+    validate_control_socket(&socket)?;
+    let mut stream = UnixStream::connect(&socket)
+        .context("the recorded local supervisor is unavailable; refusing PID-based recovery")?;
+    stream.set_read_timeout(Some(Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5)))?;
+    stream.write_all(b"stop\n")?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut response = Vec::new();
+    (&mut stream).take(64).read_to_end(&mut response)?;
+    if response != b"stopped\n" {
+        bail!("the local supervisor did not confirm a clean stop");
+    }
+    let stopped = read_state(&dev_root.join("state.json"))?;
+    if stopped.status != DevStatus::Stopped || stopped.caller.is_some() {
+        bail!("the local supervisor did not publish the closed stopped state");
+    }
+    println!("Local Evidence stopped");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn supervise(args: SupervisorArgs) -> Result<()> {
+    validate_private_directory(&args.dev_root)?;
+    let dev_root = fs::canonicalize(&args.dev_root)?;
+    let state_path = dev_root.join("state.json");
+    let mut state = read_state(&state_path)?;
+    if state.status != DevStatus::Starting || state.runtime_path != dev_root.join("runtime.yaml") {
+        bail!("supervisor state is not a fresh compiled local session");
+    }
+
+    let socket_path = dev_root.join("control.sock");
+    let listener = UnixListener::bind(&socket_path)
+        .context("failed to bind the private local control socket")?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
+    validate_control_socket(&socket_path)?;
+    listener.set_nonblocking(true)?;
+
+    let mut mint = match spawn_service(
+        &args.mint_bin,
+        &["serve", "--config"],
+        &dev_root.join("generated/mint.yaml"),
+        &dev_root.join("logs/mint.log"),
+    ) {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("Mint start failed before child ownership: {error:#}");
+            return fail_before_evidence(&state_path, &mut state, FailureKind::MintStart);
+        }
+    };
+    if wait_for_http(
+        MINT_JWKS_URL,
+        &mut mint,
+        HttpProof::MintKey(MINT_KEY_ID),
+        args.ready_timeout_seconds,
+    )
+    .is_err()
+    {
+        eprintln!("Mint did not reach its fixed local JWKS readiness proof");
+        stop_children(None, Some(&mut mint));
+        return fail_before_evidence(&state_path, &mut state, FailureKind::MintReadiness);
+    }
+
+    let mut evidence = match spawn_evidence(
+        &args.evidence_bin,
+        &state.runtime_path,
+        &dev_root.join("logs/evidence.log"),
+    ) {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("Evidence start failed before child ownership: {error:#}");
+            stop_children(None, Some(&mut mint));
+            return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceStart);
+        }
+    };
+    if wait_for_http(
+        &format!("{EVIDENCE_ORIGIN}/ready"),
+        &mut evidence,
+        HttpProof::EvidenceReady,
+        args.ready_timeout_seconds,
+    )
+    .is_err()
+    {
+        eprintln!("Evidence did not reach its fixed local readiness proof");
+        stop_children(Some(&mut evidence), Some(&mut mint));
+        return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceReadiness);
+    }
+
+    state.status = DevStatus::Ready;
+    if let Err(error) = replace_state(&state_path, &state) {
+        stop_children(Some(&mut evidence), Some(&mut mint));
+        let _ = remove_control_socket(&socket_path);
+        return Err(error);
+    }
+    let outcome = supervisor_loop(&listener, &mut evidence, &mut mint)
+        .unwrap_or(SupervisorOutcome::Failed(FailureKind::Supervisor));
+    state.status = DevStatus::Stopping;
+    let stopping_state = replace_state(&state_path, &state);
+    stop_children(Some(&mut evidence), Some(&mut mint));
+    stopping_state?;
+
+    match outcome {
+        SupervisorOutcome::Stop(mut stream) => {
+            remove_control_socket(&socket_path)?;
+            remove_private_tree(&dev_root.join("generated"))?;
+            remove_private_tree(&dev_root.join("logs"))?;
+            state.status = DevStatus::Stopped;
+            state.caller = None;
+            state.failure = None;
+            replace_state(&state_path, &state)?;
+            stream.write_all(b"stopped\n")?;
+            Ok(())
+        }
+        SupervisorOutcome::Failed(kind) => {
+            remove_control_socket(&socket_path)?;
+            state.status = DevStatus::Failed;
+            state.failure = Some(kind);
+            replace_state(&state_path, &state)
+        }
+    }
+}
+
+fn fail_before_evidence(state_path: &Path, state: &mut DevState, kind: FailureKind) -> Result<()> {
+    state.status = DevStatus::Failed;
+    state.failure = Some(kind);
+    replace_state(state_path, state)
+}
+
+enum SupervisorOutcome {
+    Stop(UnixStream),
+    Failed(FailureKind),
+}
+
+fn supervisor_loop(
+    listener: &UnixListener,
+    evidence: &mut Child,
+    mint: &mut Child,
+) -> Result<SupervisorOutcome> {
+    loop {
+        if evidence.try_wait()?.is_some() || mint.try_wait()?.is_some() {
+            return Ok(SupervisorOutcome::Failed(FailureKind::ChildExited));
+        }
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                let mut request = Vec::new();
+                (&mut stream).take(16).read_to_end(&mut request)?;
+                if request == b"stop\n" {
+                    return Ok(SupervisorOutcome::Stop(stream));
+                }
+                let _ = stream.write_all(b"invalid\n");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return Ok(SupervisorOutcome::Failed(FailureKind::Supervisor)),
+        }
+    }
+}
+
+fn spawn_service(binary: &Path, prefix: &[&str], value: &Path, log: &Path) -> Result<Child> {
+    let stdout = create_private_file(log)?;
+    let stderr = stdout.try_clone()?;
+    Command::new(binary)
+        .args(prefix)
+        .arg(value)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .with_context(|| format!("failed to start {}", binary.display()))
+}
+
+fn spawn_evidence(binary: &Path, runtime: &Path, log: &Path) -> Result<Child> {
+    let stdout = create_private_file(log)?;
+    let stderr = stdout.try_clone()?;
+    Command::new(binary)
+        .arg("--runtime")
+        .arg(runtime)
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .with_context(|| format!("failed to start {}", binary.display()))
+}
+
+enum HttpProof<'a> {
+    MintKey(&'a str),
+    EvidenceReady,
+}
+
+fn wait_for_http(url: &str, child: &mut Child, proof: HttpProof<'_>, seconds: u64) -> Result<()> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(250))
+        .timeout_read(Duration::from_millis(500))
+        .timeout_write(Duration::from_millis(500))
+        .redirects(0)
+        .build();
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while Instant::now() < deadline {
+        if child.try_wait()?.is_some() {
+            bail!("service exited before readiness");
+        }
+        if let Ok(response) = agent.get(url).call() {
+            let mut bytes = Vec::new();
+            response
+                .into_reader()
+                .take(MAX_HTTP_BODY_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 <= MAX_HTTP_BODY_BYTES {
+                let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let matches = match proof {
+                    HttpProof::MintKey(kid) => value["keys"]
+                        .as_array()
+                        .is_some_and(|keys| keys.iter().any(|key| key["kid"] == kid)),
+                    HttpProof::EvidenceReady => value == json!({"status": "ready"}),
+                };
+                if matches && child.try_wait()?.is_none() {
+                    return Ok(());
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    bail!("service readiness timed out")
+}
+
+fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
+    let mut evidence = evidence;
+    let mut mint = mint;
+    if let Some(child) = evidence.as_deref_mut() {
+        let _ = signal_child(child);
+    }
+    if let Some(child) = mint.as_deref_mut() {
+        let _ = signal_child(child);
+    }
+    let deadline = Instant::now() + Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS);
+    loop {
+        let evidence_done = evidence
+            .as_deref_mut()
+            .is_none_or(|child| child.try_wait().ok().flatten().is_some());
+        let mint_done = mint
+            .as_deref_mut()
+            .is_none_or(|child| child.try_wait().ok().flatten().is_some());
+        if evidence_done && mint_done {
+            return;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    for child in [evidence, mint].into_iter().flatten() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn signal_child(child: &Child) -> Result<()> {
+    let raw = i32::try_from(child.id()).context("child identifier is not a process id")?;
+    let pid =
+        rustix::process::Pid::from_raw(raw).ok_or_else(|| anyhow!("invalid child process"))?;
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
+    Ok(())
+}
+
+fn wait_for_supervisor_ready(dev_root: &Path, child: &mut Child, seconds: u64) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(seconds + 5);
+    loop {
+        let state = read_state(&dev_root.join("state.json"))?;
+        match state.status {
+            DevStatus::Ready => return Ok(()),
+            DevStatus::Failed => {
+                let _ = child.wait();
+                let diagnostic = read_owner_file(&dev_root.join("logs/supervisor.log"), 4096)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .unwrap_or_default();
+                bail!(
+                    "local services failed during startup ({:?}){}{}",
+                    state.failure,
+                    if diagnostic.is_empty() { "" } else { ": " },
+                    diagnostic.trim()
+                );
+            }
+            DevStatus::Starting if Instant::now() < deadline => {}
+            _ => bail!("local supervisor did not publish readiness"),
+        }
+        if child.try_wait()?.is_some() {
+            bail!("local supervisor exited before readiness");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn abort_start(dev_root: &Path, supervisor: &mut Child) {
+    let socket = dev_root.join("control.sock");
+    if validate_control_socket(&socket).is_ok() {
+        if let Ok(mut stream) = UnixStream::connect(&socket) {
+            let _ =
+                stream.set_read_timeout(Some(Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5)));
+            let _ = stream.write_all(b"stop\n");
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            let mut response = Vec::new();
+            let _ = (&mut stream).take(64).read_to_end(&mut response);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS + 5);
+    while Instant::now() < deadline {
+        if supervisor.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn mint_documents(
+    compiled: &CompiledQuestion,
+    mint_private: &Path,
+    caller_public: Value,
+) -> (Value, Value) {
+    let mint_config = json!({
+        "version": 1,
+        "validationMode": "supervised-local-development",
+        "issuer": MINT_ORIGIN,
+        "listener": {
+            "address": "127.0.0.1",
+            "port": 8081,
+            "maximumRequestBytes": 16384,
+            "requestTimeoutMilliseconds": 5000,
+        },
+        "signing": {
+            "algorithm": "EdDSA",
+            "activeKeyId": MINT_KEY_ID,
+            "activeKeyFile": mint_private,
+            "retiredPublicJwkFiles": [],
+            "jwksPath": "/.well-known/jwks.json",
+        },
+        "accessTokens": {
+            "audiences": [compiled.local_audience],
+            "lifetimeSeconds": 300,
+            "claims": {
+                "principal": "sub",
+                "requesterTags": "evidence_tags",
+                "evidenceAudience": "evidence_audience",
+                "grantId": "evidence_grant_id",
+                "grantAuthority": "evidence_authority",
+            },
+        },
+        "clientAssertion": {
+            "audience": TOKEN_URL,
+            "maximumLifetimeSeconds": 120,
+            "algorithms": ["EdDSA"],
+            "replayCacheEntries": 256,
+        },
+        "clients": {"directory": "clients"},
+    });
+    let caller = json!({
+        "clientId": CALLER_ID,
+        "principal": "urn:registrystack:evidence:local:caller",
+        "evidenceAudience": compiled.caller_evidence_audience,
+        "requesterTags": [compiled.requester_tag],
+        "keys": [caller_public],
+    });
+    (mint_config, caller)
+}
+
+impl From<&CompiledQuestion> for QuestionState {
+    fn from(compiled: &CompiledQuestion) -> Self {
+        Self {
+            alias: compiled.question_alias.clone(),
+            requirement_uri: compiled.requirement_uri.clone(),
+            purpose: compiled.purpose.clone(),
+            subject_role: compiled.subject_role.clone(),
+            selector_profile: compiled.selector_profile.clone(),
+            selector_field: compiled.selector_field.clone(),
+            concept_alias: compiled.concept_alias.clone(),
+            concept_uri: compiled.concept_uri.clone(),
+            concept_form: match compiled.concept_form {
+                CompiledConceptForm::Boolean => "boolean".to_owned(),
+            },
+        }
+    }
+}
+
+fn run_check(binary: &Path, prefix: &[&str], config: &Path, name: &str) -> Result<()> {
+    let status = Command::new(binary)
+        .args(prefix)
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to run {name} check"))?;
+    if !status.success() {
+        bail!("{name} rejected the generated local configuration");
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Shared by the immediately following request and audit slices.
+pub(crate) fn resolve_tool_binary(
+    name: &str,
+    explicit: Option<&Path>,
+    test_env: &str,
+) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path.to_path_buf());
+    }
+    let current = std::env::current_exe().context("failed to resolve evidencectl")?;
+    if let Some(sibling) = current.parent().map(|parent| parent.join(name)) {
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+    }
+    if let Some(path) = std::env::var_os(test_env) {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(PathBuf::from(name))
+}
+
+fn canonical_project(path: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("project {} is unavailable", path.display()))?;
+    let metadata = fs::symlink_metadata(&canonical)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("project is not a real directory");
+    }
+    require_owner(&metadata, "project directory")?;
+    Ok(canonical)
+}
+
+fn ensure_private_generated_root(project: &Path) -> Result<PathBuf> {
+    let root = project.join(".evidence");
+    match fs::symlink_metadata(&root) {
+        Ok(metadata) => validate_private_directory_metadata(&root, &metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_private_directory(&root)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(root)
+}
+
+fn existing_private_generated_root(project: &Path) -> Result<PathBuf> {
+    let root = project.join(".evidence");
+    validate_private_directory(&root)?;
+    Ok(root)
+}
+
+fn create_private_directory(path: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(PRIVATE_DIR_MODE);
+    builder
+        .create(path)
+        .with_context(|| format!("failed to create private directory {}", path.display()))?;
+    validate_private_directory(path)
+}
+
+fn validate_private_directory(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect private directory {}", path.display()))?;
+    validate_private_directory_metadata(path, &metadata)
+}
+
+fn validate_private_directory_metadata(path: &Path, metadata: &Metadata) -> Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("private state {} is not a real directory", path.display());
+    }
+    require_owner(metadata, "private directory")?;
+    if metadata.mode() & 0o777 != PRIVATE_DIR_MODE {
+        bail!("private state {} must have mode 0700", path.display());
+    }
+    Ok(())
+}
+
+fn lock_lifecycle(root: &Path) -> Result<LifecycleLock> {
+    let path = root.join("lifecycle.lock");
+    let file = match create_private_rw_file(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => open_owner_rw(&path)?,
+        Err(error) => return Err(error.into()),
+    };
+    require_owner_file(&path)?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .context("another local lifecycle operation is already active")?;
+    Ok(LifecycleLock { _file: file })
+}
+
+fn create_private_rw_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(PRIVATE_FILE_MODE)
+        .open(path)
+}
+
+fn open_owner_rw(path: &Path) -> Result<File> {
+    require_owner_file(path)?;
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?;
+    let file = File::from(fd);
+    require_owner_metadata(&file.metadata()?, "lifecycle lock")?;
+    Ok(file)
+}
+
+fn require_owner_file(path: &Path) -> Result<Metadata> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.nlink() != 1 {
+        bail!("owner-only state is not a single-link regular file");
+    }
+    require_owner_metadata(&metadata, "owner-only state")?;
+    Ok(metadata)
+}
+
+#[allow(dead_code)]
+fn require_owned_regular_file(path: &Path, mode: u32) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.nlink() != 1 {
+        bail!("ready session path is not a single-link regular file");
+    }
+    require_owner(&metadata, "ready session file")?;
+    if metadata.mode() & 0o777 != mode {
+        bail!("ready session file has the wrong private mode");
+    }
+    Ok(())
+}
+
+fn require_owner_metadata(metadata: &Metadata, label: &str) -> Result<()> {
+    require_owner(metadata, label)?;
+    if metadata.mode() & 0o777 != PRIVATE_FILE_MODE {
+        bail!("{label} must have mode 0600");
+    }
+    Ok(())
+}
+
+fn require_owner(metadata: &Metadata, label: &str) -> Result<()> {
+    if metadata.uid() != rustix::process::getuid().as_raw() {
+        bail!("{label} is not owned by the current user");
+    }
+    Ok(())
+}
+
+fn create_private_file(path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(PRIVATE_FILE_MODE)
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    require_owner_file(path)?;
+    Ok(file)
+}
+
+fn write_private_yaml(path: &Path, value: &Value) -> Result<()> {
+    let mut text = serde_norway::to_string(value)?;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    let mut file = create_private_file(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn read_owner_json(path: &Path, maximum: u64) -> Result<Value> {
+    let bytes = read_owner_file(path, maximum)?;
+    serde_json::from_slice(&bytes).context("owner-only JSON is invalid")
+}
+
+fn read_owner_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+    let before = require_owner_file(path)?;
+    if before.len() > maximum {
+        bail!("owner-only state exceeds its size bound");
+    }
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?;
+    let mut file = File::from(fd);
+    let opened = file.metadata()?;
+    if before.dev() != opened.dev() || before.ino() != opened.ino() {
+        bail!("owner-only state changed while opening");
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(maximum + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        bail!("owner-only state exceeds its size bound");
+    }
+    Ok(bytes)
+}
+
+fn write_new_state(path: &Path, state: &DevState) -> Result<()> {
+    let bytes = serde_json::to_vec(state)?;
+    let mut file = create_private_file(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn replace_state(path: &Path, state: &DevState) -> Result<()> {
+    require_owner_file(path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("state has no parent"))?;
+    validate_private_directory(parent)?;
+    let mut random = [0_u8; 9];
+    getrandom::fill(&mut random)?;
+    let temporary = parent.join(format!(".state-{}", URL_SAFE_NO_PAD.encode(random)));
+    write_new_state(&temporary, state)?;
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+fn read_state(path: &Path) -> Result<DevState> {
+    let bytes = read_owner_file(path, MAX_STATE_BYTES)?;
+    let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
+    if state.schema != STATE_SCHEMA {
+        bail!("local state schema is unsupported");
+    }
+    Ok(state)
+}
+
+fn validate_control_socket(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
+        bail!("local control path is not a Unix socket");
+    }
+    require_owner_metadata(&metadata, "local control socket")
+}
+
+fn remove_control_socket(path: &Path) -> Result<()> {
+    validate_control_socket(path)?;
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+fn remove_private_tree(path: &Path) -> Result<()> {
+    validate_private_directory(path)?;
+    fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))
+}
+
+fn cleanup_new_dev_root(dev_root: &Path) -> Result<()> {
+    validate_private_directory(dev_root)?;
+    let socket = dev_root.join("control.sock");
+    match fs::symlink_metadata(&socket) {
+        Ok(_) => remove_control_socket(&socket)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    make_tree_removable(dev_root)?;
+    fs::remove_dir_all(dev_root).context("failed to clean incomplete local development state")
+}
+
+fn make_tree_removable(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        require_owner(&metadata, "incomplete local state")?;
+        if metadata.file_type().is_symlink() {
+            bail!("incomplete local state contains a symlink");
+        }
+        if metadata.is_dir() {
+            make_tree_removable(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
+        } else if metadata.is_file() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
+        } else {
+            bail!("incomplete local state contains an unexpected entry");
+        }
+    }
+    fs::set_permissions(root, fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
+    Ok(())
+}
+
+fn ready_question(question: QuestionState) -> ReadyQuestionState {
+    ReadyQuestionState {
+        alias: question.alias,
+        requirement_uri: question.requirement_uri,
+        purpose: question.purpose,
+        subject_role: question.subject_role,
+        selector_profile: question.selector_profile,
+        selector_field: question.selector_field,
+        concept_alias: question.concept_alias,
+        concept_uri: question.concept_uri,
+        concept_form: question.concept_form,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn compiled(runtime: &Path) -> CompiledQuestion {
+        CompiledQuestion {
+            question_alias: "adult-status".to_owned(),
+            runtime_path: runtime.to_path_buf(),
+            requirement_uri: "urn:local:requirement:adult-status".to_owned(),
+            purpose: "age-check".to_owned(),
+            subject_role: "person".to_owned(),
+            selector_profile: "local-subject-v1".to_owned(),
+            selector_field: "person_id".to_owned(),
+            concept_alias: "is_adult".to_owned(),
+            concept_uri: "urn:local:concept:is-adult".to_owned(),
+            concept_form: CompiledConceptForm::Boolean,
+            local_audience: "registry-evidence-local".to_owned(),
+            requester_tag: "local-caller".to_owned(),
+            caller_evidence_audience: "urn:local:caller".to_owned(),
+        }
+    }
+
+    #[test]
+    fn mint_documents_are_closed_and_derive_authority_from_the_compiler() {
+        let compiled = compiled(Path::new("/private/runtime.yaml"));
+        let (config, caller) = mint_documents(
+            &compiled,
+            Path::new("/private/mint-private.jwk"),
+            json!({"kty":"OKP","crv":"Ed25519","kid":"caller","alg":"EdDSA","x":"public"}),
+        );
+        assert_eq!(config["validationMode"], "supervised-local-development");
+        assert_eq!(config["issuer"], MINT_ORIGIN);
+        assert_eq!(
+            config["listener"],
+            json!({
+                "address": "127.0.0.1", "port": 8081,
+                "maximumRequestBytes": 16384, "requestTimeoutMilliseconds": 5000
+            })
+        );
+        assert_eq!(
+            config["accessTokens"]["audiences"],
+            json!([compiled.local_audience])
+        );
+        assert_eq!(caller["requesterTags"], json!([compiled.requester_tag]));
+        assert_eq!(
+            caller["evidenceAudience"],
+            compiled.caller_evidence_audience
+        );
+        assert!(caller.to_string().find("private").is_none());
+    }
+
+    #[test]
+    fn private_state_rejects_public_directories_files_and_symlinks() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let public = root.path().join("public");
+        fs::create_dir(&public).expect("directory");
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o755)).expect("mode");
+        assert!(validate_private_directory(&public).is_err());
+
+        let private = root.path().join("private");
+        create_private_directory(&private).expect("private directory");
+        let state = private.join("state.json");
+        fs::write(&state, b"{}").expect("state");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o644)).expect("mode");
+        assert!(read_state(&state).is_err());
+
+        let link = root.path().join("link");
+        symlink(&private, &link).expect("symlink");
+        assert!(validate_private_directory(&link).is_err());
+    }
+
+    #[test]
+    fn ready_and_stopped_handoffs_validate_the_closed_lifecycle_state() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let project = temporary.path().join("project");
+        fs::create_dir(&project).expect("project");
+        let project = fs::canonicalize(project).expect("canonical project");
+        let generated = project.join(".evidence");
+        create_private_directory(&generated).expect("generated root");
+        let dev = generated.join("dev");
+        create_private_directory(&dev).expect("dev root");
+        create_private_directory(&dev.join("generated")).expect("generated");
+        create_private_directory(&dev.join("generated/keys")).expect("keys");
+
+        let runtime = dev.join("runtime.yaml");
+        drop(create_private_file(&runtime).expect("runtime"));
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o400)).expect("seal runtime");
+        let caller_key = dev.join("generated/keys/caller-private.jwk");
+        drop(create_private_file(&caller_key).expect("caller key"));
+        let socket = dev.join("control.sock");
+        let listener = UnixListener::bind(&socket).expect("control socket");
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).expect("socket mode");
+
+        let compiled = compiled(&runtime);
+        let mut state = DevState {
+            schema: STATE_SCHEMA.to_owned(),
+            status: DevStatus::Ready,
+            project: project.clone(),
+            runtime_path: runtime.clone(),
+            evidence_origin: EVIDENCE_ORIGIN.to_owned(),
+            mint_origin: MINT_ORIGIN.to_owned(),
+            token_url: TOKEN_URL.to_owned(),
+            access_token_audience: compiled.local_audience.clone(),
+            caller: Some(CallerState {
+                client_id: CALLER_ID.to_owned(),
+                private_key_path: caller_key,
+                assertion_audience: TOKEN_URL.to_owned(),
+                evidence_audience: compiled.caller_evidence_audience.clone(),
+                requester_tag: compiled.requester_tag.clone(),
+            }),
+            question: QuestionState::from(&compiled),
+            failure: None,
+        };
+        write_new_state(&dev.join("state.json"), &state).expect("ready state");
+        let ready = load_ready_state(&project).expect("ready handoff");
+        assert_eq!(ready.runtime_path, runtime);
+        assert_eq!(ready.question.alias, "adult-status");
+
+        drop(listener);
+        remove_control_socket(&socket).expect("remove socket");
+        remove_private_tree(&dev.join("generated")).expect("remove generated");
+        state.status = DevStatus::Stopped;
+        state.caller = None;
+        replace_state(&dev.join("state.json"), &state).expect("stopped state");
+        let stopped = load_stopped_state(&project).expect("stopped handoff");
+        assert_eq!(stopped.runtime_path, runtime);
+        assert_eq!(stopped.question.concept_alias, "is_adult");
+    }
+
+    #[test]
+    fn lifecycle_lock_is_nonblocking_and_owner_only() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path().join("generated");
+        create_private_directory(&root).expect("root");
+        let _held = lock_lifecycle(&root).expect("first lock");
+        assert!(lock_lifecycle(&root).is_err(), "second operation must fail");
+        require_owner_file(&root.join("lifecycle.lock")).expect("private sentinel");
+    }
+}
