@@ -31,7 +31,11 @@ SHARDS = {
         "registry-manifest-core",
     ),
     "relay": ("registry-relay",),
-    "evidence": ("registry-evidence", "registry-evidencectl"),
+    "evidence": (
+        "registry-evidence",
+        "registry-evidence-verifier",
+        "registry-evidencectl",
+    ),
     "mint": ("registry-mint",),
     "developer-tools": (
         "registry-config-report",
